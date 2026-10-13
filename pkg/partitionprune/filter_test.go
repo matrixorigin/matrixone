@@ -28,6 +28,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPartitionColumnUsesExplicitDottedQualifier(t *testing.T) {
+	for _, name := range []string{"a", "a.b"} {
+		col := &plan.ColRef{Name: "x.y." + name, TblName: "x.y", ColPos: 1}
+		require.True(t, matchesPartitionColumn(col, 0, newTestRangeExpr(name, 1)))
+		require.False(t, matchesPartitionColumn(col, 1, newTestRangeExpr("other", 1)))
+	}
+}
+
 func TestFilter(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := process.NewTopProcess(

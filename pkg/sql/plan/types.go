@@ -1012,6 +1012,10 @@ type BindContext struct {
 	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
+	// whereFilters keeps the complete bound WHERE domain while correlated
+	// subqueries are being flattened. It is cleared/replaced with the
+	// flattened filters once the walk is complete.
+	whereFilters []*plan.Expr
 	// outerUsingCols maps an unqualified column name to the ordered list of
 	// leaf tables whose values must be COALESCEd to produce the merged value.
 	// Only populated when the column has been merged through at least one
@@ -1326,15 +1330,16 @@ type MultiTableIndex struct {
 }
 
 type RemapInfo struct {
-	step           int32
-	node           *plan.Node
-	tip            string
-	colRefCnt      map[[2]int32]int
-	colRefBool     map[[2]int32]bool
-	sinkColRef     map[[2]int32]int
-	remapping      *ColRefRemapping
-	interRemapping *ColRefRemapping
-	srcExprIdx     int
+	originalScanCols []*plan.ColDef
+	step             int32
+	node             *plan.Node
+	tip              string
+	colRefCnt        map[[2]int32]int
+	colRefBool       map[[2]int32]bool
+	sinkColRef       map[[2]int32]int
+	remapping        *ColRefRemapping
+	interRemapping   *ColRefRemapping
+	srcExprIdx       int
 }
 
 func (info *RemapInfo) String() string {

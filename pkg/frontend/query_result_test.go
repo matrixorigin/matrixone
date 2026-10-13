@@ -208,6 +208,24 @@ func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T
 	require.Nil(t, bat)
 }
 
+func TestQueryResultEligibilityBySource(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(t.Context(), "save_query_result", int8(1)))
+	ses.ast = &tree.Select{}
+	ses.blockIdx = 1 // Eligibility only; configuration initialization is covered separately.
+	for _, kind := range []string{"Select", "Show"} {
+		for _, source := range []string{constant.ExternSql, constant.CloudUserSql, constant.CloudNoUserSql, constant.InternalSql} {
+			t.Run(kind+"/"+source, func(t *testing.T) {
+				ses.SetStmtType(kind)
+				ses.SetSqlSourceType(source)
+				want := source == constant.CloudUserSql || kind == "Show" && source == constant.ExternSql
+				require.Equal(t, want, canSaveQueryResult(t.Context(), ses))
+			})
+		}
+	}
+}
+
 func Test_saveQueryResultMeta(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {

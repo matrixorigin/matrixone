@@ -208,6 +208,7 @@ func (p *Partition) ConsumeSnapCkps(
 		end = start
 	}
 	state.UpdateDuration(start, end)
+	state.RecordContentChange(end)
 	if !state.IsValid() {
 		return moerr.NewInternalErrorNoCtx("invalid checkpoints duration")
 	}
@@ -248,6 +249,7 @@ func (p *Partition) ConsumeCheckpoints(
 	if err := state.consumeCheckpoints(fn); err != nil {
 		return err
 	}
+	state.RecordContentChange(state.appliedTo)
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
@@ -276,6 +278,7 @@ func (p *Partition) Truncate(
 	if updated := state.truncate(ids, ts); !updated {
 		return
 	}
+	state.RecordContentChange(ts)
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")

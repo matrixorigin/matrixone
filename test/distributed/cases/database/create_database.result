@@ -5,7 +5,20 @@ drop database if exists test05;
 drop database if exists `测试数据库`;
 drop database if exists t01234567890123456789012345678901234567890123456789012345678901234567890123456789;
 create database test01;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
 create database IF NOT EXISTS test01;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+select count(*) as compatibility_rows
+from mo_catalog.mo_mysql_compatibility_mode
+where account_id = 0
+and dat_name = 'test01'
+and variable_name = 'version_compatibility';
+➤ compatibility_rows[-5,64,0]  𝄀
+1
 create database `测试数据库`;
 create database t01234567890123456789012345678901234567890123456789012345678901234567890123456789;
 Identifier name 't01234567890123456789012345678901234567890123456789012345678901234567890123456789' is too long

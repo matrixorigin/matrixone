@@ -350,6 +350,10 @@ select count(*) from snapshot_read.users;
 Unknown database snapshot_read
 restore account test_account{snapshot="sp_01"} to account acc02;
 select count(*) from snapshot_read.students;
+internal error: do not have privilege: authenticated user no longer matches current catalog
+select count(*) from snapshot_read.users;
+internal error: do not have privilege: authenticated user no longer matches current catalog
+select count(*) from snapshot_read.students;
 count(*)
 50
 select count(*) from snapshot_read.users;

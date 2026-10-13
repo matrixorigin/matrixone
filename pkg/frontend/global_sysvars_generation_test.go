@@ -27,7 +27,7 @@ import (
 
 func TestGlobalSysVarsRefreshDoesNotOverwriteConcurrentSet(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 	accountID := ses.GetTenantInfo().GetTenantID()
 
 	globalVars := &SystemVariables{

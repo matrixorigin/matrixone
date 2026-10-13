@@ -529,7 +529,6 @@ func (c *consumer) parseCheckpointLocations(ctx context.Context, locationStr str
 			c.srcFS,
 			ckpLocation,
 			uint32(version),
-			nil,
 			&ts,
 		)
 		if err != nil {

@@ -1,0 +1,17 @@
+# The hosted CI runner is amd64; keep local development image selection intact.
+services:
+  minio:
+    image: mo-iceberg-minio-ci:RELEASE.2023-11-01T18-37-25Z
+    platform: linux/amd64
+    pull_policy: build
+    build:
+      context: ../launch-tae-compose
+      dockerfile: Dockerfile.minio
+
+  createbuckets:
+    image: mo-iceberg-mc-ci:RELEASE.2023-10-30T18-43-32Z
+    platform: linux/amd64
+    pull_policy: build
+    build:
+      context: ../launch-tae-compose
+      dockerfile: Dockerfile.mc
