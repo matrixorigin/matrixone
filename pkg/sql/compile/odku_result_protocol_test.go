@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
-"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -189,24 +189,36 @@ func TestRemoteODKUProducerReservationIncludesForwardedSubtrees(t *testing.T) {
 // implement the complete ODKU summary/baseline contract. Cached and persisted
 // owners must retain 115 even when no remote placement is attempted.
 func TestODKU115SourceCachedAndPersistedFloors(t *testing.T) {
- c,_:=expressionProtocolTestCompile(t)
- rt:=moruntime.ServiceRuntime(c.proc.GetService())
- last:=&plan.Expr{Typ:plan.Type{Id:28},Expr:&plan.Expr_F{F:&plan.Function{Func:&plan.ObjectRef{Obj:int64(function.LAST_INSERT_ID)<<32}}}}
- cases:=[]*plan.Plan{
-  {Plan:&plan.Plan_Query{Query:&plan.Query{Nodes:[]*plan.Node{{PreInsertCtx:&plan.PreInsertCtx{TrackOdkuResult:true}}}}}},
-  {Plan:&plan.Plan_Query{Query:&plan.Query{Nodes:[]*plan.Node{{ProjectList:[]*plan.Expr{last}}}}}},
- }
- for _,owner:=range cases{
-  floor,err:=planbuilder.RequiredPersistedExpressionProtocolVersion(owner);require.NoError(t,err);require.Equal(t,defines.MORPCVersion115,floor)
-  for _,version:=range []int64{57,58,112,113,114}{
-   rt.SetGlobalVariables(moruntime.MOProtocolVersion,version)
-   require.ErrorContains(t,validateJSONStringConsumerProtocol(c.proc,owner),"protocol version 115")
-   cached:=&Compile{proc:c.proc,pn:owner};require.ErrorContains(t,cached.Compile(context.Background(),owner,nil),"protocol version 115")
-   _,err=cached.Run(0);require.ErrorContains(t,err,"protocol version 115")
-  }
-  rt.SetGlobalVariables(moruntime.MOProtocolVersion,defines.MORPCVersion115);require.NoError(t,validateJSONStringConsumerProtocol(c.proc,owner))
- }
- combined:=&plan.Plan{Plan:&plan.Plan_Query{Query:&plan.Query{Nodes:[]*plan.Node{{ProjectList:[]*plan.Expr{last,bindJSONStringConsumerExpr(t,"elt")},AggList:[]*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}}}}
- features,err:=plan.RequiredRemoteExpressionFeatures(combined);require.NoError(t,err);require.True(t,features.JSONMinMaxTypedComparison);require.True(t,features.JSONStringConsumerOverload);require.Equal(t,defines.MORPCVersion115,remoteExpressionProtocolVersion(features))
- floor,err:=planbuilder.RequiredPersistedExpressionProtocolVersion(combined);require.NoError(t,err);require.Equal(t,defines.MORPCVersion115,floor)
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	last := &plan.Expr{Typ: plan.Type{Id: 28}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: int64(function.LAST_INSERT_ID) << 32}}}}
+	cases := []*plan.Plan{
+		{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{PreInsertCtx: &plan.PreInsertCtx{TrackOdkuResult: true}}}}}},
+		{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{last}}}}}},
+	}
+	for _, owner := range cases {
+		floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(owner)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion115, floor)
+		for _, version := range []int64{57, 58, 112, 113, 114} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, owner), "protocol version 115")
+			cached := &Compile{proc: c.proc, pn: owner}
+			require.ErrorContains(t, cached.Compile(context.Background(), owner, nil), "protocol version 115")
+			_, err = cached.Run(0)
+			require.ErrorContains(t, err, "protocol version 115")
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, owner))
+	}
+	node := &plan.Node{ProjectList: []*plan.Expr{last, bindJSONStringConsumerExpr(t, "elt")}, AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}
+	combined := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}
+	features, err := plan.RequiredRemoteExpressionFeatures(combined)
+	require.NoError(t, err)
+	require.True(t, features.JSONMinMaxTypedComparison)
+	require.True(t, features.JSONStringConsumerOverload)
+	require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
+	floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(combined)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion115, floor)
 }
