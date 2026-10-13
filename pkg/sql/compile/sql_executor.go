@@ -626,6 +626,7 @@ func (exec *txnExecutor) Exec(
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
+	c.skipIndexTaskRegistration = statementOption.SkipIndexTaskRegistration()
 	c.disableLock = statementOption.DisableLock()
 	c.prePipelineLockTableID = statementOption.PrePipelineLockTable()
 

@@ -2373,16 +2373,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				tableID := newRelation.GetTableID(c.proc.Ctx)
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
-				if err != nil {
-					return err
-				}
+				if !c.skipIndexTaskRegistration {
+					tableID := newRelation.GetTableID(c.proc.Ctx)
+					err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
+					if err != nil {
+						return err
+					}
 
-				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
-				if err != nil {
-					return err
+					err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}

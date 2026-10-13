@@ -868,6 +868,8 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 		for _, conn := range []*sql.Conn{conn0, conn1, conn2} {
 			_, err = conn.ExecContext(ctx, "set session transaction_isolation='READ-COMMITTED'")
 			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "set experimental_ivf_index=1")
+			require.NoError(t, err)
 			var isolation string
 			require.NoError(t, conn.QueryRowContext(ctx, "select @@transaction_isolation").Scan(&isolation))
 			require.Equal(t, "READ-COMMITTED", isolation)
@@ -886,9 +888,11 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 			}()
 			for _, query := range []string{
 				"create table " + database + ".t1(id int primary key, v int)",
-				"create table " + database + ".t2(id int primary key, v int)",
+				"create table " + database + ".t2(id int primary key, v vecf32(2))",
 				"insert into " + database + ".t1 values(1, 1)",
-				"insert into " + database + ".t2 values(1, 1)",
+				"create index idx using ivfflat on " + database +
+					".t2(v) lists=1 op_type 'vector_l2_ops'",
+				"insert into " + database + ".t2 values(1, '[1,0]')",
 			} {
 				execSQLRequire(t, ctx, db0, query)
 			}
@@ -937,10 +941,10 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("independent COPY ALTER did not finish after the holder committed")
 			}
-			for _, table := range []string{"t1", "t2"} {
-				execSQLRequire(t, ctx, db0,
-					"insert into "+database+"."+table+" values(2, 2, 2)")
-			}
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t1 values(2, 2, 2)")
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t2 values(2, '[2,0]', 2)")
 		})
 
 		t.Run("overlapping_autocommit_publishers", func(t *testing.T) {
@@ -953,9 +957,11 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 			}()
 			for _, query := range []string{
 				"create table " + database + ".t1(id int primary key, v int)",
-				"create table " + database + ".t2(id int primary key, v int)",
+				"create table " + database + ".t2(id int primary key, v vecf32(2))",
 				"insert into " + database + ".t1 values(1, 1)",
-				"insert into " + database + ".t2 values(1, 1)",
+				"create index idx using ivfflat on " + database +
+					".t2(v) lists=1 op_type 'vector_l2_ops'",
+				"insert into " + database + ".t2 values(1, '[1,0]')",
 			} {
 				execSQLRequire(t, ctx, db0, query)
 			}
@@ -1044,10 +1050,10 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 			require.NoError(t, conn0.QueryRowContext(ctx,
 				"select v from "+database+".t1 where id=1").Scan(&value))
 			require.Equal(t, 1, value, "the blocking UPDATE must roll back")
-			for _, table := range []string{"t1", "t2"} {
-				execSQLRequire(t, ctx, db0,
-					"insert into "+database+"."+table+" values(2, 2, 2)")
-			}
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t1 values(2, 2, 2)")
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t2 values(2, '[2,0]', 2)")
 		})
 	})
 }

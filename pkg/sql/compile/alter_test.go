@@ -3396,6 +3396,7 @@ func TestAlterCopyCreateOptionsDisablesNestedCreateLock(t *testing.T) {
 	})
 	require.True(t, opts.DisableLock())
 	require.True(t, opts.IgnoreForeignKey())
+	require.True(t, opts.SkipIndexTaskRegistration())
 	require.Equal(t, uint64(7), opts.KeepLogicalId())
 	kind, hasKind := opts.KeepRelKind()
 	require.True(t, hasKind)
@@ -3674,24 +3675,22 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			originRel.EXPECT().CopyTableDef(gomock.Any()).Return(liveTableDef).Times(1)
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
-			if tc.nilCtxBeforeInsert {
-				copyRel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef {
-					proc.Ctx = nil
-					return &plan.TableDef{
-						TblId: 2,
-						Name:  "dept_copy",
-					}
-				})
-			} else {
-				copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
-					TblId: 2,
-					Name:  "dept_copy",
-				}).AnyTimes()
-			}
 
 			mockDb := mock_frontend.NewMockDatabase(ctrl)
-			mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
-			mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+			mockDb.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, name string, _ any) (engine.Relation, error) {
+					if name == "dept_copy" {
+						if tc.nilCtxBeforeInsert {
+							proc.Ctx = nil
+						}
+						return copyRel, nil
+					}
+					if name == "dept" {
+						return originRel, nil
+					}
+					return nil, moerr.NewInternalError(context.Background(), "unexpected relation "+name)
+				},
+			).AnyTimes()
 
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
