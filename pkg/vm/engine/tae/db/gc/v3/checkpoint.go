@@ -158,6 +158,7 @@ type checkpointCleaner struct {
 		active       map[string]struct{}
 		markers      map[string]struct{}
 		uncertain    map[string]string
+		retry        map[string]ioutil.UnpublishedObject
 		pending      int
 		overflow     bool
 		initialized  bool
@@ -1873,6 +1874,18 @@ func (c *checkpointCleaner) PrepareUnpublishedObject(
 	isTombstone bool,
 	file string,
 ) (string, error) {
+	return c.prepareUnpublishedObject(
+		ctx, dbID, tableID, isTombstone, file, nil)
+}
+
+func (c *checkpointCleaner) prepareUnpublishedObject(
+	ctx context.Context,
+	dbID uint64,
+	tableID uint64,
+	isTombstone bool,
+	file string,
+	dependsOn []string,
+) (string, error) {
 	if file == "" {
 		return "", moerr.NewInternalErrorNoCtx(
 			"cannot prepare an empty unpublished object")
@@ -1910,6 +1923,7 @@ func (c *checkpointCleaner) PrepareUnpublishedObject(
 		markerFS,
 		ioutil.UnpublishedObject{
 			File:        file,
+			DependsOn:   append([]string(nil), dependsOn...),
 			DBID:        dbID,
 			TableID:     tableID,
 			IsTombstone: isTombstone,
@@ -2143,16 +2157,19 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 	}
 	defer c.unpublishedCleanupReplayMu.Unlock()
 
-	generation := c.unpublishedCleanupGeneration.Load()
-	if generation == c.unpublishedCleanupProcessed.Load() {
-		return nil
-	}
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		ctx, unpublishedCleanupReplayTimeout, moerr.CauseCleanUpUselessFiles)
 	defer cancel()
 	markerFS := c.unpublishedCleanupFS
 	if markerFS == nil {
 		markerFS = c.fs
+	}
+	retryRemaining, retryErr := c.retryUnpublishedObjects(
+		cleanupCtx, unpublishedCleanupReplayBatch/2)
+	generation := c.unpublishedCleanupGeneration.Load()
+	if generation == c.unpublishedCleanupProcessed.Load() &&
+		!retryRemaining && retryErr == nil {
+		return nil
 	}
 	durableLimit := unpublishedCleanupReplayBatch
 	if c.hasUncertainUnpublishedObjectMarkers() {
@@ -2183,8 +2200,8 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 			markerFS,
 			unpublishedCleanupReplayBatch-inspected,
 		)
-	remaining = remaining || uncertainRemaining
-	replayErr = errors.Join(replayErr, uncertainErr)
+	remaining = retryRemaining || remaining || uncertainRemaining
+	replayErr = errors.Join(retryErr, replayErr, uncertainErr)
 	if c.hasUncertainUnpublishedObjectMarkers() {
 		remaining = true
 	}
@@ -2225,6 +2242,10 @@ func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 		return ioutil.RetryUnpublishedObjectCleanup, nil
 	}
 	if c.checkpointCli == nil {
+		return ioutil.DeleteUnpublishedObject, nil
+	}
+	if object.DBID == 0 && object.TableID == 0 &&
+		isGCMetadataFile(object.File) {
 		return ioutil.DeleteUnpublishedObject, nil
 	}
 
@@ -2634,6 +2655,18 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
+	snapshotBefore := c.mutation.snapshotMeta.Clone()
+	defer func() {
+		if err == nil {
+			return
+		}
+		c.mutation.snapshotMeta.RestoreFrom(snapshotBefore)
+		for _, file := range newFiles {
+			if cleanupErr := c.fs.Delete(ctx, file); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
+	}()
 	saveSnapshot := func() (err2 error) {
 		select {
 		case <-ctx.Done():
@@ -2723,6 +2756,13 @@ func (c *checkpointCleaner) retainUnpublishedObjects(
 	files []string,
 ) error {
 	seen := make(map[string]struct{}, len(files))
+	var metadataFile string
+	for _, file := range files {
+		if isGCMetadataFile(file) {
+			metadataFile = file
+			break
+		}
+	}
 	var err error
 	for _, file := range files {
 		if file == "" {
@@ -2732,15 +2772,127 @@ func (c *checkpointCleaner) retainUnpublishedObjects(
 			continue
 		}
 		seen[file] = struct{}{}
-		_, prepareErr := c.PrepareUnpublishedObject(ctx, 0, 0, false, file)
-		if prepareErr != nil {
-			err = errors.Join(err, prepareErr)
+		var dependsOn []string
+		if metadataFile != "" && file != metadataFile {
+			dependsOn = []string{metadataFile}
 		}
-		// The scan has already lost its in-memory sinker owner. Transfer the
-		// durable marker to the cleaner even when marker creation was ambiguous.
-		c.AbandonUnpublishedObject(file)
+		object := ioutil.UnpublishedObject{
+			File:      file,
+			DependsOn: dependsOn,
+		}
+		_, prepareErr := c.prepareUnpublishedObject(
+			ctx, 0, 0, false, file, dependsOn,
+		)
+		if prepareErr == nil {
+			c.AbandonUnpublishedObject(file)
+			continue
+		}
+
+		marker, recordErr := c.recordUnpublishedObject(ctx, object)
+		if recordErr == nil {
+			c.retainUnboundedUnpublishedObjectMarker(marker)
+			c.AbandonUnpublishedObject(file)
+			continue
+		}
+
+		// Keep the exact object identity in the cleaner until a durable marker
+		// can be written. The sinker may be closed after this callback returns.
+		c.retainUnpublishedObjectForRetry(object)
+		err = errors.Join(err, prepareErr, recordErr)
 	}
 	return err
+}
+
+func (c *checkpointCleaner) recordUnpublishedObject(
+	ctx context.Context,
+	object ioutil.UnpublishedObject,
+) (string, error) {
+	markerFS := c.unpublishedCleanupFS
+	if markerFS == nil {
+		markerFS = c.fs
+	}
+	marker, err := ioutil.RecordUnpublishedObjectCleanup(ctx, markerFS, object)
+	if err == nil {
+		return marker, nil
+	}
+	if _, statErr := markerFS.StatFile(ctx, marker); statErr == nil {
+		return marker, nil
+	} else {
+		return marker, errors.Join(err, statErr)
+	}
+}
+
+func (c *checkpointCleaner) retainUnboundedUnpublishedObjectMarker(
+	marker string,
+) {
+	c.unpublishedCleanupOwnership.Lock()
+	defer c.unpublishedCleanupOwnership.Unlock()
+	if c.unpublishedCleanupOwnership.markers == nil {
+		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
+	}
+	c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+	c.unpublishedCleanupOwnership.overflow = true
+	if c.unpublishedCleanupOwnership.pending < unpublishedCleanupMaxPending {
+		c.unpublishedCleanupOwnership.pending = unpublishedCleanupMaxPending
+	}
+}
+
+func (c *checkpointCleaner) retainUnpublishedObjectForRetry(
+	object ioutil.UnpublishedObject,
+) {
+	c.unpublishedCleanupOwnership.Lock()
+	if c.unpublishedCleanupOwnership.retry == nil {
+		c.unpublishedCleanupOwnership.retry = make(
+			map[string]ioutil.UnpublishedObject)
+	}
+	c.unpublishedCleanupOwnership.retry[object.File] = object
+	c.unpublishedCleanupOwnership.Unlock()
+	c.unpublishedCleanupGeneration.Add(1)
+}
+
+func (c *checkpointCleaner) retryUnpublishedObjects(
+	ctx context.Context,
+	limit int,
+) (remaining bool, err error) {
+	c.unpublishedCleanupOwnership.Lock()
+	objects := make([]ioutil.UnpublishedObject, 0, min(
+		len(c.unpublishedCleanupOwnership.retry), limit))
+	for _, object := range c.unpublishedCleanupOwnership.retry {
+		if len(objects) == limit {
+			remaining = true
+			break
+		}
+		objects = append(objects, object)
+	}
+	c.unpublishedCleanupOwnership.Unlock()
+
+	var firstErr error
+	for _, object := range objects {
+		marker, recordErr := c.recordUnpublishedObject(ctx, object)
+		if recordErr != nil {
+			remaining = true
+			if firstErr == nil {
+				firstErr = recordErr
+			}
+			continue
+		}
+		c.retainUnboundedUnpublishedObjectMarker(marker)
+		c.unpublishedCleanupOwnership.Lock()
+		delete(c.unpublishedCleanupOwnership.retry, object.File)
+		c.unpublishedCleanupOwnership.Unlock()
+		c.AbandonUnpublishedObject(object.File)
+		c.unpublishedCleanupGeneration.Add(1)
+	}
+	return remaining, firstErr
+}
+
+func isGCMetadataFile(file string) bool {
+	name := file
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	return strings.HasPrefix(name, ioutil.PrefixGCMeta+"_") &&
+		strings.HasSuffix(name, "."+ioutil.GCMetaExt)
 }
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(

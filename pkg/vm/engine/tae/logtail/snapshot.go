@@ -589,6 +589,32 @@ func (sm *SnapshotMeta) restoreStateLocked(state snapshotMetaState) {
 	sm.snapshotTableIDs = state.snapshotTableIDs
 }
 
+// Clone returns a consistent snapshot of all state mutated by Update. Callers
+// that span multiple checkpoint consumers can restore it if a later consumer
+// fails before the scan commit boundary.
+func (sm *SnapshotMeta) Clone() *SnapshotMeta {
+	sm.RLock()
+	state := sm.cloneStateLocked()
+	sm.RUnlock()
+	clone := NewSnapshotMeta()
+	clone.restoreStateLocked(state)
+	return clone
+}
+
+// RestoreFrom replaces all mutable snapshot state with a previously captured
+// Clone. The source and destination may be used concurrently.
+func (sm *SnapshotMeta) RestoreFrom(snapshot *SnapshotMeta) {
+	if snapshot == nil || snapshot == sm {
+		return
+	}
+	snapshot.RLock()
+	state := snapshot.cloneStateLocked()
+	snapshot.RUnlock()
+	sm.Lock()
+	sm.restoreStateLocked(state)
+	sm.Unlock()
+}
+
 func copyObjectsLocked(
 	objects map[uint64]map[objectio.Segmentid]*objectInfo,
 ) map[uint64]map[objectio.Segmentid]*objectInfo {

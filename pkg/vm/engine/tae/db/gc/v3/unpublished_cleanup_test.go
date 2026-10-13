@@ -225,6 +225,35 @@ func TestCheckpointCleanerRetainsAmbiguousReplayMarkerIdentity(t *testing.T) {
 	cleaner.unpublishedCleanupOwnership.Unlock()
 }
 
+func TestCheckpointCleanerRetainsObjectWhenMarkerAdmissionFails(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	file := objectio.MockObjectName().String()
+	markerFS.rejectMarkerWrites.Store(true)
+	require.Error(t, cleaner.retainUnpublishedObjects(ctx, []string{file}))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	_, retained := cleaner.unpublishedCleanupOwnership.retry[file]
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	require.True(t, retained)
+
+	markerFS.rejectMarkerWrites.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	_, retained = cleaner.unpublishedCleanupOwnership.retry[file]
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	require.False(t, retained)
+}
+
 func TestParseUnpublishedObjectID(t *testing.T) {
 	name := objectio.MockObjectName()
 	got, err := parseUnpublishedObjectID(name.String())

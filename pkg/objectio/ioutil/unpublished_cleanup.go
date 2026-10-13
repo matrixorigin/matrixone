@@ -39,13 +39,14 @@ const (
 // before the object itself, so a persisted object always has a restart-safe
 // owner even when the object write returns an ambiguous error.
 type UnpublishedObject struct {
-	File                  string `json:"file"`
-	DBID                  uint64 `json:"db_id"`
-	TableID               uint64 `json:"table_id"`
-	IsTombstone           bool   `json:"is_tombstone"`
-	TNShardID             uint64 `json:"tn_shard_id,omitempty"`
-	SyncProtectionJobID   string `json:"sync_protection_job_id,omitempty"`
-	SyncProtectionValidTS int64  `json:"sync_protection_valid_ts,omitempty"`
+	File                  string   `json:"file"`
+	DependsOn             []string `json:"depends_on,omitempty"`
+	DBID                  uint64   `json:"db_id"`
+	TableID               uint64   `json:"table_id"`
+	IsTombstone           bool     `json:"is_tombstone"`
+	TNShardID             uint64   `json:"tn_shard_id,omitempty"`
+	SyncProtectionJobID   string   `json:"sync_protection_job_id,omitempty"`
+	SyncProtectionValidTS int64    `json:"sync_protection_valid_ts,omitempty"`
 }
 
 type unpublishedObjectCleanupIntent struct {
@@ -425,6 +426,11 @@ func replayUnpublishedObjectCleanupMarkers(
 			hasRemaining = true
 			continue
 		}
+		if decision == DeleteUnpublishedObject &&
+			!unpublishedObjectDependenciesReady(ctx, objectFS, intent.Object.DependsOn) {
+			hasRemaining = true
+			continue
+		}
 		if decision == DeleteUnpublishedObject {
 			if _, deleteErr := DeleteUnpublishedObjects(
 				ctx, objectFS, intent.Object.File); deleteErr != nil {
@@ -455,6 +461,26 @@ func replayUnpublishedObjectCleanupMarkers(
 		)
 	}
 	return replayed, inspected, hasRemaining, nil
+}
+
+func unpublishedObjectDependenciesReady(
+	ctx context.Context,
+	fs fileservice.FileService,
+	dependencies []string,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency == "" {
+			continue
+		}
+		_, err := fs.StatFile(ctx, dependency)
+		if err == nil {
+			return false
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return false
+		}
+	}
+	return true
 }
 
 func readUnpublishedObjectCleanup(

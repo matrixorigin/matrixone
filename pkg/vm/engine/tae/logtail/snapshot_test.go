@@ -162,6 +162,25 @@ func TestSnapshotMetaUpdateRollsBackPartialRetryState(t *testing.T) {
 	require.Equal(t, table, meta.tablePKIndex[table.pk][0])
 }
 
+func TestSnapshotMetaCloneRestore(t *testing.T) {
+	meta := NewSnapshotMeta()
+	meta.snapshotTableIDs[1] = struct{}{}
+	meta.aobjDelTsMap[types.BuildTS(1, 0)] = struct{}{}
+	meta.pitr.tid = 2
+	snapshot := meta.Clone()
+
+	delete(meta.snapshotTableIDs, 1)
+	delete(meta.aobjDelTsMap, types.BuildTS(1, 0))
+	meta.pitr.tid = 3
+	meta.RestoreFrom(snapshot)
+
+	_, ok := meta.snapshotTableIDs[1]
+	require.True(t, ok)
+	_, ok = meta.aobjDelTsMap[types.BuildTS(1, 0)]
+	require.True(t, ok)
+	require.Equal(t, uint64(2), meta.pitr.tid)
+}
+
 // TestSnapshotInfo tests the basic functionality of SnapshotInfo
 func TestSnapshotInfo(t *testing.T) {
 	t.Run("NewSnapshotInfo", func(t *testing.T) {

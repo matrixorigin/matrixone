@@ -273,8 +273,12 @@ func (w *GCWindow) ScanCheckpoints(
 				err = errors.Join(err, metaCleanupErr)
 				if w.retainUnpublished != nil {
 					persisted, _ := sinker.GetResult()
+					files := objectStatsNames(persisted)
+					if metaFile != "" {
+						files = append(files, ioutil.MakeFullName(w.dir, metaFile))
+					}
 					if retainErr := w.retainUnpublished(
-						ctx, objectStatsNames(persisted),
+						ctx, files,
 					); retainErr != nil {
 						err = errors.Join(err, retainErr)
 					}
