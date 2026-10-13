@@ -104,6 +104,10 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 
 	case *plan.Expr_Sub:
 		side := builder.outerJoinSubqueryInputSide(exprImpl.Sub, leftTags, rightTags)
+		if side&JoinSideOuter != 0 || side&JoinSideBoth == JoinSideBoth || builder.subqueryNeedsDependent(exprImpl.Sub.NodeId) {
+			bound, bindErr := builder.bindDependentJoinCondition(expr)
+			return leftID, rightID, bound, bindErr
+		}
 		if side&JoinSideOuter != 0 {
 			return 0, 0, nil, moerr.NewNYI(
 				builder.GetContext(),
@@ -460,6 +464,17 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
 	}
+	if builder.subqueryNeedsDependent(subquery.NodeId) && !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected) {
+		if subquery.Child != nil && hasSubquery(subquery.Child) {
+			var err error
+			nodeID, subquery.Child, err = builder.flattenSubqueriesWithContext(nodeID, subquery.Child, ctx, false)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		bound, err := builder.bindDependentSubquery(subquery)
+		return nodeID, bound, err
+	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
 		if subquery.Typ != plan.SubqueryRef_SCALAR {
 			return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
@@ -481,6 +496,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	var err error
 	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ, guarded)
 	if err != nil {
+		// parameterizeLocalCTEs completes all read-only admission before it
+		// rewrites any node. Its rejected replay shapes retain their original
+		// lexical plan and can therefore use invocation-local execution.
+		if moerr.IsMoErrCode(err, moerr.ErrNYI) {
+			bound, bindErr := builder.bindDependentSubquery(subquery)
+			return nodeID, bound, bindErr
+		}
 		return 0, nil, err
 	}
 	if subquery.Typ != plan.SubqueryRef_SCALAR && builder.hasCorrelatedLocalCTEHaving(subID) {

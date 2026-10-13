@@ -419,6 +419,9 @@ func validateSpillFileSize(file *os.File, expected uint64) error {
 }
 
 type HashBuild struct {
+	// DirectInput consumes a same-lane batch-only build through ExecYield
+	// checkpoints. Hash and spill builds keep their existing pipeline contract.
+	DirectInput                   bool
 	ctr                           container
 	NeedHashMap                   bool
 	HashOnPK                      bool

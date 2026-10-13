@@ -39,7 +39,9 @@ const (
 )
 
 type container struct {
-	status int
+	allocation   colexec.AnalyticAllocation
+	sortMetadata uint64
+	status       int
 
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
@@ -88,6 +90,8 @@ type container struct {
 	// A fold query can then binary-search each span instead of rescanning the
 	// partition for every frame row.
 	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
+	civilMetadata       uint64
+	civilSelection      timestampRangeSelection
 }
 
 type timestampCivilOrderKey struct {
@@ -132,6 +136,13 @@ type Window struct {
 	vm.OperatorBase
 }
 
+func (window *Window) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	return window.ctr.allocation.Set(account)
+}
+func (window *Window) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	return window.ctr.allocation.Clear(account)
+}
+
 func (window *Window) GetOperatorBase() *vm.OperatorBase {
 	return &window.OperatorBase
 }
@@ -164,6 +175,12 @@ func (window *Window) Release() {
 }
 
 func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	defer func() {
+		if window.ctr.allocation.Account != nil {
+			window.Free(proc, pipelineFailed, err)
+		}
+	}()
+
 	ctr := &window.ctr
 
 	ctr.cleanOutput(proc.Mp())
@@ -193,7 +210,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
-	ctr.timestampCivilOrder = nil
+	ctr.clearCivilOrder()
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
@@ -202,6 +219,9 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
+	ctr.orderVecs, ctr.aggVecs = nil, nil
+	ctr.clearSortState()
+	ctr.allocation.FreeMetadata()
 	ctr.prepareParamKind.Reset(nil)
 }
 
@@ -214,11 +234,16 @@ func (ctr *container) resetParam() {
 	ctr.emitOffset = 0
 	ctr.desc = nil
 	ctr.nullsLast = nil
-	ctr.sels = nil
-	ctr.ps = nil
-	ctr.os = nil
+	ctr.clearSortState()
 	ctr.runtimeFrames = nil
+	ctr.clearCivilOrder()
+}
+
+func (ctr *container) clearCivilOrder() {
 	ctr.timestampCivilOrder = nil
+	ctr.civilSelection.spans = nil
+	ctr.allocation.ReleaseMetadata(ctr.civilMetadata)
+	ctr.civilMetadata = 0
 }
 
 // cleanOutput releases the batch returned by the previous Call. Input-column
@@ -333,4 +358,10 @@ func (ctr *container) hasAccountedBufferedData() bool {
 		}
 	}
 	return false
+}
+
+func (ctr *container) clearSortState() {
+	ctr.sels, ctr.ps, ctr.os = nil, nil, nil
+	ctr.allocation.ReleaseMetadata(ctr.sortMetadata)
+	ctr.sortMetadata = 0
 }

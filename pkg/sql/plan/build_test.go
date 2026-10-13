@@ -8302,11 +8302,10 @@ func TestSubQuery(t *testing.T) {
 				OR n3.N_REGIONKEY = 1
 		)
 	)`
-	_, err := runOneStmt(mock, t, sql)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
-	}
+	p, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
@@ -10009,13 +10008,13 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
+	require.NoError(t, err)
 
 	_, err = runOneStmt(mock, t,
 		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
 			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	require.NoError(t, err)
 }
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{

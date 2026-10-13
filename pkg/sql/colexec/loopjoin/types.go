@@ -67,9 +67,15 @@ const (
 )
 
 type container struct {
-	state    int
-	probeIdx int
-	batIdx   int
+	// conditionPending preserves the partially filled result across a same-lane
+	// predicate suspension. It is distinct from an output batch boundary.
+	conditionPending bool
+	probeScanStarted bool
+	probeScanBatch   int
+	probeScanRow     int
+	state            int
+	probeIdx         int
+	batIdx           int
 	// batRowIdx is the next row to consume from batIdx. A JoinMap batch is not
 	// required to fit in DefaultBatchSize, so loop join must be able to yield
 	// in the middle of one instead of materializing the whole batch at once.
@@ -127,6 +133,9 @@ type container struct {
 }
 
 type LoopJoin struct {
+	// PairCondition evaluates one actual candidate pair. A nil result requests
+	// ExecYield; the caller retains both inputs until the next Call resumes it.
+	PairCondition                 func(*process.Process, *batch.Batch, int, *batch.Batch, int) (*vector.Vector, error)
 	ctr                           container
 	LeftTypes                     []types.Type
 	RightTypes                    []types.Type
@@ -268,6 +277,7 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanRightMatchState(proc)
+	ctr.cleanHashMap()
 
 }
 
@@ -298,6 +308,10 @@ func (ctr *container) clearConditionResult() {
 }
 
 func (ctr *container) clearProbeResume() {
+	ctr.conditionPending = false
+	ctr.probeScanStarted = false
+	ctr.probeScanBatch = 0
+	ctr.probeScanRow = 0
 	ctr.probeMatched = false
 	ctr.clearConditionResult()
 	ctr.probeScanValid = false

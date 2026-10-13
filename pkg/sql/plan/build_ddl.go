@@ -339,7 +339,7 @@ func inferViewColumns(
 			return nil, err
 		}
 	}
-	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	projectList := query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
@@ -1545,7 +1545,7 @@ func genAsSelectCols(
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
 		return nil, nil, err
 	}
-	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {

@@ -4305,6 +4305,14 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	for _, prepared := range req.PrepareStmts {
+		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
+			return moerr.NewInvalidInput(ctx, "invalid prepared statement migration contract")
+		}
+		if prepared.RequiredProtocolVersion > currentProtocolVersion(ses.proc) {
+			return moerr.NewNotSupportedf(ctx, "prepared statement migration requires protocol version %d", prepared.RequiredProtocolVersion)
+		}
+	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session values after all replay work has finished.

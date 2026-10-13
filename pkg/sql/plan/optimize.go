@@ -69,6 +69,25 @@ func (opt *BaseOptimizer) optimize() (*Query, error) {
 	if len(opt.qry.Steps) == 0 {
 		return opt.qry, nil
 	}
+	if opt.qry.Correlation != nil {
+		if err := opt.qry.ValidateCorrelation(); err != nil {
+			return nil, err
+		}
+		if err := plan.WalkQueryNodes(opt.qry, func(_ int32, n *plan.Node) error {
+			for _, rule := range opt.rules {
+				if rule.Match(n) {
+					rule.Apply(n, opt.qry, opt.ctx.GetProcess())
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if err := compactCorrelationPlan(opt.qry); err != nil {
+			return nil, err
+		}
+		return opt.qry, nil
+	}
 	for _, step := range opt.qry.Steps {
 		opt.exploreNode(opt.qry.Nodes[step])
 	}

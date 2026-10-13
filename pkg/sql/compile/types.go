@@ -283,7 +283,9 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	// Unprepared source metadata owners, never scheduled or run.
+	dependentSourceScopes []*Scope
+	scopes                []*Scope
 	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;

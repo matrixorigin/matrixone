@@ -25,6 +25,16 @@ func (proc *Process) NextGroupConcatInputRowBase(operatorIdx int, rows uint64) u
 		return 0
 	}
 
+	if proc.dependent != nil {
+		if operatorIdx < 0 || operatorIdx >= len(proc.dependent.groupRows) {
+			panic("dependent group operator outside compiled domain")
+		}
+		counter := &proc.dependent.groupRows[operatorIdx]
+		if rows == 0 {
+			return counter.Load()
+		}
+		return counter.Add(rows) - rows
+	}
 	base := proc.Base
 	base.groupConcatInputRowCountersMu.Lock()
 	if base.groupConcatInputRowCounters == nil {
@@ -45,6 +55,12 @@ func (proc *Process) NextGroupConcatInputRowBase(operatorIdx int, rows uint64) u
 
 func (proc *Process) ResetGroupConcatInputRowCounters() {
 	if proc == nil || proc.Base == nil {
+		return
+	}
+	if proc.dependent != nil {
+		for i := range proc.dependent.groupRows {
+			proc.dependent.groupRows[i].Store(0)
+		}
 		return
 	}
 	base := proc.Base

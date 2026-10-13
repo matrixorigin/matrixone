@@ -112,6 +112,9 @@ func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportPro
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
+	if q.Correlation != nil {
+		return nil, notEligiblef(EligibilityPlanShape, "dependent programs require the MO coordinator")
+	}
 	if err := planpb.RequireLegacyCollations(q); err != nil {
 		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
 	}

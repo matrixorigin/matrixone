@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -100,7 +101,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
 			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = colexec.MakeEvalVector(proc, expressions); err != nil {
+			if ctr.aggVecs[i], err = colexec.MakeEvalVectorWithAllocation(proc, expressions, ctr.allocation.Vector); err != nil {
 				return err
 			}
 		}
@@ -313,6 +314,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				if result.Status == vm.ExecYield {
+					return result, nil
+				}
 				if result.Batch == nil {
 					if ctr.bat != nil && !ctr.bat.IsEmpty() {
 						ctr.status = eval
@@ -333,6 +337,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			result, err := vm.ChildrenCall(window.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
+			}
+			if result.Status == vm.ExecYield {
+				return result, nil
 			}
 			if result.Batch == nil {
 				ctr.status = done
@@ -374,9 +381,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			// Keep the materialized and sorted logical partition, then evaluate it
 			// lazily in bounded output chunks. A LIMIT consumer can stop after the
 			// first chunk without forcing the remaining frame calculations.
-			ctr.ps = nil
-			ctr.os = nil
-			ctr.sels = nil
+			ctr.clearSortState()
 			w := window.WinSpecList[0]
 			if window.PartitionTopN {
 				window.Fs = makePartitionTopNOrderBy(w)
@@ -387,7 +392,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if len(ctr.orderVecs) == 0 {
 					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 					for j := range ctr.orderVecs {
-						ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+						ctr.orderVecs[j], err = colexec.MakeEvalVectorWithAllocation(proc, []*plan.Expr{window.Fs[j].Expr}, ctr.allocation.Vector)
 						if err != nil {
 							return result, err
 						}
@@ -532,6 +537,10 @@ func (ctr *container) newAggregateExecutor(
 
 	exec, err := aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 	if err != nil {
+		return nil, err
+	}
+	if err = ctr.allocation.BindAggregate(exec); err != nil {
+		exec.Free()
 		return nil, err
 	}
 	aggexec.ConfigureGroupConcatWarningRetention(
@@ -753,7 +762,10 @@ func (ctr *container) processOrderedSetFullPartitionRange(
 		}
 	}
 
-	result := vector.NewVec(*ctr.orderedSetPartitionResults.GetType())
+	result, allocationErr := ctr.allocation.NewVector(*ctr.orderedSetPartitionResults.GetType())
+	if allocationErr != nil {
+		return nil, allocationErr
+	}
 	defer func() {
 		if retErr != nil {
 			result.Free(proc.Mp())
@@ -1158,6 +1170,13 @@ func (ctr *container) processOrderFuncRange(
 ) (*vector.Vector, error) {
 	n := ctr.bat.RowCount()
 	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+	// Each ranking implementation builds one eight-byte value per output row
+	// before copying into its owned vector. Include that simultaneous scratch.
+	scratch := uint64(outputEnd-outputStart) * 8
+	if err := ctr.allocation.ReserveMetadata(proc, scratch); err != nil {
+		return nil, err
+	}
+	defer ctr.allocation.ReleaseMetadata(scratch)
 
 	if funcName == "percent_rank" || funcName == "cume_dist" {
 		values := make([]float64, outputEnd-outputStart)
@@ -1182,7 +1201,10 @@ func (ctr *container) processOrderFuncRange(
 				values[j-outputStart] = float64(peerEnd) / float64(n)
 			}
 		}
-		vec := vector.NewVec(types.T_float64.ToType())
+		vec, err := ctr.allocation.NewVector(types.T_float64.ToType())
+		if err != nil {
+			return nil, err
+		}
 		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
@@ -1202,7 +1224,10 @@ func (ctr *container) processOrderFuncRange(
 			}
 			values[j-outputStart] = uint64(j - partitionStart + 1)
 		}
-		vec := vector.NewVec(types.T_uint64.ToType())
+		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		if err != nil {
+			return nil, err
+		}
 		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
@@ -1220,7 +1245,10 @@ func (ctr *container) processOrderFuncRange(
 			}
 			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
 		}
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec, err := ctr.allocation.NewVector(types.T_int64.ToType())
+		if err != nil {
+			return nil, err
+		}
 		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
@@ -1252,7 +1280,10 @@ func (ctr *container) processOrderFuncRange(
 				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
 			}
 		}
-		vec := vector.NewVec(types.T_uint64.ToType())
+		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		if err != nil {
+			return nil, err
+		}
 		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
@@ -1365,7 +1396,10 @@ func (ctr *container) processValueFuncRange(
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.MustTypeFromPlan(w.WindowFunc.Typ)
-	localResult := vector.NewVec(retType)
+	localResult, err := ctr.allocation.NewVector(retType)
+	if err != nil {
+		return nil, err
+	}
 	defer func() {
 		if err != nil && localResult != nil {
 			localResult.Free(proc.Mp())
@@ -1786,6 +1820,16 @@ func (ctr *container) timestampRangeSelection(
 	}
 
 	selection := &timestampRangeSelection{}
+	if ctr.allocation.Account != nil {
+		oldCapacity := cap(ctr.civilSelection.spans)
+		spans, err := colexec.GrowAnalyticSlice(ctr.civilSelection.spans, len(index.spans)+2, proc, &ctr.allocation)
+		if err != nil {
+			return nil, err
+		}
+		ctr.civilMetadata += uint64(cap(spans)-oldCapacity) * uint64(unsafe.Sizeof(timestampCivilOrderSpan{}))
+		ctr.civilSelection.spans = spans[:0]
+		selection = &ctr.civilSelection
+	}
 	// The civil spans deliberately omit NULL order keys. A NULL peer can still
 	// belong to a frame with an unbounded side: it is included only when that
 	// side reaches the NULL end of the already sorted window order.
@@ -1823,6 +1867,15 @@ func (ctr *container) timestampCivilOrderIndex(
 	key := timestampCivilOrderKey{vec: vec, loc: loc, start: start, end: end, desc: desc}
 	if index, ok := ctr.timestampCivilOrder[key]; ok {
 		return index, nil
+	}
+	// Bound each map entry, including its share of map growth, and the index
+	// object before publishing either. Span backing is admitted as it grows.
+	if ctr.allocation.Account != nil {
+		size := 2*uint64(unsafe.Sizeof(key)+unsafe.Sizeof(uintptr(0))) + uint64(unsafe.Sizeof(timestampCivilOrderIndex{})) + 128
+		if err := ctr.allocation.ReserveMetadata(proc, size); err != nil {
+			return nil, err
+		}
+		ctr.civilMetadata += size
 	}
 	if ctr.timestampCivilOrder == nil {
 		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]*timestampCivilOrderIndex)
@@ -1864,10 +1917,11 @@ func (ctr *container) timestampCivilOrderIndex(
 		lastTimestamp, haveLast = col[i], true
 		break
 	}
-	foldTransitions, err := timestampCivilFoldTransitions(proc, loc, firstTimestamp, lastTimestamp, haveFirst && haveLast)
+	foldTransitions, err := timestampCivilFoldTransitions(proc, loc, firstTimestamp, lastTimestamp, haveFirst && haveLast, &ctr.allocation)
 	if err != nil {
 		return nil, err
 	}
+	defer ctr.allocation.ReleaseMetadata(uint64(cap(foldTransitions)) * uint64(unsafe.Sizeof(types.Timestamp(0))))
 	index.hasFold = len(foldTransitions) != 0
 
 	var previous types.Datetime
@@ -1885,7 +1939,9 @@ func (ctr *container) timestampCivilOrderIndex(
 		}
 		if vec.GetNulls().Contains(uint64(i)) {
 			if spanStart >= 0 {
-				index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+				if err = ctr.appendCivilSpan(proc, index, spanStart, i); err != nil {
+					return nil, err
+				}
 				spanStart = -1
 			}
 			havePrevious = false
@@ -1925,16 +1981,36 @@ func (ctr *container) timestampCivilOrderIndex(
 			index.hasFold = true
 		}
 		if havePrevious && (crossedFold || civilReversed) {
-			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+			if err = ctr.appendCivilSpan(proc, index, spanStart, i); err != nil {
+				return nil, err
+			}
 			spanStart = i
 		}
 		previous, previousTimestamp, previousOffset, havePrevious = civil, col[i], offset, true
 	}
 	if spanStart >= 0 {
-		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
+		if err = ctr.appendCivilSpan(proc, index, spanStart, end); err != nil {
+			return nil, err
+		}
 	}
 	ctr.timestampCivilOrder[key] = index
 	return index, nil
+}
+
+func (ctr *container) appendCivilSpan(proc *process.Process, index *timestampCivilOrderIndex, start, end int) error {
+	if ctr.allocation.Account == nil {
+		index.spans = append(index.spans, timestampCivilOrderSpan{start: start, end: end})
+		return nil
+	}
+	oldCapacity, position := cap(index.spans), len(index.spans)
+	spans, err := colexec.GrowAnalyticSlice(index.spans, position+1, proc, &ctr.allocation)
+	if err != nil {
+		return err
+	}
+	ctr.civilMetadata += uint64(cap(spans)-oldCapacity) * uint64(unsafe.Sizeof(timestampCivilOrderSpan{}))
+	index.spans = spans
+	index.spans[position] = timestampCivilOrderSpan{start: start, end: end}
+	return nil
 }
 
 // timestampCivilFoldTransitions returns every UTC-offset decrease in the
@@ -1946,7 +2022,14 @@ func timestampCivilFoldTransitions(
 	loc *time.Location,
 	minTimestamp, maxTimestamp types.Timestamp,
 	haveTimestamp bool,
-) ([]types.Timestamp, error) {
+	allocation *colexec.AnalyticAllocation,
+) (transitions []types.Timestamp, err error) {
+	defer func() {
+		if err != nil {
+			allocation.ReleaseMetadata(uint64(cap(transitions)) * uint64(unsafe.Sizeof(types.Timestamp(0))))
+			transitions = nil
+		}
+	}()
 	if !haveTimestamp || loc == nil || minTimestamp == types.ZeroTimestamp || maxTimestamp == types.ZeroTimestamp {
 		return nil, nil
 	}
@@ -1955,10 +2038,9 @@ func timestampCivilFoldTransitions(
 	}
 	probe := time.UnixMicro(int64(minTimestamp) - int64(types.UnixToTimestamp(0))).In(loc)
 	maxInstant := time.UnixMicro(int64(maxTimestamp) - int64(types.UnixToTimestamp(0)))
-	var transitions []types.Timestamp
 	for i := 0; ; i++ {
 		if err := checkCanceled(proc, i); err != nil {
-			return nil, err
+			return transitions, err
 		}
 		_, next := probe.ZoneBounds()
 		if next.IsZero() || next.After(maxInstant) {
@@ -1967,7 +2049,12 @@ func timestampCivilFoldTransitions(
 		_, beforeOffset := time.UnixMicro(next.UnixMicro() - 1).In(loc).Zone()
 		_, afterOffset := next.In(loc).Zone()
 		if afterOffset < beforeOffset {
-			transitions = append(transitions, types.UnixMicroToTimestamp(next.UnixMicro()))
+			position := len(transitions)
+			transitions, err = colexec.GrowAnalyticSlice(transitions, position+1, proc, allocation)
+			if err != nil {
+				return transitions, err
+			}
+			transitions[position] = types.UnixMicroToTimestamp(next.UnixMicro())
 		}
 		if !next.After(probe) {
 			break
@@ -2318,7 +2405,7 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 	// Eval reuses ctr.orderVecs' backing vectors by replacing their data below.
 	// Fold detection is derived from that data, so entries keyed by a vector
 	// pointer must never survive into the next materialized input batch.
-	ctr.timestampCivilOrder = nil
+	ctr.clearCivilOrder()
 	input := []*batch.Batch{bat}
 
 	for i := range ctr.orderVecs {
@@ -2364,7 +2451,7 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
-	ctr.ps = nil
+	ctr.clearSortState()
 
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
@@ -2516,9 +2603,31 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	rowCount := bat.RowCount()
-	// if ctr.sels == nil {
-	//	ctr.sels = make([]int64, rowCount)
-	// }
+	// Accounted generations reserve the exact backing capacities before the
+	// sort. ps/os share one directory; partition boundaries need their own copy.
+	partitionCapacity := 16
+	if ctr.allocation.Account != nil {
+		partitionCapacity = rowCount
+		size := uint64(rowCount) * 17 // permutation, shared peer directory, bool scratch
+		if partitionKeyCount > 0 {
+			size += uint64(rowCount) * 8
+		}
+		for _, order := range ctr.orderVecs {
+			if len(order.Vec) > 0 && order.Vec[0].GetType().Oid == types.T_json {
+				// The native JSON sorter retains one decoded descriptor and
+				// validation flags per physical row (the JSON payload is borrowed).
+				size += uint64(rowCount) * 64
+				break
+			}
+		}
+		if err := ctr.allocation.ReserveMetadata(proc, size); err != nil {
+			return false, err
+		}
+		ctr.sortMetadata = size
+		if partitionKeyCount > 0 {
+			ctr.ps = make([]int64, 0, rowCount)
+		}
+	}
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		if err := checkCanceled(proc, i); err != nil {
@@ -2545,7 +2654,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 	}
 
-	ps := make([]int64, 0, 16)
+	ps := make([]int64, 0, partitionCapacity)
 	ds := make([]bool, len(ctr.sels))
 	var jsonOrderScratch sort.JSONOrderScratch
 
@@ -2609,7 +2718,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	if err := bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
-		panic(err)
+		return false, err
 	}
 
 	// shuffle agg vector
@@ -2617,7 +2726,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		for v := range ctr.aggVecs[k].Vec {
 			if ctr.aggVecs[k].Vec[v] != nil && !ctr.aggVecs[k].Vec[v].IsConst() {
 				if err := ctr.aggVecs[k].Vec[v].Shuffle(ctr.sels, proc.Mp()); err != nil {
-					panic(err)
+					return false, err
 				}
 			}
 		}
@@ -2626,7 +2735,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	t := len(ctr.orderVecs) - 1
 	if len(ctr.orderVecs[t].Vec) > 0 {
 		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
-			panic(err)
+			return false, err
 		}
 	}
 

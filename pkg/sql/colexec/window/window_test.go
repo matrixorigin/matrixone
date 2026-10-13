@@ -5002,6 +5002,58 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 	}
 }
 
+func TestWindowAccountedScratchRetirement(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, budget)
+	require.NoError(t, err)
+	defer func() {
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+	ctr := &container{}
+	require.NoError(t, ctr.allocation.Set(account))
+	defer ctr.allocation.FreeMetadata()
+	defer ctr.clearCivilOrder()
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	vec := vector.NewVec(types.T_timestamp.ToType())
+	defer vec.Free(proc.Mp())
+	for _, instant := range []string{"2024-11-03 05:30:00", "2024-11-03 06:30:00"} {
+		value, err := types.ParseTimestamp(time.UTC, instant, 6)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixed(vec, value, false, proc.Mp()))
+	}
+	frame := &plan.FrameClause{Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: intervalExpr(30, types.Minute)},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW}}
+	for range 3 {
+		selection, err := ctr.timestampRangeSelection(proc, loc, 1, 0, 2, vec, frame)
+		require.NoError(t, err)
+		require.Equal(t, []timestampCivilOrderSpan{{start: 0, end: 1}, {start: 1, end: 2}}, selection.spans)
+		live := budget.Used()
+		require.Positive(t, live)
+		_, err = ctr.timestampRangeSelection(proc, loc, 0, 0, 2, vec, frame)
+		require.NoError(t, err)
+		require.Equal(t, live, budget.Used(), "row demands reuse admitted scratch")
+		ctr.clearCivilOrder()
+		require.Zero(t, budget.Used(), "the next materialized order batch starts with no retained index")
+	}
+	reservation, err := budget.ReserveTransientMemory(budget.Cap())
+	require.NoError(t, err)
+	defer reservation.Release()
+	_, err = ctr.timestampCivilOrderIndex(proc, loc, 0, 2, vec, false)
+	require.Error(t, err)
+	require.Empty(t, ctr.timestampCivilOrder)
+	reservation.Release()
+	require.Zero(t, budget.Used())
+}
+
 func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 	newYork, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)

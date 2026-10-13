@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,4 +55,26 @@ func TestPatchRejectsUnexpectedGeneratedShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plan.pb.go")
 	require.NoError(t, os.WriteFile(path, []byte("package plan\n"), 0o600))
 	require.ErrorContains(t, patch(path), "generated Expr.Unmarshal boundary not found")
+}
+
+func TestPatchDoesNotDependOnAdjacentMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.pb.go")
+	input := `func (m *Expr) Unmarshal(dAtA []byte) error {
+    return nil
+}
+func (m *CorrelationSpec) Unmarshal(dAtA []byte) error {
+    return nil
+}
+func (m *FoldVal) Unmarshal(dAtA []byte) error {
+    return nil
+}
+proto.RegisterFile("plan.proto", fileDescriptor_plan)
+`
+	input = strings.ReplaceAll(input, "    return", "\treturn")
+	require.NoError(t, os.WriteFile(path, []byte(input), 0o600))
+	require.NoError(t, patch(path))
+	result, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(result), "func (m *Expr) Unmarshal(dAtA []byte) error {\n\treturn m.validateOwnStringLiteralForm()")
+	require.Contains(t, string(result), "func (m *CorrelationSpec) Unmarshal(dAtA []byte) error {\n\treturn nil")
 }

@@ -759,6 +759,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	tempTableMigrationSupported bool,
 	lastInsertIDMigrationSupported bool,
 	resp *query.MigrateConnFromResponse,
+	preparedStatementProtocolSupported ...bool,
 ) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
 	if !ok {
@@ -829,7 +830,18 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastInsertID = ses.GetLastInsertID()
 	resp.LastInsertIDExported = true
 	prepareStmts := ses.GetPrepareStmts()
-	for _, st := range prepareStmts {
+	requiredVersions := make([]int64, len(prepareStmts))
+	for i, st := range prepareStmts {
+		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
+		if err != nil {
+			return err
+		}
+		if features.DependentPrograms {
+			if len(preparedStatementProtocolSupported) > 0 && !preparedStatementProtocolSupported[0] {
+				return moerr.GetOkExpectedNotSafeToStartTransfer()
+			}
+			requiredVersions[i] = defines.MORPCVersion112
+		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
 		// Keep the connection here until the statement is deallocated.
@@ -894,11 +906,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.SystemVariables = systemVars
 		resp.SystemVariablesExported = systemVarsExported
 	}
-	for _, st := range prepareStmts {
+	for i, st := range prepareStmts {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name:       st.Name,
-			SQL:        st.Sql,
-			ParamTypes: st.ParamTypes,
+			Name:                    st.Name,
+			SQL:                     st.Sql,
+			ParamTypes:              st.ParamTypes,
+			RequiredProtocolVersion: requiredVersions[i],
 		})
 	}
 	if cause := context.Cause(operationCtx); cause != nil {
