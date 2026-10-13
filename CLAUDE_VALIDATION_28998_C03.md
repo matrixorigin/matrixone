@@ -1,6 +1,6 @@
 # #28998：C03 验证与交付记录
 
-## 当前状态（本地适用验收与审查已闭环）
+## 历史状态快照（f09；当前资格见末节）
 
 以下原始验收记录对应历史交付 `1511bb6b9499bb354418d34d1e863bfd7a27703f`，不代表远端 CI 已通过。实际 run `38076256462` 的可复现UT/BVT失败及上游冲突已修复；维护提交为 `7a462de0f3c53ce3fcff88c1ae4f7e3198467850`。前三次pure merge冻结 `5f94c8f88a469e0e5053668bfca89770481a9595` / checkpoint `bb6d76360811a51a34566a9922a39118ffe975e8`，该范围完整owner/消费者/race/54完整public两轮/覆盖/static/正常生成均通过。最新冻结上游为 `f09d4788fd4d1aa30aae0e2f49d014589e7566c0`，独立第四次pure merge为 `a660a0fd7b353c50dbf65ce270795a4e4ec72401`：完成相关增量重验与明确资格复用，不将旧证据无条件换标签。当前严格覆盖率84.73%，没有未解决的本地审查/执行阻塞；实际提交与PR head以交付后核验为准。Darwin/embed成功不等于Linux CI green。
 
@@ -173,3 +173,18 @@ P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch
 - 最新两个受影响package vet/lint及匹配gofmt/whitespace通过；之前六包证据限定复用。PR-base改以080365f0，fresh current plan/function配已qualified compile/frontend/txn和byte-identical非core profiles，严格仍**578/740=78.11%**（aux707/830）；纯编号/声明修改无新增执行token，registry/编码及公开consumer负责其合同。旧f536/64b结果保留各自冻结范围，不冒称重测全部C03/无关upstream功能。
 
 此次正常merge补推既有draft PR，保留214fc22a历史，不force/rebase/新PR，不评论/关闭issue或持续监控CI；远端Linux CI仍未确认。
+
+## 2026-10-13：当前冲突与交互维护（冻结main 21f19ae063）
+
+当前PR已经ready，保留其状态与既有正常历史。独立正常合并cd8d5abf、175a645a、21f19ae0；前述110/596/END597仅为历史未发布分配，当前为**C03能力112 / INTERNAL_TABLE_COLLATION598 / END599 / 独立4.0.15 / CreateTable.database_defaults#18**。已发布MEDIUMINT110、IndexSearchScan111及FORMAT_BYTES596/FORMAT_PICO_TIME597均保持。
+
+- **交互合同**：MEDIUMINT authoring/remote fence与int32/uint32 Width24赋值校验保留，binary stored ColRef的COPY保留优化不覆盖数值目标。SHOW FULL建SQL前选择上游或C03投影，补binary classifier2，不再依赖已不存在的null占位字符串；sys/tenant分支共享选择。现有真实SQL binary fixture增加正控，公开现有explicit_binary fixture只加一条SHOW及4行oracle，不引入新数据/服务，旧生成CAST截断与utf8mb3拒绝控制保留。
+- **生成及编号**：parser/PB正常生成；完整descriptor相对175只允许C03消息及字段5/3/18，pipeline与其余所有layout/reserved/enums/options一致。恢复19份schema不变的精确预像噪声，不恢复上游修改的pipeline。21无schema/grammar/native/module变化，生成资格限定复用，不冒称第三次重跑生成。持久视图通过SQL名字绑定598，而非保存旧未发布ID。
+- **175范围fresh资格**：8完整ordinary owners全部PASS、35382 PASS事件，首次严格覆盖**575/740=77.70%**。真实inheritance/recovery/两CN各PASS（5.16s/11.49s/7.45s），后者实际109/110/111拒绝及112恢复控制成功；11包vet/lint成功。此前磁盘准入拒绝不是整体PASS，失败终态全部保留。
+- **175公开比较**：正确native-linked13完整脚本同实例两轮均**2403 total / 2402 success / 1原ignore / 0 failed / 0 abnormal**，Java50s/51s，driver145.10s。下一轮初始化前mapped databases/accounts/snapshots全部0，errors空。首轮12脚本遗漏历史完整clone_db清理owner，导致clone_sys计数+3及dangling view使cluster restore失败（1989/1958/30 failed/1原ignore）；保留报告/日志，只补回完整公共owner，未改计数/错误预期、增加ignore或临时DROP。新golden候选的两处旧trailing-empty格式噪声不采纳。
+- **21当前owner与消费者**：6个完整fresh owners：mysql parser1.101s/1519 PASS、parsers0.817s/92、plan13.226s/14978、function10.947s/10743、compile18.064s/3149、frontend29.708s/5624，共36105 PASS事件。重新真实inheritance/recovery/两CN，并加入MixedIntegerComparisons与PreparedZeroLimitReuse，五个精确顶层全部JSON PASS/exit0；只宣称选择内消费者，非全sqlintegration/issues套件。
+- **当前覆盖/SCA**：相对21严格仍**575/740=77.70%**，aux680/785=86.62%；仅上述6 fresh successful atomic profiles及175的pb/sysview/4.0.15三份成功profile（owning package源字节相同、wire/floor/DDL定义/native/module输入不变；相关lexer/执行消费者另有fresh SQL/公开证明）。旧4个core及旧parser、失败/取消/未执行SQL profiles不进入当前数值。缺映射仍计未覆盖。当前12-package vet/lint exit0/0 issues，89份非生成Go匹配gofmt通过。
+- **当前风险审查**：977行cd8交互、218行175交互、2560行21源/测试/public增量均已完整可见读取，连同作者门控/SHOW/assignment及新oracle差量形成统一闭包。21 qualified扫描上下文defer/reset、comparison域独立于assignment、SELECT限定LIMIT=0借用计划Compile返回恢复，未覆盖C03 CREATE/ALTER锁后freshness。新准入只改未发布字面能力，不改C03锁/取消/共享可写生命周期；旧txn及其它race/restart证据保持历史合同，不冒称本轮重跑。无新state/cache/worker/row scan/生产retry。未认定零ERROR日志或远端Linux green。
+- **资源与证据**：按用户“自己清理”授权，只清可再生Go/lint缓存；精确路径/hash/小时使用时间/active-importcfg/open-handle筛选及停止记录保留。UT报告经解压SHA256验证无损压缩。源码/WIP/模块缓存/native/database/证据/worktree及无关进程保留；保留16GiB及>17GiB admission，不归因host后来65GiB恢复。所有私有driver/TODO/manifest/profile/log/mirror留本worktree，不提交。
+
+**当前最终本地验收闭环**：正确native新二进制、16完整public scripts同实例两轮均**2507 total / 2506 success / 1原ignore / 0 failed / 0 abnormal**，Java66s/141s，完整driver262.61s PASS/exit0。32份SQL/result与交付输入逐字节/hash一致，errors均空，两个下一初始化前mapped databases/accounts/snapshots（含三新增公共库）全0，owned launcher/test/Java终态与teardown通过。2547条服务ERROR保留，未宣称零ERROR；未发现panic/fatal/data-race签名。只读资格parser首次误将SUMMARY当第17个script的失败保留，排除SUMMARY后完整exact selection通过，未改oracle或重跑成功SQL。所有当前适用本地blockers关闭；正常提交/推送现有ready PR，最终SHA/远端HEAD/ready/mergeability另行核验，**不代表远端Linux CI已绿**。
