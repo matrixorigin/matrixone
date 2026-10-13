@@ -72,7 +72,9 @@ type RPCMessage struct {
 	internal       bool
 	stream         bool
 	streamSequence uint32
-	createAt       time.Time
+	// Native timeout cancellation provenance, never encoded on the wire.
+	// Values alone cannot prove ancestry after context.WithoutCancel.
+	nativeContextDone <-chan struct{}
 }
 
 // StreamTerminalToken proves that the server IO loop validated a particular
@@ -95,6 +97,8 @@ func StreamTerminalTokenFromContext(ctx context.Context) (StreamTerminalToken, b
 
 // StreamFinisher is implemented by server-side sessions that can synchronously
 // flush a final response and atomically retire the stream sequence state.
+// FinishStream consumes a non-nil response on every outcome; callers must not
+// access or release it after handing it off.
 type StreamFinisher interface {
 	FinishStream(context.Context, StreamTerminalToken, Message) error
 }
@@ -177,7 +181,9 @@ type RPCServer interface {
 	// a separate goroutine is assigned to handle the Read, and the Read-to message is handed over
 	// to the Handler for processing.
 	Start() error
-	// Close close the rpc server
+	// Close closes the rpc server and waits for all admitted request handlers
+	// to return. Close must not be called synchronously from a request handler,
+	// because a handler cannot wait for its own completion.
 	Close() error
 	// RegisterRequestHandler register the request handler. The request handler is processed in the
 	// read goroutine of the current client connection. Sequence is the sequence of message received
@@ -208,6 +214,22 @@ type HeaderCodec interface {
 type BackendFactory interface {
 	// Create create the corresponding backend based on the given address.
 	Create(address string, extraOptions ...BackendOption) (Backend, error)
+}
+
+// ContextBackendFactory extends BackendFactory with cancellable creation.
+// Clients prefer this method when it is available and cancel ctx when the
+// client, manager incarnation, or remote generation stops owning the create.
+// Implementations must return promptly; if lower-level work cannot be
+// interrupted, it must remain bounded and retain ownership of any late result.
+// BackendFactory remains supported for compatibility, but its in-flight Create
+// calls cannot be interrupted by the client.
+type ContextBackendFactory interface {
+	BackendFactory
+	CreateWithContext(
+		ctx context.Context,
+		address string,
+		extraOptions ...BackendOption,
+	) (Backend, error)
 }
 
 // Backend backend represents a wrapper for a client communicating with a

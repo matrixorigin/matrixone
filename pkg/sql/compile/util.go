@@ -23,8 +23,10 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -73,6 +75,42 @@ func resolveVariableOrDefault(proc *process.Process, name string, isSystemVar, i
 	}
 	return nil, moerr.NewInternalErrorNoCtxf(
 		"resolveVariableOrDefault: no resolver available for %q (proc resolver and executor.DefaultResolveVariable both nil)", name)
+}
+
+func groupConcatMaxLenAsUint64(value any) (uint64, bool) {
+	switch v := value.(type) {
+	case int:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint:
+		return uint64(v), true
+	case int8:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint8:
+		return uint64(v), true
+	case int16:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint16:
+		return uint64(v), true
+	case int32:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint32:
+		return uint64(v), true
+	case int64:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint64:
+		return v, true
+	}
+	return 0, false
 }
 
 const (
@@ -134,17 +172,19 @@ var (
 
 var (
 	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select (%s), %s from `%s`.`%s` where (%s) is not null;"
-	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select serial(%s), %s from `%s`.`%s` where serial(%s) is not null;"
-	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select serial_full(%s), %s from `%s`.`%s`;"
+	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select %s, %s from `%s`.`%s` where %s is not null;"
+	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select %s, %s from `%s`.`%s`;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  `%s`.`%s` select (%s) from `%s`.`%s` where (%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select serial(%s) from `%s`.`%s` where serial(%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select %s from `%s`.`%s` where %s is not null;"
 	insertIntoMasterIndexTableFormat            = "insert into  `%s`.`%s` select serial_full('%s', %s, %s), %s from `%s`.`%s`;"
 )
 
 var (
 	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	deleteMoRolePrivsWithObjectIdFormat          = `delete from mo_catalog.mo_role_privs where obj_id = %d;`
+	deleteMoRolePrivsWithDatabaseIdFormat        = `delete from mo_catalog.mo_role_privs where obj_id = %d or obj_id in (select rel_logical_id from mo_catalog.mo_tables where account_id = %d and reldatabase_id = %d);`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = %s;`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
@@ -163,11 +203,15 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	if spatialIndex && len(indexDef.Parts) > 0 {
 		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
 	}
+	singlePart := len(indexDef.Parts) == 1 || spatialIndex
+	physicalSinglePart := singlePart && indexSinglePartNeedsPhysicalKey(originTableDef, indexDef)
+	withPKey := originTableDef.Pkey != nil && originTableDef.Pkey.PkeyColName != ""
+	keyExpr := indexBackfillKeyExpr(temp, indexDef.KeyFormat, isUnique, singlePart, physicalSinglePart, withPKey)
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
 		}
 	} else {
 		pkeyName := originTableDef.Pkey.PkeyColName
@@ -186,16 +230,54 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
 		} else {
 			if isUnique {
-				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
 			} else {
-				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name)
+				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name)
 			}
 		}
 	}
 	return insertSQL, nil
+}
+
+// indexBackfillKeyExpr mirrors the DML physical-key choice. Legacy backfills
+// retain their historical raw/serial expressions; a V1 index must materialize
+// exactly the same opaque key as the physical index-maintenance functions.
+func indexBackfillKeyExpr(partsExpr string, keyFormat uint32, isUnique, singlePart, physicalSinglePart, withPKey bool) string {
+	if keyFormat != collation.KeyFormatV1 {
+		if singlePart {
+			return partsExpr
+		}
+		if isUnique || !withPKey {
+			return fmt.Sprintf("serial(%s)", partsExpr)
+		}
+		return fmt.Sprintf("serial_full(%s)", partsExpr)
+	}
+	if singlePart {
+		if !physicalSinglePart {
+			return partsExpr
+		}
+		return fmt.Sprintf("physical_collation_key(%s)", partsExpr)
+	}
+	if isUnique || !withPKey {
+		return fmt.Sprintf("physical_serial(%s)", partsExpr)
+	}
+	return fmt.Sprintf("physical_serial_full(%s)", partsExpr)
+}
+
+func indexSinglePartNeedsPhysicalKey(originTableDef *plan.TableDef, indexDef *plan.IndexDef) bool {
+	if originTableDef == nil || indexDef == nil || len(indexDef.Parts) == 0 {
+		return false
+	}
+	part := catalog.ResolveAlias(indexDef.Parts[0])
+	for _, col := range originTableDef.Cols {
+		if col != nil && col.Name == part {
+			return types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString()
+		}
+	}
+	return false
 }
 
 // genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
@@ -284,51 +366,60 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", databaseId)
 
 					// 4.index.IndexName
-					fmt.Fprintf(buffer, "'%s', ", indexDef.IndexName)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.IndexName))
 
 					// 5. index_type
 					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
-					fmt.Fprintf(buffer, "'%s', ", index_type)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(index_type))
 
 					//6. algorithm
 					var algorithm = indexDef.IndexAlgo
-					fmt.Fprintf(buffer, "'%s', ", algorithm)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm))
 
 					//7. algorithm_table_type
 					var algorithm_table_type = indexDef.IndexAlgoTableType
-					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_table_type))
 
 					//8. algorithm_params
 					var algorithm_params = indexDef.IndexAlgoParams
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_params))
 
 					// 9. index visible
-					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
+					visible := INDEX_VISIBLE_NO
+					if isVisible, _ := catalog.GetIndexVisibility(indexDef); isVisible {
+						visible = INDEX_VISIBLE_YES
+					}
+					fmt.Fprintf(buffer, "%d, ", visible)
 
 					// 10. index vec_hidden
-					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
+					hidden := INDEX_HIDDEN_NO
+					for _, col := range tableDef.Cols {
+						if col.Name == part && col.Hidden && col.GeneratedCol != nil {
+							hidden = 1
+							break
+						}
+					}
+					fmt.Fprintf(buffer, "%d, ", hidden)
 
 					// 11. index vec_comment
-					fmt.Fprintf(buffer, "'%s', ", indexDef.Comment)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.Comment))
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", getOriginName(part))
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(getOriginName(part)))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
 					// 14. index vec_options
-					if indexDef.Option != nil {
-						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
-						}
+					if indexDef.Option != nil && indexDef.Option.ParserName != "" {
+						fmt.Fprintf(buffer, "%s, ", sqlquote.String(fmt.Sprintf("parser=%s,ngram_token_size=%d", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)))
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 					}
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
+						fmt.Fprintf(buffer, "%s)", sqlquote.String(indexDef.IndexTableName))
 					} else {
 						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 					}
@@ -358,19 +449,19 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", databaseId)
 
 					// 4.index.IndexName
-					fmt.Fprintf(buffer, "'%s', ", "PRIMARY")
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String("PRIMARY"))
 
 					// 5.index_type
-					fmt.Fprintf(buffer, "'%s', ", INDEX_TYPE_PRIMARY)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(INDEX_TYPE_PRIMARY))
 
 					//6. algorithm
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//7. algorithm_table_type
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//8. algorithm_params
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
@@ -379,10 +470,10 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
 					// 11. index vec_comment
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", getOriginName(colName))
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(getOriginName(colName)))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)

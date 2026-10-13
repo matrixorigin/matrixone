@@ -15,6 +15,8 @@
 package mergeutil
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,7 +91,14 @@ func (v *varlenaDataSlice) size() int {
 }
 
 type mergeInterface interface {
+	batchLength(int) int
 	getNextPos() (int, int, int)
+	disjointBatchOrder() []int
+	prepareGeneralMerge()
+}
+
+func (m *merge[T]) batchLength(batchIndex int) int {
+	return m.ds.length(batchIndex)
 }
 
 type heapElem[T any] struct {
@@ -123,18 +132,18 @@ type merge[T comparable] struct {
 }
 
 func newMerge[T comparable](compLess sort.LessFunc[T], ds dataSlice[T], nulls []*nulls.Nulls) mergeInterface {
-	m := &merge[T]{
-		size:   ds.size(),
+	return &merge[T]{
 		ds:     ds,
 		rowIdx: make([]int, ds.size()),
 		nulls:  nulls,
 		heap:   newHeapSlice(ds.size(), compLess),
 	}
-	m.initHeap()
-	return m
 }
 
-func (m *merge[T]) initHeap() {
+func (m *merge[T]) prepareGeneralMerge() {
+	m.size = m.ds.size()
+	clear(m.rowIdx)
+	m.heap.s = m.heap.s[:0]
 	for i := 0; i < m.ds.size(); i++ {
 		if m.ds.length(i) == 0 {
 			m.rowIdx[i] = -1
@@ -176,6 +185,57 @@ func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	}
 	size = m.size
 	return
+}
+
+// disjointBatchOrder returns an ordering in which already-sorted batches can
+// be concatenated without a row-at-a-time k-way merge. A nil result means at
+// least two key ranges overlap and the caller must use the general merge.
+func (m *merge[T]) disjointBatchOrder() []int {
+	// Reuse rowIdx before heap initialization so range detection does not add
+	// an allocation to either the fast path or the general path.
+	order := m.rowIdx[:0]
+	for i := 0; i < m.ds.size(); i++ {
+		if m.ds.length(i) > 0 {
+			order = append(order, i)
+		}
+	}
+	slices.SortStableFunc(order, func(i, j int) int {
+		if cmp := m.comparePos(i, 0, j, 0); cmp != 0 {
+			return cmp
+		}
+		return i - j
+	})
+	for i := 1; i < len(order); i++ {
+		prev, next := order[i-1], order[i]
+		// Equal boundaries are not disjoint. Keep them on the general merge so
+		// consumers that collapse duplicate keys retain the existing tie order.
+		if m.comparePos(next, 0, prev, m.ds.length(prev)-1) <= 0 {
+			return nil
+		}
+	}
+	return order
+}
+
+func (m *merge[T]) comparePos(leftBatch, leftRow, rightBatch, rightRow int) int {
+	leftNull := m.nulls[leftBatch].Contains(uint64(leftRow))
+	rightNull := m.nulls[rightBatch].Contains(uint64(rightRow))
+	if leftNull != rightNull {
+		if leftNull {
+			return -1
+		}
+		return 1
+	}
+	if leftNull {
+		return 0
+	}
+	left, right := m.ds.at(leftBatch, leftRow), m.ds.at(rightBatch, rightRow)
+	if m.heap.lessFunc(left, right) {
+		return -1
+	}
+	if m.heap.lessFunc(right, left) {
+		return 1
+	}
+	return 0
 }
 
 type heapSlice[T any] struct {

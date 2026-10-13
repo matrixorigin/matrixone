@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -118,6 +120,79 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 	return bat
 }
 
+func TestCanSaveQueryResultBySQLSource(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ctx := context.Background()
+	assert.NoError(t, ses.SetSessionSysVar(ctx, "save_query_result", int8(1)))
+	ses.ast = &tree.ShowColumns{}
+
+	tests := []struct {
+		name       string
+		stmtType   string
+		sourceType string
+		want       bool
+	}{
+		{name: "cloud user show", stmtType: "Show Columns", sourceType: constant.CloudUserSql, want: true},
+		{name: "cloud user select", stmtType: "Select", sourceType: constant.CloudUserSql, want: true},
+		{name: "cloud non-user show", stmtType: "Show Columns", sourceType: constant.CloudNoUserSql, want: false},
+		{name: "cloud non-user select", stmtType: "Select", sourceType: constant.CloudNoUserSql, want: false},
+		{name: "internal show", stmtType: "Show Columns", sourceType: constant.InternalSql, want: false},
+		{name: "external show", stmtType: "Show Columns", sourceType: constant.ExternSql, want: true},
+		{name: "external select", stmtType: "Select", sourceType: constant.ExternSql, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses.SetStmtType(test.stmtType)
+			ses.SetSqlSourceType(test.sourceType)
+			assert.Equal(t, test.want, canSaveQueryResult(ctx, ses))
+		})
+	}
+	t.Run("classified qualified statements", func(t *testing.T) {
+		// Exercise real profile publication without allocating statement telemetry.
+		tracing := motrace.GetTracerProvider().IsEnable()
+		motrace.GetTracerProvider().SetEnable(false)
+		t.Cleanup(func() { motrace.GetTracerProvider().SetEnable(tracing) })
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		for _, tc := range []struct {
+			sql      string
+			internal bool
+			sources  []string
+			save     []bool
+		}{
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", false, []string{constant.ExternSql, constant.CloudUserSql}, []bool{false, true}},
+			{"SELECT t.begin, t.rank FROM t; /* cloud_nonuser */ SELECT 2", false, []string{constant.ExternSql, constant.CloudNoUserSql}, []bool{false, false}},
+			{"SELECT t. /* gap */ begin, t.rank FROM t /* save_result */", false, []string{constant.CloudUserSql}, []bool{true}},
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", true, []string{constant.InternalSql, constant.InternalSql}, []bool{false, false}},
+		} {
+			t.Run(fmt.Sprintf("internal=%t/%s", tc.internal, tc.sql), func(t *testing.T) {
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				execCtx.input = &UserInput{sql: tc.sql, isInternalInput: tc.internal}
+				cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+				require.NoError(t, err)
+				defer func() {
+					for _, cw := range cws {
+						cw.Free()
+					}
+				}()
+				require.Len(t, cws, len(tc.sources))
+				require.Equal(t, tc.sources, execCtx.input.getSqlSourceTypes())
+				for i, cw := range cws {
+					_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "", execCtx.input.getSqlSourceType(i), true)
+					require.NoError(t, err)
+					require.Equal(t, tc.sources[i], ses.GetSqlSourceType())
+					require.Equal(t, "Select", ses.GetStmtType())
+					require.Equal(t, tc.save[i], canSaveQueryResult(ctx, ses))
+				}
+			})
+		}
+	})
+}
+
 func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T) {
 	originalCapLimit := mpool.CapLimit
 	mpool.CapLimit = 128
@@ -126,18 +201,11 @@ func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	meta := &catalog.Meta{Statement: strings.Repeat("x", 256)}
-	result, err := buildQueryResultMetaBatch(meta, mp)
+	bat, err := buildQueryResultMetaBatch(&catalog.Meta{
+		Statement: strings.Repeat("x", 256),
+	}, mp)
 	require.Error(t, err)
-	require.Nil(t, result)
-
-	// Retain the helper input so the test can observe Batch.Clean's terminal
-	// state directly; 4.2 does not account Go-heap-backed vectors in CurrNB.
-	bat := batch.NewWithSize(len(catalog.MetaColTypes))
-	_, err = populateQueryResultMetaBatch(bat, meta, mp)
-	require.Error(t, err)
-	require.Nil(t, bat.Vecs)
-	require.Nil(t, bat.Attrs)
+	require.Nil(t, bat)
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {
@@ -282,6 +350,227 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			//fmt.Println(string(content))
 		},
 	)
+}
+
+func TestSaveBatchPreservesBroadcastConstantRows(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		stmtID := uuid.New()
+		ses.SetStmtId(stmtID)
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
+		require.NoError(t, err)
+		totals := vector.NewVec(types.T_int64.ToType())
+		for _, value := range []int64{10, 20, 30} {
+			require.NoError(t, vector.AppendFixed(totals, value, false, proc.Mp()))
+		}
+		data := batch.NewWithSize(2)
+		data.SetVector(0, constant)
+		data.SetVector(1, totals)
+		data.SetRowCount(3)
+		defer data.Clean(proc.Mp())
+
+		ctx := context.Background()
+		require.NoError(t, saveBatch(ctx, ses, data))
+		assert.Equal(t, 1, constant.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(3), ses.queryRowCount)
+		assert.Equal(t, uint64(3), ses.savedRowCount)
+
+		path := catalog.BuildQueryResultPath(sysAccountName, stmtID.String(), 1)
+		reader, err := ioutil.NewFileReader(getPu("").FileService, path)
+		require.NoError(t, err)
+		blocks, err := reader.LoadAllBlocks(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, uint32(3), blocks[0].GetRows())
+
+		loaded, release, err := reader.LoadColumns(
+			ctx, []uint16{0}, nil, blocks[0].BlockHeader().BlockID().Sequence(), proc.Mp(),
+		)
+		require.NoError(t, err)
+		defer release()
+		assert.Equal(t, 3, loaded.RowCount())
+		require.True(t, loaded.Vecs[0].IsConst())
+		for row := range loaded.RowCount() {
+			assert.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](loaded.Vecs[0], row))
+		}
+	})
+}
+
+func TestSaveBatchPreservesTrailingFlatNullRows(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		stmtID := uuid.New()
+		ses.SetStmtId(stmtID)
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		flatNull := vector.NewVec(types.T_varchar.ToType())
+		flatNull.GetNulls().Add(0)
+		data := batch.NewWithSize(1)
+		data.SetVector(0, flatNull)
+		data.SetRowCount(1)
+		defer data.Clean(proc.Mp())
+
+		ctx := context.Background()
+		require.NoError(t, saveBatch(ctx, ses, data))
+		assert.Zero(t, flatNull.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(1), ses.queryRowCount)
+		assert.Equal(t, uint64(1), ses.savedRowCount)
+
+		path := catalog.BuildQueryResultPath(sysAccountName, stmtID.String(), 1)
+		reader, err := ioutil.NewFileReader(getPu("").FileService, path)
+		require.NoError(t, err)
+		blocks, err := reader.LoadAllBlocks(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, uint32(1), blocks[0].GetRows())
+
+		loaded, release, err := reader.LoadColumns(
+			ctx, []uint16{0}, nil, blocks[0].BlockHeader().BlockID().Sequence(), proc.Mp(),
+		)
+		require.NoError(t, err)
+		defer release()
+		assert.Equal(t, 1, loaded.RowCount())
+		assert.Equal(t, 1, loaded.Vecs[0].Length())
+		assert.True(t, loaded.Vecs[0].GetNulls().Contains(0))
+	})
+}
+
+func TestSaveBatchUsesNormalizedSizeForAdmission(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		ses.SetStmtId(uuid.New())
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+		ses.limitResultSize = 0
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constantNull := vector.NewConstNull(types.T_varchar.ToType(), 0, proc.Mp())
+		data := batch.NewWithSize(1)
+		data.SetVector(0, constantNull)
+		data.SetRowCount(1)
+		defer data.Clean(proc.Mp())
+		require.Zero(t, data.Size(), "the source batch reproduces the pre-normalization zero-size case")
+		before := proc.Mp().CurrNB()
+
+		require.NoError(t, saveBatch(context.Background(), ses, data))
+		assert.Zero(t, constantNull.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(1), ses.queryRowCount)
+		assert.Zero(t, ses.savedRowCount)
+		assert.Zero(t, ses.curResultSize)
+		assert.Zero(t, ses.blockIdx)
+		assert.Equal(t, before, proc.Mp().CurrNB(), "rejected normalized vectors must be released")
+	})
+}
+
+func TestPrepareQueryResultBatchForWriteMaterializesTrailingNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
+	vec.GetNulls().Add(1)
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, mp)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotSame(t, bat, writeBat)
+	assert.Equal(t, 1, vec.Length(), "normalization must not mutate the source vector")
+	require.Len(t, writeBat.Vecs, 1)
+	assert.Equal(t, 2, writeBat.Vecs[0].Length())
+	assert.Equal(t, "value", string(writeBat.Vecs[0].GetBytesAt(0)))
+	assert.True(t, writeBat.Vecs[0].GetNulls().Contains(1))
+
+	release()
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareQueryResultBatchForWriteRejectsInvalidFlatCardinality(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		makeBatch func(*testing.T, *mpool.MPool) *batch.Batch
+		errText   string
+	}{
+		{
+			name: "missing non-null row",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+				bat.SetRowCount(1)
+				return bat
+			},
+			errText: "missing non-null row 0",
+		},
+		{
+			name: "vector longer than batch",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+				bat := batch.NewWithSize(1)
+				bat.SetVector(0, vec)
+				bat.SetRowCount(0)
+				return bat
+			},
+			errText: "has 1 rows, batch has 0",
+		},
+		{
+			name: "nil vector",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				bat.SetRowCount(1)
+				return bat
+			},
+			errText: "column 0 is nil",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := test.makeBatch(t, mp)
+			writeBat, release, err := prepareQueryResultBatchForWrite(bat, mp)
+			require.ErrorContains(t, err, test.errText)
+			require.Nil(t, writeBat)
+			require.Nil(t, release)
+			bat.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func Test_getFileSize(t *testing.T) {

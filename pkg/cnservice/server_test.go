@@ -17,7 +17,9 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,21 +44,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 type closeErrorMOServer struct {
 	err error
+}
+
+type closableEngine struct {
+	engine.Engine
+	closeFn func() error
+}
+
+func (e closableEngine) Close() error {
+	return e.closeFn()
 }
 
 func (s closeErrorMOServer) GetRoutineManager() *frontend.RoutineManager {
@@ -91,6 +107,34 @@ type closeOnlyRPCServer struct {
 	onClose  func()
 }
 
+type closeOnlySiriusBackend struct {
+	compile.SiriusBackend
+	closeFn func() error
+}
+
+func (b closeOnlySiriusBackend) Close(context.Context) error { return b.closeFn() }
+
+func TestCloseSiriusRuntimeRetainsFailedOwner(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		failure := errors.New("runtime cleanup failed")
+		var closeErr error = failure
+		owner := &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error { return closeErr }}}
+		s := &service{cfg: &Config{UUID: t.Name()}, siriusRuntime: owner}
+		rt.SetGlobalVariables(compile.SiriusRuntimeKey, owner)
+		t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, owner) })
+		require.ErrorIs(t, s.closeSiriusRuntime(), failure)
+		require.Same(t, owner, s.siriusRuntime)
+		published, ok := rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.True(t, ok)
+		require.Same(t, owner, published)
+		closeErr = nil
+		require.NoError(t, s.closeSiriusRuntime())
+		require.Nil(t, s.siriusRuntime)
+		_, ok = rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.False(t, ok)
+	})
+}
+
 func (s closeOnlyRPCServer) Start() error {
 	return nil
 }
@@ -102,14 +146,46 @@ func (s closeOnlyRPCServer) Close() error {
 	return s.closeErr
 }
 
-type closeRecordingTraceService struct {
-	trace.Service
-	closed chan struct{}
+type closeOnlyIncrService struct {
+	incrservice.AutoIncrementService
+	onClose  func()
+	onReload func(context.Context, uint64) error
 }
 
-func (s *closeRecordingTraceService) Close() {
+func (s closeOnlyIncrService) Close() {
+	s.onClose()
+}
+
+func (s closeOnlyIncrService) Reload(ctx context.Context, tableID uint64) error {
+	return s.onReload(ctx, tableID)
+}
+
+type closeOnlyTxnClient struct {
+	client.TxnClient
+	onClose func() error
+}
+
+func (c closeOnlyTxnClient) Close() error {
+	return c.onClose()
+}
+
+type closeRecordingQueryService struct {
+	queryservice.QueryService
+	handlers map[querypb.CmdMethod]func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error
+	closed   chan struct{}
+}
+
+func (s *closeRecordingQueryService) AddHandleFunc(
+	method querypb.CmdMethod,
+	handler func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error,
+	_ bool,
+) {
+	s.handlers[method] = handler
+}
+
+func (s *closeRecordingQueryService) Close() error {
 	close(s.closed)
-	s.Service.Close()
+	return nil
 }
 
 func (s closeOnlyRPCServer) RegisterRequestHandler(
@@ -163,6 +239,60 @@ func TestCloseCNServiceStepsAttemptsAllAndAggregatesErrors(t *testing.T) {
 	}, calls)
 }
 
+func TestCNServiceCloseStoreEngineUsesItsOwner(t *testing.T) {
+	sentinel := errors.New("engine close failed")
+	calls := 0
+	s := &service{
+		storeEngine: closableEngine{
+			closeFn: func() error {
+				calls++
+				return sentinel
+			},
+		},
+	}
+
+	require.ErrorIs(t, s.closeStoreEngine(), sentinel)
+	require.Equal(t, 1, calls)
+	require.NoError(t, (&service{}).closeStoreEngine())
+}
+func TestCNServiceCloseIsSafeBeforeConstructionCompletes(t *testing.T) {
+	s := &service{
+		cfg:    &Config{UUID: t.Name()},
+		logger: zap.NewNop(),
+	}
+
+	require.NoError(t, s.Close())
+	require.True(t, s.CloseComplete())
+	require.NoError(t, s.Close())
+}
+
+func TestCNServiceConstructorPublishesBeforeOptionFailure(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		services, err := fileservice.NewFileServices(defines.LocalFileServiceName, local, etl)
+		require.NoError(t, err)
+		t.Cleanup(func() { services.Close(context.Background()) })
+
+		var owner Service
+		sentinel := errors.New("CN option refused")
+		require.PanicsWithValue(t, sentinel, func() {
+			NewService(
+				&Config{UUID: t.Name()},
+				context.Background(),
+				services,
+				nil,
+				func(value Service) { owner = value },
+				func(*service) { panic(sentinel) },
+			)
+		})
+		require.NotNil(t, owner)
+		require.NoError(t, owner.Close())
+	})
+}
+
 func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T) {
 	moruntime.RunTest(
 		t.Name(),
@@ -171,10 +301,12 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			refreshErr := errors.New("hakeeper refresh failed")
 			hc := &testHAKClient{clusterErr: refreshErr}
 			moCluster := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+			defer moCluster.Close()
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Times(0)
+			engineCloses := 0
 			sv := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
@@ -186,6 +318,10 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 				moCluster:          moCluster,
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
+				storeEngine: closableEngine{closeFn: func() error {
+					engineCloses++
+					return nil
+				}},
 			}
 
 			done := make(chan error, 1)
@@ -196,12 +332,52 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, frontendErr)
-				require.Equal(t, 1, hc.closed)
+				require.Equal(t, 0, hc.closed, "unknown producer failure must preserve dependencies")
+				require.Zero(t, engineCloses, "unknown producer failure must preserve the engine")
+				require.False(t, sv.CloseComplete())
 			case <-time.After(time.Second):
 				t.Fatal("service.Close blocked on never-ready cluster")
 			}
 		},
 	)
+}
+
+func TestServiceCloseWithdrawalErrorIsLocallyComplete(t *testing.T) {
+	for _, localFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("local-failure=%t", localFailure), func(t *testing.T) {
+			moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+				failure := errors.New("withdrawal failed")
+				hc := &failingWithdrawalHeartbeatClient{testHAKClient: &testHAKClient{}, err: failure}
+				mc := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+				t.Cleanup(mc.Close)
+				ctrl := gomock.NewController(t)
+				ls := mock_lock.NewMockLockService(ctrl)
+				var tailErr error
+				if localFailure {
+					// A tail failure is not certified complete even when remote
+					// withdrawal failed too; both diagnostics must survive.
+					tailErr = errors.New("local tail failed")
+				}
+				ls.EXPECT().Close().Return(tailErr).Times(1)
+				sv := &service{
+					cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(), config: util.NewConfigData(nil),
+					stopper:          stopper.NewStopper(t.Name()),
+					bootstrapService: &testBootService{}, mo: closeErrorMOServer{},
+					_hakeeperClient: hc, moCluster: mc, server: closeOnlyRPCServer{}, lockService: ls,
+					viewMetadataAdmissionGeneration: 1,
+				}
+				require.False(t, sv.CloseComplete())
+				require.ErrorIs(t, sv.Close(), failure)
+				if tailErr != nil {
+					require.ErrorIs(t, sv.Close(), tailErr)
+				}
+				require.Equal(t, !localFailure, sv.CloseComplete())
+				require.Equal(t, 1, hc.closed)
+				require.ErrorIs(t, sv.Close(), failure)
+				require.Equal(t, 1, hc.closed, "cached diagnostics must not replay teardown")
+			})
+		})
+	}
 }
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
@@ -427,13 +603,15 @@ func (c *testMessageCache) Close() {
 var _ bootstrap.Service = new(testBootService)
 
 type testBootService struct {
-	choice         int
-	closeCount     int
-	closeErr       error
-	bootstrapErr   error
-	bootstrapCount atomic.Int32
-	bootstrapHook  func()
-	maybeUpgrade   func()
+	choice               int
+	closeCount           int
+	closeErr             error
+	bootstrapErr         error
+	bootstrapCount       atomic.Int32
+	bootstrapHook        func()
+	bootstrapUpgradeHook func(context.Context) error
+	maybeUpgrade         func()
+	maybeUpgradeFetch    func(func() (int32, string, error))
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -445,11 +623,16 @@ func (boot *testBootService) Bootstrap(ctx context.Context) error {
 }
 
 func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
+	if boot.bootstrapUpgradeHook != nil {
+		return boot.bootstrapUpgradeHook(ctx)
+	}
+	return nil
 }
 
 func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {
+	if boot.maybeUpgradeFetch != nil {
+		boot.maybeUpgradeFetch(tenantFetchFunc)
+	}
 	if boot.maybeUpgrade != nil {
 		boot.maybeUpgrade()
 	}
@@ -500,9 +683,8 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Return(nil).Times(1)
 			cfg := &Config{UUID: t.Name()}
-			cfg.Txn.Trace.BufferSize = 1
 			s := &service{
 				cfg:                cfg,
 				logger:             zap.NewNop(),
@@ -513,7 +695,6 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
 			}
-			s.options.traceDataPath = t.TempDir()
 
 			stopped := make(chan struct{})
 			require.NoError(t, s.stopper.RunTask(func(ctx context.Context) {
@@ -540,10 +721,7 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			require.ErrorIs(t, err, bootstrapErr)
 			require.NoError(t, <-closeDone)
 			require.Nil(t, s.incrservice)
-			require.Nil(t, s.txnTraceService)
 			_, ok := rt.GetGlobalVariables(moruntime.AutoIncrementService)
-			require.False(t, ok)
-			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
 			require.False(t, ok)
 
 			err = s.Start()
@@ -551,10 +729,7 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
 			require.Equal(t, int32(1), boot.bootstrapCount.Load())
 			require.Nil(t, s.incrservice)
-			require.Nil(t, s.txnTraceService)
 			_, ok = rt.GetGlobalVariables(moruntime.AutoIncrementService)
-			require.False(t, ok)
-			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
 			require.False(t, ok)
 
 			require.NoError(t, s.Close())
@@ -613,75 +788,238 @@ func TestBootstrapRetirementWaitsForTenantUpgradeConsumer(t *testing.T) {
 	require.Error(t, s.CheckTenantUpgrade(context.Background(), 1))
 }
 
-func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
+func TestServiceCloseWaitsForPipelineHandlers(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		stopped := make(chan struct{})
+		ls := mock_lock.NewMockLockService(ctrl)
+		ls.EXPECT().Close().DoAndReturn(func() error {
+			select {
+			case <-stopped:
+			default:
+				t.Error("lock service closed before pipeline producer stopped")
+			}
+			return nil
+		})
+		startFinal := make(chan struct{})
+		s := &service{
+			cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(),
+			stopper: stopper.NewStopper("test-pipeline-close-order"),
+			mo:      closeErrorMOServer{}, cancelMoServerFunc: func() {},
+			server: closeOnlyRPCServer{onClose: func() { close(startFinal) }}, lockService: ls,
+		}
+		s.pipelines.wg.Add(1)
+		go func() { defer s.pipelines.wg.Done(); <-startFinal; close(stopped) }()
+		require.NoError(t, s.Close())
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("CN close returned before pipeline producer stopped")
+		}
+	})
+}
+
+func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
+	for _, engineErr := range []error{nil, errors.New("engine close failed")} {
+		t.Run(fmt.Sprintf("engine-error=%t", engineErr != nil), func(t *testing.T) {
+			moruntime.RunTest(
+				t.Name(),
+				func(rt moruntime.Runtime) {
+					ctrl := gomock.NewController(t)
+					defer ctrl.Finish()
+					ls := mock_lock.NewMockLockService(ctrl)
+					ls.EXPECT().Close().Return(nil).Times(1)
+
+					incrCloseStarted := make(chan struct{})
+					releaseIncrClose := make(chan struct{})
+					t.Cleanup(func() {
+						select {
+						case <-releaseIncrClose:
+						default:
+							close(releaseIncrClose)
+						}
+					})
+					engineClosed := make(chan struct{})
+					txnClientClosed := make(chan struct{})
+					s := &service{
+						cfg:                &Config{UUID: t.Name()},
+						logger:             zap.NewNop(),
+						stopper:            stopper.NewStopper("test-incr-close-order"),
+						mo:                 closeErrorMOServer{},
+						cancelMoServerFunc: func() {},
+						server:             closeOnlyRPCServer{},
+						lockService:        ls,
+						incrservice: closeOnlyIncrService{onClose: func() {
+							close(incrCloseStarted)
+							<-releaseIncrClose
+						}},
+						storeEngine: closableEngine{closeFn: func() error {
+							select {
+							case <-releaseIncrClose:
+							default:
+								t.Error("engine closed before auto-increment producer drained")
+							}
+							close(engineClosed)
+							return engineErr
+						}},
+						_txnClient: closeOnlyTxnClient{onClose: func() error {
+							select {
+							case <-engineClosed:
+							default:
+								t.Error("transaction client closed before engine owner")
+							}
+							close(txnClientClosed)
+							return nil
+						}},
+					}
+
+					closeDone := make(chan error, 1)
+					go func() {
+						closeDone <- s.Close()
+					}()
+
+					select {
+					case <-incrCloseStarted:
+					case <-time.After(time.Second):
+						t.Fatal("auto-increment service close did not start")
+					}
+					txnClientClosedEarly := false
+					select {
+					case <-txnClientClosed:
+						txnClientClosedEarly = true
+					default:
+					}
+
+					close(releaseIncrClose)
+					err := <-closeDone
+					if engineErr != nil {
+						require.ErrorIs(t, err, engineErr)
+					} else {
+						require.NoError(t, err)
+					}
+					require.Equal(t, engineErr == nil, s.CloseComplete())
+					require.Equal(t, err, s.Close(), "repeat Close must not replay engine retirement")
+					require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
+					select {
+					case <-txnClientClosed:
+					default:
+						t.Fatal("transaction client was not closed")
+					}
+				},
+			)
+		})
+	}
+}
+
+func TestServiceCloseDrainsQueryHandlersBeforeDependencies(t *testing.T) {
 	moruntime.RunTest(
 		t.Name(),
 		func(rt moruntime.Runtime) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Return(nil).Times(1)
 
-			traceService, err := trace.NewService(
-				t.TempDir(),
-				t.Name(),
-				nil,
-				rt.Clock(),
-				nil,
-				trace.WithEnable(true, []uint64{1}),
-				trace.WithBufferSize(8),
-			)
-			require.NoError(t, err)
-			recordingTrace := &closeRecordingTraceService{
-				Service: traceService,
-				closed:  make(chan struct{}),
+			reloadStarted := make(chan struct{})
+			releaseReload := make(chan struct{})
+			incrServiceClosed := make(chan struct{})
+			txnClientClosed := make(chan struct{})
+			var reloadCalls atomic.Int32
+			queryService := &closeRecordingQueryService{
+				handlers: make(map[querypb.CmdMethod]func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error),
+				closed:   make(chan struct{}),
 			}
-			rt.SetGlobalVariables(moruntime.TxnTraceService, recordingTrace)
-
-			startFinalEvent := make(chan struct{})
-			finalEventSubmitted := make(chan struct{})
 			s := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
-				stopper:            stopper.NewStopper("test-trace-close-order"),
-				txnTraceService:    recordingTrace,
+				stopper:            stopper.NewStopper("test-query-close-order"),
 				mo:                 closeErrorMOServer{},
 				cancelMoServerFunc: func() {},
-				server: closeOnlyRPCServer{onClose: func() {
-					close(startFinalEvent)
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+				queryService:       queryService,
+				incrservice: closeOnlyIncrService{
+					onClose: func() {
+						close(incrServiceClosed)
+					},
+					onReload: func(context.Context, uint64) error {
+						if reloadCalls.Add(1) == 1 {
+							close(reloadStarted)
+							<-releaseReload
+						}
+						return nil
+					},
+				},
+				_txnClient: closeOnlyTxnClient{onClose: func() error {
+					close(txnClientClosed)
+					return nil
 				}},
-				lockService: ls,
 			}
+			s.initQueryCommandHandler()
+			reloadHandler := queryService.handlers[querypb.CmdMethod_ReloadAutoIncrementCache]
+			require.NotNil(t, reloadHandler)
 
-			s.pipelines.wg.Add(1)
+			reloadDone := make(chan error, 1)
 			go func() {
-				defer s.pipelines.wg.Done()
-				<-startFinalEvent
-				select {
-				case <-recordingTrace.closed:
-					t.Error("trace closed before pipeline producer stopped")
-				default:
-				}
-				recordingTrace.ApplyFlush(
-					[]byte("txn"),
-					1,
-					timestamp.Timestamp{PhysicalTime: 1},
-					timestamp.Timestamp{PhysicalTime: 2},
-					1,
+				reloadDone <- reloadHandler(
+					context.Background(),
+					&querypb.Request{ReloadAutoIncrementCache: &querypb.ReloadAutoIncrementCacheRequest{TableID: 1}},
+					&querypb.Response{},
+					nil,
 				)
-				close(finalEventSubmitted)
 			}()
+			<-reloadStarted
 
-			require.NoError(t, s.Close())
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+			dependencyClosedEarly := false
 			select {
-			case <-finalEventSubmitted:
+			case <-queryService.closed:
+			case <-incrServiceClosed:
+				dependencyClosedEarly = true
+				select {
+				case <-queryService.closed:
+				case <-time.After(time.Second):
+					t.Fatal("query service close did not start")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("query service close did not start")
+			}
+
+			lateErr := reloadHandler(
+				context.Background(),
+				&querypb.Request{ReloadAutoIncrementCache: &querypb.ReloadAutoIncrementCacheRequest{TableID: 2}},
+				&querypb.Response{},
+				nil,
+			)
+			lateRequestRejected := moerr.IsMoErrCode(lateErr, moerr.ErrServiceUnavailable)
+			reloadCallCount := reloadCalls.Load()
+			dependencyClosedWhileActive := false
+			select {
+			case <-incrServiceClosed:
+				dependencyClosedWhileActive = true
 			default:
-				t.Fatal("CN close returned before the final trace event was submitted")
+			}
+
+			close(releaseReload)
+			require.NoError(t, <-reloadDone)
+			require.NoError(t, <-closeDone)
+			require.False(t, dependencyClosedEarly, "auto-increment service closed before query ingress drained")
+			require.True(t, lateRequestRejected, "query request admitted after shutdown started")
+			require.Equal(t, int32(1), reloadCallCount)
+			require.False(t, dependencyClosedWhileActive, "auto-increment service closed while a query handler was active")
+			select {
+			case <-incrServiceClosed:
+			default:
+				t.Fatal("auto-increment service was not closed")
 			}
 			select {
-			case <-recordingTrace.closed:
+			case <-txnClientClosed:
 			default:
-				t.Fatal("trace service was not closed")
+				t.Fatal("transaction client was not closed")
 			}
 		},
 	)
@@ -770,9 +1108,9 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 		}
 
 		require.NoError(t, s.closePipelineAdmission())
+		close(allowAdmission)
 		require.NoError(t, rpcServer.Close())
 		require.NoError(t, s.waitPipelineHandlers())
-		close(allowAdmission)
 
 		select {
 		case response := <-receiveC:
@@ -900,7 +1238,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ls := mock_lock.NewMockLockService(ctrl)
-		ls.EXPECT().Close().Return(nil).Times(2)
+		ls.EXPECT().Close().Return(nil).Times(1)
 
 		handlerStarted := make(chan struct{})
 		handlerExited := make(chan struct{})
@@ -914,6 +1252,23 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			server:             closeOnlyRPCServer{},
 			lockService:        ls,
 		}
+		// A deliberately wrong retirement order must fail without stranding the
+		// admitted handler, even when public Close has cached its failure.
+		t.Cleanup(func() {
+			_ = s.closePipelineAdmission()
+			_ = s.waitPipelineHandlers()
+			s.stopper.Stop()
+		})
+		var runtimeClosed bool
+		s.siriusRuntime = &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error {
+			select {
+			case <-handlerExited:
+				runtimeClosed = true
+				return nil
+			default:
+				return errors.New("runtime retired before its pipeline user exited")
+			}
+		}}}
 		s.requestHandler = func(
 			ctx context.Context,
 			_ string,
@@ -967,6 +1322,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			t.Fatal("CN close returned before the canceled pipeline exited")
 		}
 		require.Equal(t, int32(1), cancelCount.Load())
+		require.True(t, runtimeClosed)
 	})
 }
 
@@ -986,6 +1342,46 @@ func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
 	require.Equal(t, int32(1), cancelCount.Load())
+}
+
+func TestHandleRequestPropagatesConfiguredRPCMaxMessageSize(t *testing.T) {
+	const configuredLimit = 32 * 1024
+	s := &service{cfg: &Config{UUID: t.Name()}}
+	s.cfg.RPC.MaxMessageSize = configuredLimit
+
+	observed := make(chan int, 1)
+	s.requestHandler = func(
+		ctx context.Context,
+		_ string,
+		_ morpc.Message,
+		_ morpc.ClientSession,
+		_ engine.Engine,
+		_ fileservice.FileService,
+		_ lockservice.LockService,
+		_ qclient.QueryClient,
+		_ logservice.CNHAKeeperClient,
+		_ udf.Service,
+		_ client.TxnClient,
+		_ *defines.AutoIncrCacheManager,
+		_ func() morpc.Message,
+	) error {
+		limit, ok := morpc.MaxMessageSizeFromContext(ctx)
+		if !ok {
+			observed <- 0
+			return nil
+		}
+		observed <- limit
+		return nil
+	}
+
+	require.NoError(t, s.handleRequest(
+		context.Background(),
+		morpc.RPCMessage{Message: &pipeline.Message{Sid: pipeline.Status_Last}},
+		0,
+		nil,
+	))
+	require.NoError(t, s.waitPipelineHandlers())
+	require.Equal(t, configuredLimit, <-observed)
 }
 
 func TestPipelineEarlyReturnCancelsRequestOnce(t *testing.T) {
@@ -1041,7 +1437,12 @@ func Test_tenant(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	boot := &testBootService{}
+	boot := &testBootService{maybeUpgradeFetch: func(fetch func() (int32, string, error)) {
+		tenantID, version, err := fetch()
+		require.NoError(t, err)
+		require.Equal(t, int32(3), tenantID)
+		require.Empty(t, version, "the serving CN's version must not stand in for the account's version")
+	}}
 
 	sv := &service{
 		bootstrapService: boot,
@@ -1059,4 +1460,124 @@ func Test_tenant(t *testing.T) {
 
 	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
 	assert.Error(t, err)
+}
+
+// Use the real constructor and an actual engine scheduler. Options publish the
+// owner without requiring a network cluster; failure is through the real next
+// constructor boundary, not a standalone copy of its defer.
+type constructionFailureHAKeeper struct {
+	testHAKClient
+	fail func(context.Context) (uint64, error)
+}
+
+func (c *constructionFailureHAKeeper) AllocateIDByKey(ctx context.Context, _ string) (uint64, error) {
+	return c.fail(ctx)
+}
+
+func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
+	for _, mode := range []string{"error", "cancel", "panic", "goexit", "error-cleanup-success"} {
+		t.Run(mode, func(t *testing.T) {
+			sid := "00000000-0000-0000-0000-000000000077"
+			moruntime.RunTest(sid, func(rt moruntime.Runtime) {
+				local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				defer local.Close(context.Background())
+				etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				defer etl.Close(context.Background())
+				fs, err := fileservice.NewFileServices(defines.LocalFileServiceName, local, etl)
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				engineOwner := &disttae.Engine{}
+				defer engineOwner.Close()
+				require.NoError(t, engineOwner.StartGCScheduler(ctx))
+				var published Service
+				publish := func(owner Service) { published = owner }
+				primary := errors.New("construction failure")
+				var cleanup error
+				if mode != "error-cleanup-success" {
+					cleanup = errors.New("cleanup failure")
+				}
+				calls := 0
+				// Options run before stopper creation. Engine cleanup must tolerate that
+				// partially initialized service and preserve the original panic.
+				optionWithoutStop := func(s *service) {
+					s.storeEngine = closableEngine{closeFn: func() error { calls++; return errors.Join(engineOwner.Close(), cleanup) }}
+					s.initHakeeperClientOnce.Do(func() {})
+					s._hakeeperClient = &constructionFailureHAKeeper{fail: func(ctx context.Context) (uint64, error) {
+						if mode == "cancel" {
+							return 0, ctx.Err()
+						}
+						return 0, primary
+					}}
+					if mode == "cancel" {
+						cancel()
+					}
+					if mode == "panic" {
+						panic(primary)
+					}
+					if mode == "goexit" {
+						goruntime.Goexit()
+					}
+				}
+				cfg := &Config{UUID: sid}
+				if mode == "panic" {
+					require.PanicsWithValue(t, primary, func() { _, _ = NewService(cfg, ctx, fs, nil, publish, optionWithoutStop) })
+				} else if mode == "goexit" {
+					done := make(chan struct{})
+					returned := false
+					go func() {
+						defer close(done)
+						_, _ = NewService(cfg, ctx, fs, nil, publish, optionWithoutStop)
+						returned = true
+					}()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("constructor Goexit cleanup did not finish")
+					}
+					require.False(t, returned)
+				} else {
+					result, err := NewService(cfg, ctx, fs, nil, publish, optionWithoutStop)
+					if cleanup != nil {
+						require.Same(t, published, result, "retain an incomplete cleanup owner")
+						require.ErrorIs(t, err, cleanup)
+					} else {
+						require.Nil(t, result)
+					}
+					if mode == "cancel" {
+						require.ErrorIs(t, err, context.Canceled)
+					} else {
+						require.ErrorIs(t, err, primary)
+					}
+				}
+				require.NotNil(t, published)
+				require.Equal(t, cleanup == nil, published.(*service).CloseComplete())
+				if cleanup != nil {
+					require.ErrorIs(t, published.Close(), cleanup)
+				} else {
+					require.NoError(t, published.Close())
+				}
+				require.Equal(t, 1, calls, "construction unwind and repeated Close must retire the engine exactly once")
+				require.Error(t, engineOwner.StartGCScheduler(context.Background()), "the actual owner must be retired")
+			})
+		})
+	}
+}
+
+func TestCNServiceDetectorShutdownUsesOwnedRuntime(t *testing.T) {
+	sid := t.Name()
+	oldRT := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	nextRT := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	old := cdc.InitTableDetector(oldRT, nil)
+	next := cdc.InitTableDetector(nextRT, nil)
+	defer next.Close()
+	moruntime.SetupServiceBasedRuntime(sid, nextRT)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, nextRT) })
+	s := &service{rt: oldRT}
+	require.NoError(t, s.stopTableDetector())
+	require.NoError(t, s.closeTableDetector())
+	require.ErrorIs(t, old.Context().Err(), context.Canceled)
+	require.NoError(t, next.Context().Err())
 }

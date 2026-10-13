@@ -30,8 +30,8 @@ insert into src values
   (20,'[500,500,500]'),(21,'[501,501,501]');
 create index idx using ivfflat on src(b) lists=3 op_type 'vector_l2_ops' ASYNC;
 
--- let the async build finish, then confirm the source index answers search
-select sleep(30);
+-- wait for the async build, then confirm the source index answers search
+-- @wait_expect(2, 30)
 select a from src order by l2_distance(b,'[1,1,1]') limit 1;
 
 -- (a) clone succeeds and copies the rows + index definition
@@ -39,18 +39,16 @@ create table dst clone src;
 select count(*) from dst;
 show create table dst;
 
--- let RestoreTable's re-registered CDC run its FORCE_SYNC reindex on the clone
-select sleep(30);
-
 -- (b) the cloned index answers search (no "version not found")
+-- @wait_expect(2, 30)
 select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
 select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
 
 -- (c) maintenance re-armed: rows inserted AFTER the clone get indexed
 insert into dst values (30,'[1000,1000,1000]'),(31,'[1001,1001,1001]');
-select sleep(45);
 -- the post-clone row is the nearest neighbor for its own vector, served by the
 -- cloned index -> the CDC maintenance path on the clone is live
+-- @wait_expect(2, 45)
 select a from dst order by l2_distance(b,'[1000,1000,1000]') limit 1;
 -- pre-existing cloned rows remain searchable too
 select a from dst order by l2_distance(b,'[100,100,100]') limit 1;

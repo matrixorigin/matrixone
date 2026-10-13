@@ -81,7 +81,7 @@ func (l *localLockTable) detectOwnerLocalDeadlockLocked(
 		return false
 	}
 
-	c.txn.deadlockFound = true
+	c.txn.markDeadlockLocked(ErrDeadLockDetected, l.logger)
 	v2.TxnDeadlockOwnerLocalCounter.WithLabelValues("aborted").Inc()
 	l.logger.Warn("owner_local_deadlock_found",
 		zap.Uint64("table", l.bind.OriginTable),

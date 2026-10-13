@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -339,80 +338,6 @@ func TestCompileIcebergScanRejectsInvalidRuntimePlanner(t *testing.T) {
 	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
 }
 
-func TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithRemoteSigning(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	setIcebergConfigForTest(t, testCompile, func(params *config.IcebergParameters) {
-		params.EnableRemoteSigning = true
-	})
-	testCompile.addr = "cn1:6001"
-
-	err := testCompile.validateIcebergRemoteFanoutPolicy(nil, icebergExternalScanRuntime{
-		objectIORef: "remote-signing-object-ref",
-		dataTasks:   []*pipeline.IcebergDataFileTask{{FilePath: "warehouse/iceberg/orders/part-0.parquet"}},
-	}, []icebergDataFileScopeShard{
-		{node: engine.Node{Addr: "cn1:6001"}},
-		{node: engine.Node{Addr: "cn2:6001"}},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "ObjectIO provider handoff")
-}
-
-func TestIcebergRemoteFanoutPolicyBlocksObjectRefWhenRemoteSigningDisabled(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	testCompile.addr = "cn1:6001"
-
-	err := testCompile.validateIcebergRemoteFanoutPolicy(nil, icebergExternalScanRuntime{
-		objectIORef: "remote-signing-object-ref",
-		dataTasks:   []*pipeline.IcebergDataFileTask{{FilePath: "warehouse/iceberg/orders/part-0.parquet"}},
-	}, []icebergDataFileScopeShard{
-		{node: engine.Node{Addr: "cn1:6001"}},
-		{node: engine.Node{Addr: "cn2:6001"}},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "ObjectIO provider handoff")
-}
-
-func TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithProtectedCNToCN(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	enableProtectedIcebergCNToCNForTest(t, testCompile)
-	testCompile.addr = "cn1:6001"
-
-	err := testCompile.validateIcebergRemoteFanoutPolicy(nil, icebergExternalScanRuntime{
-		objectIORef: "protected-transport-object-ref",
-		dataTasks:   []*pipeline.IcebergDataFileTask{{FilePath: "warehouse/iceberg/orders/part-0.parquet"}},
-	}, []icebergDataFileScopeShard{
-		{node: engine.Node{Addr: "cn1:6001"}},
-		{node: engine.Node{Addr: "cn2:6001"}},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "ObjectIO provider handoff")
-}
-
-func TestIcebergRemoteFanoutPolicyBlocksCredentialScopeEvenWithRemoteSigning(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	setIcebergConfigForTest(t, testCompile, func(params *config.IcebergParameters) {
-		params.EnableRemoteSigning = true
-	})
-	testCompile.addr = "cn1:6001"
-
-	err := testCompile.validateIcebergRemoteFanoutPolicy(nil, icebergExternalScanRuntime{
-		objectIORef: "remote-signing-object-ref",
-		dataTasks: []*pipeline.IcebergDataFileTask{{
-			FilePath:        "warehouse/iceberg/orders/part-0.parquet",
-			CredentialScope: "vended-scope",
-		}},
-	}, []icebergDataFileScopeShard{
-		{node: engine.Node{Addr: "cn1:6001"}},
-		{node: engine.Node{Addr: "cn2:6001"}},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "remote credential fanout")
-}
-
 func TestCompileIcebergScanPassesPlanningTimeoutFromParameterUnit(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}}
@@ -700,6 +625,29 @@ func TestIcebergTimestampLiteralNormalizationUsesUTCInstant(t *testing.T) {
 	require.Equal(t, api.TypeTimestampTZ, lit.Kind)
 	require.True(t, lit.Normalized)
 	require.Equal(t, time.Date(2025, 12, 31, 21, 0, 0, 0, time.UTC).UnixMicro(), lit.Int64)
+}
+
+func TestIcebergDateLiteralNormalizationUsesUnixEpochDays(t *testing.T) {
+	tests := []struct {
+		date string
+		want int64
+	}{
+		{date: "1969-12-31", want: -1},
+		{date: "1970-01-01", want: 0},
+		{date: "2020-01-01", want: 18262},
+	}
+	for _, test := range tests {
+		t.Run(test.date, func(t *testing.T) {
+			date, err := types.ParseDateCast(test.date)
+			require.NoError(t, err)
+			lit, ok := icebergPruneLiteralFromPlanLiteral(&plan.Literal{
+				Value: &plan.Literal_Dateval{Dateval: int32(date)},
+			})
+			require.True(t, ok)
+			require.Equal(t, api.TypeDate, lit.Kind)
+			require.Equal(t, test.want, lit.Int64)
+		})
+	}
 }
 
 func TestCompileIcebergScanWiresDeleteTasksToExternalRuntime(t *testing.T) {

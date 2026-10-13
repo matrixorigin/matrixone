@@ -2,4 +2,8 @@
 *.a
 *.so
 *.dylib
+.mo-native-provenance
+.mo-native-provenance.pending
+.mo-native-provenance.building
+.mo-native-provenance.tmp
 __.SYMDEF*

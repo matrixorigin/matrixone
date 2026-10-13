@@ -51,7 +51,7 @@ t0 TIME(0)
 INSERT INTO t_time_boundary VALUES (1, 'next second', CAST('12:34:56.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
-INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
+INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.499999' AS TIME(0)));
 SELECT id, description, t0
 FROM t_time_boundary
 ORDER BY id;
@@ -59,8 +59,41 @@ ORDER BY id;
 1  ¦  next second  ¦  12:34:57  𝄀
 2  ¦  next minute  ¦  12:35:00  𝄀
 3  ¦  next hour  ¦  13:00:00  𝄀
-4  ¦  max time  ¦  839:00:00
+4  ¦  max time  ¦  838:59:59
 DROP TABLE t_time_boundary;
+DROP TABLE IF EXISTS t_time_range;
+CREATE TABLE t_time_range (id INT, t6 TIME(6));
+SET @time_range_old_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO t_time_range VALUES (1, '838:59:59.000000');
+INSERT INTO t_time_range VALUES (2, '838:59:59.000001');
+Data truncation: data out of range: data type time, value '838:59:59.000001'
+INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
+Data truncation: data out of range: data type time, value '-838:59:59.000001'
+INSERT INTO t_time_range VALUES (4, '2562047788:00:00');
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
+Data truncation: data out of range: data type time, value '-2562047788:00:00'
+INSERT INTO t_time_range VALUES (6, '25620477880000');
+Data truncation: Truncated incorrect time value: '25620477880000'
+INSERT INTO t_time_range VALUES (7, '-25620477880000');
+Data truncation: Truncated incorrect time value: '-25620477880000'
+SET SESSION sql_mode = '';
+INSERT INTO t_time_range VALUES (8, '25620477880000');
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for column 'time' at row 1
+INSERT INTO t_time_range VALUES (9, '-25620477880000');
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for column 'time' at row 1
+SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
+➤ id[4,32,0]  ¦  t6[12,65535,0]  𝄀
+1  ¦  838:59:59.000000  𝄀
+8  ¦  00:00:00.000000  𝄀
+9  ¦  00:00:00.000000
+SET SESSION sql_mode = @time_range_old_sql_mode;
+DROP TABLE t_time_range;
 DROP TABLE IF EXISTS t_time_negative;
 CREATE TABLE t_time_negative (
 id INT,

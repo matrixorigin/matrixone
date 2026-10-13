@@ -48,7 +48,7 @@ var globalProfileShards [numProfileShards]profileShard
 // Accounted allocations already carry stable, bounded provenance. Reusing one
 // synthetic sample per owner/site avoids collecting and hashing the same
 // runtime stack for every vector growth in a hash build.
-var accountedProfileSamples [AllocationOwnerMax + 1][256]atomic.Pointer[malloc.HeapSampleValues]
+var accountedProfileSamples [AllocationOwnerCatalogMax + 1][256]atomic.Pointer[malloc.HeapSampleValues]
 
 func init() {
 	for i := range globalProfileShards {
@@ -82,15 +82,21 @@ func profileRecordAlloc(skip int, ptr uintptr, sz int64) {
 	values.Bytes.Inuse.Add(sz)
 	values.Objects.Inuse.Add(1)
 
-	shard := getProfileShard(ptr)
-	shard.mu.Lock()
-	shard.m[ptr] = values
-	shard.mu.Unlock()
+	profileRestore(ptr, values)
 }
 
 func profileRecordFree(ptr uintptr, sz int64) {
+	if values := profileDetach(ptr); values != nil {
+		values.Bytes.Inuse.Add(-sz)
+		values.Objects.Inuse.Add(-1)
+	}
+}
+
+// Detach address-keyed state before the physical allocator can reuse its address.
+// The caller owns the returned sample until rollback or successful retirement.
+func profileDetach(ptr uintptr) *malloc.HeapSampleValues {
 	if !profilingEnabled.Load() {
-		return
+		return nil
 	}
 	shard := getProfileShard(ptr)
 	shard.mu.Lock()
@@ -99,9 +105,15 @@ func profileRecordFree(ptr uintptr, sz int64) {
 		delete(shard.m, ptr)
 	}
 	shard.mu.Unlock()
-	if ok {
-		values.Bytes.Inuse.Add(-sz)
-		values.Objects.Inuse.Add(-1)
+	return values
+}
+
+func profileRestore(ptr uintptr, values *malloc.HeapSampleValues) {
+	if values != nil {
+		shard := getProfileShard(ptr)
+		shard.mu.Lock()
+		shard.m[ptr] = values
+		shard.mu.Unlock()
 	}
 }
 
@@ -114,7 +126,8 @@ func accountedProfileSample(
 		return values
 	}
 	values := malloc.GlobalProfiler().SampleNamed(fmt.Sprintf(
-		"| mpool accounted owner=%d site=%d |",
+		"| mpool accounted owner=%s(%d) site=%d |",
+		owner,
 		owner,
 		site,
 	))
@@ -144,11 +157,11 @@ func profileRecordAccountedFree(lease allocationLease, sz int64) {
 	values.Objects.Inuse.Add(-1)
 }
 
-func profileRecordRealloc(skip int, oldPtr, newPtr uintptr, oldSz, newSz int64) {
-	if !profilingEnabled.Load() {
-		return
+func profileRecordRealloc(skip int, old *malloc.HeapSampleValues, newPtr uintptr, oldSz, newSz int64) {
+	if old != nil {
+		old.Bytes.Inuse.Add(-oldSz)
+		old.Objects.Inuse.Add(-1)
 	}
-	profileRecordFree(oldPtr, oldSz)
 	profileRecordAlloc(skip, newPtr, newSz)
 }
 

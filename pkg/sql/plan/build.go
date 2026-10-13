@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,13 +41,39 @@ func bindAndOptimizeSelectQueryWithValidator(
 	skipStats bool,
 	validate func(*Query) error,
 ) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "",
+	)
+}
+
+func bindAndOptimizeSelectQueryWithValidatorAndCapture(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+	capture func(*BindContext),
+	restoreViewMySQLSpecialTypes bool,
+	persistedViewTarget string,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
+	builder.persistedViewTarget = persistedViewTarget
+	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
+		ctx, stmt, builder.isReusablePlan(),
+	)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
+	if capture != nil {
+		bindCtx.captureViewStarExpansion = true
+		bindCtx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -55,9 +82,21 @@ func bindAndOptimizeSelectQueryWithValidator(
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
-	rootId = builder.reuseMultiReferenceCTEs(rootId)
+	// Shared-computation rewrites happen before createQuery, so parse the
+	// service-level rollback hint before entering either rewrite.
+	builder.parseOptimizeHints()
+	if !builder.sharedComputationDisabled() {
+		rootId = builder.reuseMultiReferenceCTEs(rootId)
+		rootId = builder.sharePendingGroupingSetInputs(rootId)
+	}
 	ctx.SetViews(bindCtx.views)
+	if capture != nil {
+		capture(bindCtx)
+	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if validate != nil {
@@ -74,6 +113,32 @@ func bindAndOptimizeSelectQueryWithValidator(
 			Query: query,
 		},
 	}, err
+}
+
+func sessionSelectLimitMayStopEarly(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+) bool {
+	if ctx == nil || stmt == nil || stmt.IsPerform || selectHasExplicitTopLevelLimit(stmt) {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil || proc.Base == nil || !proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+	// A prepared plan resolves this dynamic session variable at every EXECUTE;
+	// even an unlimited value during PREPARE is not a proof for later runs.
+	if isPrepareStmt {
+		return true
+	}
+	value, err := ctx.ResolveVariable(SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return true
+	}
+	limit, ok := value.(uint64)
+	return !ok || limit != ^uint64(0)
 }
 
 func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {
@@ -102,12 +167,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
 		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: plain INSERT (e.g. inserting into a system index table); and the
-		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// back: ordinary plain INSERT (e.g. inserting into a system index table),
+		// and the degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
-			(len(stmt.OnDuplicateUpdate) == 0 ||
+			((len(stmt.GetOnDuplicateUpdate()) == 0 && !stmt.IsIgnore()) ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
@@ -142,6 +207,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		// The in-plan child checks and self-reference DetectSqls depend on the
+		// session's foreign_key_checks value. Keep prepared INSERT plans sensitive
+		// even while checks are disabled, so a later EXECUTE rebuilds the plan
+		// after either an OFF->ON or ON->OFF transition.
+		query.HasForeignKeyAction = true
+
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
@@ -318,6 +389,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateSingleTableDMLLimitOffset(ctx, "DELETE", stmt.Limit); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -368,9 +442,12 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
 	}()
 	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
+	if err := validateSingleTableDMLLimitOffset(ctx, "UPDATE", stmt.Limit); err != nil {
 		return nil, err
 	}
 
@@ -388,15 +465,6 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
-		case updatePlannerLegacy:
-			recordUpdatePlannerRoute(route, reason, "selected")
-			if stmt.HasReturning() {
-				if reason == updateRouteReasonExternalTable {
-					return nil, returningNotSupported(builder, "external table")
-				}
-				return nil, returningNotSupported(builder, "legacy UPDATE path")
-			}
-			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		case updatePlannerSpecialized:
 			recordUpdatePlannerRoute(route, reason, "selected")
 			if stmt.HasReturning() {
@@ -558,7 +626,15 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+	defer func() {
+		if err == nil {
+			err = plan.RequireLegacyCollations(result)
+			if err != nil {
+				result = nil
+			}
+		}
+	}()
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
@@ -570,17 +646,36 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		if err != nil {
+			return nil, err
+		}
+		applySQLSelectLimit(stmt, queryPlan)
+		return queryPlan, nil
 	case *tree.ParenSelect:
-		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		if err != nil {
+			return nil, err
+		}
+		applySQLSelectLimit(stmt.Select, queryPlan)
+		return queryPlan, nil
 	case *tree.ExplainStmt:
-		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateUnresolvedIndexHints(ctx.GetContext(), queryPlan.GetQuery()); err != nil {
+			return nil, err
+		}
+		return queryPlan, nil
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:
 		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.MultiInsert:
+		return bindAndOptimizeMultiInsertQuery(ctx, stmt, isPrepareStmt)
 	case *tree.Replace:
 		if stmt.HasReturning() {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
@@ -729,6 +824,63 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	}
 }
 
+// applySQLSelectLimit marks top-level SELECTs whose final result pipeline must
+// enforce the session row cap. The compiler materializes ordinary finite caps
+// only after optimization, avoiding changes to estimates and rewrites while
+// still making the cap visible to offload serialization.
+func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
+	query := queryPlan.GetQuery()
+	if query != nil {
+		query.ApplySqlSelectLimit = stmt != nil && !stmt.IsPerform &&
+			!selectHasExplicitTopLevelLimit(stmt)
+	}
+}
+
+func selectHasSQLCalcFoundRows(stmt *tree.Select) bool {
+	for stmt != nil {
+		switch body := stmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			stmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return selectHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return selectHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
+	}
+}
+
+// Parenthesized SELECTs are flattened by bindSelect. A LIMIT on any wrapper in
+// that chain is the top-level explicit LIMIT and takes precedence over the
+// session sql_select_limit value. Limits inside UNION arms and subqueries are
+// deliberately not considered top-level limits.
+func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
+	for stmt != nil {
+		if stmt.Limit != nil && stmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := stmt.Select.(*tree.ParenSelect)
+		if !ok {
+			return false
+		}
+		stmt = paren.Select
+	}
+	return false
+}
+
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
@@ -757,6 +909,26 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				}
 			}
 
+			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				if columns[idx].TblName == "" {
+					columns[idx].TblName = source.tableName
+				}
+				if columns[idx].DbName == "" {
+					columns[idx].DbName = source.dbName
+				}
+				columns[idx].OriginTblName = source.tableName
+				columns[idx].OriginName = source.columnName
+				columns[idx].Primary = source.primary
+				columns[idx].Unique = source.unique
+				columns[idx].NotNull = source.notNull
+				if source.nullExtended {
+					columns[idx].Typ.NotNullable = false
+				} else {
+					columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				}
+				columns[idx].Typ.AutoIncr = columns[idx].Typ.AutoIncr || source.autoIncr
+			}
+
 		}
 
 		return columns
@@ -782,10 +954,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
-			typ := plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
+			typ := makeGeneratedPlan2Type(types.T_varchar, 1024, 0, false)
 			return []*ColDef{
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
@@ -801,4 +970,441 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+type resultColumnSource struct {
+	dbName       string
+	tableName    string
+	columnName   string
+	primary      bool
+	unique       bool
+	notNull      bool
+	autoIncr     bool
+	nullExtended bool
+}
+
+// findResultColumnSource follows a result projection through transparent plan
+// nodes and JOIN remappings until it reaches the table column that produced
+// it. Expressions such as arithmetic, aggregation, and DISTINCT intentionally
+// do not produce source metadata: marking those outputs as key columns would
+// be less compatible than leaving the flags unset.
+func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *resultColumnSource {
+	if query == nil || expr == nil || expr.GetCol() == nil {
+		return nil
+	}
+	// The result expression belongs to the node's own projection list, so its
+	// ColPos already carries that list's source identity. Local-slot semantics
+	// are introduced only when a PROJECT passes an output reference into a
+	// transparent child node.
+	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool), false)
+}
+
+func findResultColumnSourceAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+	preferLocal bool,
+) *resultColumnSource {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		// INDEX_SEARCH_SCAN's TableDef describes the synthetic result schema
+		// (pkid, score, and optional included columns), not the source table.
+		// Resolve its output slots through the typed vector-index specification
+		// so a pkid or included column carries the same metadata as a regular
+		// table scan.  A score has no source column by design.
+		vectorRef := ref
+		if len(node.ProjectList) > 0 {
+			// The vector scan projection can be deliberately reordered. Its
+			// ColPos values are synthetic slots, so resolve by source identity
+			// rather than treating the projection-list index as a local slot.
+			sourceExpr := resultColumnProjectionByIdentity(node, ref)
+			if sourceExpr != nil && sourceExpr.GetCol() != nil {
+				vectorRef = sourceExpr.GetCol()
+			}
+		}
+		return resultColumnSourceFromIndexSearchScan(node.IndexSearchScan, node.TableDef, vectorRef.ColPos)
+	}
+
+	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
+		if len(node.ProjectList) > 0 {
+			if sourceExpr := resultColumnProjectionByIdentity(node, ref); sourceExpr != nil {
+				if sourceRef := sourceExpr.GetCol(); sourceRef != nil {
+					return resultColumnSourceFromTableDef(node.TableDef, sourceRef.ColPos)
+				}
+			}
+			return nil
+		}
+		if source := resultColumnSourceFromTableDef(node.TableDef, ref.ColPos); source != nil {
+			return source
+		}
+	}
+
+	if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+		// The provider is control input. Result provenance belongs to the
+		// preserved relational branch, not its one-column vector schema.
+		if len(node.Children) != 3 {
+			return nil
+		}
+		childRef := resultColumnJoinChildProjectionRef(query, node, 2, ref.ColPos)
+		if childRef == nil {
+			return nil
+		}
+		return findResultColumnSourceAtNode(query, node.Children[2], childRef, visited, false)
+	}
+
+	if node.NodeType == plan.Node_JOIN {
+		return findResultColumnSourceAtJoin(query, node, ref, visited, preferLocal)
+	}
+
+	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
+		return nil
+	}
+
+	projected := resultColumnProjectionAtNode(node, ref, preferLocal)
+	if projected == nil {
+		return nil
+	}
+	projectedRef := projected.GetCol()
+	if projectedRef == nil {
+		return nil
+	}
+
+	var found *resultColumnSource
+	for _, childID := range node.Children {
+		childPreferLocal := false
+		if childID >= 0 && int(childID) < len(query.Nodes) {
+			child := query.Nodes[childID]
+			// 透明节点的列引用指向 JOIN 输出槽位，不是 JOIN 两侧的
+			// 源列位置；左右两侧重排后这两种编号可能碰撞。
+			if child != nil {
+				childPreferLocal = isResultColumnTransparentNode(child.NodeType) ||
+					(child.NodeType == plan.Node_JOIN && len(child.BindingTags) == 0)
+			}
+		}
+		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited), childPreferLocal)
+		if candidate == nil {
+			continue
+		}
+		if found != nil && *found != *candidate {
+			// The reference is ambiguous across children. Do not claim a key
+			// flag when the plan no longer identifies one source column.
+			return nil
+		}
+		found = candidate
+	}
+	return found
+}
+
+func findResultColumnSourceAtJoin(
+	query *plan.Query,
+	node *plan.Node,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+	preferLocal bool,
+) *resultColumnSource {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return nil
+	}
+
+	projectedRef := ref
+	childIdx := -1
+	projected := resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		projected = node.ProjectList[ref.ColPos]
+	}
+	if projected != nil {
+		if col := projected.GetCol(); col != nil {
+			projectedRef = col
+			// JOIN ProjectList entries use RelPos 0/1 to identify the
+			// corresponding child and ColPos to identify that child's output
+			// slot. This is a local remapping, not a source-table position.
+			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
+				childIdx = int(projectedRef.RelPos)
+				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
+					projectedRef = childRef
+				}
+			}
+		}
+	}
+
+	if childIdx < 0 {
+		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
+	}
+	if childIdx >= 0 && childIdx < len(node.Children) {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			node.Children[childIdx],
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+			false,
+		)
+		return resultColumnSourceAfterJoin(candidate, node, childIdx)
+	}
+
+	// Plans from earlier optimization stages may not yet have the local JOIN
+	// projection. Fall back to tracing each child by the source identity, but
+	// reject an ambiguous match rather than assigning metadata from one side.
+	var found *resultColumnSource
+	foundChild := -1
+	for childIdx, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			childID,
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+			false,
+		)
+		if candidate == nil {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = candidate
+		foundChild = childIdx
+	}
+	return resultColumnSourceAfterJoin(found, node, foundChild)
+}
+
+func resultColumnJoinChildProjectionRef(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.ColRef {
+	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
+		return nil
+	}
+	childID := node.Children[childIdx]
+	if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+		return nil
+	}
+	child := query.Nodes[childID]
+	if int(colPos) >= len(child.ProjectList) {
+		return nil
+	}
+	return child.ProjectList[colPos].GetCol()
+}
+
+func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return -1
+	}
+	childIdx := -1
+	for i, childID := range node.Children {
+		if !resultColumnNodeHasBindingTag(query, childID, ref.RelPos, make(map[int32]bool)) {
+			continue
+		}
+		if childIdx >= 0 {
+			return -1
+		}
+		childIdx = i
+	}
+	return childIdx
+}
+
+func resultColumnNodeHasBindingTag(query *plan.Query, nodeID, tag int32, visited map[int32]bool) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if resultColumnNodeHasBindingTag(query, childID, tag, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnSourceAfterJoin(source *resultColumnSource, node *plan.Node, childIdx int) *resultColumnSource {
+	if source == nil || !nodeNullExtendsChild(node, childIdx) {
+		return source
+	}
+	result := *source
+	result.notNull = false
+	result.nullExtended = true
+	return &result
+}
+
+func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
+	clone := make(map[int32]bool, len(visited)+1)
+	for nodeID, seen := range visited {
+		clone[nodeID] = seen
+	}
+	return clone
+}
+
+func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef, preferLocal bool) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	if preferLocal && ref.RelPos == 0 && isResultColumnTransparentNode(node.NodeType) &&
+		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		// 从父节点传入的是这个节点的输出槽位；节点自己的投影表达式
+		// 才使用子节点位置。包括中间 PROJECT，且计算列不能再按位置
+		// 回退匹配到碰巧同号的真实表列。
+		return node.ProjectList[ref.ColPos]
+	}
+	return resultColumnProjectionByIdentity(node, ref)
+}
+
+func resultColumnProjectionByIdentity(node *plan.Node, ref *plan.ColRef) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	// ColPos identifies the source column, not the position of the expression
+	// in this node's projection.  A projection can reorder columns (for example
+	// SELECT unique_value, id), so looking up ProjectList[ref.ColPos] can attach
+	// the metadata of a different source column.  Resolve the source identity
+	// across the whole projection first.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsHaveSamePosition(ref, col) {
+			return expr
+		}
+	}
+
+	// Some plan nodes omit relation/column positions while retaining names.
+	// Use names only after the identity lookup, and require the names that are
+	// available on both refs to agree so an ambiguous table-only match cannot
+	// claim key metadata.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsMatchByName(ref, col) {
+			return expr
+		}
+	}
+	return nil
+}
+
+func resultColumnRefsHaveSamePosition(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return left.RelPos == right.RelPos && left.ColPos == right.ColPos
+}
+
+func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.Name != "" && right.Name != "" {
+		if !strings.EqualFold(left.Name, right.Name) {
+			return false
+		}
+		if left.TblName != "" && right.TblName != "" &&
+			!strings.EqualFold(left.TblName, right.TblName) {
+			return false
+		}
+		if left.DbName != "" && right.DbName != "" &&
+			!strings.EqualFold(left.DbName, right.DbName) {
+			return false
+		}
+		return true
+	}
+	if left.TblName == "" || right.TblName == "" ||
+		!strings.EqualFold(left.TblName, right.TblName) {
+		return false
+	}
+	if left.DbName != "" && right.DbName != "" &&
+		!strings.EqualFold(left.DbName, right.DbName) {
+		return false
+	}
+	return left.Name == "" && right.Name == ""
+}
+
+func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+		return true
+	default:
+		return false
+	}
+}
+
+func isResultColumnTransparentNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_PROJECT,
+		plan.Node_FILTER,
+		plan.Node_SORT,
+		plan.Node_SAMPLE,
+		plan.Node_MATERIAL,
+		plan.Node_PARTITION,
+		plan.Node_GATHER:
+		return true
+	default:
+		return false
+	}
+}
+
+func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if tableDef == nil || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return nil
+	}
+	col := tableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	primary := col.Primary
+	if !primary && tableDef.Pkey != nil {
+		primary = resultColumnNameInList(tableDef.Pkey.Names, col.Name)
+	}
+	unique := col.Unique && !primary
+	if !primary && !unique {
+		for _, index := range tableDef.Indexes {
+			if index == nil || !index.Unique {
+				continue
+			}
+			if resultColumnNameInList(index.Parts, col.Name) {
+				unique = true
+				break
+			}
+		}
+	}
+	tableName := tableDef.OriginalName
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
+	return &resultColumnSource{
+		dbName:     tableDef.DbName,
+		tableName:  tableName,
+		columnName: col.GetOriginCaseName(),
+		primary:    primary,
+		unique:     unique,
+		notNull:    primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr:   col.Typ.AutoIncr,
+	}
+}
+
+func resultColumnNameInList(names []string, name string) bool {
+	for _, candidate := range names {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
 }

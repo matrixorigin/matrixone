@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,6 +59,33 @@ func newTestRoutineManager(t *testing.T, ctx context.Context) *RoutineManager {
 	return rm
 }
 
+func TestRoutineManagerGetConnIDUsesConnectTimeout(t *testing.T) {
+	const connectTimeout = 17 * time.Second
+	var observed time.Duration
+	client := newMockHAKeeperClient()
+	client.allocateIDByKey = func(ctx context.Context, key string) (uint64, error) {
+		require.Equal(t, ConnIDAllocKey, key)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		observed = time.Until(deadline)
+		return 0, context.DeadlineExceeded
+	}
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	sv.ConnectTimeout.Duration = connectTimeout
+	rm := &RoutineManager{
+		ctx: context.Background(),
+		pu: &config.ParameterUnit{
+			SV:             sv,
+			HAKeeperClient: client,
+		},
+	}
+
+	_, err := rm.getConnID()
+	require.Error(t, err)
+	require.InDelta(t, connectTimeout, observed, float64(time.Second))
+}
+
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
@@ -80,10 +108,8 @@ func Test_Closed(t *testing.T) {
 		mo.handleConn(ctx, serverConn)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
 	db, err := openDbConn(t, 6001)
 	require.NoError(t, err)
-	time.Sleep(100 * time.Millisecond)
 	cf.Close()
 
 	closeDbConn(t, db)
@@ -133,6 +159,22 @@ type blockingCloseConn struct {
 	closeStarted chan struct{}
 	closeRelease chan struct{}
 	startOnce    sync.Once
+}
+
+type blockingResponseProtocol struct {
+	MysqlRrWr
+	responseWritten chan struct{}
+	releaseResponse chan struct{}
+	writtenOnce     sync.Once
+}
+
+func (p *blockingResponseProtocol) WriteResponse(ctx context.Context, response *Response) error {
+	err := p.MysqlRrWr.WriteResponse(ctx, response)
+	p.writtenOnce.Do(func() {
+		close(p.responseWritten)
+	})
+	<-p.releaseResponse
+	return err
 }
 
 func (tc *blockingCloseConn) Close() error {
@@ -298,9 +340,9 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	}}
 
 	probes := 0
-	rm.cancelDisconnectedRequests(now, grace, func(conn net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(conn *Conn) (bool, error) {
 		probes++
-		return conn == longServer, nil
+		return conn.RawConn() == longServer, nil
 	})
 
 	require.Equal(t, 1, probes, "only requests beyond the grace period should be probed")
@@ -315,11 +357,42 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	default:
 	}
 
-	rm.cancelDisconnectedRequests(now, grace, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(*Conn) (bool, error) {
 		probes++
 		return true, nil
 	})
 	require.Equal(t, 1, probes, "a routine already closing should not be probed again")
+}
+
+func TestClientDisconnectProbePolicyCoversNewRequests(t *testing.T) {
+	now := time.Now()
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.requestStartedAt.Store(clientRequestClockValue(now))
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	t.Cleanup(cancelRequest)
+	routine.setCancelRequestFunc(cancelRequest)
+
+	conn := &Conn{conn: serverConn, remoteAddr: "new-request"}
+	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
+	probes := 0
+	rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, func(*Conn) (bool, error) {
+		probes++
+		return true, nil
+	})
+
+	require.Equal(t, 1, probes, "a new active request must be probed without an age grace period")
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("a disconnected new request was not canceled")
+	}
 }
 
 func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
@@ -339,7 +412,7 @@ func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
 
 	conn := &Conn{conn: serverConn}
 	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
-	rm.cancelDisconnectedRequests(now, 30*time.Second, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, 30*time.Second, func(*Conn) (bool, error) {
 		return false, errors.New("probe failed")
 	})
 
@@ -392,7 +465,8 @@ func BenchmarkRoutineManagerLongRunningRequests(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = rm.longRunningRequests(now, 30*time.Second)
+				requests := rm.appendLongRunningRequests(nil, now, 30*time.Second)
+				clear(requests)
 			}
 		})
 	}
@@ -756,6 +830,307 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
 }
 
+func TestRoutineManagerLegacyMigrationActionsWaitForRequest(t *testing.T) {
+	t.Run("skip user lock release rechecks after request", func(t *testing.T) {
+		rm, routine, ses := newLegacyMigrationActionTestFixture(t, 1011)
+		require.True(t, routine.mc.tryBeginRequest())
+		var releaseRequest sync.Once
+		t.Cleanup(func() { releaseRequest.Do(routine.mc.endRequest) })
+
+		result := startLegacyMigrationAction(rm, 1011,
+			query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+
+		function.RestoreUserLevelLocksFromMigration(ses.proc, []function.UserLevelLockState{
+			{Name: "request_acquired_lock", Count: 1},
+		})
+		defer function.DiscardMigratedUserLevelLocks(ses.proc)
+		releaseRequest.Do(routine.mc.endRequest)
+
+		require.ErrorContains(t, receiveLegacyMigrationActionResult(t, result),
+			"cannot migrate connection while user-level locks are held")
+		require.False(t, ses.userLevelLocksMigrated)
+	})
+
+	t.Run("enable user lock release waits for request", func(t *testing.T) {
+		rm, routine, ses := newLegacyMigrationActionTestFixture(t, 1012)
+		ses.userLevelLocksMigrated = true
+		require.True(t, routine.mc.tryBeginRequest())
+		var releaseRequest sync.Once
+		t.Cleanup(func() { releaseRequest.Do(routine.mc.endRequest) })
+
+		result := startLegacyMigrationAction(rm, 1012,
+			query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+		require.True(t, ses.userLevelLocksMigrated)
+
+		releaseRequest.Do(routine.mc.endRequest)
+		require.NoError(t, receiveLegacyMigrationActionResult(t, result))
+		require.False(t, ses.userLevelLocksMigrated)
+	})
+}
+
+func TestRoutineManagerLegacyMigrationActionsWaitForReset(t *testing.T) {
+	t.Run("skip user lock release checks replacement session", func(t *testing.T) {
+		rm, routine, oldSession := newLegacyMigrationActionTestFixture(t, 1013)
+		require.True(t, routine.mc.tryBeginOperation())
+		var releaseReset sync.Once
+		t.Cleanup(func() { releaseReset.Do(routine.mc.endOperation) })
+
+		result := startLegacyMigrationAction(rm, 1013,
+			query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+
+		newSession := newLegacyMigrationActionTestSession(t, 1013)
+		function.RestoreUserLevelLocksFromMigration(newSession.proc, []function.UserLevelLockState{
+			{Name: "replacement_session_lock", Count: 1},
+		})
+		defer function.DiscardMigratedUserLevelLocks(newSession.proc)
+		routine.setSession(newSession)
+		releaseReset.Do(routine.mc.endOperation)
+
+		require.ErrorContains(t, receiveLegacyMigrationActionResult(t, result),
+			"cannot migrate connection while user-level locks are held")
+		require.False(t, oldSession.userLevelLocksMigrated)
+		require.False(t, newSession.userLevelLocksMigrated)
+	})
+
+	t.Run("enable user lock release mutates replacement session", func(t *testing.T) {
+		rm, routine, oldSession := newLegacyMigrationActionTestFixture(t, 1014)
+		oldSession.userLevelLocksMigrated = true
+		require.True(t, routine.mc.tryBeginOperation())
+		var releaseReset sync.Once
+		t.Cleanup(func() { releaseReset.Do(routine.mc.endOperation) })
+
+		result := startLegacyMigrationAction(rm, 1014,
+			query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+		require.True(t, oldSession.userLevelLocksMigrated)
+
+		newSession := newLegacyMigrationActionTestSession(t, 1014)
+		newSession.userLevelLocksMigrated = true
+		routine.setSession(newSession)
+		releaseReset.Do(routine.mc.endOperation)
+
+		require.NoError(t, receiveLegacyMigrationActionResult(t, result))
+		require.True(t, oldSession.userLevelLocksMigrated)
+		require.False(t, newSession.userLevelLocksMigrated)
+	})
+}
+
+func newLegacyMigrationActionTestFixture(
+	t *testing.T,
+	connID uint32,
+) (*RoutineManager, *Routine, *Session) {
+	t.Helper()
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ses := newLegacyMigrationActionTestSession(t, connID)
+	routine.setSession(ses)
+	return &RoutineManager{
+		ctx:              context.Background(),
+		routinesByConnID: map[uint32]*Routine{connID: routine},
+	}, routine, ses
+}
+
+func newLegacyMigrationActionTestSession(t *testing.T, connID uint32) *Session {
+	t.Helper()
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "legacy_migration_action"
+	proc.GetSessionInfo().ConnectionID = uint64(connID)
+	return &Session{proc: proc}
+}
+
+func startLegacyMigrationAction(
+	rm *RoutineManager,
+	connID uint32,
+	action query.MigrateConnFromAction,
+) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		result <- rm.MigrateConnectionFromWithContext(context.Background(),
+			&query.MigrateConnFromRequest{ConnID: connID, Action: action},
+			&query.MigrateConnFromResponse{})
+	}()
+	return result
+}
+
+func requireLegacyMigrationActionPending(t *testing.T, result <-chan error) {
+	t.Helper()
+	select {
+	case err := <-result:
+		require.Failf(t, "legacy migration action bypassed lifecycle admission", "err=%v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(time.Second):
+		require.FailNow(t, "legacy migration action did not finish after lifecycle release")
+		return nil
+	}
+}
+
+func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.T) {
+	const connID = uint32(1009)
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	protocol := &blockingResponseProtocol{
+		MysqlRrWr:       oldSession.GetResponser().MysqlRrWr(),
+		responseWritten: make(chan struct{}),
+		releaseResponse: make(chan struct{}),
+	}
+	routine := NewRoutine(context.Background(), protocol, getPu("").SV)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
+
+	oldSession.respr = NewMysqlResp(protocol)
+	oldSession.SetDatabaseName("must_not_leak")
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := &Conn{id: uint64(connID), conn: &testConn{}, remoteAddr: "remote"}
+	rm.setRoutine(conn, connID, routine)
+
+	var releaseOnce sync.Once
+	handlerFinished := make(chan struct{})
+	handlerResult := make(chan struct {
+		err       error
+		recovered any
+	}, 1)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() {
+			close(protocol.releaseResponse)
+		})
+		select {
+		case <-handlerFinished:
+		case <-time.After(time.Second):
+		}
+		if current := routine.getSession(); current != nil && current.GetProc() != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	go func() {
+		var result struct {
+			err       error
+			recovered any
+		}
+		defer func() {
+			result.recovered = recover()
+			handlerResult <- result
+			close(handlerFinished)
+		}()
+		result.err = rm.Handler(conn, []byte{byte(COM_PING)})
+	}()
+
+	select {
+	case <-protocol.responseWritten:
+	case <-time.After(time.Second):
+		t.Fatal("request did not write its terminal response")
+	}
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+
+	oldProc := oldSession.GetProc()
+	oldTxnHandler := oldSession.GetTxnHandler()
+	resetCtx, cancelReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReset()
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- rm.ResetSessionWithContext(
+			resetCtx,
+			&query.ResetSessionRequest{ConnID: connID},
+			&query.ResetSessionResponse{},
+		)
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request finished: %v", err)
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
+	}
+	require.Same(t, oldSession, routine.getSession())
+	require.Same(t, oldProc, oldSession.GetProc())
+	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, oldSession, registered[0])
+
+	releaseOnce.Do(func() {
+		close(protocol.releaseResponse)
+	})
+	select {
+	case result := <-handlerResult:
+		require.Nil(t, result.recovered)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("request handler did not finish after response release")
+	}
+
+	select {
+	case err := <-resetResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not finish after request release")
+	}
+	newSession := routine.getSession()
+	require.NotSame(t, oldSession, newSession)
+	require.Empty(t, newSession.GetDatabaseName(),
+		"QueryService ResetSession must clear the previous client's database")
+	require.Nil(t, oldSession.GetProc())
+	require.Nil(t, oldSession.GetTxnHandler())
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, newSession, registered[0])
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
+	secondResetCtx, cancelSecondReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecondReset()
+	require.NoError(t, rm.ResetSessionWithContext(
+		secondResetCtx,
+		&query.ResetSessionRequest{ConnID: connID},
+		&query.ResetSessionResponse{},
+	))
+	secondSession := routine.getSession()
+	require.NotSame(t, newSession, secondSession)
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, secondSession, registered[0])
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
+}
+
+func TestRoutineManagerHandlerRejectsLifecycleConflictBeforeSessionRead(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginOperation())
+	defer routine.mc.endOperation()
+
+	conn := &Conn{id: 1010, conn: &testConn{}, remoteAddr: "remote"}
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          map[*Conn]*Routine{conn: routine},
+		routinesByConnID: map[uint32]*Routine{1010: routine},
+	}
+
+	require.ErrorContains(t, rm.Handler(conn, nil), "empty MySQL command packet")
+	require.ErrorContains(
+		t,
+		rm.Handler(conn, []byte{byte(COM_PING)}),
+		"cannot process request as routine is closed or busy",
+	)
+}
+
 func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {
 	rt, proto := newUnitTestRoutine(t, 1006)
 	proc := testutil.NewProc(t)
@@ -843,15 +1218,21 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	var legacyTxnIDs int
 	for _, txnID := range lockService.unlockedTxnIDs {
 		txnIDText := string(txnID)
-		require.NotContains(t, txnIDText, "1010")
 		parts := strings.Split(txnIDText, "\x00")
 		switch len(parts) {
 		case 4:
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			connID, err := strconv.ParseUint(parts[3], 10, 64)
 			require.NoError(t, err)
 			require.Equal(t, uint64(1009), connID)
 			currentTxnIDs++
 		case 3:
+			// Legacy IDs have no connection-ID field. Do not search the full
+			// string for "1010": the owner includes a random UUID that may
+			// legitimately contain those digits.
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			legacyTxnIDs++
 		default:
 			require.Failf(t, "unexpected user lock txnID format", "txnID=%q", txnIDText)

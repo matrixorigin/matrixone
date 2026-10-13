@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -43,6 +42,8 @@ const (
 	Finalize
 	End
 )
+
+const defaultDedupJoinResultBatchBytes = 64 * mpool.MB
 
 const (
 	dedupJoinAllocationSiteMatched mpool.AllocationSite = iota + 82
@@ -232,6 +233,29 @@ type container struct {
 	state   int
 	lastPos int
 
+	// Ordered ODKU action replay may expand one hot-key group into many logical
+	// rows. These cursors let Call yield without retaining an unbounded output
+	// batch. probeBat is borrowed from the child and remains valid until the next
+	// child Call; current vectors point into stableUpdateVecs owned below.
+	resultBatchByteLimit int
+	probeBat             *batch.Batch
+	probeRow             int
+	probeGroup           uint64
+	probeActionIdx       int
+	probeActionActive    bool
+	probeLogicalAffected uint64
+	probeAnyChanged      bool
+	probeCurrentVecs     []*vector.Vector
+
+	finalizePrepared      bool
+	finalizeDone          bool
+	finalizeZeroIdx       int
+	finalizeGroup         uint64
+	finalizeActionIdx     int
+	finalizeActionActive  bool
+	finalizeLogicalAffect uint64
+	finalizeCurrentVecs   []*vector.Vector
+
 	batches       []*batch.Batch
 	batchRowCount int64
 
@@ -243,7 +267,16 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	savedVecs []*vector.Vector
+	savedVecs             []*vector.Vector
+	actionBeforeVecs      []*vector.Vector
+	actionImageBeforeVecs []*vector.Vector
+	groupBeforeVecs       []*vector.Vector
+	foreignKeyBeforeVecs  [][]*vector.Vector
+	foreignKeyEligibility []bool
+	stableUpdateVecs      [][]*vector.Vector
+	stableCols            []int32
+	stableSources         []*vector.Vector
+	stableDests           []*vector.Vector
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -277,6 +310,7 @@ type container struct {
 	// Spill support for large build sides.
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
+	autoSpill      bool
 }
 
 type DedupJoin struct {
@@ -305,6 +339,14 @@ type DedupJoin struct {
 	DedupDeleteKeepColIdxList []int32
 	UpdateColIdxList          []int32
 	UpdateColExprList         []*plan.Expr
+	HasODKUAffectedRows       bool
+	AffectedRowsResultPos     int32
+	PhysicalChangedResultPos  int32
+	UpdateCheckColIdxList     []int32
+	CountFoundRows            bool
+	EmitActionRows            bool
+	ActionFinalResultPos      int32
+	ForeignKeyChecks          []ODKUForeignKeyCheck
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -319,6 +361,11 @@ type DedupJoin struct {
 	resultAllocation                *vector.AllocationAccountSelection
 
 	vm.OperatorBase
+}
+
+type ODKUForeignKeyCheck struct {
+	ColIdxList           []int32
+	EligibilityResultPos int32
 }
 
 func (dedupJoin *DedupJoin) SetAllocationAccount(
@@ -336,7 +383,7 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
 		dedupJoinAllocationSiteCaptureArea,
 		dedupJoinAllocationSiteCaptureNulls,
@@ -347,7 +394,7 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	}
 	resultSelection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
 		dedupJoinAllocationSiteResultArea,
 		dedupJoinAllocationSiteResultNulls,
@@ -455,6 +502,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanExprExecutor()
+	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -476,6 +524,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
+	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -494,6 +543,25 @@ func (ctr *container) cleanExprExecutor() {
 		}
 	}
 	ctr.exprExecs = nil
+}
+
+func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
+	for _, candidates := range ctr.stableUpdateVecs {
+		for _, vec := range candidates {
+			vec.Free(proc.Mp())
+		}
+	}
+	ctr.stableUpdateVecs = nil
+	ctr.stableCols = nil
+	ctr.stableSources = nil
+	ctr.stableDests = nil
+	ctr.actionBeforeVecs = nil
+	ctr.actionImageBeforeVecs = nil
+	ctr.groupBeforeVecs = nil
+	ctr.foreignKeyBeforeVecs = nil
+	ctr.foreignKeyEligibility = nil
+	ctr.probeCurrentVecs = nil
+	ctr.finalizeCurrentVecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
@@ -554,6 +622,26 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.batchRowCount = 0
 	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
+	ctr.resetActionReplayCursors()
+}
+
+func (ctr *container) resetActionReplayCursors() {
+	ctr.probeBat = nil
+	ctr.probeRow = 0
+	ctr.probeGroup = 0
+	ctr.probeActionIdx = 0
+	ctr.probeActionActive = false
+	ctr.probeLogicalAffected = 0
+	ctr.probeAnyChanged = false
+	ctr.probeCurrentVecs = nil
+	ctr.finalizePrepared = false
+	ctr.finalizeDone = false
+	ctr.finalizeZeroIdx = 0
+	ctr.finalizeGroup = 0
+	ctr.finalizeActionIdx = 0
+	ctr.finalizeActionActive = false
+	ctr.finalizeLogicalAffect = 0
+	ctr.finalizeCurrentVecs = nil
 }
 
 func (ctr *container) cleanHashMap() {

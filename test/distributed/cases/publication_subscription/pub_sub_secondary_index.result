@@ -1,0 +1,131 @@
+drop publication if exists mo28279_pub_table;
+drop publication if exists mo28279_pub_sec;
+drop account if exists mo28279_sub_a;
+drop account if exists mo28279_sub_b;
+drop database if exists mo28279_pub_db;
+create account mo28279_sub_a admin_name = 'admin' identified by '111';
+create account mo28279_sub_b admin_name = 'admin' identified by '111';
+create database mo28279_pub_db;
+create table mo28279_pub_db.audit_events (
+id int primary key,
+event_type varchar(32),
+created_at bigint,
+index idx_event_type (event_type),
+index idx_created_at (created_at)
+);
+insert into mo28279_pub_db.audit_events
+select g.result,
+if(g.result in (42, 4242), 'login_success', concat('other_', g.result)),
+g.result
+from generate_series(1, 100000) g;
+create table mo28279_pub_db.private_events (id int primary key);
+insert into mo28279_pub_db.private_events values (99);
+select mo_ctl('dn', 'flush', 'mo28279_pub_db.audit_events');
+➤ mo_ctl(dn, flush, mo28279_pub_db.audit_events)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+create publication mo28279_pub_sec database mo28279_pub_db account mo28279_sub_a, mo28279_sub_b;
+create publication mo28279_pub_table database mo28279_pub_db table audit_events account mo28279_sub_a;
+drop database if exists mo28279_sub_a_db;
+create database mo28279_sub_a_db from sys publication mo28279_pub_sec;
+select count(*) as total_count from mo28279_sub_a_db.audit_events;
+➤ total_count[-5,64,0]  𝄀
+100000
+explain select count(*) as login_count from mo28279_sub_a_db.audit_events
+where event_type = 'login_success';
+-- @regex("Index Table Scan.*idx_event_type", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on audit_events.idx_event_type  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'login_success')  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select count(*) as login_count from mo28279_sub_a_db.audit_events
+where event_type = 'login_success';
+➤ login_count[-5,64,0]  𝄀
+2
+explain select count(*) as recent_count from mo28279_sub_a_db.audit_events
+where created_at >= 99999;
+-- @regex("Index Table Scan.*idx_created_at", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on audit_events.idx_created_at  𝄀
+              Filter Cond: (__mo_index_idx_col >= '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col >= '<opaque>')
+select count(*) as recent_count from mo28279_sub_a_db.audit_events
+where created_at >= 99999;
+➤ recent_count[-5,64,0]  𝄀
+2
+select count(*) as login_count from mo28279_sub_a_db.audit_events
+ignore index (idx_event_type, idx_created_at)
+where event_type = 'login_success';
+➤ login_count[-5,64,0]  𝄀
+2
+select * from mo28279_sub_a_db.private_events;
+➤ id[4,32,0]  𝄀
+99
+prepare indexed_stmt from 'select count(*) from mo28279_sub_a_db.audit_events where event_type = \'login_success\'';
+execute indexed_stmt;
+➤ count(*)[-5,64,0]  𝄀
+2
+create database mo28279_sub_a_table_db from sys publication mo28279_pub_table;
+explain select count(*) as table_pub_login_count from mo28279_sub_a_table_db.audit_events
+where event_type = 'login_success';
+-- @regex("Index Table Scan.*idx_event_type", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on audit_events.idx_event_type  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'login_success')  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select count(*) as table_pub_login_count from mo28279_sub_a_table_db.audit_events
+where event_type = 'login_success';
+➤ table_pub_login_count[-5,64,0]  𝄀
+2
+select * from mo28279_sub_a_table_db.private_events;
+SQL parser error: table "private_events" does not exist
+prepare table_indexed_stmt from 'select count(*) from mo28279_sub_a_table_db.audit_events where event_type = \'login_success\'';
+execute table_indexed_stmt;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database if exists mo28279_sub_b_db;
+create database mo28279_sub_b_db from sys publication mo28279_pub_sec;
+prepare second_indexed_stmt from 'select count(*) from mo28279_sub_b_db.audit_events where created_at >= 99999';
+execute second_indexed_stmt;
+➤ count(*)[-5,64,0]  𝄀
+2
+alter publication mo28279_pub_sec account mo28279_sub_b;
+execute indexed_stmt;
+internal error: the account mo28279_sub_a is not allowed to subscribe the publication mo28279_pub_sec
+select count(*) from mo28279_sub_a_db.audit_events where event_type = 'login_success';
+internal error: the account mo28279_sub_a is not allowed to subscribe the publication mo28279_pub_sec
+alter publication mo28279_pub_sec account mo28279_sub_a, mo28279_sub_b;
+execute indexed_stmt;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop publication mo28279_pub_sec;
+execute second_indexed_stmt;
+internal error: there is no publication mo28279_pub_sec
+deallocate prepare second_indexed_stmt;
+drop database mo28279_sub_b_db;
+deallocate prepare indexed_stmt;
+drop database mo28279_sub_a_db;
+drop publication mo28279_pub_table;
+execute table_indexed_stmt;
+internal error: there is no publication mo28279_pub_table
+deallocate prepare table_indexed_stmt;
+drop database mo28279_sub_a_table_db;
+drop database if exists mo28279_pub_db;
+drop account mo28279_sub_a;
+drop account mo28279_sub_b;

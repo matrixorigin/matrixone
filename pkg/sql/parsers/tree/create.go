@@ -125,6 +125,12 @@ func init() {
 		reuse.DefaultOptions[AttributeCollate](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeCharset](
+		func() *AttributeCharset { return &AttributeCharset{} },
+		func(a *AttributeCharset) { a.reset() },
+		reuse.DefaultOptions[AttributeCharset](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[AttributeColumnFormat](
 		func() *AttributeColumnFormat { return &AttributeColumnFormat{} },
 		func(a *AttributeColumnFormat) { a.reset() },
@@ -949,6 +955,7 @@ type CreateTable struct {
 	KafkaParam         *KafkaTableParam
 	AsSource           *Select
 	IsAsSelect         bool
+	CTASConflict       string
 	IsAsLike           bool
 	LikeTableName      TableName
 	SubscriptionOption *SubscriptionOption
@@ -1002,6 +1009,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 
 	if node.IsAsSelect {
+		if node.CTASConflict != "" {
+			ctx.WriteByte(' ')
+			ctx.WriteString(node.CTASConflict)
+		}
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
 	}
@@ -1145,6 +1156,8 @@ func (node *CreateTable) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -1299,6 +1312,8 @@ func (node *ColumnTableDef) reset() {
 			case *AttributeComment:
 				opt.Free()
 			case *AttributeCollate:
+				opt.Free()
+			case *AttributeCharset:
 				opt.Free()
 			case *AttributeColumnFormat:
 				opt.Free()
@@ -1575,6 +1590,32 @@ func NewAttributeCollate(c string) *AttributeCollate {
 	ac := reuse.Alloc[AttributeCollate](nil)
 	ac.Collate = c
 	return ac
+}
+
+type AttributeCharset struct {
+	columnAttributeImpl
+	Charset string
+}
+
+func (node *AttributeCharset) Format(ctx *FmtCtx) {
+	ctx.WriteString("character set ")
+	ctx.WriteString(node.Charset)
+}
+
+func (node AttributeCharset) TypeName() string { return "tree.AttributeCharset" }
+
+func (node *AttributeCharset) reset() {
+	*node = AttributeCharset{}
+}
+
+func (node *AttributeCharset) Free() {
+	reuse.Free[AttributeCharset](node, nil)
+}
+
+func NewAttributeCharset(charset string) *AttributeCharset {
+	attribute := reuse.Alloc[AttributeCharset](nil)
+	attribute.Charset = charset
+	return attribute
 }
 
 type AttributeColumnFormat struct {
@@ -2818,11 +2859,19 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	Collate string
+	// NonCharsetSyntax distinguishes historical ALTER no-op placeholders
+	// (FORCE, KEYS, TABLESPACE, VALIDATION) from actual charset requests.
+	NonCharsetSyntax bool
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
+	if node.Collate != "" {
+		ctx.WriteString(" collate = ")
+		ctx.WriteString(node.Collate)
+	}
 }
 
 func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }
@@ -3896,6 +3945,8 @@ func (node *Partition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -4029,6 +4080,8 @@ func (node *SubPartition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:

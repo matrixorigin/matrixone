@@ -234,6 +234,175 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 	return nil
 }
 
+// FindPrehashedBatch looks up already hashed keys without mutating or
+// allocating. It is used when an exact preview temporarily outgrows the
+// current table and will be replanned after exact resize admission.
+func (ht *Int64HashMap) FindPrehashedBatch(
+	zValues []int64,
+	hashes []uint64,
+	values []uint64,
+	useRing bool,
+) error {
+	if len(values) < len(hashes) || useRing && len(zValues) < len(hashes) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for row, hash := range hashes {
+		if useRing && zValues[row] == 0 {
+			values[row] = 0
+			continue
+		}
+		values[row] = ht.findCell(hash).Mapped
+	}
+	return nil
+}
+
+// PlanInsertBatch computes the exact mapping and target cells for one bounded
+// batch without changing the table. It models earlier new rows in the same
+// batch, so duplicate and colliding hashes receive the same mapping that a
+// sequential insert would publish. complete is false only if the current
+// physical table has too few empty cells; callers may resize exactly and plan
+// again.
+func (ht *Int64HashMap) PlanInsertBatch(
+	n int,
+	base uint64,
+	zValues []int64,
+	hashes []uint64,
+	keysPtr unsafe.Pointer,
+	values []uint64,
+	slots []uint64,
+	inserted []uint8,
+	useRing bool,
+	prehashed bool,
+) (newGroups uint64, version uint64, complete bool, err error) {
+	if base != ht.elemCnt {
+		return 0, ht.version, false, mpool.ErrAllocationAccountInvariant
+	}
+	if n < 0 || n > len(hashes) || n > len(values) || n > len(slots) ||
+		n > len(inserted) || useRing && n > len(zValues) {
+		return 0, ht.version, false, mpool.ErrAllocationAccountInvalid
+	}
+	if n == 0 {
+		return 0, ht.version, true, nil
+	}
+	if !prehashed {
+		Int64BatchHash(keysPtr, &hashes[0], n)
+	}
+	clear(values[:n])
+	clear(inserted[:n])
+	var planned [512]uint16
+	const plannedMask = len(planned) - 1
+	next := ht.elemCnt
+	for row, hash := range hashes[:n] {
+		if useRing && zValues[row] == 0 {
+			continue
+		}
+		index := hash & ht.cellCntMask
+		found := false
+		for probes := uint64(0); probes < ht.cellCnt; probes++ {
+			cell := ht.cellAt(index)
+			if cell.Mapped != 0 {
+				if cell.Key == hash {
+					values[row] = cell.Mapped
+					slots[row] = index
+					found = true
+					break
+				}
+				index = (index + 1) & ht.cellCntMask
+				continue
+			}
+
+			bucket := int(index) & plannedMask
+			for planned[bucket] != 0 {
+				prior := int(planned[bucket] - 1)
+				if slots[prior] == index {
+					if hashes[prior] == hash {
+						values[row] = values[prior]
+						slots[row] = index
+						found = true
+					}
+					break
+				}
+				bucket = (bucket + 1) & plannedMask
+			}
+			if found {
+				break
+			}
+			if planned[bucket] == 0 {
+				next++
+				values[row] = next
+				slots[row] = index
+				inserted[row] = 1
+				planned[bucket] = uint16(row + 1)
+				found = true
+				break
+			}
+			index = (index + 1) & ht.cellCntMask
+		}
+		if !found {
+			return 0, ht.version, false, nil
+		}
+	}
+	return next - ht.elemCnt, ht.version, true, nil
+}
+
+// CommitInsertBatchPlan publishes a complete plan without probing or
+// allocating. The table generation and element count make stale plans fail
+// before the first cell changes. A malformed plan is rolled back before the
+// error is returned, so the successful path needs only one pass over the
+// bounded plan while publication remains atomic to the caller.
+func (ht *Int64HashMap) CommitInsertBatchPlan(
+	version uint64,
+	base uint64,
+	hashes []uint64,
+	values []uint64,
+	slots []uint64,
+	inserted []uint8,
+) error {
+	if version != ht.version || base != ht.elemCnt ||
+		len(values) < len(hashes) || len(slots) < len(hashes) ||
+		len(inserted) < len(hashes) {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	next := base
+	for row, flag := range inserted[:len(hashes)] {
+		if flag > 1 {
+			ht.rollbackInsertBatchPlan(slots, inserted, row)
+			return mpool.ErrAllocationAccountInvalid
+		}
+		if flag == 0 {
+			continue
+		}
+		next++
+		if values[row] != next || slots[row] >= ht.cellCnt {
+			ht.rollbackInsertBatchPlan(slots, inserted, row)
+			return mpool.ErrAllocationAccountInvariant
+		}
+		cell := ht.cellAt(slots[row])
+		if cell.Mapped != 0 {
+			ht.rollbackInsertBatchPlan(slots, inserted, row)
+			return mpool.ErrAllocationAccountInvariant
+		}
+		cell.Key = hashes[row]
+		cell.Mapped = values[row]
+	}
+	ht.elemCnt = next
+	return nil
+}
+
+func (ht *Int64HashMap) rollbackInsertBatchPlan(
+	slots []uint64,
+	inserted []uint8,
+	before int,
+) {
+	for row, flag := range inserted[:before] {
+		if flag != 0 {
+			*ht.cellAt(slots[row]) = Int64HashMapCell{}
+		}
+	}
+}
+
+func (ht *Int64HashMap) Version() uint64 { return ht.version }
+
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
 		Int64BatchHash(keysPtr, &hashes[0], n)
@@ -501,6 +670,10 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, er
 	}
 	n += int64(rn)
 	elemCnt := types.DecodeUint64(buf)
+	if remaining, bounded := readerRemainingBytes(r); bounded &&
+		elemCnt > uint64(remaining)/16 {
+		return n, io.ErrUnexpectedEOF
+	}
 
 	if err = ht.Init(mp); err != nil {
 		return

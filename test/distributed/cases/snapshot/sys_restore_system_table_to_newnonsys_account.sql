@@ -54,7 +54,7 @@ create snapshot udf_dsp03 for account acc01;
 show snapshots;
 
 -- @session:id=1&user=acc01:test_account&password=111
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
@@ -63,13 +63,13 @@ drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 restore account acc01{snapshot="udf_dsp03"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @session
 
 restore account acc01{snapshot="udf_dsp02"} to account acc02;
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db;
 -- @session
@@ -94,7 +94,7 @@ use udf_db2;
 create function `addAB`(x int, y int) returns int
     language sql as
 '$1 + $2';
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @session
 
@@ -109,7 +109,7 @@ select * from mo_catalog.mo_user_defined_function;
 restore account acc01{snapshot="udf_sp04"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db2;
 -- @session

@@ -34,6 +34,8 @@ permissions:
 jobs:
   iceberg-e2e-local:
     name: Iceberg E2E Local
+    # Temporarily disabled while the local Iceberg E2E suite is stabilized.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true

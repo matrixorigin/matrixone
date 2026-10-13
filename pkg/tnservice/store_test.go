@@ -56,15 +56,109 @@ type storeQueryClient struct {
 type storeQueryService struct {
 	queryservice.QueryService
 	closeCalls int
+	start      func() error
 }
 
 type storeTxnServer struct {
 	rpc.TxnServer
-	beforeClose func()
+	start         func() error
+	beforeQuiesce func()
+	beforeDrain   func()
+	beforeClose   func()
+}
+
+type failingDrainServer struct {
+	rpc.TxnServer
+	quiesce func() error
+	drain   func(context.Context) error
+}
+
+func (s *failingDrainServer) Quiesce() error                  { return s.quiesce() }
+func (s *failingDrainServer) Drain(ctx context.Context) error { return s.drain(ctx) }
+
+func TestStoreCloseConcurrentSharesDrainFailure(t *testing.T) {
+	expected := errors.New("drain failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var calls atomic.Int32
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(context.Context) error {
+			calls.Add(1)
+			close(entered)
+			<-release
+			return expected
+		},
+	}}
+	results := make(chan error, 2)
+	go func() { results <- s.Close() }()
+	<-entered
+	go func() { results <- s.Close() }()
+	unblock()
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, s.Close(), expected)
+	require.Equal(t, int32(1), calls.Load())
+	// Replica/storage dependencies are deliberately absent: a failed drain
+	// must return without entering their destruction path.
+}
+
+func TestStoreDrainSharesContextWithLocalHandlers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(actual context.Context) error {
+			require.Equal(t, ctx, actual)
+			cancel()
+			return nil
+		},
+	}}
+	release, ok := s.acquireLocalHandler()
+	require.True(t, ok)
+	defer release()
+	err := s.drainHandlers(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, rpc.ErrTxnDrainTimeout)
+	_, accepted := s.acquireLocalHandler()
+	require.False(t, accepted)
+}
+
+func (s *storeTxnServer) Start() error {
+	if s.start != nil {
+		return s.start()
+	}
+	return s.TxnServer.Start()
+}
+
+func (s *storeQueryService) Start() error {
+	if s.start != nil {
+		return s.start()
+	}
+	return s.QueryService.Start()
+}
+
+func (s *storeTxnServer) Quiesce() error {
+	if s.beforeQuiesce != nil {
+		s.beforeQuiesce()
+	}
+	return s.TxnServer.(txnServerLifecycle).Quiesce()
+}
+
+func (s *storeTxnServer) Drain(ctx context.Context) error {
+	if s.beforeDrain != nil {
+		s.beforeDrain()
+	}
+	return s.TxnServer.(txnServerLifecycle).Drain(ctx)
 }
 
 func (s *storeTxnServer) Close() error {
-	s.beforeClose()
+	if s.beforeClose != nil {
+		s.beforeClose()
+	}
 	return s.TxnServer.Close()
 }
 
@@ -156,6 +250,104 @@ func TestStartWithReplicas(t *testing.T) {
 	runTNStoreTestWithFileServiceFactory(t, func(s *store) {
 
 	}, factory)
+}
+
+func TestStoreStartFailureDoesNotPublishHeartbeat(t *testing.T) {
+	expected := errors.New("injected startup failure")
+	for _, queryFailure := range []bool{false, true} {
+		name := "transaction server"
+		if queryFailure {
+			name = "query server"
+		}
+		t.Run(name, func(t *testing.T) {
+			client := newTestHAKeeperClient()
+			s := &store{hakeeperClient: client, heartbeatWakeup: make(chan struct{}, 1)}
+			// Replica completion may precede server startup. A pending token must
+			// not create a heartbeat owner when either endpoint fails to start.
+			s.notifyHeartbeat()
+			s.server = &storeTxnServer{start: func() error {
+				if queryFailure {
+					return nil
+				}
+				return expected
+			}}
+			s.queryService = &storeQueryService{start: func() error { return expected }}
+			require.ErrorIs(t, s.Start(), expected)
+			require.Zero(t, client.getCount())
+		})
+	}
+}
+
+func TestStoreHeartbeatPublishesAsyncReplicaReadiness(t *testing.T) {
+	heartbeats := make(chan logservicepb.TNStoreHeartbeat, 2)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	runTNStoreTestBeforeStart(t, func(s *store) {
+		s.cfg.HAKeeper.HeatbeatInterval.Duration = time.Hour
+		s.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Minute
+		client := s.hakeeperClient.(*testHAKeeperClient)
+		client.onHeartbeat = func(ctx context.Context, hb logservicepb.TNStoreHeartbeat) error {
+			call := calls.Add(1)
+			select {
+			case heartbeats <- hb:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if call == 1 {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	}, func(s *store) {
+		select {
+		case hb := <-heartbeats:
+			require.Empty(t, hb.Shards)
+		case <-time.After(10 * time.Second):
+			t.Fatal("successful startup waited for the hourly heartbeat tick")
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		first := newTestTNShard(101, 201, 301)
+		require.NoError(t, s.StartTNReplica(first))
+		require.NoError(t, s.getReplica(first.ShardID).waitStarted(ctx))
+		// The actual async owner must publish success, not just close startedC.
+		select {
+		case <-s.heartbeatWakeup:
+		case <-ctx.Done():
+			t.Fatal("async replica completion did not notify heartbeat")
+		}
+		require.NoError(t, s.StartTNReplica(first))
+		require.Empty(t, s.heartbeatWakeup, "a duplicate attempt must not notify")
+		second := newTestTNShard(102, 202, 302)
+		require.NoError(t, s.StartTNReplica(second))
+		require.NoError(t, s.getReplica(second.ShardID).waitStarted(ctx))
+		close(release)
+		select {
+		case hb := <-heartbeats:
+			require.ElementsMatch(t, []logservicepb.TNShardInfo{
+				{ShardID: first.ShardID, ReplicaID: first.ReplicaID},
+				{ShardID: second.ShardID, ReplicaID: second.ReplicaID},
+			}, hb.Shards)
+		case <-ctx.Done():
+			t.Fatal("ready shards waited for the hourly heartbeat tick")
+		}
+		// The second RPC remains blocked until the real owner is canceled by Close.
+		closed := make(chan error, 1)
+		go func() { closed <- s.Close() }()
+		select {
+		case err := <-closed:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("Close did not cancel and join the heartbeat owner")
+		}
+		require.Equal(t, int32(2), calls.Load())
+	})
 }
 
 func TestStartReplica(t *testing.T) {
@@ -273,6 +465,12 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 		realClient := s.queryClient
 		s.queryClient = sharedClient
 		require.NoError(t, realClient.Close())
+		results := make(chan error, 2)
+		go func() { results <- s.Close() }()
+		go func() { results <- s.Close() }()
+		require.NoError(t, <-results)
+		require.NoError(t, <-results)
+		// runTNStoreTest calls Close once more on return.
 		t.Cleanup(func() {
 			require.Equal(t, 1, sharedClient.closeCalls)
 		})
@@ -281,22 +479,31 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 
 func TestStoreCloseClosesQueryService(t *testing.T) {
 	var tracked *storeQueryService
-	runTNStoreTest(t, func(s *store) {
+	runTNStoreTestBeforeStart(t, func(s *store) {
 		tracked = &storeQueryService{QueryService: s.queryService}
 		s.queryService = tracked
+	}, func(s *store) {
 		t.Cleanup(func() {
 			require.Equal(t, 1, tracked.closeCalls)
 		})
 	})
 }
 
-func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
+func TestStoreCloseDrainsRPCBeforeCancellingReplicas(t *testing.T) {
+	var canceledBeforeDrain atomic.Bool
 	var canceledBeforeServerClose atomic.Bool
+	var drainedBeforeServerClose atomic.Bool
 	runTNStoreTest(t, func(s *store) {
 		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
 		s.replicas.Store(r.shard.ShardID, r)
 		s.server = &storeTxnServer{
 			TxnServer: s.server,
+			beforeDrain: func() {
+				r.mu.RLock()
+				canceledBeforeDrain.Store(r.mu.cancelled)
+				r.mu.RUnlock()
+				drainedBeforeServerClose.Store(true)
+			},
 			beforeClose: func() {
 				r.mu.RLock()
 				defer r.mu.RUnlock()
@@ -304,7 +511,9 @@ func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
 			},
 		}
 	})
+	require.False(t, canceledBeforeDrain.Load())
 	require.True(t, canceledBeforeServerClose.Load())
+	require.True(t, drainedBeforeServerClose.Load())
 }
 
 type neverReadyHAKeeperClient struct {
@@ -380,6 +589,17 @@ func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {
 		require.Equal(t, []logservicepb.TNShardInfo{{
 			ShardID: 1, ReplicaID: 2,
 		}}, s.getTNShardInfo())
+		r.cancelStart(false)
+		require.Empty(t, s.getTNShardInfo(), "a canceled replica must not be advertised")
+		failed := newReplica(newTestTNShard(2, 3, 4), s.rt)
+		startErr := errors.New("injected storage start failure")
+		failedService := service.NewTxnService(s.cfg.UUID, failed.shard,
+			&startErrorStorage{startErr: startErr}, sender, time.Hour, nil)
+		s.replicas.Store(failed.shard.ShardID, failed)
+		require.ErrorIs(t, failed.start(failedService), startErr)
+		require.Empty(t, s.getTNShardInfo(), "a failed start must not be advertised")
+		s.replicas.Delete(failed.shard.ShardID)
+		require.ErrorIs(t, failed.close(false), startErr)
 	})
 }
 
@@ -456,34 +676,48 @@ func runTNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
-	runTNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
-		local, err := fileservice.NewMemoryFS(
-			defines.LocalFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
+	runTNStoreTestBeforeStart(t, nil, testFn, opts...)
+}
+
+func runTNStoreTestBeforeStart(
+	t *testing.T,
+	beforeStart func(*store),
+	testFn func(*store),
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, beforeStart, testFn, func(name string) (*fileservice.FileServices, error) {
+		var acquired []fileservice.FileService
+		complete := false
+		defer func() {
+			if !complete {
+				for _, fs := range acquired {
+					fs.Close(context.Background())
+				}
+			}
+		}()
+		for _, serviceName := range []string{defines.LocalFileServiceName, defines.SharedFileServiceName, defines.ETLFileServiceName} {
+			fs, err := fileservice.NewMemoryFS(serviceName, fileservice.DisabledCacheConfig, nil)
+			if err != nil {
+				return nil, err
+			}
+			acquired = append(acquired, fs)
 		}
-		s3, err := fileservice.NewMemoryFS(
-			defines.SharedFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		etl, err := fileservice.NewMemoryFS(
-			defines.ETLFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return fileservice.NewFileServices(name, local, s3, etl)
+		fs, err := fileservice.NewFileServices(name, acquired...)
+		complete = err == nil
+		return fs, err
 	}, opts...)
 }
 
 func runTNStoreTestWithFileServiceFactory(
 	t *testing.T,
+	testFn func(*store),
+	fsFactory fileservice.NewFileServicesFunc,
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, nil, testFn, fsFactory, opts...)
+}
+
+func runTNStoreTestWithSetup(
+	t *testing.T,
+	beforeStart func(*store),
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
@@ -515,6 +749,11 @@ func runTNStoreTestWithFileServiceFactory(
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+	// Test instrumentation must be installed before heartbeat goroutines read
+	// service fields; replacing them after Start races with production readers.
+	if beforeStart != nil {
+		beforeStart(s)
+	}
 	assert.NoError(t, s.Start())
 	testFn(s)
 }
@@ -561,7 +800,7 @@ func newTestStore(
 	}
 	c.LogtailServer.ListenAddress = testTNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_TN,
@@ -571,13 +810,24 @@ func newTestStore(
 			clock.NewHLCClock(
 				func() int64 { return time.Now().UTC().UnixNano() },
 				time.Duration(math.MaxInt64))))
+	var owner Service
+	t.Cleanup(func() {
+		if owner != nil {
+			if closeErr := owner.Close(); closeErr != nil {
+				t.Errorf("retain TN file service after incomplete close: %v", closeErr)
+				return
+			}
+		}
+		fs.Close(context.Background())
+	})
 	s, err := NewService(
 		c,
 		rt,
 		fs,
 		nil,
+		func(value Service) { owner = value },
 		options...)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	return s.(*store)
 }
 
@@ -590,7 +840,9 @@ func newTestTNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
 }
 
 type testHAKeeperClient struct {
-	mu struct {
+	// Installed before Start; heartbeat is the only reader.
+	onHeartbeat func(context.Context, logservicepb.TNStoreHeartbeat) error
+	mu          struct {
 		sync.RWMutex
 		commandBatch logservicepb.CommandBatch
 	}
@@ -620,6 +872,11 @@ func (thc *testHAKeeperClient) Close() error {
 
 func (thc *testHAKeeperClient) SendTNHeartbeat(ctx context.Context, hb logservicepb.TNStoreHeartbeat) (logservicepb.CommandBatch, error) {
 	atomic.AddUint64(&thc.atomic.count, 1)
+	if thc.onHeartbeat != nil {
+		if err := thc.onHeartbeat(ctx, hb); err != nil {
+			return logservicepb.CommandBatch{}, err
+		}
+	}
 	thc.mu.RLock()
 	defer thc.mu.RUnlock()
 	return thc.mu.commandBatch, nil

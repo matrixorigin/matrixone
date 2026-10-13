@@ -31,7 +31,7 @@ func Test_readCache(t *testing.T) {
 
 	slowCacheReadThreshold = time.Second
 
-	size := int64(128)
+	size := int64(DefaultCacheDataAllocator().BackingSize(1))
 	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close(ctx)
 
@@ -78,6 +78,29 @@ func Test_readCache(t *testing.T) {
 
 	err = readCache(ctx, m, newReadVec2())
 	assert.Error(t, err)
+}
+
+func benchmarkFileServiceAllocateCacheData(
+	b *testing.B,
+	allocate func(context.Context, int) fscache.Data,
+	firstSize int,
+	numSizes int,
+) {
+	b.Helper()
+	if numSizes <= 0 {
+		b.Fatal("number of allocation sizes must be positive")
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			data := allocate(ctx, firstSize+i%numSizes)
+			data.Release()
+			i++
+		}
+	})
 }
 
 var _ IOVectorCache = (*testCache)(nil)

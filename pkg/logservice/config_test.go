@@ -16,8 +16,10 @@ package logservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +113,7 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c3 := c
 	c3.RaftAddress = ""
 	c3.RaftPort = 0
-	err = c2.Validate()
+	err = c3.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c4 := c
@@ -129,6 +131,40 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c6.GossipProbeInterval.Duration = 0
 	err = c6.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c7 := c
+	c7.HAKeeperBootstrapRetryInterval.Duration = -time.Second
+	err = c7.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c8 := c
+	c8.HAKeeperCheckInterval.Duration = 0
+	err = c8.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c9 := c
+	c9.HAKeeperCheckInterval.Duration = -time.Second
+	err = c9.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c10 := c
+	c10.HAKeeperTickInterval.Duration = -time.Second
+	err = c10.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c11 := c
+	c11.HAKeeperCheckInterval.Duration = time.Duration(1<<63 - 1)
+	err = c11.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+}
+
+func TestHAKeeperBootstrapRetryIntervalDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
+
+	cfg.HAKeeperBootstrapRetryInterval.Duration = 0
+	assert.NoError(t, cfg.Validate())
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
@@ -233,32 +269,66 @@ func TestClientConfigValidate(t *testing.T) {
 
 func TestHAKeeperClientConfigValidate(t *testing.T) {
 	tests := []struct {
-		cfg HAKeeperClientConfig
-		ok  bool
+		name        string
+		cfg         HAKeeperClientConfig
+		ok          bool
+		wantTimeout time.Duration
 	}{
 		{
-			HAKeeperClientConfig{}, true,
+			"defaults", HAKeeperClientConfig{}, true, defaultBackendReadTimeout,
 		},
 		{
-			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+			"discovery address", HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+			defaultBackendReadTimeout,
 		},
 		{
-			HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+			"service address", HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+			defaultBackendReadTimeout,
 		},
 		{
+			"both address forms",
 			HAKeeperClientConfig{
 				DiscoveryAddress: "localhost:9091",
 				ServiceAddresses: []string{"localhost:9090"},
-			}, true,
+			},
+			true,
+			defaultBackendReadTimeout,
+		},
+		{
+			"explicit backend timeout",
+			HAKeeperClientConfig{
+				BackendReadTimeout: toml.Duration{Duration: 20 * time.Second},
+			},
+			true,
+			20 * time.Second,
+		},
+		{
+			"negative backend timeout",
+			HAKeeperClientConfig{
+				BackendReadTimeout: toml.Duration{Duration: -time.Second},
+			},
+			false,
+			0,
 		},
 	}
 
 	for _, tt := range tests {
-		err := tt.cfg.Validate()
-		if tt.ok {
-			assert.NoError(t, err)
-		} else {
-			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.ok {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantTimeout, tt.cfg.BackendReadTimeout.Duration)
+			} else {
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			}
+		})
 	}
+}
+
+func TestGetHAKeeperClientConfigPreservesBackendReadTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.HAKeeperClientConfig.BackendReadTimeout.Duration = 20 * time.Second
+
+	clientCfg := cfg.GetHAKeeperClientConfig()
+	require.Equal(t, 20*time.Second, clientCfg.BackendReadTimeout.Duration)
 }

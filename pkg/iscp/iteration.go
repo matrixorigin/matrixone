@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -84,7 +85,7 @@ func ExecuteIterationWithRuntime(
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithoutTimeout := ctx
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.CauseISCPIterationTimeout)
 	defer cancel()
 
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -95,7 +96,9 @@ func ExecuteIterationWithRuntime(
 		0)
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		defer func() {
+			err = finishISCPTransaction(ctx, txnOp, err)
+		}()
 	}
 	if err != nil {
 		return
@@ -106,7 +109,7 @@ func ExecuteIterationWithRuntime(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, prevStatus, err := GetJobSpecs(
+	jobSpecs, prevStatus, committedWatermark, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -126,6 +129,11 @@ func ExecuteIterationWithRuntime(
 		}
 		return
 	}
+	// The scheduler stage belongs to the same job generation selected above and
+	// is a monotonic lower bound. A catalog snapshot can lag a durable transition
+	// or expose a stage erased by a legacy watermark flush. Reconcile before
+	// deciding whether InitSQL is allowed to run.
+	reconcileIterationStages(iterCtx, prevStatus)
 	preLSN := make([]uint64, len(iterCtx.jobNames))
 	for i := range iterCtx.jobNames {
 		preLSN[i] = iterCtx.lsn[i] - 1
@@ -133,10 +141,10 @@ func ExecuteIterationWithRuntime(
 
 	var needInit bool
 	for i := range prevStatus {
-		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
+		if jobNeedsInitSQL(jobSpecs[i], prevStatus[i]) {
 			if len(iterCtx.jobNames) != 1 {
 				errMsg := "init sql is not supported for multiple jobs"
-				FlushPermanentErrorMessage(
+				return FlushPermanentErrorMessage(
 					ctx,
 					cnUUID,
 					cnEngine,
@@ -157,18 +165,36 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 	if needInit {
+		completedStatus := atomicInitCompletionStatus(prevStatus[0], iterCtx.lsn[0])
 		err = runInitSQLWithRuntime(
 			ctx,
 			runtime,
 			iterCtx,
 			func(initCtx context.Context) error {
 				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
-				return ProcessInitSQL(
+				return processInitSQL(
 					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
 					jobSpecs[0].ConsumerInfo.InitSQL,
 					jobSpecs[0].ConsumerInfo.SrcTable.DBName,
 					jobSpecs[0].ConsumerInfo.SrcTable.TableName,
 					jobSpecs[0].ConsumerInfo.IndexName,
+					func(completeCtx context.Context, txn client.TxnOperator) error {
+						completeCtx = context.WithValue(
+							completeCtx, defines.TenantIDKey{}, catalog.System_Account)
+						return FlushStatus(
+							completeCtx,
+							cnUUID,
+							txn,
+							iterCtx.accountID,
+							iterCtx.tableID,
+							iterCtx.jobNames[0],
+							iterCtx.jobIDs[0],
+							&completedStatus,
+							iterCtx.fromTS,
+							ISCPJobState_Completed,
+							preLSN[0],
+						)
+					},
 				)
 			},
 		)
@@ -176,34 +202,6 @@ func ExecuteIterationWithRuntime(
 			if errors.Is(err, errInitSQLJobFenced) {
 				return nil
 			}
-			return
-		}
-		statuses[0] = prevStatus[0]
-		statuses[0].Stage = JobStage_Running
-		err = retry(
-			ctx,
-			func() error {
-				return FlushJobStatusOnIterationState(
-					ctx,
-					cnUUID,
-					cnEngine,
-					cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					iterCtx.jobNames,
-					iterCtx.jobIDs,
-					iterCtx.lsn,
-					statuses,
-					iterCtx.fromTS,
-					ISCPJobState_Completed,
-					preLSN,
-				)
-			},
-			SubmitRetryTimes,
-			DefaultRetryInterval,
-			SubmitRetryDuration,
-		)
-		if err != nil {
 			return
 		}
 		return nil
@@ -237,7 +235,10 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(
+		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		rel, iterCtx.fromTS, iterCtx.toTS, mp,
+	)
 	if err != nil {
 		return
 	}
@@ -322,6 +323,7 @@ func ExecuteIterationWithRuntime(
 		delTSColIdx,
 		delCompositedPkColIdx,
 	)
+	var finalErr error
 	for i, status := range statuses {
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
 			continue
@@ -347,6 +349,7 @@ func ExecuteIterationWithRuntime(
 				state,
 			)
 			if err != nil {
+				finalErr = errors.Join(finalErr, err)
 				logutil.Error(
 					"ISCP-Task iteration flush job status failed",
 					zap.Error(err),
@@ -355,7 +358,97 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 
-	return nil
+	return finalErr
+}
+
+func reconcileIterationStages(iterCtx *IterationContext, statuses []*JobStatus) {
+	if iterCtx == nil || len(iterCtx.stages) != len(statuses) {
+		return
+	}
+	for i, status := range statuses {
+		if status != nil && status.Stage < iterCtx.stages[i] {
+			status.Stage = iterCtx.stages[i]
+		}
+	}
+}
+
+func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
+	return jobSpec != nil &&
+		status != nil &&
+		status.Stage == JobStage_Init &&
+		jobSpec.ConsumerInfo.InitSQL != ""
+}
+
+// collectChangesCtxForJobs returns the context one iteration must read its
+// change range with.
+//
+// A key that is both inserted and deleted inside the range is coalesced away as
+// "no net change" (filterBatch Case 2.2). That is sound only while a consumer's
+// materialized state equals the table state at the range start. An InitSQL-seeded
+// job generation breaks the precondition exactly once: RestoreTable / CREATE
+// TABLE ... CLONE / DATA BRANCH copy an index's already-built state and re-arm
+// its CDC at the DDL transaction's PRE-commit snapshot TS, so the clone's own row
+// appends commit inside the FIRST range the copy is maintained from and share it
+// with a DELETE of a row inherited from the copied base. Dropping that tombstone
+// leaves the copied entry queryable forever (#28847).
+//
+// The window is bounded by durable consumption, not by the index algorithm:
+// mo_iscp_log.watermark reaches prevStatus.To only in the transaction that
+// applies the range, and a persisted ErrorCode means the last attempt may have
+// been applied only partially, so its range is retried from the same lagging
+// state. Every later range starts after the clone's appends, where coalescing is
+// sound again, so ordinary insert-then-delete churn keeps cancelling out and no
+// consumer accumulates extra durable deletes. That bound matters: the
+// append-only cuVS sinks retain every distinct deleted pk in their cdc_tail,
+// while CuvsUpdatable counts inserts and upserts only, so an unconditional
+// opt-in would grow their retained history without ever arming the rebuild that
+// reclaims it.
+func collectChangesCtxForJobs(
+	ctx context.Context,
+	jobSpecs []*JobSpec,
+	prevStatus []*JobStatus,
+	committedWatermark []types.TS,
+) context.Context {
+	for i := range prevStatus {
+		if jobStateMayLagRangeStart(jobSpecs[i], prevStatus[i], committedWatermark[i]) {
+			return engine.WithCollectChangesKeepTrailingDeletes(ctx)
+		}
+	}
+	return ctx
+}
+
+// jobStateMayLagRangeStart reports whether a job generation was seeded by
+// InitSQL and its materialized state may still predate the range start.
+//
+// A selected range is not evidence of consumption. ExecuteIterationWithRuntime
+// persists statuses[i].To with ISCPJobState_Running before the consumers run,
+// and repairAbandonedJobs turns such an abandoned row into Completed while
+// leaving To and the zero ErrorCode untouched, so a populated To alone would
+// switch the option off after a stop that consumed nothing. Only the sink
+// transaction's UpdateWatermark advances mo_iscp_log.watermark to that To -- the
+// Snapshot path's final flush does the same -- which makes the watermark the
+// durable commit boundary. The ErrorCode arm stays separate: a maintenance
+// watermark flush advances the column without replacing job_status, so a failed
+// range keeps its retry opt-in even if the column later moves past it.
+func jobStateMayLagRangeStart(jobSpec *JobSpec, status *JobStatus, committed types.TS) bool {
+	if jobSpec == nil || status == nil || jobSpec.ConsumerInfo.InitSQL == "" {
+		return false
+	}
+	if status.ErrorCode != 0 {
+		return true
+	}
+	return status.To.IsEmpty() || !committed.GE(&status.To)
+}
+
+func atomicInitCompletionStatus(previous *JobStatus, nextLSN uint64) JobStatus {
+	completed := *previous
+	completed.LSN = nextLSN
+	completed.Stage = JobStage_Running
+	completed.LifecycleVersion = max(
+		completed.LifecycleVersion, atomicInitLifecycleVersion)
+	completed.ErrorCode = 0
+	completed.ErrorMsg = ""
+	return completed
 }
 
 func runISCPTaskIterationConsumers(
@@ -619,18 +712,14 @@ var FlushJobStatusOnIterationState = func(
 ) (err error) {
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushJobStatusTimeout)
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	if err != nil {
 		return
 	}
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, txnWriter.Rollback(ctx))
-		} else {
-			err = txnWriter.Commit(ctx)
-		}
+		err = finishISCPTransaction(ctx, txnWriter, err)
 		if err != nil {
 			logutil.Error(
 				"ISCP-Task flush job status failed",
@@ -687,6 +776,8 @@ func FlushStatus(
 		jobID,
 		watermark,
 		statusJson,
+		jobStatus.Stage,
+		jobStatus.LifecycleVersion,
 		state,
 		prevLSN,
 	)
@@ -696,8 +787,7 @@ func FlushStatus(
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return moerr.NewInternalErrorNoCtxf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
-			result.AffectedRows, jobName, jobID)
+		return newISCPStatusCASLostError("iscp flush status", jobName, jobID, result.AffectedRows)
 	}
 	return
 }
@@ -730,15 +820,17 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, committedWatermark []types.TS, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	// watermark is the durable consumption boundary: only the transaction that
+	// applies a range advances it to that range's job_status.To.
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status, watermark FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
 		}
-		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d)",
-			tenantId, tableID, jobName, jobIDs[i]))
+		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d)",
+			tenantId, tableID, sqlquote.String(jobName), jobIDs[i]))
 	}
 	sql := buf.String()
 	execResult, err := ExecWithResult(ctx, sql, cnUUID, txn)
@@ -756,6 +848,7 @@ var GetJobSpecs = func(
 	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	committedWatermark = make([]types.TS, len(jobName))
 	var foundRows int
 	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -781,6 +874,7 @@ var GetJobSpecs = func(
 				permanentErrMsg = err.Error()
 				return false
 			}
+			committedWatermark[jobIdx] = types.StringToTS(cols[4].GetStringAt(i))
 			foundRows++
 		}
 		return true
@@ -807,7 +901,7 @@ var GetJobSpecs = func(
 		if err == nil {
 			err = errPermanent
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	return
 }
@@ -819,6 +913,39 @@ func (permanentError) Error() string {
 }
 
 var errPermanent error = permanentError{}
+
+type iscpStatusCASLostError struct {
+	operation    string
+	jobName      string
+	jobID        uint64
+	affectedRows uint64
+}
+
+func (e *iscpStatusCASLostError) Error() string {
+	return fmt.Sprintf(
+		"iscp status compare-and-swap lost: %s affected %d rows for job %s (id=%d), expected 1",
+		e.operation,
+		e.affectedRows,
+		e.jobName,
+		e.jobID,
+	)
+}
+
+func (e *iscpStatusCASLostError) Is(target error) bool {
+	_, ok := target.(*iscpStatusCASLostError)
+	return ok
+}
+
+var errISCPStatusCASLost error = &iscpStatusCASLostError{}
+
+func newISCPStatusCASLostError(operation, jobName string, jobID, affectedRows uint64) error {
+	return &iscpStatusCASLostError{
+		operation:    operation,
+		jobName:      jobName,
+		jobID:        jobID,
+		affectedRows: affectedRows,
+	}
+}
 
 func FlushPermanentErrorMessage(
 	ctx context.Context,
@@ -843,9 +970,13 @@ func FlushPermanentErrorMessage(
 		zap.Any("jobIDs", jobIDs),
 		zap.String("errMsg", errMsg),
 	)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushPermanentErrorMessageTimeout)
 	defer cancel()
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
+	for _, status := range jobStatuses {
+		status.ErrorCode = PermanentErrorThreshold
+		status.ErrorMsg = errMsg
+	}
 	return FlushJobStatusOnIterationState(
 		ctx,
 		cnUUID,
@@ -1025,6 +1156,66 @@ func ProcessInitSQL(
 	dbName string,
 	tableName string,
 	indexName string,
+) error {
+	return processInitSQL(
+		ctx, cnUUID, cnEngine, cnTxnClient,
+		sql, dbName, tableName, indexName, nil,
+	)
+}
+
+type initSQLStep func(context.Context, client.TxnOperator) error
+
+func runInitSQLTransaction(
+	ctx context.Context,
+	txnOp client.TxnOperator,
+	run initSQLStep,
+	complete initSQLStep,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cleanupErr := finishISCPTransaction(
+				ctx,
+				txnOp,
+				moerr.NewInternalErrorNoCtx("iscp init sql panicked"),
+			)
+			logutil.Error("ISCP-Task init sql panic rollback", zap.Error(cleanupErr))
+			panic(recovered)
+		}
+		err = finishISCPTransaction(ctx, txnOp, err)
+	}()
+	if run != nil {
+		err = run(ctx, txnOp)
+		if err != nil {
+			return
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	if complete != nil {
+		err = complete(ctx, txnOp)
+		if err != nil {
+			return
+		}
+	}
+	err = ctx.Err()
+	return
+}
+
+// processInitSQL commits the initialization statements and their lifecycle
+// transition in one transaction. A retry can therefore observe either neither
+// side effect or both; it can never re-run a committed initialization whose
+// Stage=Running write was lost in a separate transaction.
+func processInitSQL(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	sql string,
+	dbName string,
+	tableName string,
+	indexName string,
+	complete initSQLStep,
 ) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
@@ -1038,79 +1229,67 @@ func ProcessInitSQL(
 		"iscp process init sql",
 		0)
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
-	if txnOp != nil {
-		// Commit only when every InitSQL statement succeeded; roll back on any
-		// error so a multi-statement InitSQL (postings-populate + WAND build) is
-		// atomic — a mid-sequence failure must not leave the earlier statements
-		// committed (which an ISCP retry would then re-apply). finishISCPTransaction
-		// runs that commit/rollback under a detached 5-minute timeout context.
-		defer func() {
-			err = finishISCPTransaction(ctx, txnOp, err)
-		}()
-	}
-	// injection is for ut
-
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "processInitSQLNewTxn" {
-		err = moerr.NewInternalErrorNoCtx(msg)
-	}
 	if err != nil {
-		return
+		return finishISCPTransaction(ctx, txnOp, err)
 	}
-	err = cnEngine.New(ctx, txnOp)
-	if err != nil {
-		return
-	}
+	return runInitSQLTransaction(
+		ctx,
+		txnOp,
+		func(runCtx context.Context, txn client.TxnOperator) error {
+			// injection is for ut
+			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "processInitSQLNewTxn" {
+				return moerr.NewInternalErrorNoCtx(msg)
+			}
+			if err := cnEngine.New(runCtx, txn); err != nil {
+				return err
+			}
 
-	// Fetch the target index's captured build-time session vars from
-	// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
-	// (cagra_create/ivfpq_create/...) resolves vars like kmeans_train_percent
-	// through this process's resolver; overlaying the captured values lets the
-	// background rebuild reproduce the create-time config instead of process
-	// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-	sessionVars, svErr := initSQLSessionVars(ctx, cnEngine, txnOp, dbName, tableName, indexName)
-	if svErr != nil {
-		err = svErr
-		return
-	}
+			// Fetch the target index's captured build-time session vars from
+			// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
+			// (cagra_create/ivfpq_create/...) resolves vars like kmeans_train_percent
+			// through this process's resolver; overlaying the captured values lets the
+			// background rebuild reproduce the create-time config instead of process
+			// defaults. A load/parse failure is surfaced; an absent blob yields nil.
+			sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
+			if err != nil {
+				return err
+			}
 
-	// Run the InitSQL through sqlexec's background SqlContext rather than the
-	// frontend back-exec. sqlexec.RunSql (SqlContext path) runs IsFrontend=false
-	// and passes the SqlContext's ResolveVariableFunc straight into the executor
-	// opts, so the overlay built from algo_params.session_vars
-	// (kmeans_train_percent etc.) actually reaches the cuvs build. The frontend
-	// back-exec instead resets the proc resolver to the back session's default
-	// (back_exec.go), silently dropping the overlay. initSQLResolver overlays the
-	// captured session_vars on top of executor.DefaultResolveVariable.
-	accountId, aerr := defines.GetAccountId(ctx)
-	if aerr != nil {
-		err = aerr
-		return
-	}
-	resolver, rerr := initSQLResolver(sessionVars)
-	if rerr != nil {
-		err = rerr
-		return
-	}
-	sqlctx := sqlexec.NewSqlContext(ctx, cnUUID, txnOp, accountId, resolver)
-	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
-	// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
-	// string / raw single statement (backward-compat). ISCP has no multi-statement
-	// executor, so run each in sequence within this txn.
-	for _, stmt := range splitInitSQL(sql) {
-		if stmt == "" {
-			continue
-		}
-		res, e := sqlexec.RunSql(sqlproc, stmt)
-		if e != nil {
-			err = e
-			return
-		}
-		res.Close()
-	}
-	if err = ctx.Err(); err != nil {
-		return
-	}
-	return
+			// Run the InitSQL through sqlexec's background SqlContext rather than the
+			// frontend back-exec. sqlexec.RunSql (SqlContext path) runs IsFrontend=false
+			// and passes the SqlContext's ResolveVariableFunc straight into the executor
+			// opts, so the overlay built from algo_params.session_vars
+			// (kmeans_train_percent etc.) actually reaches the cuvs build. The frontend
+			// back-exec instead resets the proc resolver to the back session's default
+			// (back_exec.go), silently dropping the overlay. initSQLResolver overlays the
+			// captured session_vars on top of executor.DefaultResolveVariable.
+			accountId, err := defines.GetAccountId(runCtx)
+			if err != nil {
+				return err
+			}
+			resolver, err := initSQLResolver(sessionVars)
+			if err != nil {
+				return err
+			}
+			sqlctx := sqlexec.NewSqlContext(runCtx, cnUUID, txn, accountId, resolver)
+			sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+			// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
+			// string / raw single statement (backward-compat). ISCP has no multi-statement
+			// executor, so run each in sequence within this txn.
+			for _, stmt := range splitInitSQL(sql) {
+				if stmt == "" {
+					continue
+				}
+				res, err := sqlexec.RunSql(sqlproc, stmt)
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		complete,
+	)
 }
 
 // splitInitSQL parses a decoded InitSQL payload into individual statements. The
@@ -1130,23 +1309,4 @@ func splitInitSQL(s string) []string {
 		return []string{one}
 	}
 	return []string{s}
-}
-
-func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
-	if txnOp == nil {
-		return err
-	}
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx),
-		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
-	)
-	defer cancel()
-	if err != nil {
-		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
-			return errors.Join(err, rollbackErr)
-		}
-		return err
-	}
-	return txnOp.Commit(cleanupCtx)
 }

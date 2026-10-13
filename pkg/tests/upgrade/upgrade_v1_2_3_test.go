@@ -27,29 +27,26 @@ import (
 )
 
 func Test_UpgradeEntry(t *testing.T) {
-	c, err := embed.StartTestCluster(embed.WithCNCount(1))
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
-	require.NoError(t, err)
-
-	svc, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	exec := testutils.GetSQLExecutor(svc)
-	require.NotNil(t, exec)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-
-	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		err = v1_2_3.Handler.HandleClusterUpgrade(ctx, txn)
+	// These handlers run against the current catalog and need no separate legacy cluster.
+	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+		svc, err := c.GetCNService(0)
 		require.NoError(t, err)
 
-		err = v1_2_3.Handler.HandleTenantUpgrade(ctx, 0, txn)
-		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(svc)
+		require.NotNil(t, exec)
 
-		return nil
-	}, executor.Options{}.WithWaitCommittedLogApplied())
-	require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		defer cancel()
+
+		err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			err = v1_2_3.Handler.HandleClusterUpgrade(ctx, txn)
+			require.NoError(t, err)
+
+			err = v1_2_3.Handler.HandleTenantUpgrade(ctx, 0, txn)
+			require.NoError(t, err)
+
+			return nil
+		}, executor.Options{}.WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+	})
 }

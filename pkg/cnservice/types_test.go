@@ -15,8 +15,12 @@
 package cnservice
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,4 +32,31 @@ func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
 			require.ErrorContains(t, cfg.Validate(), "unsupported CN engine")
 		})
 	}
+}
+
+func TestValidateHeartbeatDurations(t *testing.T) {
+	for name, interval := range map[string]time.Duration{
+		"negative interval":       -time.Nanosecond,
+		"exceeds progress budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{UUID: "cn1"}
+			cfg.HAKeeper.HeatbeatInterval.Duration = interval
+			require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat interval")
+		})
+	}
+	cfg := Config{UUID: "cn1"}
+	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
+	require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
+}
+
+func TestValidateServiceUUID(t *testing.T) {
+	require.Panics(t, func() { _ = (&Config{}).Validate() })
+	for _, id := range []string{".", "..", "../trace", "../shared2", "./cn", "cn/child", `cn\child`} {
+		t.Run(id, func(t *testing.T) {
+			err := (&Config{UUID: id}).Validate()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig), "%v", err)
+		})
+	}
+	require.NoError(t, validateCNServiceUUID(strings.Repeat("é", 63)+"x"))
 }

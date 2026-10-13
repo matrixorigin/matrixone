@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"bytes"
 	"hash/fnv"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -80,6 +82,7 @@ const (
 	tagCol
 	tagFn
 	tagList
+	tagVec
 	tagOther
 )
 
@@ -88,15 +91,34 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 		writeByte(h, tagNil)
 		return
 	}
+	if expr.AuxId < 0 {
+		writeByte(h, 1)
+		writeUint32(h, uint32(expr.AuxId))
+	} else {
+		writeByte(h, 0)
+	}
 	// Incorporate the Typ so that e.g. int64(5) and varchar("5") differ.
 	writeUint32(h, uint32(expr.Typ.Id))
 	writeUint32(h, uint32(expr.Typ.Width))
 	writeUint32(h, uint32(expr.Typ.Scale))
+	writeUint32(h, expr.Typ.Charset)
+	writeUint32(h, expr.Typ.CollationVersion)
+	writeUint32(h, expr.Typ.CollationCoercibility)
+	if expr.Typ.CollationCoercibilitySet {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
+	}
+	if expr.Typ.CollationMergeConflict {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
+	}
 
 	switch v := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		writeByte(h, tagLit)
-		hashLitInto(h, v.Lit)
+		hashLitInto(h, expr.Typ, v.Lit)
 	case *plan.Expr_Col:
 		writeByte(h, tagCol)
 		if v.Col != nil {
@@ -128,6 +150,19 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 				hashExprInto(h, e)
 			}
 		}
+	case *plan.Expr_Vec:
+		writeByte(h, tagVec)
+		if v.Vec != nil {
+			writeUint32(h, uint32(v.Vec.Len))
+			writeUint32(h, v.Vec.StringSource)
+			if v.Vec.DecimalLiteralRequiresV82 {
+				writeByte(h, 1)
+			} else {
+				writeByte(h, 0)
+			}
+			writeUint64(h, uint64(len(v.Vec.Data)))
+			_, _ = h.Write(v.Vec.Data)
+		}
 	default:
 		// Uncommon variants (Sub, Vec, Max, ...) — fall back to the proto
 		// binary marshaller so the bucket is still correct, just slower.
@@ -138,10 +173,56 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	}
 }
 
-func hashLitInto(h writeByter, lit *plan.Literal) {
+// literalForExecutableIdentity returns a shallow copy only when diagnostic or
+// wire-compatibility fields must be normalized. Keep value-bearing fields,
+// including IsBin, non-text LiteralForm, and Src, intact.
+func literalForExecutableIdentity(typ plan.Type, lit *plan.Literal) *plan.Literal {
+	if lit == nil || !lit.IsSerialized &&
+		(lit.LiteralForm != plan.StringLiteralForm_STRING_LITERAL_TEXT ||
+			executableLiteralForm(typ, lit.LiteralForm) == lit.LiteralForm) {
+		return lit
+	}
+	literalCopy := *lit
+	literalCopy.IsSerialized = false
+	// NONE is the wire-compatible spelling of an ordinary text literal in
+	// plans produced before LiteralForm existed.
+	if executableLiteralForm(typ, literalCopy.LiteralForm) ==
+		plan.StringLiteralForm_STRING_LITERAL_NONE {
+		literalCopy.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	}
+	return &literalCopy
+}
+
+func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.StringLiteralForm {
+	staticDomain := types.StaticStringDomain(types.MustTypeFromPlan(
+		typ))
+	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
+		staticDomain == types.StringDomainText {
+		return plan.StringLiteralForm_STRING_LITERAL_NONE
+	}
+	return form
+}
+
+func executableLiteralStringSource(lit *plan.Literal) uint32 {
+	if lit == nil {
+		return 0
+	}
+	if lit.StringSource != 0 {
+		return lit.StringSource
+	}
+	return uint32(types.StringSourceLiteral) + 1
+}
+
+func hashLitInto(h writeByter, typ plan.Type, lit *plan.Literal) {
 	if lit == nil {
 		writeByte(h, 0)
 		return
+	}
+	writeUint32(h, executableLiteralStringSource(lit))
+	if lit.DecimalLiteralRequiresV82 {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
 	}
 	if lit.Isnull {
 		writeByte(h, 1)
@@ -188,6 +269,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 		} else {
 			writeByte(h, 0)
 		}
+		writeUint32(h, uint32(executableLiteralForm(typ, lit.LiteralForm)))
 	case *plan.Literal_Bval:
 		writeByte(h, 12)
 		if v.Bval {
@@ -217,7 +299,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 	default:
 		// Uncommon literal variants — fall back to marshal.
 		writeByte(h, 0xff)
-		if b, err := lit.Marshal(); err == nil {
+		if b, err := literalForExecutableIdentity(typ, lit).Marshal(); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
@@ -233,7 +315,11 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width || a.Typ.Scale != b.Typ.Scale {
+	if (a.AuxId < 0 || b.AuxId < 0) && a.AuxId != b.AuxId {
+		return false
+	}
+	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width ||
+		a.Typ.Scale != b.Typ.Scale || !a.Typ.SameCollation(b.Typ) {
 		return false
 	}
 	switch av := a.Expr.(type) {
@@ -242,7 +328,7 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		if !ok {
 			return false
 		}
-		return literalEqual(av.Lit, bv.Lit)
+		return literalEqual(a.Typ, av.Lit, bv.Lit)
 	case *plan.Expr_Col:
 		bv, ok := b.Expr.(*plan.Expr_Col)
 		if !ok {
@@ -289,33 +375,55 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 			}
 		}
 		return true
+	case *plan.Expr_Vec:
+		bv, ok := b.Expr.(*plan.Expr_Vec)
+		if !ok {
+			return false
+		}
+		if av.Vec == nil || bv.Vec == nil {
+			return av.Vec == bv.Vec
+		}
+		// IsSerialized is diagnostic provenance and must not affect execution
+		// identity, just like Literal.IsSerialized.
+		return av.Vec.Len == bv.Vec.Len &&
+			av.Vec.StringSource == bv.Vec.StringSource &&
+			av.Vec.DecimalLiteralRequiresV82 == bv.Vec.DecimalLiteralRequiresV82 &&
+			bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
-		// Fallback: compare proto bytes.
-		ab, aerr := a.Marshal()
-		bb, berr := b.Marshal()
-		if aerr != nil || berr != nil {
-			return false
-		}
-		if len(ab) != len(bb) {
-			return false
-		}
-		for i := range ab {
-			if ab[i] != bb[i] {
-				return false
-			}
-		}
-		return true
+		return exprWireEqual(a, b)
 	}
 }
 
-func literalEqual(a, b *plan.Literal) bool {
+// exprWireEqual retains complete protobuf identity for uncommon variants.
+// Small messages share one bounded allocation; large messages keep their
+// original allocation sizes. Each backwards encoder receives an exact slice.
+func exprWireEqual(a, b *plan.Expr) bool {
+	size := a.ProtoSize()
+	if size != b.ProtoSize() {
+		return false
+	}
+	var ab, bb []byte
+	if size <= 64 {
+		wire := make([]byte, 2*size)
+		ab, bb = wire[:size:size], wire[size:]
+	} else {
+		ab, bb = make([]byte, size), make([]byte, size)
+	}
+	an, aerr := a.MarshalToSizedBuffer(ab)
+	bn, berr := b.MarshalToSizedBuffer(bb)
+	return aerr == nil && berr == nil && bytes.Equal(ab[:an], bb[:bn])
+}
+
+func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
 	if a == b {
 		return true
 	}
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Isnull != b.Isnull {
+	if a.Isnull != b.Isnull ||
+		a.DecimalLiteralRequiresV82 != b.DecimalLiteralRequiresV82 ||
+		executableLiteralStringSource(a) != executableLiteralStringSource(b) {
 		return false
 	}
 	if a.Isnull {
@@ -354,7 +462,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Fval == bv.Fval
 	case *plan.Literal_Sval:
 		bv, ok := b.Value.(*plan.Literal_Sval)
-		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin
+		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin &&
+			executableLiteralForm(typ, a.LiteralForm) == executableLiteralForm(typ, b.LiteralForm)
 	case *plan.Literal_Bval:
 		bv, ok := b.Value.(*plan.Literal_Bval)
 		return ok && av.Bval == bv.Bval
@@ -378,8 +487,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Jsonval == bv.Jsonval
 	default:
 		// Uncommon literal variant — binary fallback.
-		ab, aerr := a.Marshal()
-		bb, berr := b.Marshal()
+		ab, aerr := literalForExecutableIdentity(typ, a).Marshal()
+		bb, berr := literalForExecutableIdentity(typ, b).Marshal()
 		if aerr != nil || berr != nil {
 			return false
 		}
@@ -407,18 +516,20 @@ func objectRefEqual(a, b *plan.ObjectRef) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	ab, aerr := a.Marshal()
-	bb, berr := b.Marshal()
-	if aerr != nil || berr != nil {
+	size := a.ProtoSize()
+	if size != b.ProtoSize() {
 		return false
 	}
-	if len(ab) != len(bb) {
-		return false
+	// Most function references fit locally. Preserve complete protobuf identity,
+	// including nested metadata and unknown fields, for references of any size.
+	var aLocal, bLocal [64]byte
+	ab, bb := aLocal[:], bLocal[:]
+	if size > len(aLocal) {
+		ab, bb = make([]byte, size), make([]byte, size)
+	} else {
+		ab, bb = ab[:size], bb[:size]
 	}
-	for i := range ab {
-		if ab[i] != bb[i] {
-			return false
-		}
-	}
-	return true
+	an, aerr := a.MarshalToSizedBuffer(ab)
+	bn, berr := b.MarshalToSizedBuffer(bb)
+	return aerr == nil && berr == nil && bytes.Equal(ab[:an], bb[:bn])
 }

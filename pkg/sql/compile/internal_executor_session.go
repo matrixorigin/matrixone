@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type internalExecutorSessionKey struct{}
+type internalExecutorCompilerContextKey struct{}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.
@@ -50,6 +52,21 @@ func getInternalExecutorSession(ctx context.Context) process.Session {
 		}
 	}
 	return nil
+}
+
+func attachInternalExecutorCompilerContext(ctx context.Context, compilerContext plan.CompilerContext) context.Context {
+	if compilerContext == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, internalExecutorCompilerContextKey{}, compilerContext)
+}
+
+func getInternalExecutorCompilerContext(ctx context.Context) plan.CompilerContext {
+	if ctx == nil {
+		return nil
+	}
+	compilerContext, _ := ctx.Value(internalExecutorCompilerContextKey{}).(plan.CompilerContext)
+	return compilerContext
 }
 
 func attachInternalExecutorPrivilegeCheck(ctx context.Context) context.Context {

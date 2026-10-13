@@ -37,3 +37,30 @@ func TestSessionKafkaState(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(4711), id)
 }
+
+func TestSessionKafkaProgressStatementTerminal(t *testing.T) {
+	t.Run("successful statement publishes and clears", func(t *testing.T) {
+		ses := &Session{}
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+
+		ses.FinalizeKafkaProgress(true)
+		require.Equal(t, []bool{true, true}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+
+		// A later transaction terminal has no Kafka state to revisit.
+		ses.FinalizeKafkaProgress(false)
+		require.Equal(t, []bool{true, true}, calls)
+	})
+
+	t.Run("failed statement discards and clears", func(t *testing.T) {
+		ses := &Session{}
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+
+		ses.FinalizeKafkaProgress(false)
+		require.Equal(t, []bool{false}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+}

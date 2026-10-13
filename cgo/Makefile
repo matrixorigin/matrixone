@@ -2,12 +2,16 @@ DEBUG_OPT :=
 UNAME_M := $(shell uname -m)
 UNAME_S := $(shell uname -s)
 CC ?= gcc
+MO_CGO_CC = $(CC)
 
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
 OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
-COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
-CFLAGS := -std=c11 $(COMMON_CFLAGS)
+# Keep these recursive so the debug target's target-specific OPT_LV reaches
+# prerequisites. Immediate expansion here silently turned `make debug` back
+# into an optimized -O3 build while provenance advertised cpu-debug.
+COMMON_CFLAGS = -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
+CFLAGS = -std=c11 $(COMMON_CFLAGS)
 OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o cbitmap.o sorted64.o
 CUDA_OBJS :=
 LDFLAGS := -L../thirdparties/install/lib -lusearch_c -lroaring
@@ -25,15 +29,13 @@ ifeq ($(UNAME_M), x86_64)
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-	ifeq ($(CONDA_PREFIX),)
-		$(error CONDA_PREFIX env variable not found. Please activate your conda environment.)
-	endif
-	CC = /usr/local/cuda/bin/nvcc 
-	CFLAGS = -ccbin g++ -m64 -Xcompiler -fPIC -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
-	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA
+	include gpu-toolchain.mk
+	MO_CGO_CC = $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
+	CFLAGS = -m64 -Xcompiler -fPIC -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
+	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA $(MO_GPU_CFLAGS)
 	CUDA_OBJS += cuda/cuda.o
 	# Explicitly include all needed libraries for shared library linking
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lstdc++
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS) -ldl -lrmm
 	LDFLAGS += $(CUDA_LDFLAGS)
 endif
 
@@ -60,9 +62,9 @@ ifeq ($(MO_CL_CUDA),1)
 # (The wildcard normal-prereqs add no "no rule" errors on a clean build — they
 # match only already-built objects; the order-only sub-makes create them.)
 cuda_objs:
-	$(MAKE) -C cuda
+	$(MAKE) -C cuda $(if $(filter debug,$(DEBUG_OPT)),dbg=1)
 cuvs_objs:
-	$(MAKE) -C cuvs
+	$(MAKE) -C cuvs $(if $(filter debug,$(DEBUG_OPT)),debug)
 LIB_PREREQS := $(OBJS) $(wildcard cuda/*.o cuvs/*.o) | cuda_objs cuvs_objs
 else
 LIB_PREREQS := $(OBJS)
@@ -72,9 +74,9 @@ all: $(TARGET_LIB) libmo.a
 
 $(TARGET_LIB): $(LIB_PREREQS)
 ifeq ($(MO_CL_CUDA),1)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
+	$(MO_CGO_CC) $(LDFLAGS) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
 else
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(MO_CGO_CC) $(LDFLAGS) -o $@ $(OBJS)
 endif
 
 libmo.a: $(LIB_PREREQS)
@@ -85,18 +87,23 @@ else
 endif
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(MO_CGO_CC) $(CFLAGS) -c $< -o $@
 
 test: $(TARGET_LIB)
 	$(MAKE) -C test
 
 debug: override OPT_LV := -O0
+debug: override CFLAGS := $(filter-out -O% -ffast-math -ftree-vectorize -funroll-loops,$(CFLAGS)) -O0
 debug: override DEBUG_OPT := debug
 debug: all
 
 clean:
 	rm -f *.o *.a *.so *.dylib
-ifeq ($(MO_CL_CUDA),1)
+# Accelerator transitions must clean the generation being left, not only the
+# mode requested by the next build. Select by the supported GPU host platform,
+# not MO_CL_CUDA: the CUDA Makefile rejects unsupported macOS/arm64 targets even
+# for clean, while a Linux/x86_64 CPU invocation may be leaving a GPU generation.
+ifeq ($(UNAME_S)_$(UNAME_M),Linux_x86_64)
 	$(MAKE) -C cuda clean
 	$(MAKE) -C cuvs clean
 endif

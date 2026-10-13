@@ -133,7 +133,7 @@ select conv('14', 10, 5) as dec_to_base5;
 -- expected: 24
 
 -- ============================================
--- null and invalid input tests (matching)
+-- null and numeric-prefix input tests (matching)
 -- ============================================
 
 -- test 18: null inputs
@@ -153,7 +153,7 @@ select conv(255, 10, 2) as numeric_input_bin;
 
 -- test 24: empty string
 select conv('', 10, 16) as empty_string;
--- expected: 0 or null
+-- expected: null
 
 -- ============================================
 -- practical use cases
@@ -259,7 +259,7 @@ select concat('0x', conv('255', 10, 16)) as hex_with_prefix;
 -- expected: 0xff
 
 select conv('g', 16, 10) as result8;
--- expected: MO returns error on invalid character
+-- expected: 0 (no usable numeric prefix)
 
 select conv('10', 1, 10) as result9;
 -- expected: null
@@ -274,13 +274,13 @@ select conv('10', 10, null) as null_to_base;
 -- expected: null
 
 select conv('g', 16, 10) as invalid_hex_char;
--- expected: MO returns error on invalid character
+-- expected: 0 (no usable numeric prefix)
 
 select conv('2', 2, 10) as invalid_binary_char;
--- expected: MO returns error on invalid character
+-- expected: 0 (no usable numeric prefix)
 
 select conv('8', 8, 10) as invalid_octal_char;
--- expected: MO returns error on invalid character
+-- expected: 0 (no usable numeric prefix)
 
 select conv('10', 1, 10) as invalid_from_base;
 -- expected: null
@@ -325,8 +325,11 @@ select conv('-18446744073709551615', 10, 16) as negative_uint64_max_minus_one;
 select conv('-18446744073709551616', 10, 16) as negative_uint64_overflow;
 -- expected: 0
 
+select conv('-18446744073709551617tail', 10, 16) as negative_uint64_overflow_with_suffix;
+-- expected: 0
+
 select conv('10xyz', 10, 16) as invalid_suffix;
--- expected: MO returns error on prefix truncation / invalid suffix
+-- expected: A (convert the leading numeric prefix)
 
 -- overflow semantics (saturate to uint64 max)
 select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
@@ -349,6 +352,6 @@ select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
 -- expected: 18446744073709551615
 
 select conv('+', 10, 16) as sign_only_invalid;
--- expected: MO returns error on sign-only invalid input
+-- expected: 0 (no usable numeric prefix)
 
 drop database conv_func;

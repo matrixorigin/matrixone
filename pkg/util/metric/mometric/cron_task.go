@@ -93,6 +93,26 @@ func GetMetricStorageUsageExecutor(
 	}
 }
 
+type storageUsageWorker struct {
+	cancel context.CancelFunc
+	done   <-chan struct{}
+}
+
+func startStorageUsageWorker(ctx context.Context, worker func(context.Context)) storageUsageWorker {
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker(workerCtx)
+	}()
+	return storageUsageWorker{cancel: cancel, done: done}
+}
+
+func (w storageUsageWorker) stop() {
+	w.cancel()
+	<-w.done
+}
+
 const (
 	ShowAllAccountSQL = "SHOW ACCOUNTS;"
 	ShowAccountSQL    = "SHOW ACCOUNTS like %q;"
@@ -195,8 +215,6 @@ func CalculateStorageUsage(
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel() // quit CheckNewAccountSize goroutine
 	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
 	if !checkServerStarted(service, logger) {
@@ -220,7 +238,10 @@ func CalculateStorageUsage(
 	v2.GetTraceCheckStorageUsageNewIncCounter().Add(0)
 
 	// start background task to check new account
-	go checkNewAccountSize(ctx, logger, sqlExecutor)
+	newAccountWorker := startStorageUsageWorker(ctx, func(ctx context.Context) {
+		checkNewAccountSize(ctx, logger, sqlExecutor)
+	})
+	defer newAccountWorker.stop()
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -357,6 +378,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	var now time.Time
 	var interval = GetStorageUsageCheckNewInterval()
 	var next = time.NewTicker(interval)
+	defer next.Stop()
 	var lastCheckTime = time.Now().Add(-time.Second)
 	var newAccountCnt uint64
 	var account, createdTime string

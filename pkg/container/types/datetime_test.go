@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -23,6 +24,56 @@ import (
 )
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+
+// Calendar precedence is intentional for a successfully parsed compact date.
+// Padding a TIME to eight digits must not make an impossible calendar date.
+func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		calendar bool
+	}{
+		{"1234", false},
+		{"0001234", false},
+		{"00001234", false},
+		{"00001234.5", false},
+		{"00001234.123456", false},
+		{"00000000.5", false},
+		{"00010101.5", false},
+		{"00000101", false}, // zero-year DATE cannot be represented, but 00:01:01 can.
+		{"08385959", false}, // impossible calendar month, valid bounded TIME.
+		{"00010101", true},  // year 0001 is a valid compact DATE in MatrixOne.
+		{"00000000", true},  // established zero-date sentinel.
+		{"20240229", true},
+		{"20240230", true},       // invalid unambiguous calendar must not become TIME.
+		{"00000000001234", true}, // 14-digit datetime grammar retains precedence.
+		{"20240229123456.123456", true},
+		{"2024.2.29", true},
+		{"2024@2@29", true},
+		{"1234.5", false},
+		{"1-1-1", true},
+		{"24-2-29", true},
+		{"123-2-3", true},
+		{"24/2/29", true},
+		{"24.2.29", true},
+		{"24@2@29", true},
+		{"24-2-30", true},   // Invalid calendar spellings must not fall back to TIME.
+		{"10:11:12", false}, // An ordinary clock wins over a two-digit year.
+		{"12:99:00", false}, // An invalid clock must not become a calendar.
+		{"12:34.56", false}, // One-colon fractional clocks are still durations.
+		{"01:02.03", false},
+		{"1:2.3", false},
+		{"123:45.6", false},
+		{"12:99.56", false},   // Validate a malformed clock as TIME; do not reinterpret it as a date.
+		{"1234:56:07", false}, // Four-digit hours can cancel back into the SQL TIME range.
+		{"1234:56.7", false},
+		{"2024:02:29", false}, // Whole colon clocks take precedence at every hour width.
+		{"24:2-29", true},     // Mixed punctuation is not a whole clock.
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			require.Equal(t, tc.calendar, IsCalendarStringCandidate(tc.input))
+		})
+	}
+}
 
 func TestDate(t *testing.T) {
 	fmt.Println(DateFromCalendar(1215, 6, 15).Calendar(true))
@@ -72,6 +123,36 @@ func TestDatetime(t *testing.T) {
 	dt = Now(loc)
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
+}
+
+func TestDatetimeTemporalHelpers(t *testing.T) {
+	dt := DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000), dt.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 0), dt.TruncateToScaleWithoutRounding(-1))
+	require.Equal(t, time.Date(2024, 1, 2, 3, 4, 5, 987654000, time.UTC), dt.ConvertToGoTime(nil))
+
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	gap := DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	require.True(t, gap.IsNonexistentLocalTime(zone))
+	require.False(t, dt.IsNonexistentLocalTime(zone))
+	require.False(t, ZeroDatetime.IsNonexistentLocalTime(zone))
+	got := gap.ConvertToGoTime(zone)
+	require.Equal(t, 3, got.Hour())
+	require.Equal(t, 123456000, got.Nanosecond())
+}
+
+func TestTimeAndTimestampTruncateWithoutRounding(t *testing.T) {
+	tm := Time(1234567)
+	require.Equal(t, Time(1234000), tm.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, Time(-1234000), Time(-1234567).TruncateToScaleWithoutRounding(3))
+	require.Equal(t, tm, tm.TruncateToScaleWithoutRounding(6))
+
+	ts := Timestamp(1234567)
+	require.Equal(t, Timestamp(1234000), ts.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, ts, ts.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, ZeroTimestamp, ZeroTimestamp.TruncateToScaleWithoutRounding(3))
 }
 
 func TestAddDatetime(t *testing.T) {
@@ -176,6 +257,43 @@ func TestSubDateTime(t *testing.T) {
 		d, b := d.AddInterval(-ret, rettype, DateType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
+	}
+}
+
+func TestConvertToMonthHonorsTimeOfDay(t *testing.T) {
+	start, err := ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	end, err := ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-01-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-03-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2000-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("1999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), end.ConvertToMonth(start))
+}
+
+func TestParseDatetimeMalformedPrefixesNeverPanic(t *testing.T) {
+	for _, separator := range []string{" ", "T"} {
+		for prefixLength := 0; prefixLength < 8; prefixLength++ {
+			input := "1234-05-06"[:prefixLength] + separator + "12:34:56.000000"
+			require.NotPanics(t, func() {
+				_, _ = ParseDatetime(input, 6)
+			}, input)
+		}
 	}
 }
 
@@ -356,6 +474,11 @@ func TestParseDatetime(t *testing.T) {
 			name: "1-digit month and day",
 			args: "2000-1-2 3:4:5",
 			want: "2000-01-02 03:04:05.000000",
+		},
+		{
+			name:    "short date prefix before a long clock",
+			args:    "123 -12:34:56.000000",
+			wantErr: true,
 		},
 		{
 			name: "trailing colon in time",
@@ -647,37 +770,99 @@ func TestDatetime_ToTime(t *testing.T) {
 // TestAddIntervalMicrosecond tests AddInterval with MicroSecond unit
 // This test verifies the fix for TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20'))
 func TestAddIntervalMicrosecond(t *testing.T) {
-	// Test case: DATE('2024-12-20') + 1000000 microseconds = 2024-12-20 00:00:01.000000
-	date, _ := ParseDateCast("2024-12-20")
-	dt := date.ToDatetime()
-
-	// Add 1000000 microseconds (1 second)
-	result, success := dt.AddInterval(1000000, MicroSecond, DateTimeType)
-	require.True(t, success, "AddInterval should succeed for MicroSecond")
-	require.NotEqual(t, Datetime(0), result, "Result should not be zero")
-
-	// Verify the result is 2024-12-20 00:00:01.000000
-	expected, _ := ParseDatetime("2024-12-20 00:00:01.000000", 6)
-	require.Equal(t, expected, result, "DATE + 1000000 microseconds should equal 2024-12-20 00:00:01.000000")
-
-	// Verify the string representation
-	require.Equal(t, "2024-12-20 00:00:01.000000", result.String2(6), "String representation should match")
-
-	// Test with different microsecond values
-	testCases := []struct {
-		microseconds int64
-		expected     string
+	min := DatetimeFromClock(MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+	max := DatetimeFromClock(MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
+	tests := []struct {
+		name  string
+		start Datetime
+		delta int64
+		want  Datetime
+		valid bool
 	}{
-		{1000000, "2024-12-20 00:00:01.000000"}, // 1 second
-		{500000, "2024-12-20 00:00:00.500000"},  // 0.5 seconds
-		{123456, "2024-12-20 00:00:00.123456"},  // 123456 microseconds
-		{2000000, "2024-12-20 00:00:02.000000"}, // 2 seconds
+		{name: "ordinary fraction", start: DatetimeFromClock(2024, 12, 20, 0, 0, 0, 0), delta: 123456, want: DatetimeFromClock(2024, 12, 20, 0, 0, 0, 123456), valid: true},
+		{name: "exact minimum", start: min, want: min, valid: true},
+		{name: "minimum plus one", start: min, delta: 1, want: min + 1, valid: true},
+		{name: "one below minimum", start: min, delta: -1, valid: false},
+		{name: "two below minimum", start: min, delta: -2, valid: false},
+		{name: "exact maximum", start: max, want: max, valid: true},
+		{name: "one above maximum", start: max, delta: 1, valid: false},
+		{name: "signed addition overflow", start: max, delta: math.MaxInt64, valid: false},
+		{name: "signed subtraction overflow", start: min, delta: math.MinInt64, valid: false},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, valid := test.start.AddInterval(test.delta, MicroSecond, DateTimeType)
+			require.Equal(t, test.valid, valid)
+			if test.valid {
+				require.Equal(t, test.want, got)
+			}
+		})
+	}
+}
 
-	for _, tc := range testCases {
-		result, success := dt.AddInterval(tc.microseconds, MicroSecond, DateTimeType)
-		require.True(t, success, "AddInterval should succeed for %d microseconds", tc.microseconds)
-		require.NotEqual(t, Datetime(0), result, "Result should not be zero for %d microseconds", tc.microseconds)
-		require.Equal(t, tc.expected, result.String2(6), "Result should match expected for %d microseconds", tc.microseconds)
+func TestDatetimeDSTGapUsesFirstRepresentableWallTime(t *testing.T) {
+	for _, tc := range []struct {
+		zone, input, want string
+		gap               bool
+	}{
+		{"America/New_York", "2024-03-10 02:30:00.123456", "2024-03-10 03:00:00.123456", true},
+		{"America/New_York", "2024-03-10 01:59:59.999999", "2024-03-10 01:59:59.999999", false},
+		{"America/New_York", "2024-03-10 03:00:00.123456", "2024-03-10 03:00:00.123456", false},
+		{"America/New_York", "2024-11-03 01:30:00.123456", "2024-11-03 01:30:00.123456", false},
+		{"Australia/Lord_Howe", "2024-10-06 02:15:00.123456", "2024-10-06 02:30:00.123456", true},
+		{"Pacific/Apia", "2011-12-30 12:00:00.123456", "2011-12-31 00:00:00.123456", true},
+		{"UTC", "2024-03-10 02:30:00.123456", "2024-03-10 02:30:00.123456", false},
+	} {
+		t.Run(tc.zone+"/"+tc.input, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			require.NoError(t, err)
+			dt, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			value, gap := dt.ToTimestampWithLocalTimeStatus(loc)
+			require.Equal(t, tc.gap, gap)
+			require.Equal(t, gap, dt.IsNonexistentLocalTime(loc))
+			require.Equal(t, tc.want, dt.ConvertToGoTime(loc).Format("2006-01-02 15:04:05.000000"))
+			require.Equal(t, dt.ToTimestamp(loc), value)
+			if !gap {
+				require.Equal(t, dt, value.ToDatetime(loc))
+			}
+		})
+	}
+	value, gap := ZeroDatetime.ToTimestampWithLocalTimeStatus(nil)
+	require.Equal(t, ZeroTimestamp, value)
+	require.False(t, gap)
+}
+
+// DATE and DATETIME share calendar spelling; clock fields never wrap into
+// another day, and malformed prefixes are rejected without panic recovery.
+func TestParseDatetimeCalendarAndClockContract(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"50-01-01 00:00:01", "2050-01-01 00:00:01.000000"},
+		{"90-01-01 00:00:01", "1990-01-01 00:00:01.000000"},
+		{"69-1-1 0:0", "2069-01-01 00:00:00.000000"},
+		{"70-1-1T0:0", "1970-01-01 00:00:00.000000"},
+		{"24.2.29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"2024@2@29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"20240229235959.999999", "2024-02-29 23:59:59.999999"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String2(6))
+		})
+	}
+	for _, input := range []string{"T", "1 T", "24-1-1 1:2 3:4", "2024-1-1 1 12:34", "2024- 12:34:56", "2024-1- 12:34:56", "20240230235959", "20240229240000", "20240229236000", "20240229235960", "20240229x00000", "20240229/00000", "2024-02-29 24:00:00", "2024-02-29 23:60:00", "2024-02-29 23:59:60", "9999-12-31 23:59:59.9999999"} {
+		t.Run(input, func(t *testing.T) { _, err := ParseDatetime(input, 6); require.Error(t, err) })
+	}
+}
+
+func TestTemporalFractionValidatesDiscardedSuffix(t *testing.T) {
+	for _, scale := range []int32{0, 1, 6} {
+		for _, suffix := range []string{".", ".1234567x", ".12345678!", ".123456789012345678901234x"} {
+			_, err := ParseDatetime("2024-02-29 12:34:56"+suffix, scale)
+			require.Error(t, err)
+			_, err = ParseTime("12:34:56"+suffix, scale)
+			require.Error(t, err)
+		}
 	}
 }

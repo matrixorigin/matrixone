@@ -97,7 +97,7 @@ func TestFulltext2CompactPrepareArgCount(t *testing.T) {
 
 func TestFulltext2CompactStartValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 
 	good := func() []*vector.Vector {
@@ -147,7 +147,7 @@ func TestFulltext2CompactStartValidation(t *testing.T) {
 
 func TestFulltext2CompactStartOptionalArgs(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 
 	// 6 args: capacity + position_free=true + posting_capacity=4096 all parsed.

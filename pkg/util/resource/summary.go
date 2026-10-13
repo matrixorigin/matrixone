@@ -57,8 +57,9 @@ type MemoryTotals struct {
 	CrossPoolFreeCount          uint64
 }
 
-// AllocationAccountTotals is the fixed-size terminal observation of accounted
-// allocation generations. It is diagnostic only: these bytes are a subset of
+// AllocationAccountTotals is the terminal observation of accounted allocation
+// generations. Owner detail is immutable and sparse so owner-less statements
+// retain only one pointer. It is diagnostic only: these bytes are a subset of
 // allocator memory and are never added to MemoryTotals or fed back into
 // admission.
 type AllocationAccountTotals struct {
@@ -68,6 +69,8 @@ type AllocationAccountTotals struct {
 	MaxGenerationPeak     uint64
 	SumGenerationPeak     uint64
 	LiveBytesAtTerminal   uint64
+
+	owners *allocationOwnerSet
 }
 
 func (t *AllocationAccountTotals) AddGeneration(
@@ -113,7 +116,7 @@ func MergeAllocationAccountTotals(
 	dst *AllocationAccountTotals,
 	delta AllocationAccountTotals,
 ) QualityFlags {
-	var quality QualityFlags
+	quality := delta.Validate()
 	dst.GenerationCount, quality = addChecked(
 		dst.GenerationCount,
 		delta.GenerationCount,
@@ -142,19 +145,8 @@ func MergeAllocationAccountTotals(
 	if delta.MaxGenerationPeak > dst.MaxGenerationPeak {
 		dst.MaxGenerationPeak = delta.MaxGenerationPeak
 	}
-	if delta.FailedGenerationCount != 0 || delta.LiveBytesAtTerminal != 0 {
-		quality |= QualityInvariantFailure
-	}
-	if delta.ValidGenerationCount > delta.GenerationCount ||
-		delta.FailedGenerationCount >
-			delta.GenerationCount-delta.ValidGenerationCount ||
-		delta.MaxGenerationPeak > delta.SumGenerationPeak {
-		quality |= QualityInvariantFailure
-	}
-	if delta.LiveBytesAtTerminal != 0 {
-		quality |= QualityNonZeroLiveAtSeal
-	}
-	return quality
+	quality |= mergeAllocationOwnerTotals(dst, &delta)
+	return quality | dst.Validate()
 }
 
 // MergeMemoryDomain merges one physical domain exactly once.
@@ -238,6 +230,12 @@ type StatementResourceSummary struct {
 	OutputPacketCount        uint64
 	Quality                  QualityFlags
 	ConnType                 ConnType
+}
+
+// Clone returns a fully reference-independent statement summary.
+func (s StatementResourceSummary) Clone() StatementResourceSummary {
+	s.Allocation = s.Allocation.Clone()
+	return s
 }
 
 // MergeExecution merges one sealed logical execution into its root.

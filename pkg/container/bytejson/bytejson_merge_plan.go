@@ -30,6 +30,175 @@ type ByteJsonDataEncoder interface {
 	EncodeDataInto(dst []byte) (int, error)
 }
 
+// ByteJsonDataValidator is implemented by encoders whose source can be
+// semantically invalid. Vector sinks call it before reserving physical area,
+// so malformed input never turns into a fallible post-publication encode.
+type ByteJsonDataValidator interface {
+	ValidateData() error
+}
+
+// IndexedValueSource exposes stable storage-compatible JSON values without
+// requiring a data-scaled Go []ByteJson materialization.
+type IndexedValueSource interface {
+	Len() int
+	Value(index int) (ByteJson, error)
+}
+
+// IndexedObjectSource is the corresponding source for a finalized JSON
+// object. Keys must be supplied in ascending byte order.
+type IndexedObjectSource interface {
+	Len() int
+	Key(index int) []byte
+	Value(index int) (ByteJson, error)
+}
+
+type indexedContainerEncoder struct {
+	typ      TpCode
+	array    IndexedValueSource
+	object   IndexedObjectSource
+	dataSize uint32
+	prepared bool
+}
+
+func NewIndexedArrayEncoder(
+	source IndexedValueSource,
+) ByteJsonDataEncoder {
+	return &indexedContainerEncoder{typ: TpCodeArray, array: source}
+}
+
+func NewIndexedObjectEncoder(
+	source IndexedObjectSource,
+) ByteJsonDataEncoder {
+	return &indexedContainerEncoder{typ: TpCodeObject, object: source}
+}
+
+func (e *indexedContainerEncoder) TypeCode() TpCode { return e.typ }
+func (e *indexedContainerEncoder) DataSize() uint32 {
+	if !e.prepared {
+		_ = e.prepare()
+	}
+	return e.dataSize
+}
+
+func (e *indexedContainerEncoder) ValidateData() error {
+	if e.prepared {
+		return nil
+	}
+	return e.prepare()
+}
+
+func (e *indexedContainerEncoder) length() int {
+	if e.typ == TpCodeArray && e.array != nil {
+		return e.array.Len()
+	}
+	if e.typ == TpCodeObject && e.object != nil {
+		return e.object.Len()
+	}
+	return -1
+}
+
+func (e *indexedContainerEncoder) value(index int) (ByteJson, error) {
+	if e.typ == TpCodeArray {
+		return e.array.Value(index)
+	}
+	return e.object.Value(index)
+}
+
+func (e *indexedContainerEncoder) prepare() error {
+	count := e.length()
+	if count < 0 || uint64(count) > math.MaxUint32 {
+		return moerr.NewInvalidInputNoCtx("invalid indexed json source")
+	}
+	total := uint64(headerSize) + uint64(count)*valEntrySize
+	if e.typ == TpCodeObject {
+		total += uint64(count) * keyEntrySize
+	}
+	var previous []byte
+	for i := range count {
+		if e.typ == TpCodeObject {
+			key := e.object.Key(i)
+			if len(key) > math.MaxUint16 || i > 0 && bytes.Compare(previous, key) >= 0 {
+				return moerr.NewInvalidInputNoCtx("invalid indexed json object key order")
+			}
+			total += uint64(len(key))
+			previous = key
+		}
+		value, err := e.value(i)
+		if err != nil {
+			return err
+		}
+		stored, err := value.StorageCompatible()
+		if err != nil {
+			return err
+		}
+		if stored.Type == TpCodeLiteral {
+			if len(stored.Data) != 1 {
+				return moerr.NewInvalidInputNoCtx("invalid indexed json literal")
+			}
+		} else {
+			total += uint64(len(stored.Data))
+		}
+		if total > math.MaxUint32 {
+			return moerr.NewInvalidInputNoCtx("indexed json value is too large")
+		}
+	}
+	e.dataSize = uint32(total)
+	e.prepared = true
+	return nil
+}
+
+func (e *indexedContainerEncoder) EncodeDataInto(dst []byte) (int, error) {
+	if !e.prepared {
+		if err := e.ValidateData(); err != nil {
+			return 0, err
+		}
+	}
+	if uint64(len(dst)) != uint64(e.dataSize) {
+		return 0, newMergeSizeMismatchError(int(e.dataSize), len(dst))
+	}
+	count := e.length()
+	clear(dst)
+	endian.PutUint32(dst, uint32(count))
+	endian.PutUint32(dst[docSizeOff:], e.dataSize)
+	valueTable := headerSize
+	payload := headerSize + count*valEntrySize
+	if e.typ == TpCodeObject {
+		valueTable += count * keyEntrySize
+		payload += count * keyEntrySize
+		for i := range count {
+			key := e.object.Key(i)
+			entry := dst[headerSize+i*keyEntrySize:]
+			endian.PutUint32(entry, uint32(payload))
+			endian.PutUint16(entry[keyOriginOff:], uint16(len(key)))
+			copy(dst[payload:], key)
+			payload += len(key)
+		}
+	}
+	for i := range count {
+		value, err := e.value(i)
+		if err != nil {
+			return 0, err
+		}
+		stored, err := value.StorageCompatible()
+		if err != nil {
+			return 0, err
+		}
+		entry := dst[valueTable+i*valEntrySize:]
+		entry[0] = stored.Type
+		if stored.Type == TpCodeLiteral {
+			entry[valTypeSize] = stored.Data[0]
+			continue
+		}
+		endian.PutUint32(entry[valTypeSize:], uint32(payload))
+		copy(dst[payload:], stored.Data)
+		payload += len(stored.Data)
+	}
+	if payload != len(dst) {
+		return 0, newMergeSizeMismatchError(len(dst), payload)
+	}
+	return payload, nil
+}
+
 type mergeMode uint8
 
 const (

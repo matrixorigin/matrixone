@@ -17,6 +17,8 @@ package parsers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -69,6 +71,15 @@ func TestPostgresql(t *testing.T) {
 }
 
 func TestSplitSqlBySemicolon(t *testing.T) {
+	t.Run("qualified BEGIN before comment semicolon", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				first := "SELECT t." + name + "/* ; */ FROM t"
+				require.Equal(t, []string{first, "SELECT 2"}, SplitSqlBySemicolon(first+"; SELECT 2"))
+				require.Equal(t, []string{first, "SELECT 2"}, HandleSqlForRecord(first+"; SELECT 2"))
+			})
+		}
+	})
 	ret := SplitSqlBySemicolon("select 1;select 2;select 3;")
 	require.Equal(t, 3, len(ret))
 	require.Equal(t, "select 1", ret[0])
@@ -238,6 +249,47 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			sql:  "/*!40101 select 1; */;",
 			want: []string{"/*!40101 select 1; */", ""},
 		},
+		{
+			name: "qualified BEGIN before comma",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */"},
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! SELECT t.`begin`, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.`begin`, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "/*! SELECT t.rank FROM t; */",
+			want: []string{"/*! SELECT t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN after whitespace and line comment",
+			sql:  "/*! SELECT t. -- component\n begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t. -- component\n begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualification crosses executable comment opening",
+			sql:  "SELECT t./*! begin, t.rank FROM t; */",
+			want: []string{"SELECT t./*! begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN followed by ordinary statement",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ SELECT 2;",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "SELECT 2"},
+		},
+		{
+			name: "qualified BEGIN in consecutive executable comments",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ /*! SELECT t.begin FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin FROM t; */"},
+		},
+		{
+			name:    "qualified BEGIN with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! SELECT t.begin, 'x\', t.rank FROM t; */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! SELECT t.begin, 'x\', t.rank FROM t; */`},
+		},
 	}
 
 	for _, test := range tests {
@@ -250,6 +302,28 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 }
 
 func TestHandleSqlForRecord(t *testing.T) {
+	t.Run("qualified BEGIN before quoted comment text", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				for _, key := range []string{"secret_access_key", "access_key_id"} {
+					t.Run(key, func(t *testing.T) {
+						prefix := "SELECT t." + name + "/* 'comment */ FROM t WHERE " + key + " = "
+						input := prefix + "'recording-test-value'"
+						stmt, err := ParseOne(context.Background(), dialect.MYSQL, input, 1)
+						require.NoError(t, err)
+						defer stmt.Free()
+						require.Equal(t, []string{prefix + "'******'"}, HandleSqlForRecord(input))
+					})
+				}
+			})
+		}
+	})
+	t.Run("qualified recording context resets between fragments", func(t *testing.T) {
+		first := "SELECT t.begin/* 'comment */ FROM t WHERE secret_access_key = "
+		last := "SELECT t.begin/* 'comment */ FROM t WHERE access_key_id = "
+		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
+		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")
@@ -468,6 +542,50 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 		// ok
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+	}
+}
+
+// A read source inside a DML statement must carry the rewrite option too,
+// otherwise the statement reads the raw base table and bypasses the rewrite
+// policy. Covers INSERT ... SELECT and multi-table INSERT ALL/FIRST ... SELECT.
+func TestAddRewriteHints_AttachesToDMLSourceQuery(t *testing.T) {
+	tests := []struct {
+		name   string
+		sql    string
+		source func(tree.Statement) *tree.Select
+	}{
+		{
+			name: "insert select",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert into db1.t2 select * from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.Insert).Rows
+			},
+		},
+		{
+			name: "multi insert all",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert all into db1.t2 (a) values (k) into db1.t3 (a) values (k) select k from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.MultiInsert).Source
+			},
+		},
+		{
+			name: "multi insert first with when",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert first when k > 1 then into db1.t2 (a) values (k) else into db1.t3 (a) values (k) select k from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.MultiInsert).Source
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parseAndApply(t, test.sql)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			source := test.source(stmts[0])
+			require.NotNil(t, source)
+			require.NotNil(t, source.RewriteOption, "rewrite policy must reach the DML source query")
+			require.Contains(t, source.RewriteOption.Rewrites, "db1.t1")
+		})
 	}
 }
 
@@ -697,4 +815,148 @@ func TestAddRewriteHints_ParseHintsBug_MismatchedInputs(t *testing.T) {
 	// Provide SQL with only one statement to trigger mismatch
 	err = AddRewriteHints(ctx, stmts, "/*+ {\\\"rewrites\\\": {\\\"db1.t1\\\": \\\"select 1\\\"}} */ select 1")
 	require.ErrorContains(t, err, "parse hints bug")
+}
+
+func TestNormalizeAndValidateRemapDb(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		lower int64
+		input map[string]string
+		want  map[string]string
+	}{
+		{
+			name: "mode zero preserves source and target", lower: 0,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"SrcDB": "DstDB"},
+		},
+		{
+			name: "mode one lowercases source and execution target", lower: 1,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"srcdb": "dstdb"},
+		},
+		{
+			name: "mode two lowercases source and preserves target", lower: 2,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"srcdb": "DstDB"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := NormalizeAndValidateRemapDb(ctx, test.input, test.lower)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	_, err := NormalizeAndValidateRemapDb(ctx,
+		map[string]string{"SourceCase": "dst_a", "sourcecase": "dst_b"}, 1)
+	require.ErrorContains(t, err, "equivalent")
+
+	_, err = NormalizeAndValidateRemapDb(ctx,
+		map[string]string{"ChainSrc": "MID", "mid": "dst"}, 1)
+	require.ErrorContains(t, err, "chaining is not allowed")
+}
+
+func TestRewriteKeysUseIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name          string
+		lower         int64
+		want          string
+		wantExecution string
+	}{
+		{name: "mode zero", lower: 0, want: "MixedDB.MixedTable", wantExecution: "MixedDB.MixedTable"},
+		{name: "mode one", lower: 1, want: "mixeddb.mixedtable", wantExecution: "mixeddb.mixedtable"},
+		{name: "mode two", lower: 2, want: "mixeddb.mixedtable", wantExecution: "MixedDB.MixedTable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			key, db, table, err := NormalizeRewriteKey(ctx, "MixedDB.MixedTable", test.lower)
+			require.NoError(t, err)
+			require.Equal(t, test.want, key)
+			require.Equal(t, strings.Split(test.wantExecution, ".")[0], db)
+			require.Equal(t, strings.Split(test.wantExecution, ".")[1], table)
+		})
+	}
+
+	rewrites, _, err := DecodeRewriteHintWithLowerCaseTableNames(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.t":"select 2"}}`, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select 2"}, rewrites["mixeddb.t"])
+
+	rewrites, _, err = DecodeRewriteHintWithLowerCaseTableNames(ctx,
+		`{"rewrites":{"MixedDB.T":"select 1","MIXEDDB.t":"select 2"}}`, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select 2"}, rewrites["mixeddb.t"])
+
+	_, _, _, err = NormalizeRewriteKey(ctx, "t", 1)
+	require.EqualError(t, err, "SQL parser error: the mapping name needs to include database name")
+	_, _, _, err = NormalizeRewriteKey(ctx, "db.", 1)
+	require.EqualError(t, err, "SQL parser error: empty table or database")
+
+	var remapErr string
+	for range 200 {
+		_, err = NormalizeAndValidateRemapDb(ctx,
+			map[string]string{"SourceCase": "dst_a", "sourcecase": "dst_b"}, 1)
+		require.Error(t, err)
+		if remapErr == "" {
+			remapErr = err.Error()
+		}
+		require.Equal(t, remapErr, err.Error())
+	}
+}
+
+func TestRewriteBodyUsesIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	const sql = `/*+ {"rewrites":{"MixedDB.T":"select * from MixedDB.T"}} */ select * from MixedDB.T`
+	for _, test := range []struct {
+		lower  int64
+		key    string
+		origin string
+	}{
+		{lower: 0, key: "MixedDB.T", origin: "MixedDB.T"},
+		{lower: 1, key: "mixeddb.t", origin: "mixeddb.t"},
+		{lower: 2, key: "mixeddb.t", origin: "MixedDB.T"},
+	} {
+		stmts, err := Parse(ctx, dialect.MYSQL, sql, test.lower)
+		require.NoError(t, err)
+		require.NoError(t, AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			ctx, stmts, sql, "", test.lower))
+		sel := stmts[0].(*tree.Select)
+		chain := sel.RewriteOption.Rewrites[test.key]
+		require.Len(t, chain, 1)
+		require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), test.origin)
+	}
+}
+
+func TestEquivalentRewriteValuesAreValidatedBeforeKeySelection(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name    string
+		loser   string
+		wantErr string
+	}{
+		{name: "non select", loser: "delete from shadow27190.t", wantErr: "only accept SELECT-like statements"},
+		{name: "empty", loser: "", wantErr: "statement"},
+		{name: "syntax error", loser: "select from", wantErr: "syntax error"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sql := fmt.Sprintf(`/*+ {"rewrites":{
+				"shadow27190.t":"select * from shadow27190.t where id=1",
+				"shadow27190.T":%q
+			}} */ select id from shadow27190.t`, test.loser)
+			stmts, err := Parse(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			err = AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, "", 1)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+
+	const valid = `/*+ {"rewrites":{
+		"shadow27190.t":"select * from shadow27190.t where id=1",
+		"shadow27190.T":"select * from shadow27190.t where id=2"
+	}} */ select id from shadow27190.t`
+	stmts, err := Parse(ctx, dialect.MYSQL, valid, 1)
+	require.NoError(t, err)
+	require.NoError(t, AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, valid, "", 1))
+	chain := stmts[0].(*tree.Select).RewriteOption.Rewrites["shadow27190.t"]
+	require.Len(t, chain, 1)
+	require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), "id = 1")
 }

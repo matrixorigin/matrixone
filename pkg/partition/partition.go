@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -133,6 +134,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
+		typ := *vec.GetType()
+		unicode := types.IsUnicodeCollation(typ.Charset)
 
 		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
@@ -143,7 +146,11 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+					if unicode {
+						diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
+					} else {
+						diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+					}
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -152,7 +159,11 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		} else {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				if unicode {
+					diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
+				} else {
+					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				}
 				v = w
 			}
 		}
@@ -171,6 +182,21 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 // by default, the 0th row is always not equal to the one before it
 // (though it doesn't exist)
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	// A constant NULL has no payload domain (a literal NULL can be ANY).
+	// It contributes no new boundaries, but must retain earlier sort keys.
+	if vec.IsConstNull() {
+		partitions = partitions[:0]
+		if len(sels) == 0 {
+			return partitions
+		}
+		diffs[0] = true
+		for i, different := range diffs[:len(sels)] {
+			if different {
+				partitions = append(partitions, int64(i))
+			}
+		}
+		return partitions
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return genericPartition[bool](sels, diffs, partitions, vec)
@@ -232,6 +258,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
 	default:
+		if vec.IsConst() {
+			// Even untyped NULL contributes no boundaries. This path never
+			// reads values, so the helper's type parameter is immaterial.
+			return genericPartition[bool](sels, diffs, partitions, vec)
+		}
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
 }
@@ -245,7 +276,66 @@ func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vect
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float32OrderAscCompare)
 	case types.T_float64:
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
+	case types.T_json:
+		return jsonOrderPartition(sels, diffs, partitions, vec)
 	default:
 		return Partition(sels, diffs, partitions, vec)
 	}
+}
+
+func jsonOrderPartition(
+	sels []int64, diffs []bool, partitions []int64, vec *vector.Vector,
+) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	if !vec.IsConst() {
+		data, area := vector.MustVarlenaRawData(vec)
+		nsp := vec.GetNulls()
+		var previous bytejson.ByteJson
+		var previousValid bool
+		var previousNull bool
+		var havePrevious bool
+		for i, sel := range sels {
+			isNull := nulls.Contains(nsp, uint64(sel))
+			var current bytejson.ByteJson
+			var currentValid bool
+			if !isNull {
+				current = types.DecodeJson(data[sel].GetByteSlice(area))
+				currentValid = bytejson.IsValidByteJson(current)
+			}
+
+			if havePrevious {
+				if previousNull != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					var cmp int
+					if currentValid && previousValid {
+						cmp = bytejson.CompareByteJsonTrusted(current, previous)
+					} else {
+						cmp = bytejson.CompareByteJson(current, previous)
+					}
+					diffs[i] = diffs[i] || cmp != 0
+				}
+			}
+
+			if !isNull {
+				previous = current
+				previousValid = currentValid
+			}
+			previousNull = isNull
+			havePrevious = true
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+	return partitions
 }

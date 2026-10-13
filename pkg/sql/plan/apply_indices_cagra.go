@@ -15,14 +15,8 @@
 package plan
 
 import (
-	"fmt"
-
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -37,7 +31,6 @@ type cagraIndexContext struct {
 	partType     plan.Type
 	pkPos        int32
 	pkType       plan.Type
-	params       string
 	nThread      int64
 	batchWindow  int64
 	gpuMultiSim  int64
@@ -69,17 +62,20 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, nil
 	}
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := decodeVectorIndexAlgoParams(metaDef.IndexAlgoParams)
 	if err != nil {
 		return nil, nil
 	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
+	opType, ok := vectorIndexStringParam(params, catalog.IndexAlgoParamOpType)
+	if !ok {
 		return nil, nil
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
+	// An index serves this distance function when its op_type is metric-equivalent to the
+	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
+	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
+	if !metric.OpTypeServesDistFunc(opType, origFuncName) {
 		return nil, nil
 	}
 
@@ -94,17 +90,17 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 
-	nThread, err := builder.compCtx.ResolveVariable("cagra_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("cagra_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
 
-	batchWindow, err := builder.compCtx.ResolveVariable("cagra_batch_window", true, false)
+	batchWindow, err := builder.resolveInt64Variable("cagra_batch_window", 0)
 	if err != nil {
 		return nil, err
 	}
 
-	gpuMultiSim, err := builder.compCtx.ResolveVariable("gpu_multi_simulation", true, false)
+	gpuMultiSim, err := builder.resolveInt64Variable("gpu_multi_simulation", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -119,254 +115,46 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		partType:     partType,
 		pkPos:        pkPos,
 		pkType:       pkType,
-		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
-		batchWindow:  batchWindow.(int64),
-		gpuMultiSim:  gpuMultiSim.(int64),
+		nThread:      nThread,
+		batchWindow:  batchWindow,
+		gpuMultiSim:  gpuMultiSim,
 	}, nil
 }
 
-func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
+func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
-
-	ctx := builder.ctxByNode[nodeID]
-	projNode := vecCtx.projNode
-	scanNode := vecCtx.scanNode
-	childNode := vecCtx.childNode
-	orderExpr := vecCtx.orderExpr
-	limit := vecCtx.limit
 
 	cagraCtx, err := builder.prepareCagraIndexContext(vecCtx, multiTableIndex)
 	if err != nil || cagraCtx == nil {
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d, "parttype": %d}`,
-		scanNode.ObjRef.SchemaName,
-		scanNode.TableDef.Name,
-		cagraCtx.metaDef.IndexTableName,
-		cagraCtx.idxDef.IndexTableName,
-		cagraCtx.nThread,
-		cagraCtx.origFuncName,
-		cagraCtx.batchWindow,
-		cagraCtx.gpuMultiSim,
-		cagraCtx.partType.Id)
-
-	// Predicate pushdown on INCLUDE columns and the primary key: peel
-	// filters that reference only INCLUDE columns (or the PK, routed to
-	// host_ids via the __mo_pk_host_id virtual column) into a JSON array
-	// passed as the cagra_search 3rd arg. Unserializable/mixed predicates
-	// stay on the TABLE_SCAN.
-	includeCols, err := parseIncludedColumnsFromParams(cagraCtx.idxDef.IndexAlgoParams)
-	if err != nil {
-		return nodeID, err
-	}
-	pkColName := ""
-	if scanNode.TableDef.Pkey != nil {
-		pkColName = scanNode.TableDef.Pkey.PkeyColName
-	}
-	if len(includeCols) > 0 {
-		logutil.Debugf("CAGRA pushdown: INCLUDE columns = %v, scan filters = %d",
-			includeCols, len(scanNode.FilterList))
-	}
-	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
-		scanNode.FilterList, scanNode, includeCols, pkColName, false)
-	if err != nil {
-		return nodeID, err
-	}
-	if predsJSON != "" {
-		logutil.Debugf("CAGRA pushdown: peeled %d filter(s), %d residual, preds_json = %s",
-			len(peeled), len(residualFilters), predsJSON)
-		scanNode.FilterList = residualFilters
-	}
-
-	// JOIN between source table and cagra_search table function
-	tableFuncTag := builder.genNewBindTag()
-	tableFuncExprs := []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id: int32(types.T_varchar),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblCfgStr,
-					},
-				},
-			},
-		},
-		DeepCopyExpr(cagraCtx.vecLitArg),
-	}
-	if predsJSON != "" {
-		tableFuncExprs = append(tableFuncExprs, makePlan2StringConstExprWithType(predsJSON))
-	}
-	tableFuncNode := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  cagraplan.CAGRASearchFuncName,
-				Param: []byte(cagraCtx.params),
-			},
-			Cols: DeepCopyColDefList(cagraplan.CAGRASearchColDefs),
-		},
-		BindingTags:     []int32{tableFuncTag},
-		TblFuncExprList: tableFuncExprs,
-	}
-	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
-
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_cagra_alias_0")}, ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	// Peel `distfn(col, vec) <op> K` predicates off the scan FilterList and
-	// re-attach them — rewritten to reference the table function's score
-	// column — on tableFuncNode.FilterList. Node_FUNCTION_SCAN applies them
-	// via compileRestrict (compile.go:1351), so the base table scan no longer
-	// recomputes the distance kernel brute-force after the JOIN.
-	scoreColType := tableFuncNode.TableDef.Cols[1].Typ
-	newScanFilters, peeledDistFilters := builder.peelAndRewriteDistFnFilters(
-		scanNode.FilterList, cagraCtx.partPos, cagraCtx.origFuncName,
-		cagraCtx.vecLitArg, tableFuncTag, scoreColType)
-	scanNode.FilterList = newScanFilters
-	if len(peeledDistFilters) > 0 {
-		logutil.Debugf("CAGRA pushdown: peeled %d distance predicate(s) onto table function FilterList",
-			len(peeledDistFilters))
-		tableFuncNode.FilterList = append(tableFuncNode.FilterList, peeledDistFilters...)
-	}
-
-	// Rewrite any SELECT-side `origFuncName(ec, vec)` calls in the surrounding
-	// projections to reference the table function's score column directly, so
-	// the user's `... AS dist` does not re-run the distance kernel on every
-	// scanned row.
-	{
-		scanTag := scanNode.BindingTags[0]
-		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-			cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
-			tableFuncTag, scoreColType)
-		if childNode != nil {
-			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
-				cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
-				tableFuncTag, scoreColType)
-		}
-	}
-
-	// pushdown limit to Table Function
-	// When there are filters or a peeled distance-range bound, over-fetch to
-	// get more candidates so the downstream post-filter still has enough rows.
-	if len(scanNode.FilterList) > 0 || len(peeledDistFilters) > 0 {
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limit.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-			tableFuncNode.Limit = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
-		}
-	} else {
-		// No filters, use original limit
-		tableFuncNode.Limit = DeepCopyExpr(limit)
-	}
-
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: cagraCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: cagraCtx.pkPos, // tbl.pk
-				},
-			},
-		},
-		{
-			Typ: cagraCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
-					ColPos: 0,            // idxTbl.pk
-				},
-			},
+	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
+		algo:         "CAGRA",
+		alias:        "mo_cagra_alias_0",
+		metaDef:      cagraCtx.metaDef,
+		idxDef:       cagraCtx.idxDef,
+		metaRole:     catalog.Cagra_TblType_Metadata,
+		storageRole:  catalog.Cagra_TblType_Storage,
+		cols:         cagraplan.CAGRASearchColDefs,
+		vecLitArg:    cagraCtx.vecLitArg,
+		origFuncName: cagraCtx.origFuncName,
+		partPos:      cagraCtx.partPos,
+		pkPos:        cagraCtx.pkPos,
+		pkType:       cagraCtx.pkType,
+		algoOptions: func(filterJSON string) ([]byte, error) {
+			return cagraplan.EncodeScanOptions(cagraplan.ScanOptions{
+				ThreadsSearch:      cagraCtx.nThread,
+				BatchWindow:        cagraCtx.batchWindow,
+				GpuMultiSimulation: cagraCtx.gpuMultiSim,
+				KeyPartType:        cagraCtx.partType.Id,
+				FilterJSON:         filterJSON,
+			})
 		},
 	})
-
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, tableFuncNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-	}, ctx)
-
-	// Keep FilterList on scanNode so filters are applied during table scan
-	// Clear Limit/Offset from scanNode since they should be applied after SORT
-	scanNode.Limit = nil
-	scanNode.Offset = nil
-
-	// Create SortBy with distance column from table function
-	orderByScore := []*OrderBySpec{
-		{
-			Expr: &Expr{
-				Typ: tableFuncNode.TableDef.Cols[1].Typ, // score column
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tableFuncTag,
-						ColPos: 1, // score column
-					},
-				},
-			},
-			Flag: vecCtx.sortDirection,
-		},
-	}
-	resultLimit, resultOffset := vectorResultPagination(vecCtx)
-
-	sortByID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_SORT,
-		Children: []int32{joinNodeID},
-		OrderBy:  orderByScore,
-		Limit:    resultLimit,
-		Offset:   resultOffset,
-	}, ctx)
-
-	projNode.Children[0] = sortByID
-
-	if childNode != nil {
-		sortIdx := orderExpr.GetCol().ColPos
-		projMap := make(map[[2]int32]*plan.Expr)
-		for i, proj := range childNode.ProjectList {
-			if i == int(sortIdx) {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-			} else {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
-			}
-		}
-
-		replaceColumnsForNode(projNode, projMap)
-	}
-
-	return nodeID, nil
 }
 
 /*

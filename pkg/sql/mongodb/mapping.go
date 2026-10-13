@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -108,12 +109,34 @@ func ParseTableMappingSpec(
 		if !strings.EqualFold(column.Name.ColName(), planned.Name) {
 			return TableMappingSpec{}, moerr.NewInternalError(ctx, "MongoDB parsed and planned column order diverged")
 		}
+		if planned.Typ.AutoIncr {
+			return TableMappingSpec{}, moerr.NewNotSupportedf(ctx,
+				"MongoDB external table does not support AUTO_INCREMENT column '%s'", planned.Name)
+		}
+		if planned.GeneratedCol != nil {
+			return TableMappingSpec{}, moerr.NewNotSupportedf(ctx, "MongoDB external table does not support generated column '%s'", planned.Name)
+		}
+		// SET becomes T_uint64 in plans, and its joined member metadata is also
+		// empty for SET(''). Use the parsed MySQL type while it is still
+		// unambiguous, before ColumnMapping flattens it to a bare TypeID.
+		parsedType, ok := column.Type.(*tree.T)
+		if ok && defines.MysqlType(parsedType.InternalType.Oid) == defines.MYSQL_TYPE_SET {
+			return TableMappingSpec{}, moerr.NewNotSupported(ctx, "MongoDB mapping target type SET")
+		}
 		path := planned.Name
 		conversion := mapping.Conversion
 		seenPath := false
 		seenConversion := false
 		for _, attribute := range column.Attributes {
 			switch typed := attribute.(type) {
+			case *tree.AttributeDefault:
+				// Missing BSON fields are materialized as SQL NULL. Until the
+				// external scan defines default substitution semantics, accepting
+				// any other default would preserve metadata that is never applied.
+				if !isExplicitNullDefault(typed.Expr) {
+					return TableMappingSpec{}, moerr.NewNotSupportedf(ctx,
+						"MongoDB external tables do not support non-NULL DEFAULT values (column %s)", planned.Name)
+				}
 			case *tree.AttributeMongoDBPath:
 				if seenPath {
 					return TableMappingSpec{}, moerr.NewInvalidInputf(ctx, "duplicate MONGODB_PATH for column %s", planned.Name)
@@ -155,4 +178,16 @@ func ParseTableMappingSpec(
 		return TableMappingSpec{}, err
 	}
 	return TableMappingSpec{Mapping: mapping}, nil
+}
+
+func isExplicitNullDefault(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	null, ok := expr.(*tree.NumVal)
+	return ok && (null.ValType == tree.P_null || null.ValType == tree.P_nulltext)
 }

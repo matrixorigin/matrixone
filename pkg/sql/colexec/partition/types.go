@@ -34,9 +34,24 @@ const (
 )
 
 type Partition struct {
-	ctr container
+	ctr  container
+	top  *topNContainer
+	hash *hashContainer
 
 	OrderBySpecs []*plan.OrderBySpec
+	Limit        *plan.Expr
+	// PartitionByCount splits OrderBySpecs into equality keys followed by
+	// per-partition ordering keys when Limit is non-nil.
+	PartitionByCount int32
+	// PreReduce is set when the consumer can recover partition boundaries from
+	// keys. It emits dense candidate batches instead of one batch per group.
+	PreReduce bool
+	// WithTies retains every peer of the Nth row in each partition. This makes
+	// the bounded path exact for RANK predicates, whose boundary is peer-aware.
+	WithTies bool
+	// Algorithm is ignored by the bounded Partition Top-N path.
+	Algorithm plan.Node_PartitionAlgorithm
+	SpillMem  int64
 
 	vm.OperatorBase
 }
@@ -92,6 +107,14 @@ type container struct {
 }
 
 func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if partition.top != nil {
+		partition.top.reset(proc)
+		return
+	}
+	if partition.hash != nil {
+		partition.hash.reset(proc)
+		return
+	}
 	ctr := &partition.ctr
 
 	ctr.resetExes()
@@ -104,6 +127,16 @@ func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if partition.top != nil {
+		partition.top.free(proc)
+		partition.top = nil
+		return
+	}
+	if partition.hash != nil {
+		partition.hash.free(proc)
+		partition.hash = nil
+		return
+	}
 	ctr := &partition.ctr
 	ctr.freeExes()
 	if ctr.buf != nil {

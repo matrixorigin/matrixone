@@ -18,11 +18,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -31,22 +36,83 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 type testProxy struct {
 	address   string
 	upstreams []string
 	startErr  error
+	stopErr   error
 	started   bool
 }
 
+type testDynamicProcess struct {
+	processPID int
+	waitFn     func() error
+	waitedC    chan struct{}
+
+	mu      sync.Mutex
+	waited  bool
+	signals []syscall.Signal
+}
+
+func (p *testDynamicProcess) pid() int {
+	return p.processPID
+}
+
+func (p *testDynamicProcess) signal(signal syscall.Signal) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.waited {
+		return os.ErrProcessDone
+	}
+	p.signals = append(p.signals, signal)
+	return nil
+}
+
+func (p *testDynamicProcess) wait() dynamicWaitResult {
+	var err error
+	if p.waitFn != nil {
+		err = p.waitFn()
+	}
+	p.mu.Lock()
+	p.waited = true
+	p.mu.Unlock()
+	if p.waitedC != nil {
+		close(p.waitedC)
+	}
+	return dynamicWaitResult{reaped: true, err: err}
+}
+
+func newTestDynamicChild(pid int) *dynamicCNChild {
+	return &dynamicCNChild{
+		process: &testDynamicProcess{processPID: pid},
+		pid:     pid,
+	}
+}
+
+func setDynamicTestSlots(pids ...int) {
+	dynamicCNMu.Lock()
+	defer dynamicCNMu.Unlock()
+	dynamicCNServicePIDs = append([]int(nil), pids...)
+	dynamicCNServiceProcesses = make([]*dynamicCNChild, len(pids))
+	for i, pid := range pids {
+		if pid != 0 {
+			dynamicCNServiceProcesses[i] = newTestDynamicChild(pid)
+		}
+	}
+}
+
 func (p *testProxy) Start() error {
-	p.started = true
+	if p.startErr == nil {
+		p.started = true
+	}
 	return p.startErr
 }
 
 func (p *testProxy) Stop() error {
-	return nil
+	return p.stopErr
 }
 
 func (p *testProxy) AddUpStream(address string, _ time.Duration) {
@@ -90,28 +156,420 @@ func setLaunchTestHooks(t *testing.T) {
 	oldNewProxy := launchNewProxy
 	oldNewClient := launchNewHAKeeperClient
 	oldSleep := launchSleep
+	oldSignalNotify := launchSignalNotify
+	oldSignalStop := launchSignalStop
+	oldStartDynamicCNServices := launchStartDynamicCNServices
+	oldDynamicStartProcess := dynamicStartProcess
+	oldDynamicKill := dynamicKill
+	oldDynamicListenAndServe := dynamicListenAndServe
+	oldDynamicWaitProcess := dynamicWaitProcess
+	dynamicCNMu.Lock()
+	oldDynamicPIDs := append([]int(nil), dynamicCNServicePIDs...)
+	oldDynamicProcesses := append([]*dynamicCNChild(nil), dynamicCNServiceProcesses...)
+	oldDynamicCommands := append([][]string(nil), dynamicCNServiceCommands...)
+	oldDynamicChaosTester := dynamicChaosTester
+	oldDynamicStopping := dynamicCNStopping
+	dynamicCNMu.Unlock()
 	oldLaunchFile := *launchFile
 	oldWithProxy := *withProxy
 	oldCNProxy := cnProxy
+	oldServiceLifecycle := serviceLifecycle
 	t.Cleanup(func() {
 		launchStartService = oldStartService
 		launchStartDynamic = oldStartDynamic
 		launchNewProxy = oldNewProxy
 		launchNewHAKeeperClient = oldNewClient
 		launchSleep = oldSleep
+		launchSignalNotify = oldSignalNotify
+		launchSignalStop = oldSignalStop
+		launchStartDynamicCNServices = oldStartDynamicCNServices
+		dynamicStartProcess = oldDynamicStartProcess
+		dynamicKill = oldDynamicKill
+		dynamicListenAndServe = oldDynamicListenAndServe
+		dynamicWaitProcess = oldDynamicWaitProcess
+		dynamicCNMu.Lock()
+		dynamicCNServicePIDs = oldDynamicPIDs
+		dynamicCNServiceProcesses = oldDynamicProcesses
+		dynamicCNServiceCommands = oldDynamicCommands
+		dynamicChaosTester = oldDynamicChaosTester
+		dynamicCNStopping = oldDynamicStopping
+		dynamicCNMu.Unlock()
 		*launchFile = oldLaunchFile
 		*withProxy = oldWithProxy
 		cnProxy = oldCNProxy
+		serviceLifecycle = oldServiceLifecycle
 	})
+}
+
+func TestStartDynamicClusterRegistersCleanupBeforeChildStartup(t *testing.T) {
+	setLaunchTestHooks(t)
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cfg := &LaunchConfig{
+		LogServiceConfigFiles: []string{logConfig},
+		TNServiceConfigsFiles: []string{tnConfig},
+		Dynamic:               Dynamic{ServiceCount: 2},
+	}
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	launchStartDynamicCNServices = func(string, Dynamic) error {
+		return errors.New("second dynamic CN failed to start")
+	}
+	serviceLifecycle = newServiceSupervisor()
+	err := startDynamicCluster(context.Background(), cfg, nil, nil)
+	require.Error(t, err)
+	require.NotNil(t, serviceLifecycle.dynamicCNStop,
+		"partial dynamic startup must be owned by supervisor cleanup")
+}
+
+func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("child-%d", failAt), func(t *testing.T) {
+			setLaunchTestHooks(t)
+			baseDir := t.TempDir()
+			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
+			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+			cfg := &LaunchConfig{
+				LogServiceConfigFiles: []string{logConfig},
+				TNServiceConfigsFiles: []string{tnConfig},
+				Dynamic: Dynamic{
+					ServiceCount: 3,
+					CpuCount:     1,
+					CNTemplate:   template,
+				},
+			}
+			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+				return nil
+			}
+			launchStartDynamicCNServices = func(_ string, dynamic Dynamic) error {
+				return startDynamicCNServices(baseDir, dynamic)
+			}
+
+			forkCount := 0
+			dynamicStartProcess = func(string, []string, *os.ProcAttr) (dynamicProcess, error) {
+				if forkCount == failAt {
+					return nil, errors.New("fork failed")
+				}
+				forkCount++
+				return &testDynamicProcess{processPID: 1000 + forkCount}, nil
+			}
+			type killedProcess struct {
+				pid    int
+				signal syscall.Signal
+			}
+			var killed []killedProcess
+			dynamicKill = func(child *dynamicCNChild, signal syscall.Signal) error {
+				killed = append(killed, killedProcess{pid: child.pid, signal: signal})
+				return nil
+			}
+			dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult { return dynamicWaitResult{reaped: true} }
+			serviceLifecycle = newServiceSupervisor()
+
+			err := startDynamicCluster(context.Background(), cfg, nil, nil)
+			require.ErrorContains(t, err, "fork failed")
+			require.NotNil(t, serviceLifecycle.dynamicCNStop)
+			require.NoError(t, serviceLifecycle.shutdown(context.Background()))
+			require.Len(t, killed, failAt)
+			for i, process := range killed {
+				require.Equal(t, 1001+i, process.pid)
+				require.Equal(t, syscall.SIGTERM, process.signal)
+			}
+			dynamicCNMu.RLock()
+			defer dynamicCNMu.RUnlock()
+			for i := 0; i < failAt; i++ {
+				require.Zero(t, dynamicCNServicePIDs[i])
+			}
+		})
+	}
+}
+
+func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
+	setLaunchTestHooks(t)
+	baseDir := t.TempDir()
+	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cfg := &LaunchConfig{
+		LogServiceConfigFiles: []string{logConfig},
+		TNServiceConfigsFiles: []string{tnConfig},
+		Dynamic:               Dynamic{ServiceCount: 1, CpuCount: 1, CNTemplate: template},
+	}
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error { return nil }
+	launchStartDynamicCNServices = func(_ string, dynamic Dynamic) error {
+		return startDynamicCNServices(baseDir, dynamic)
+	}
+	dynamicStartProcess = func(string, []string, *os.ProcAttr) (dynamicProcess, error) {
+		return &testDynamicProcess{processPID: 91}, nil
+	}
+	failedProxy := &testProxy{startErr: errors.New("listen: address already in use")}
+	launchNewProxy = func(string, *zap.Logger) goetty.Proxy { return failedProxy }
+	var killedPID int
+	var signal syscall.Signal
+	dynamicKill = func(child *dynamicCNChild, got syscall.Signal) error {
+		killedPID = child.pid
+		signal = got
+		return nil
+	}
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult { return dynamicWaitResult{reaped: true} }
+	serviceLifecycle = newServiceSupervisor()
+
+	err := startDynamicCluster(context.Background(), cfg, nil, nil)
+	require.ErrorContains(t, err, "address already in use")
+	require.False(t, failedProxy.started)
+	require.NoError(t, serviceLifecycle.shutdown(context.Background()))
+	require.Equal(t, 91, killedPID)
+	require.Equal(t, syscall.SIGTERM, signal)
+}
+
+func TestDynamicCNServicesStartsConfiguredChaosTester(t *testing.T) {
+	setLaunchTestHooks(t)
+	t.Cleanup(func() {
+		dynamicCNMu.Lock()
+		chaosTester := dynamicChaosTester
+		dynamicCNMu.Unlock()
+		if chaosTester != nil {
+			_ = chaosTester.Stop()
+		}
+	})
+	template := writeLaunchTestFile(t, "cn-template.toml", "")
+	cfg := Dynamic{
+		CNTemplate: template,
+	}
+	cfg.Chaos.Enable = true
+	require.NoError(t, startDynamicCNServices(t.TempDir(), cfg))
+	dynamicCNMu.RLock()
+	chaosTester := dynamicChaosTester
+	dynamicCNMu.RUnlock()
+	require.NotNil(t, chaosTester)
+	require.NoError(t, stopAllDynamicCNServicesGracefully(context.Background()))
+}
+
+func TestDynamicWaitProcessRejectsInvalidPID(t *testing.T) {
+	setLaunchTestHooks(t)
+	require.Error(t, dynamicWaitProcess(nil).err)
+}
+
+func TestDynamicCNStartStopLifecycleErrors(t *testing.T) {
+	setLaunchTestHooks(t)
+	dynamicCNMu.Lock()
+	dynamicCNServiceCommands = [][]string{{"mo-service", "-cfg", "cn.toml"}}
+	dynamicCNMu.Unlock()
+	setDynamicTestSlots(0)
+
+	require.ErrorContains(t, startDynamicCNByIndex(-1), "invalid")
+	require.ErrorContains(t, stopDynamicCNByIndex(1), "invalid")
+	require.ErrorContains(t, stopDynamicCNByIndex(0), "not running")
+
+	dynamicStartProcess = func(string, []string, *os.ProcAttr) (dynamicProcess, error) {
+		return &testDynamicProcess{processPID: 42}, nil
+	}
+	require.NoError(t, startDynamicCNByIndex(0))
+	require.ErrorContains(t, startDynamicCNByIndex(0), "already running")
+
+	killErr := errors.New("kill failed")
+	dynamicKill = func(*dynamicCNChild, syscall.Signal) error { return killErr }
+	require.ErrorIs(t, stopDynamicCNByIndex(0), killErr)
+	dynamicKill = func(child *dynamicCNChild, signal syscall.Signal) error {
+		require.Equal(t, 42, child.pid)
+		require.Equal(t, syscall.SIGKILL, signal)
+		return nil
+	}
+	require.NoError(t, stopDynamicCNByIndex(0))
+}
+
+func TestDynamicCNControlHTTPRoutesRequests(t *testing.T) {
+	setLaunchTestHooks(t)
+	oldListenAddr := *httpListenAddr
+	oldMux := http.DefaultServeMux
+	t.Cleanup(func() {
+		*httpListenAddr = oldListenAddr
+		http.DefaultServeMux = oldMux
+	})
+	http.DefaultServeMux = http.NewServeMux()
+	*httpListenAddr = "127.0.0.1:bad"
+	serverDone := make(chan struct{})
+	dynamicListenAndServe = func(string, http.Handler) error {
+		close(serverDone)
+		return nil
+	}
+	require.NoError(t, startDynamicCtlHTTPServer("127.0.0.1:bad"))
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("dynamic control server did not start")
+	}
+
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		http.DefaultServeMux.ServeHTTP(resp, req)
+		return resp
+	}
+
+	resp := request("/dynamic/cn")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServiceCommands = [][]string{{"mo-service", "-cfg", "cn.toml"}}
+	dynamicCNMu.Unlock()
+	setDynamicTestSlots(42)
+	resp = request("/dynamic/cn?cn=9&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already started", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs[0] = 0
+	dynamicCNServiceProcesses[0] = nil
+	dynamicCNMu.Unlock()
+	dynamicStartProcess = func(string, []string, *os.ProcAttr) (dynamicProcess, error) {
+		return nil, errors.New("fork failed")
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "fork failed", resp.Body.String())
+	dynamicStartProcess = func(string, []string, *os.ProcAttr) (dynamicProcess, error) {
+		return &testDynamicProcess{processPID: 43}, nil
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "OK", resp.Body.String())
+
+	dynamicKill = func(*dynamicCNChild, syscall.Signal) error { return errors.New("kill failed") }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "kill failed", resp.Body.String())
+	dynamicKill = func(*dynamicCNChild, syscall.Signal) error { return nil }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "OK", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already stopped", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=restart")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
+}
+
+func TestStopAllDynamicCNServicesGracefullyWaitsAndHonorsContext(t *testing.T) {
+	setLaunchTestHooks(t)
+	setDynamicTestSlots(0, 41, 42)
+	dynamicKill = func(*dynamicCNChild, syscall.Signal) error { return nil }
+	dynamicWaitProcess = func(child *dynamicCNChild) dynamicWaitResult {
+		if child.pid == 42 {
+			return dynamicWaitResult{err: errors.New("wait failed")}
+		}
+		return dynamicWaitResult{reaped: true}
+	}
+	err := stopAllDynamicCNServicesGracefully(context.Background())
+	require.ErrorContains(t, err, "wait failed")
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[1])
+	require.Equal(t, 42, dynamicCNServicePIDs[2])
+	dynamicCNMu.RUnlock()
+
+	setDynamicTestSlots(43)
+	release := make(chan struct{})
+	waitStarted := make(chan struct{})
+	forceKill := make(chan struct{})
+	waitDone := make(chan struct{})
+	dynamicKill = func(_ *dynamicCNChild, signal syscall.Signal) error {
+		if signal == syscall.SIGKILL {
+			close(forceKill)
+		}
+		return nil
+	}
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
+		close(waitStarted)
+		<-release
+		close(waitDone)
+		return dynamicWaitResult{reaped: true}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- stopAllDynamicCNServicesGracefully(ctx) }()
+	<-waitStarted
+	cancel()
+	<-forceKill
+	close(release)
+	<-waitDone
+	require.ErrorIs(t, <-shutdownDone, context.Canceled)
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[0])
+	dynamicCNMu.RUnlock()
+}
+
+func TestStopAllDynamicCNServicesForceStopsAfterDeadline(t *testing.T) {
+	setLaunchTestHooks(t)
+	setDynamicTestSlots(100)
+
+	waitStarted := make(chan struct{})
+	forceKill := make(chan struct{})
+	var signals []syscall.Signal
+	dynamicKill = func(_ *dynamicCNChild, signal syscall.Signal) error {
+		signals = append(signals, signal)
+		if signal == syscall.SIGKILL {
+			close(forceKill)
+		}
+		return nil
+	}
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
+		close(waitStarted)
+		<-forceKill
+		return dynamicWaitResult{reaped: true}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- stopAllDynamicCNServicesGracefully(ctx) }()
+	<-waitStarted
+	<-ctx.Done()
+	require.ErrorIs(t, <-done, context.DeadlineExceeded)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, signals)
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[0])
+	dynamicCNMu.RUnlock()
+}
+
+func TestStopAllDynamicCNServicesEscalatesAfterSIGTERMFailure(t *testing.T) {
+	setLaunchTestHooks(t)
+	setDynamicTestSlots(100)
+
+	forceKill := make(chan struct{})
+	termErr := errors.New("SIGTERM failed")
+	var signals []syscall.Signal
+	dynamicKill = func(_ *dynamicCNChild, signal syscall.Signal) error {
+		signals = append(signals, signal)
+		if signal == syscall.SIGTERM {
+			return termErr
+		}
+		close(forceKill)
+		return nil
+	}
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
+		<-forceKill
+		return dynamicWaitResult{reaped: true}
+	}
+
+	err := stopAllDynamicCNServicesGracefully(context.Background())
+	require.ErrorIs(t, err, termErr)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, signals)
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[0])
+	dynamicCNMu.RUnlock()
 }
 
 func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 	setLaunchTestHooks(t)
-	config := writeLaunchTestFile(t, "service.toml", "")
-	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
+	pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
+	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\nproxy-services=[%q]\npython-udf-services=[%q]\n",
-		config, config, config, config, proxyConfig, config,
+		logConfig, tnConfig, cnConfig, cnConfig, proxyConfig, pythonConfig,
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = true
@@ -144,12 +602,13 @@ func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 
 func TestStartClusterStartsBuiltinProxyWithoutProxyService(t *testing.T) {
 	setLaunchTestHooks(t)
-	cn1 := writeLaunchTestFile(t, "cn1.toml", "[cn.frontend]\nport=16001\n")
-	cn2 := writeLaunchTestFile(t, "cn2.toml", "[cn.frontend]\nport=16002\n")
-	config := writeLaunchTestFile(t, "service.toml", "")
+	cn1 := writeLaunchTestFile(t, "cn1.toml", "service-type=\"CN\"\n[cn.frontend]\nport=16001\n")
+	cn2 := writeLaunchTestFile(t, "cn2.toml", "service-type=\"CN\"\n[cn.frontend]\nport=16002\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\n",
-		config, config, cn1, cn2,
+		logConfig, tnConfig, cn1, cn2,
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = false
@@ -216,21 +675,22 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	ctx := context.Background()
 	startError := errors.New("start failed")
 	invalid := filepath.Join(t.TempDir(), "missing.toml")
-	valid := writeLaunchTestFile(t, "service.toml", "")
 
 	tests := []struct {
-		name    string
-		start   func([]string) error
-		emptyOK bool
+		name        string
+		start       func([]string) error
+		emptyOK     bool
+		validConfig string
 	}{
-		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false},
-		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil, nil) }, false},
-		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil) }, false},
-		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false},
-		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true},
+		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"LOG\"\n"},
+		{"tn", func(files []string) error { _, err := startTNServiceCluster(ctx, files, nil, nil); return err }, false, "service-type=\"TN\"\n"},
+		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil, false) }, false, "service-type=\"CN\"\n"},
+		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"PROXY\"\n"},
+		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true, "service-type=\"PYTHON_UDF\"\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			valid := writeLaunchTestFile(t, "valid-"+test.name+".toml", test.validConfig)
 			err := test.start(nil)
 			if test.emptyOK && err != nil {
 				t.Fatalf("empty configs: %v", err)
@@ -251,14 +711,141 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	}
 }
 
+func TestLaunchRejectsMisclassifiedServiceConfigs(t *testing.T) {
+	setLaunchTestHooks(t)
+	started := make([]metadata.ServiceType, 0, 2)
+	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
+		serviceType, err := cfg.getServiceType()
+		require.NoError(t, err)
+		started = append(started, serviceType)
+		return nil
+	}
+
+	cnInTNServices := writeLaunchTestFile(t, "cn-in-tnservices.toml", "service-type=\"CN\"\n[tn.GCCfg]\ndisable-gc=true\n")
+	_, err := startTNServiceCluster(context.Background(), []string{cnInTNServices}, nil, nil)
+	require.ErrorContains(t, err, "expected TN")
+	require.Empty(t, started)
+
+	tnInCNServices := writeLaunchTestFile(t, "tn-in-cnservices.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
+	benchmarkCN := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	started = started[:0]
+	err = startCNServiceCluster(context.Background(), []string{tnInCNServices, benchmarkCN}, nil, nil, true)
+	require.ErrorContains(t, err, "expected CN")
+	require.Empty(t, started)
+}
+
+func TestStartClusterRejectsMisclassifiedManifestBeforeAnyService(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "log", field: "logservices"},
+		{name: "proxy", field: "proxy-services"},
+		{name: "python", field: "python-udf-services"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setLaunchTestHooks(t)
+			*withProxy = true
+			wrongTN := writeLaunchTestFile(t, "wrong-tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
+			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=true\n")
+			cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+			proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n")
+			pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
+			entries := map[string]string{
+				"logservices":         fmt.Sprintf("logservices=[%q]", logConfig),
+				"tnservices":          fmt.Sprintf("tnservices=[%q]", tnConfig),
+				"cnservices":          fmt.Sprintf("cnservices=[%q]", cnConfig),
+				"proxy-services":      fmt.Sprintf("proxy-services=[%q]", proxyConfig),
+				"python-udf-services": fmt.Sprintf("python-udf-services=[%q]", pythonConfig),
+			}
+			entries[test.field] = fmt.Sprintf("%s=[%q]", test.field, wrongTN)
+			launch := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n", entries["logservices"], entries["tnservices"], entries["cnservices"], entries["proxy-services"], entries["python-udf-services"])
+			*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
+
+			started := 0
+			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+				started++
+				return nil
+			}
+			err := startCluster(context.Background(), nil, nil)
+			require.ErrorContains(t, err, "expected")
+			require.Zero(t, started)
+		})
+	}
+}
+
+func TestLaunchTNGCDisabledProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	tn := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-1\"\n[tn.GCCfg]\ndisable-gc=true\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	proof, err := startTNServiceCluster(context.Background(), []string{tn}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, proof)
+
+	tnWithoutGC := writeLaunchTestFile(t, "tn-with-gc.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-2\"\n")
+	proof, err = startTNServiceCluster(context.Background(), []string{tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	proof, err = startTNServiceCluster(context.Background(), []string{tn, tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	cn := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
+		require.True(t, cfg.benchmarkTNNoGC)
+		require.NoError(t, cfg.verifySiriusBenchmarkNoGC())
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, true))
+}
+
+func TestStandaloneCNConfigCannotAssertTNGCDisabled(t *testing.T) {
+	cn := writeLaunchTestFile(t, "standalone-cn.toml", `service-type = "CN"
+[cn.sirius]
+enabled = true
+benchmark-no-gc = true
+[tn.GCCfg]
+disable-gc = true
+`)
+	cfg := NewConfig()
+	require.NoError(t, parseConfigFromFile(cn, cfg))
+	require.True(t, cfg.getTNServiceConfig().GCCfg.DisableGC)
+	require.False(t, cfg.benchmarkTNNoGC)
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "launcher-verified")
+}
+
+func TestOrdinaryCNClusterDoesNotReadLaunchTNProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	*launchFile = filepath.Join(t.TempDir(), "missing-launch.toml")
+	cn := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, false))
+}
+
+func TestStartCNServiceRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.CN.Sirius.Enabled = true
+	cfg.CN.Sirius.BenchmarkNoGC = true
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "disable-gc=true")
+	require.ErrorContains(t, startCNService(cfg, nil, nil, nil), "disable-gc=true")
+}
+
 func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	setLaunchTestHooks(t)
-	valid := writeLaunchTestFile(t, "cn.toml", "")
+	valid := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
 	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
 		return nil
 	}
 	*withProxy = false
-	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil); err != nil {
+	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +853,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	launchNewProxy = func(string, *zap.Logger) goetty.Proxy {
 		return &testProxy{startErr: startError}
 	}
-	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil); !errors.Is(err, startError) {
+	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil, false); !errors.Is(err, startError) {
 		t.Fatalf("startCNServiceCluster() = %v, want %v", err, startError)
 	}
 }
@@ -357,6 +944,21 @@ func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {
 	require.NoError(t, startDynamicBuiltinProxy(2, false))
 	require.True(t, proxy.started)
 	require.Equal(t, []string{"127.0.0.1:16001", "127.0.0.1:16002"}, proxy.upstreams)
+}
+
+func TestStartDynamicBuiltinProxyDoesNotPublishFailedProxy(t *testing.T) {
+	setLaunchTestHooks(t)
+	old := &testProxy{}
+	cnProxy = old
+	failed := &testProxy{startErr: errors.New("listen: address already in use")}
+	launchNewProxy = func(string, *zap.Logger) goetty.Proxy { return failed }
+
+	err := startDynamicBuiltinProxy(1, false)
+	require.Error(t, err)
+	require.Same(t, old, cnProxy,
+		"a proxy that failed Start must not replace the published proxy")
+	require.False(t, failed.started,
+		"failed proxy must not be visible to lifecycle cleanup")
 }
 
 func TestV1LaunchWithProxyOwnsLegacyPort(t *testing.T) {
@@ -519,5 +1121,24 @@ func TestWaitClusterCondition(t *testing.T) {
 	}
 	if client.closed {
 		t.Fatal("client unexpectedly closed after wait error")
+	}
+}
+
+func TestDynamicCNTemplatesPreserveAddressBindings(t *testing.T) {
+	for _, name := range []string{"launch-dynamic-cn", "launch-dynamic-with-proxy", "v1/launch-dynamic-cn", "v1/launch-dynamic-with-proxy"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, genDynamicCNConfigs(dir, Dynamic{ServiceCount: 2, CNTemplate: filepath.Join("../../etc", name, "cn.toml.base")}))
+			for i := 0; i < 2; i++ {
+				var cfg Config
+				_, err := toml.DecodeFile(filepath.Join(dir, fmt.Sprintf("cn-%d.toml", i)), &cfg)
+				require.NoError(t, err)
+				require.Equal(t, fmt.Sprintf("dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf", baseUUID+i), cfg.CN.UUID)
+				require.Equal(t, basePort+i*100, cfg.CN.PortBase)
+				require.Equal(t, fmt.Sprintf("cn%d", i), cfg.CN.ServiceHost)
+				require.EqualValues(t, baseFrontendPort+i, cfg.CN.Frontend.Port)
+				require.Empty(t, cfg.CN.Txn.Trace.Dir)
+			}
+		})
 	}
 }

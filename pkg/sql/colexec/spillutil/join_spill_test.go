@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"testing"
 
@@ -71,7 +72,7 @@ func writeBuildRecords(
 	if err != nil {
 		panic(err)
 	}
-	file, err := spillfs.CreateAndRemoveFile(context.Background(), name)
+	file, err := spillfs.CreateFile(context.Background(), name)
 	if err != nil {
 		panic(err)
 	}
@@ -103,7 +104,7 @@ func makeCorruptBatchFile(t *testing.T) *os.File {
 }
 
 func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	_, _, err := TakeSpillBuildPayload(proc, nil)
 	require.ErrorContains(t, err, message.ErrSpillBuildPayloadEmpty.Error())
@@ -115,7 +116,8 @@ func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 	_, err = fd.Seek(0, io.SeekStart)
 	require.NoError(t, err)
 	releases := 0
-	file := message.NewSpillFile(fd, 1, 1, func() { releases++ })
+	file := newTestSpillFileWithSize(fd, 1, 1, func() { releases++ })
+	defer file.Close()
 	jm := message.NewJoinMap(
 		message.GroupSels{}, nil, nil, nil, nil, proc.Mp(),
 	)
@@ -132,14 +134,19 @@ func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 }
 
 func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	defer generation.Close()
 	fd, err := os.CreateTemp(t.TempDir(), "payload-row-mismatch")
 	require.NoError(t, err)
+	_, err = fd.Write([]byte{1})
+	require.NoError(t, err)
 	releases := 0
+	file := newTestSpillFileWithSize(fd, 1, 1, func() { releases++ })
+	defer file.Close()
 	jm := message.NewJoinMap(
 		message.GroupSels{}, nil, nil, nil, nil, proc.Mp(),
 	)
@@ -147,7 +154,7 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	jm.IncRef(1)
 	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
 		Files: []*message.SpillFile{
-			message.NewSpillFile(fd, 1, 0, func() { releases++ }),
+			file,
 		},
 		BudgetRef: generation,
 	}))
@@ -155,6 +162,51 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "row count")
 	require.Equal(t, 1, releases)
 	jm.Free()
+}
+
+func TestBucketWriterQueuesWithoutOpenFD(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	writer := BucketWriter{
+		Name:   "queued-spill",
+		Budget: generation,
+	}
+	defer writer.Close()
+
+	payload := []byte("complete-record")
+	require.NoError(t, writeBucketPayload(proc, payload, 1, &writer, nil))
+	require.True(t, writer.Created())
+	// A second write reopens the same named file and appends, while the queued
+	// writer still retains disk ownership only.
+	require.NoError(t, writeBucketPayload(proc, payload, 1, &writer, nil))
+	require.Zero(t, generation.SpillFDUsed())
+	require.Equal(t, uint64(2*len(payload)), generation.SpillDiskUsed())
+
+	file, err := writer.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, file)
+	defer file.Close()
+	require.True(t, file.NeedsOpen())
+	require.Zero(t, generation.SpillFDUsed())
+
+	reader := BucketReader{}
+	require.NoError(t, reader.ResetForSpillFile(proc, generation, file))
+	defer reader.Close()
+	require.Equal(t, uint64(1), generation.SpillFDUsed())
+	got, err := io.ReadAll(reader.fd)
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat(payload, 2), got)
+	reader.Close()
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, generation.SpillDiskUsed())
+	spillFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	_, err = spillFS.OpenFile(context.Background(), "queued-spill")
+	require.Error(t, err)
 }
 
 func TestClassifyRowsConservesRows(t *testing.T) {
@@ -191,17 +243,25 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 		make([]int32, 1),
 		make([]int32, SpillNumBuckets*2),
 		make([]int32, SpillNumBuckets*2+1),
-	), process.ErrHashBuildBudgetInvalid)
+	), process.ErrExecutionResourceInvalid)
 }
 
 func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	budget := process.MustNewExecutionResourceBudget(8<<20, 8<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 
 	source := makeInt32Batch(proc, []int32{1, 2, 3})
+	source.Vecs = append(source.Vecs, vector.NewVec(types.T_text.ToType()))
+	for _, value := range []string{"raw", "text", "plain"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(value), false, proc.Mp()))
+	}
+	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
+	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone, vector.PrepareParamFloat,
+	}, proc.Mp()))
 	defer source.Clean(proc.Mp())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
@@ -209,7 +269,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	reader := &BucketReader{
@@ -222,6 +282,10 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]))
+	require.True(t, got.Vecs[1].GetIsBinaryStringAt(0))
+	require.False(t, got.Vecs[1].GetIsBinaryStringAt(1))
+	require.Equal(t, vector.PrepareParamInteger, got.Vecs[1].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamFloat, got.Vecs[1].GetPrepareParamKindAt(2))
 	got.Clean(proc.Mp())
 	_, err = reader.ReadBatch(proc, decoded)
 	require.ErrorIs(t, err, io.EOF)
@@ -245,7 +309,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 }
 
 func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	textBatch := batch.NewWithSize(1)
@@ -279,7 +343,7 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 }
 
 func TestRebuildHashmapBasic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -311,8 +375,47 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	engine.Cleanup(proc)
 }
 
+func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
+	builder := &hashbuild.HashmapBuilder{}
+	builder.Batches.MemSize = 120_000
+
+	spill, adaptive, err := shouldReSpillBeforeRetain(
+		builder, nil, math.MaxInt64, nil,
+	)
+	require.NoError(t, err)
+	require.False(t, spill)
+	require.False(t, adaptive)
+
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.False(t, adaptive)
+
+	builder.Batches.MemSize = 140 * mpool.MB
+	budget := process.MustNewExecutionResourceBudget(200*mpool.MB, 200*mpool.MB)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	retained, err := generation.ReserveTransientMemory(140 * mpool.MB)
+	require.NoError(t, err)
+	first, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	second, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	spill, adaptive, err = shouldReSpillBeforeRetain(
+		builder, nil, math.MaxInt64, first,
+	)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.True(t, adaptive)
+
+	require.True(t, first.Release())
+	require.True(t, second.Release())
+	retained.Release()
+}
+
 func TestReSpillConservesBuildAndProbeRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 5_000)
 	for i := range values {
@@ -364,7 +467,7 @@ func TestSpillRejectsCompleteRecordTruncation(t *testing.T) {
 	} {
 		for _, metadataRows := range []int64{0, 6} {
 			t.Run(fmt.Sprintf("%s/metadata-%d", test.name, metadataRows), func(t *testing.T) {
-				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 				defer proc.Free()
 				first := makeInt32Batch(proc, []int32{1, 2, 3})
 				defer first.Clean(proc.Mp())
@@ -391,7 +494,7 @@ func TestSpillRejectsCompleteRecordTruncation(t *testing.T) {
 }
 
 func TestSpillRejectsPhysicalTruncationBeforeFirstRecord(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	baseline := proc.Mp().CurrNB()
 	first := makeInt32Batch(proc, []int32{1})
@@ -411,7 +514,7 @@ func TestSpillRejectsPhysicalTruncationBeforeFirstRecord(t *testing.T) {
 		NeedsBuildForEmptyProbe: true,
 	})
 	engine.InitFromSpilledFiles([]*message.SpillFile{
-		message.NewSpillFile(file, 2, uint64(info.Size()), nil),
+		newTestSpillFileWithSize(file, 2, uint64(info.Size()), nil),
 	})
 	jm, _, err := engine.RebuildHashmap(
 		proc,
@@ -437,7 +540,7 @@ func TestProbeRejectsCompleteRecordTruncation(t *testing.T) {
 		{name: "complete record truncation", values: []int32{1}, metadataRows: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			build := makeInt32Batch(proc, []int32{1})
 			probe := makeInt32Batch(proc, test.values)
@@ -484,7 +587,7 @@ func TestProbeRejectsCompleteRecordTruncation(t *testing.T) {
 }
 
 func TestReSpillRejectsProbeRowMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -517,7 +620,7 @@ func TestReSpillRejectsProbeRowMetadata(t *testing.T) {
 }
 
 func TestRebuildRejectsRowsWithoutFile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	for _, bucket := range []SpillBucket{
 		{BuildRows: 1},
@@ -537,7 +640,7 @@ func TestRebuildRejectsRowsWithoutFile(t *testing.T) {
 }
 
 func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -579,7 +682,7 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 }
 
 func TestCleanupDoubleSafe(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	engine := newExactTestSpillEngine(t, SpillEngineConfig{
 		BuildKeyExprs: makeTestKeyExpr(),

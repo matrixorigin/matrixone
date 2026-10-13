@@ -1,0 +1,61 @@
+DROP TABLE IF EXISTS dml_limit_offset_t;
+CREATE TABLE dml_limit_offset_t(id INT PRIMARY KEY, touched INT DEFAULT 0);
+INSERT INTO dml_limit_offset_t VALUES (1, 0), (2, 0), (3, 0);
+UPDATE dml_limit_offset_t SET touched = 1 ORDER BY id LIMIT 1 OFFSET 1;
+SQL parser error: UPDATE does not support LIMIT with OFFSET
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+UPDATE dml_limit_offset_t SET touched = 1 ORDER BY id LIMIT 1, 1;
+SQL parser error: UPDATE does not support LIMIT with OFFSET
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+DELETE FROM dml_limit_offset_t ORDER BY id LIMIT 1 OFFSET 1;
+SQL parser error: DELETE does not support LIMIT with OFFSET
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+DELETE FROM dml_limit_offset_t ORDER BY id LIMIT 1, 1;
+SQL parser error: DELETE does not support LIMIT with OFFSET
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+UPDATE dml_limit_offset_t SET touched = 2 ORDER BY id LIMIT 1;
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+DELETE FROM dml_limit_offset_t ORDER BY id LIMIT 1;
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+UPDATE dml_limit_offset_t SET touched = 3 ORDER BY id LIMIT 0;
+DELETE FROM dml_limit_offset_t ORDER BY id LIMIT 0;
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+UPDATE dml_limit_offset_t SET touched = 3 ORDER BY id LIMIT -1;
+SQL syntax error: LIMIT must be a non-negative integer
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+DELETE FROM dml_limit_offset_t ORDER BY missing_col LIMIT 1;
+invalid input: column missing_col does not exist
+SELECT id, touched FROM dml_limit_offset_t ORDER BY id;
+➤ id[4,32,0]  ¦  touched[4,32,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+DROP TABLE dml_limit_offset_t;

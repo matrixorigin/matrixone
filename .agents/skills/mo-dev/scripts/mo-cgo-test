@@ -19,6 +19,7 @@ set -eu
 usage() {
     echo "usage: $0 [go test flags and package patterns...]" >&2
     echo "example: $0 -race -count=1 -timeout=120s ./pkg/target/..." >&2
+    echo "gpu:     MO_CL_CUDA=1 $0 -count=1 ./pkg/vectorindex/metric/" >&2
 }
 
 if [ "$#" -eq 0 ]; then
@@ -34,10 +35,13 @@ case "$repo_root" in
         exit 1
         ;;
 esac
-cgo_dir="$repo_root/cgo"
-thirdparty_dir="$repo_root/thirdparties/install"
-lib_dir="$thirdparty_dir/lib"
-include_dir="$thirdparty_dir/include"
+source_cgo_dir="$repo_root/cgo"
+
+# Compiler identity participates in native provenance. Source the Pixi profile
+# before validating reusable artifacts, as Make does before building.
+if [ "${MO_CL_CUDA:-}" = "1" ]; then
+    . "$source_cgo_dir/mo-gpu-env"
+fi
 
 goos=$(go env GOOS)
 gohostos=$(go env GOHOSTOS)
@@ -56,12 +60,12 @@ fi
 
 case "$goos" in
     darwin)
-        libmo="$cgo_dir/libmo.dylib"
+        libmo_name=libmo.dylib
         runtime_path_var=DYLD_LIBRARY_PATH
         platform_link_flags=
         ;;
     linux)
-        libmo="$cgo_dir/libmo.so"
+        libmo_name=libmo.so
         runtime_path_var=LD_LIBRARY_PATH
         platform_link_flags=-fopenmp
         ;;
@@ -71,19 +75,303 @@ case "$goos" in
         ;;
 esac
 
-for required in "$libmo" "$include_dir"; do
+# Build artifacts are intentionally untracked, so a linked git worktree normally has
+# neither libmo nor thirdparties/install even when the primary worktree already has a
+# usable build. Reuse that build only when the tracked and untracked native inputs are
+# clean and identical. This keeps worktree tests cheap without letting a branch-specific
+# C/C++ or Makefile change link against a stale library.
+native_inputs_match() {
+    candidate_root=$1
+    native_paths="Makefile cgo thirdparties"
+    if ! repo_native_status=$(git -C "$repo_root" status \
+        --porcelain --untracked-files=all -- $native_paths); then
+        return 1
+    fi
+    if ! candidate_native_status=$(git -C "$candidate_root" status \
+        --porcelain --untracked-files=all -- $native_paths); then
+        return 1
+    fi
+    if [ -n "$repo_native_status" ] || [ -n "$candidate_native_status" ]; then
+        return 1
+    fi
+    repo_head=$(git -C "$repo_root" rev-parse HEAD) || return 1
+    candidate_head=$(git -C "$candidate_root" rev-parse HEAD) || return 1
+    git -C "$repo_root" diff --quiet "$repo_head" "$candidate_head" -- $native_paths
+}
+
+native_artifact_provenance_matches() {
+    candidate_root=$1
+    candidate_lib=$2
+    accelerator=cpu
+    if [ "${MO_CL_CUDA:-}" = "1" ]; then
+        accelerator=gpu
+    fi
+    simsimd=0
+    if [ "${MO_CL_SIMSIMD:-}" = "1" ]; then
+        simsimd=1
+    fi
+    "$source_cgo_dir/mo-native-provenance" verify \
+        "$candidate_root" "$candidate_lib" "$goos" "$goarch" \
+        "$accelerator" release "$simsimd"
+}
+
+artifact_root="$repo_root"
+artifact_cgo_dir="$artifact_root/cgo"
+thirdparty_dir="$artifact_root/thirdparties/install"
+lib_dir="$thirdparty_dir/lib"
+include_dir="$thirdparty_dir/include"
+libmo="$artifact_cgo_dir/$libmo_name"
+reuse_rejection=
+
+if [ ! -e "$libmo" ] || [ ! -d "$include_dir" ] || [ ! -d "$lib_dir" ]; then
+    # Git documents the main worktree as the first porcelain entry. Do not
+    # derive it from git-common-dir: repositories created with
+    # --separate-git-dir keep that directory outside the primary checkout.
+    primary_root=$(git -C "$repo_root" worktree list --porcelain |
+        sed -n '1s/^worktree //p')
+    candidate_lib="$primary_root/cgo/$libmo_name"
+    candidate_thirdparty="$primary_root/thirdparties/install"
+    case "$primary_root" in
+        *[[:space:]]*) reuse_rejection="primary worktree path contains whitespace" ;;
+        "$repo_root") reuse_rejection="current checkout is the primary worktree" ;;
+        *)
+            if [ "$(git -C "$primary_root" rev-parse --is-inside-work-tree 2>/dev/null || true)" != true ]; then
+                reuse_rejection="Git metadata does not expose a usable primary worktree"
+            elif [ ! -e "$candidate_lib" ] ||
+               [ ! -d "$candidate_thirdparty/include" ] ||
+               [ ! -d "$candidate_thirdparty/lib" ]; then
+                reuse_rejection="primary worktree lacks $libmo_name or thirdparties/install"
+            elif ! native_inputs_match "$primary_root"; then
+                reuse_rejection="native inputs differ from or are dirty in the primary worktree"
+            elif ! provenance_error=$(native_artifact_provenance_matches \
+                "$primary_root" "$candidate_lib" 2>&1); then
+                reuse_rejection="${provenance_error:-native artifact provenance validation failed}"
+            else
+                artifact_root="$primary_root"
+                artifact_cgo_dir="$artifact_root/cgo"
+                thirdparty_dir="$artifact_root/thirdparties/install"
+                lib_dir="$thirdparty_dir/lib"
+                include_dir="$thirdparty_dir/include"
+                libmo="$artifact_cgo_dir/$libmo_name"
+                echo "using platform-matched CGo artifacts ($libmo_name) from primary worktree: $artifact_root" >&2
+            fi
+            ;;
+    esac
+fi
+
+# MO_CL_CUDA=1 selects the GPU build, exactly as it does for `make`. It is required
+# whenever libmo was built with CUDA -- not only for `-tags gpu` packages -- because a
+# CUDA libmo carries undefined cu* symbols that every test binary linking it must
+# resolve, whatever tags the package itself uses.
+#
+# Flags mirror the Makefile's MO_CL_CUDA block; keep the two in step. The rpaths do not:
+# the Makefile ships $ORIGIN/lib for the distributable, while test binaries run from
+# temporary directories and need absolute paths, like the libmo rpath below.
+cuda_cflags=
+cuda_ldflags=
+cuda_rpaths=
+cuda_runtime_paths=
+gpu_tag_args=
+cuda_fatbin=
+if [ "${MO_CL_CUDA:-}" = "1" ]; then
+    if [ "$goos" != linux ]; then
+        echo "MO_CL_CUDA=1 is only supported on linux, not $goos" >&2
+        exit 1
+    fi
+    cuda_cflags=$MO_GPU_CFLAGS
+    cuda_ldflags=$MO_GPU_LDFLAGS
+    cuda_runtime_paths=":$MO_GPU_RUNTIME_PATH"
+    gpu_path_ifs=$IFS
+    IFS=:
+    for gpu_library_directory in $MO_GPU_RUNTIME_PATH; do
+        cuda_rpaths="$cuda_rpaths -Wl,-rpath,$gpu_library_directory"
+    done
+    IFS=$gpu_path_ifs
+    cuda_fatbin="$artifact_root/mocl_kernel64.fatbin"
+
+    # The Makefile adds `-tags gpu` under the same switch, so MO_CL_CUDA=1 must always end up
+    # building the gpu-tagged files. It cannot be appended as a second -tags: go test keeps
+    # only the LAST one, which would discard the caller's. Nor can it be skipped when the
+    # caller passes -tags -- that was the old behaviour, and it silently excluded every
+    # //go:build gpu file while still reporting a pass, so
+    #     MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/
+    # validated no GPU code at all and went green. MERGE instead: gpu joins the caller's tag
+    # set, in whichever form they wrote it.
+    merge_gpu_tag() {
+        # Go accepts comma-separated tags, and historically space-separated ones. Treat both
+        # as separators so `gpu` is not added twice to `-tags "foo gpu"`.
+        case ",$(printf '%s' "$1" | tr ' ' ',')," in
+            *,gpu,*) printf '%s' "$1" ;;
+            ,,) printf 'gpu' ;;
+            *) printf '%s,gpu' "$1" ;;
+        esac
+    }
+
+    caller_set_tags=0
+    argc=$#
+    i=0
+    while [ "$i" -lt "$argc" ]; do
+        arg="$1"
+        shift
+        i=$((i + 1))
+        case "$arg" in
+            -tags | --tags)
+                caller_set_tags=1
+                if [ "$i" -lt "$argc" ] && [ $# -gt 0 ]; then
+                    val="$1"
+                    shift
+                    i=$((i + 1))
+                else
+                    val=
+                fi
+                set -- "$@" "$arg" "$(merge_gpu_tag "$val")"
+                ;;
+            -tags=* | --tags=*)
+                caller_set_tags=1
+                set -- "$@" "${arg%%=*}=$(merge_gpu_tag "${arg#*=}")"
+                ;;
+            *)
+                set -- "$@" "$arg"
+                ;;
+        esac
+    done
+    if [ "$caller_set_tags" -eq 0 ]; then
+        gpu_tag_args="-tags gpu"
+    fi
+fi
+
+sirius_cflags=
+sirius_link_flags=
+sirius_runtime_paths=
+sirius_tag_args=
+sirius_extld=
+if [ "${MO_SIRIUS:-}" = "1" ]; then
+    if [ "$goos/$goarch" != linux/amd64 ]; then
+        echo "MO_SIRIUS=1 CGo tests require linux/amd64, not $goos/$goarch" >&2
+        exit 1
+    fi
+    if [ -z "${SIRIUS_SDK:-}" ] || [ ! -f "$SIRIUS_SDK/link.json" ]; then
+        echo "MO_SIRIUS=1 CGo tests require a generated SIRIUS_SDK" >&2
+        exit 1
+    fi
+    case "$SIRIUS_SDK" in
+        /*) ;;
+        *) echo "SIRIUS_SDK must be an absolute path" >&2; exit 1 ;;
+    esac
+    case "$SIRIUS_SDK" in
+        *[!A-Za-z0-9_./+@-]*)
+            echo "SIRIUS_SDK cannot contain whitespace or metacharacters" >&2
+            exit 1
+            ;;
+    esac
+    if [ ! -f "$repo_root/.sirius-sdk/provenance.json" ] ||
+       [ ! -f "$repo_root/lib/sirius-provenance.json" ]; then
+        echo "missing prepared or packaged Sirius runtime closure" >&2
+        echo "build the combined binary before running native Sirius tests" >&2
+        exit 1
+    fi
+    python3 "$repo_root/optools/sirius_sdk.py" verify-package \
+        --prepared "$repo_root/.sirius-sdk" --output "$repo_root/lib" \
+        --sdk "$SIRIUS_SDK"
+    sirius_cc=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["c_compiler"])' "$SIRIUS_SDK/link.json")
+    sirius_cxx=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["compiler"])' "$SIRIUS_SDK/link.json")
+    # SDK preparation has already bound both compilers to the activated Pixi
+    # prefix. Sirius may use Clang while MO's CUDA objects use Pixi GCC/NVCC.
+    CC=$sirius_cc
+    CXX=$sirius_cxx
+    export CC CXX
+    sirius_fingerprint=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SIRIUS_SDK/link.json")
+    sirius_cflags=" -I$SIRIUS_SDK -DSIRIUS_SDK_BUILD_$sirius_fingerprint=1"
+    sirius_link_flags=" @$repo_root/.sirius-sdk/link.rsp -Wl,-rpath,$repo_root/lib"
+    sirius_runtime_paths=":$repo_root/lib"
+    sirius_extld="-extld=$sirius_cxx "
+
+    merge_sirius_tag() {
+        case ",$(printf '%s' "$1" | tr ' ' ',')," in
+            *,sirius,*) printf '%s' "$1" ;;
+            ,,) printf 'sirius' ;;
+            *) printf '%s,sirius' "$1" ;;
+        esac
+    }
+    caller_set_tags=0
+    argc=$#
+    i=0
+    while [ "$i" -lt "$argc" ]; do
+        arg="$1"
+        shift
+        i=$((i + 1))
+        case "$arg" in
+            -tags | --tags)
+                caller_set_tags=1
+                if [ "$i" -lt "$argc" ] && [ $# -gt 0 ]; then
+                    val="$1"
+                    shift
+                    i=$((i + 1))
+                else
+                    val=
+                fi
+                set -- "$@" "$arg" "$(merge_sirius_tag "$val")"
+                ;;
+            -tags=* | --tags=*)
+                caller_set_tags=1
+                set -- "$@" "${arg%%=*}=$(merge_sirius_tag "${arg#*=}")"
+                ;;
+            *)
+                set -- "$@" "$arg"
+                ;;
+        esac
+    done
+    if [ "$caller_set_tags" -eq 0 ]; then
+        if [ -n "$gpu_tag_args" ]; then
+            gpu_tag_args="-tags gpu,sirius"
+        else
+            sirius_tag_args="-tags sirius"
+        fi
+    fi
+fi
+
+for required in "$libmo" "$include_dir" "$lib_dir"; do
     if [ ! -e "$required" ]; then
         echo "missing MatrixOne CGo prerequisite: $required" >&2
+        if [ -n "$reuse_rejection" ]; then
+            echo "primary-worktree reuse rejected: $reuse_rejection" >&2
+        fi
         echo "build the repository thirdparties and CGo libraries before testing" >&2
         exit 1
     fi
 done
+if [ -n "$cuda_fatbin" ] && [ ! -f "$cuda_fatbin" ]; then
+    echo "missing MatrixOne CUDA runtime sidecar: $cuda_fatbin" >&2
+    if [ -n "$reuse_rejection" ]; then
+        echo "primary-worktree reuse rejected: $reuse_rejection" >&2
+    fi
+    echo "build the GPU generation with top-level: MO_CL_CUDA=1 make cgo" >&2
+    exit 1
+fi
+
+# A CUDA-built libmo cannot be linked without the CUDA flags, whatever the package under
+# test is. Left alone that surfaces as a page of "undefined reference to cuInit" from the
+# linker, which reads like a code fault; say what it actually is instead.
+if [ -z "$cuda_ldflags" ] && command -v readelf >/dev/null 2>&1; then
+    if readelf -d "$libmo" 2>/dev/null | grep -q 'NEEDED.*libcuda'; then
+        echo "$libmo was built with CUDA but MO_CL_CUDA is not set." >&2
+        echo "re-run as: MO_CL_CUDA=1 $0 $*" >&2
+        echo "or rebuild a CPU libmo with: make clean && make" >&2
+        exit 1
+    fi
+fi
 
 # Match the repository build contract and remove ambient module/CGo flag
 # drift. CC/CXX and other standard toolchain selectors remain caller-owned.
 export GOWORK=off
-export CGO_CFLAGS="'-I$cgo_dir' '-I$include_dir'"
+export CGO_CFLAGS="'-I$source_cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}$sirius_cflags"
 export CGO_LDFLAGS="'-L$lib_dir'"
+if [ -n "$cuda_fatbin" ]; then
+    # Go test executables live in temporary directories, while production
+    # executables find the staged fatbin beside mo-service. Point the test
+    # process at the exact sidecar already bound by provenance verification.
+    export MO_CUDA_FATBIN_PATH="$cuda_fatbin"
+fi
 
 # cgo/lib.go owns libmo's native dependency declaration. Query that metadata
 # instead of duplicating a library list here; newly added CPU dependencies then
@@ -96,7 +384,7 @@ if [ -z "$cgo_link_flags" ]; then
     exit 1
 fi
 
-runtime_paths="$cgo_dir:$lib_dir"
+runtime_paths="$artifact_cgo_dir:$lib_dir$sirius_runtime_paths$cuda_runtime_paths"
 if [ "$runtime_path_var" = DYLD_LIBRARY_PATH ]; then
     export DYLD_LIBRARY_PATH="$runtime_paths"
 else
@@ -109,8 +397,8 @@ fi
 # The wrapper injects libmo even when the requested package does not import
 # cgo/lib.go, so it must also close libmo's dependency graph. Keep the queried
 # flags after -lmo: archive resolution is order-sensitive on common linkers.
-external_flags="$platform_link_flags -L$cgo_dir -lmo $cgo_link_flags -Wl,-rpath,$cgo_dir -Wl,-rpath,$lib_dir"
-ldflags="-extldflags '$external_flags'"
+external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$artifact_cgo_dir -lmo -L$lib_dir $cgo_link_flags -Wl,-rpath,$artifact_cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}$sirius_link_flags"
+ldflags="${sirius_extld}-extldflags '$external_flags'"
 
 cd "$repo_root"
-exec go test -mod=readonly -ldflags "$ldflags" "$@"
+exec go test -mod=readonly $gpu_tag_args $sirius_tag_args -ldflags "$ldflags" "$@"

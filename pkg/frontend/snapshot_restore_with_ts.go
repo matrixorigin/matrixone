@@ -180,6 +180,17 @@ func getTableInfosFromTS(ctx context.Context,
 		fmt.Sprintf("%d:%d", from, ts),
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					newCtx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsListFromTS(queryCtx, bh, sql, from, to, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
 		},
 	)
@@ -276,15 +287,19 @@ func restoreToAccountFromTS(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore account: %v, restore timestamp : %d", restoreAccount, snapshotTs, restoreAccount, snapshotTs))
 
-	var dbNames []string
+	var currentDBNames, restoreDBNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 
-	// delete current dbs from to account
-	if dbNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+	if restoreDBNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs from to account
+	if currentDBNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			if toAccountId == 0 && dbName == moCatalog {
 				// drop existing cluster tables
@@ -302,10 +317,7 @@ func restoreToAccountFromTS(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
-		return
-	}
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if needSkipDb(dbName) {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
 			continue
@@ -337,6 +349,32 @@ func restoreToAccountFromTS(
 	}
 
 	return
+}
+
+func preflightLogicalRestoreAccountFromTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotTS int64,
+	sourceAccount uint32,
+	targetAccount uint32,
+) error {
+	databaseNames, err := showDatabasesFromTS(
+		ctx, sid, bh, snapshotTS, sourceAccount, targetAccount,
+	)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlFromTS(
+				ctx, sid, bh, dbName, snapshotTS, sourceAccount, targetAccount,
+			)
+		},
+	)
 }
 
 func showDatabasesFromTS(ctx context.Context, sid string, bh BackgroundExec, ts int64, from, to uint32) ([]string, error) {
@@ -374,14 +412,21 @@ func restoreDatabaseFromTS(
 	subDbToRestore map[string]*subDbRestoreRecord,
 ) (err error) {
 
-	var createDbSql string
+	var definition logicalRestoreDatabaseDefinition
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
+	definition, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
 	if err != nil {
 		return
 	}
+	createDbSql := definition.createSQL
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	toCtx, err = prepareLogicalRestoreDatabase(
+		toCtx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
+	if err != nil {
+		return
+	}
 	// if restore to table, check if the db is sub db
 	isSubDb, err = checkDbWhetherSub(ctx, createDbSql)
 	if err != nil {
@@ -392,7 +437,7 @@ func restoreDatabaseFromTS(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] append sub db to restore list: %v, at restore cluster account %d", restoreAccount, snapshotTs, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, toAccountId, createDbSql, snapshotTs)
 		return
 	}
 
@@ -420,7 +465,10 @@ func restoreDatabaseFromTS(
 
 	if isSubDb {
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v, no publication", restoreAccount, snapshotTs, dbName))
 			return
@@ -428,7 +476,7 @@ func restoreDatabaseFromTS(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db with pub: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -437,7 +485,7 @@ func restoreDatabaseFromTS(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -491,25 +539,25 @@ func getCreateDatabaseSqlFromTS(ctx context.Context,
 	dbName string,
 	ts int64,
 	from,
-	to uint32) (string, error) {
+	to uint32) (logicalRestoreDatabaseDefinition, error) {
 
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d }", ts)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, from)
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] get create database `%s` sql: %s", from, ts, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(newCtx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(newCtx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
 }
 
 func recreateTableFromTS(
@@ -524,6 +572,33 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
+			restoreAccount,
+			toAccountId,
+		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
+	if isSequence(tblInfo) {
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			snapshotTs,
+			restoreAccount,
+			toAccountId,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
@@ -535,14 +610,6 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
 	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
-	}
-
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			return
-		}
 	}
 
 	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
@@ -583,9 +650,12 @@ func restoreSystemDatabaseFromTS(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
@@ -679,6 +749,9 @@ func restoreViewsFromTS(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -710,12 +783,23 @@ func restoreViewsFromTS(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A refusal can also surface here when the sort's plan happened to succeed.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%d:%d] skip restore view %v.%v: its definition can never run (%v)",
+						restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))

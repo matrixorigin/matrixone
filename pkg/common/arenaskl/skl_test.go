@@ -122,6 +122,71 @@ func makeInserterAdd(s *Skiplist) func(key []byte, value []byte) error {
 	}
 }
 
+func TestSkiplistGrowArenaPreservesNodesAndLinks(t *testing.T) {
+	list := NewSkiplist(newArena(64<<10), bytes.Compare)
+	const rows = 500
+	for i := 0; i < rows; i++ {
+		require.NoError(t, list.Add(makeIntKey(i), makeValue(i)))
+	}
+	originalSize := list.Size()
+	originalHeight := list.Height()
+	require.ErrorIs(t, list.GrowArena(make([]byte, originalSize-1)), ErrArenaFull)
+
+	require.NoError(t, list.GrowArena(make([]byte, 256<<10)))
+	require.Equal(t, originalSize, list.Size())
+	require.Equal(t, originalHeight, list.Height())
+	require.Equal(t, rows, length(list))
+	require.Equal(t, rows, lengthRev(list))
+	it := list.NewIter(nil, nil)
+	i := 0
+	for ok, key, value := it.First(); ok; ok, key, value = it.Next() {
+		require.Equal(t, makeIntKey(i), key)
+		require.Equal(t, makeValue(i), value)
+		i++
+	}
+	it.Close()
+	require.Equal(t, rows, i)
+	require.ErrorIs(t, list.Add(makeIntKey(rows/2), nil), ErrRecordExists)
+	require.NoError(t, list.Add(makeIntKey(rows), makeValue(rows)))
+	require.Equal(t, rows+1, length(list))
+}
+
+func TestSkiplistGrowArenaRejectsPoisonedArena(t *testing.T) {
+	list := NewSkiplist(newArena(1000), bytes.Compare)
+	require.ErrorIs(t, list.Add(make([]byte, 2000), nil), ErrArenaFull)
+	require.ErrorIs(t, list.GrowArena(make([]byte, 64<<10)), ErrArenaFull)
+	require.Error(t, (&Skiplist{}).GrowArena(make([]byte, 64<<10)))
+}
+
+func TestSkiplistGrowArenaRequiresIndependentLargerBuffer(t *testing.T) {
+	backing := make([]byte, 128<<10)
+	list := NewSkiplist(NewArena(backing[:64<<10]), bytes.Compare)
+	require.NoError(t, list.Add(makeIntKey(1), makeValue(1)))
+	require.ErrorIs(t, list.GrowArena(make([]byte, 64<<10)), ErrArenaFull)
+	require.Error(t, list.GrowArena(backing))
+	require.True(t, list.Contains(makeIntKey(1)))
+}
+
+func TestInserterAddWithPlanDeduplicatesSortedOverlap(t *testing.T) {
+	list := NewSkiplist(newArena(64<<10), bytes.Compare)
+	var inserter Inserter
+	require.Error(t, inserter.AddWithPlan(list, []byte("invalid"), nil, AddPlan{}))
+	for i := 0; i < 100; i += 2 {
+		key := makeIntKey(i)
+		require.NoError(t, list.AddWithPlan(key, nil, MakeAddPlan(key)))
+	}
+	for i := 0; i < 100; i++ {
+		key := makeIntKey(i)
+		err := inserter.AddWithPlan(list, key, nil, MakeAddPlan(key))
+		if i%2 == 0 {
+			require.ErrorIs(t, err, ErrRecordExists, "key %d", i)
+		} else {
+			require.NoError(t, err, "key %d", i)
+		}
+	}
+	require.Equal(t, 100, length(list))
+}
+
 // length iterates over skiplist to give exact size.
 func length(s *Skiplist) int {
 	count := 0
@@ -161,6 +226,49 @@ func TestEmpty(t *testing.T) {
 
 	require.False(t, it.SeekGE(key))
 	require.False(t, it.Valid())
+}
+
+func TestContainsDoesNotMutateSkiplist(t *testing.T) {
+	l := NewSkiplist(newArena(arenaSize), bytes.Compare)
+	require.False(t, l.Contains([]byte("missing")))
+	require.NoError(t, l.Add([]byte("present"), []byte("value")))
+
+	size := l.Size()
+	height := l.Height()
+	require.True(t, l.Contains([]byte("present")))
+	require.False(t, l.Contains([]byte("absent")))
+	require.Equal(t, size, l.Size())
+	require.Equal(t, height, l.Height())
+	require.Equal(t, 1, length(l))
+}
+
+func TestPlannedAddHasExactArenaFootprint(t *testing.T) {
+	key := []byte("planned-key")
+	value := []byte("planned-value")
+	plan := MakeAddPlan(key)
+	require.Equal(t, plan, MakeAddPlan(key))
+	consumed, trailing, ok := plan.ArenaFootprint(
+		uint32(len(key)), uint32(len(value)))
+	require.True(t, ok)
+
+	probe := NewSkiplist(newArena(4096), bytes.Compare)
+	base := uint64(probe.Size())
+	require.NoError(t, probe.AddWithPlan(key, value, plan))
+	require.Equal(t, consumed, uint64(probe.Size())-base)
+
+	exact := uint32(base + consumed + trailing)
+	l := NewSkiplist(newArena(exact), bytes.Compare)
+	require.NoError(t, l.AddWithPlan(key, value, plan))
+	require.Equal(t, value, func() []byte {
+		it := l.NewIter(nil, nil)
+		defer it.Close()
+		ok, _, got := it.SeekGE(key)
+		require.True(t, ok)
+		return got
+	}())
+
+	short := NewSkiplist(newArena(exact-1), bytes.Compare)
+	require.ErrorIs(t, short.AddWithPlan(key, value, plan), ErrArenaFull)
 }
 
 func TestFull(t *testing.T) {

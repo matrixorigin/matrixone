@@ -219,13 +219,13 @@ a	col	seq	key	path	index	value	this
 create view v3 as (select * from unnest(substring('{"a":1}...',1,7), '$') u);
 desc v3;
 Field    Type    Null    Key    Default    Extra    Comment
-col    VARCHAR(65535)    YES        null
-index    INT(4)    YES        null
-key    VARCHAR(65535)    YES        null
-path    VARCHAR(65535)    YES        null
-seq    INT(4)    YES        null
-this    JSON(0)    YES        null
-value    JSON(0)    YES        null
+col    varchar(65535)    YES        null
+index    int    YES        null
+key    varchar(65535)    YES        null
+path    varchar(65535)    YES        null
+seq    int    YES        null
+this    json    YES        null
+value    json    YES        null
 drop table if exists t1;
 create table t1(a int,b json);
 insert into t1 values(1,'{"people":[{"name":"a1","address":"a2"},{"name":"b1","address":"b2"}]}');
@@ -234,3 +234,7 @@ select a,e.* from t1,unnest(t1.b,'$.people[0]') e where seq=0 and e.this=json_ex
 a    col    seq    key    path    index    value    this
 1    t1.b    0    address    $.people[0].address    null    "a2"    {"address": "a2", "name": "a1"}
 2    t1.b    0    address    $.people[0].address    null    "c2"    {"address": "c2", "name": "c1"}
+select min(`key`), max(`key`), min(path), max(path)
+from unnest('{"a":1,"B":2}') u;
+min(key)	max(key)	min(path)	max(path)
+a	B	$.a	$.B

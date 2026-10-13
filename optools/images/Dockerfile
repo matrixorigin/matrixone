@@ -1,6 +1,13 @@
-FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS build-base
+FROM golang:1.27.1-bookworm AS go-toolchain
 
-ENV GOWORK=off
+FROM matrixorigin/golang:1.27.0-ubuntu22.04-matrixone-native-1 AS build-base
+
+# Retain the published native SDK while matching the minimum in go.mod.
+# Replace, rather than merge, GOROOT; no automatic toolchain download is needed.
+RUN rm -rf /usr/local/go
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+
+ENV GOWORK=off GOTOOLCHAIN=local
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
@@ -20,7 +27,7 @@ FROM build-base AS builder
 # GOPROXY affects Go modules, not native dependencies. Keeping it out of the
 # native stage preserves that expensive cache when build environments differ.
 ARG GOPROXY="https://proxy.golang.org,direct"
-RUN go env -w GOPROXY=${GOPROXY}
+RUN go env -w GOPROXY="${GOPROXY}"
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
 # Default: 0 (disabled), set to 1 to enable

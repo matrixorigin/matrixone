@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,11 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+var _ engine.TableVersionedStats = new(Engine)
+var _ engine.RemoteStatsExporter = new(Engine)
+var _ engine.StatsRefresher = new(Engine)
+var _ engine.StatsRefresherWithOptions = new(Engine)
+var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
@@ -94,10 +100,20 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	publish func(*Engine),
 	options ...EngineOptions,
 ) *Engine {
-	cluster := clusterservice.GetMOCluster(service)
-	services := cluster.GetAllTNServices()
+	if publish == nil {
+		panic("disttae engine requires an owner")
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		panic(err)
+	}
+	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	if err != nil {
+		panic(err)
+	}
 
 	var tnID string
 	if len(services) > 0 {
@@ -131,6 +147,16 @@ func New(
 			},
 		),
 	}
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if err := e.Close(); err != nil {
+			logutil.Error("failed to retire disttae engine construction", zap.Error(err))
+		}
+	}()
+	publish(e)
 	// Initialize snapshot manager
 	e.snapshotMgr = NewSnapshotManager()
 	e.snapshotMgr.Init()
@@ -142,6 +168,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		func(owner *GlobalStats) { e.globalStats = owner },
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &message.MessageCenter{
@@ -204,19 +231,52 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	constructed = true
 	return e
 }
 
 func (e *Engine) Close() error {
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
+	e.closeOnce.Do(func() {
+		// Linearize statistics admission before waiting on any engine-owned
+		// resource. A callback must not start work after engine teardown begins.
+		e.dynamicCtx.closed.Store(true)
 
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
+		// The scheduler reads pClient and snapshotMgr. Stop and join it before
+		// retiring either dependency so a tick already in flight cannot use a
+		// closed resource.
+		e.gcMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
 
-	return nil
+		if err := e.pClient.Close(); err != nil {
+			e.closeErr = err
+		}
+		if e.ccprTxnCache != nil {
+			e.ccprTxnCache.Close()
+		}
+		if e.snapshotMgr != nil {
+			e.snapshotMgr.Close()
+		}
+
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
+		if e.gcPool != nil {
+			if err := e.gcPool.ReleaseContext(context.Background()); e.closeErr == nil {
+				e.closeErr = err
+			}
+		}
+		e.dynamicCtx.Close()
+		e.cloneTxnCache = nil
+		e.ccprTxnCache = nil
+	})
+
+	return e.closeErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -301,6 +361,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
 	accountId, userId, _, err := getAccessInfo(ctx)
@@ -345,7 +407,7 @@ func (e *Engine) loadDatabaseFromStorage(
 	name string,
 	op client.TxnOperator,
 ) (*cache.DatabaseItem, error) {
-	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, name)
+	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, sqlquote.String(name))
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
@@ -428,7 +490,11 @@ func (e *Engine) Database(
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if txn.databaseOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
+		// Keep all authoritative "database does not exist" results on the same
+		// typed contract.  In particular, DROP DATABASE followed by CREATE
+		// DATABASE in the same transaction (used by PITR and snapshot restore)
+		// reaches this transaction-local tombstone before consulting the catalog.
+		return nil, moerr.GetOkExpectedEOB()
 	}
 
 	if v := txn.databaseOps.existAndActive(key); v != nil {
@@ -537,6 +603,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -582,14 +649,24 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		if cacheItem == nil {
+			latest := cache.GetTableById(accountId, 0, tableId)
+			if latest != nil && isSessionTemporaryCatalogItem(
+				cache, latest, accountId, latest.DatabaseId, latest.DatabaseName,
+			) {
+				cacheItem = latest
+				latestCatalogFallback = true
+			}
+		}
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
@@ -630,7 +707,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,
@@ -666,6 +743,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		)
 		return "", "", nil, err
 	}
+	if latestCatalogFallback {
+		var resolvedTableID uint64
+		if txnTable != nil {
+			resolvedTableID = txnTable.GetTableID(ctx)
+		}
+		if resolvedTableID != tableId {
+			return "", "", nil, moerr.NewInternalErrorf(
+				ctx,
+				"can not find table by id %d: accountId: %d. latest catalog name resolved to table id %d",
+				tableId, accountId, resolvedTableID,
+			)
+		}
+	}
 
 	return dbName, tableName, txnTable, nil
 }
@@ -684,6 +774,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 
 	// Get the database to be deleted
 	toDelDB, err := e.Database(ctx, name, op)
@@ -711,11 +803,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	res, err := execReadSql(
-		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true,
+		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, sqlquote.String(name)), true,
 	)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",
@@ -1146,6 +1239,39 @@ func (e *Engine) BuildBlockReaders(
 	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
+	if combined, ok := relData.(*CombinedRelData); ok {
+		if num <= 0 {
+			return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if combined.DataCnt() == 0 {
+			return ensureReaders(nil, num), nil
+		}
+		hint := engine.FilterHint{}
+		if len(filterHint) > 0 {
+			hint = filterHint[0]
+		}
+		// Decode once. Recursive ordinary builders borrow this root and give
+		// each reader its own share; only this frame owns the decoded root.
+		hint, filter, owned, err := prepareMembershipFilter(hint, docfilter.AdmissionForService(e.service))
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			defer filter.Free()
+		}
+		if hint.BF != nil && filter == nil {
+			return nil, moerr.NewInvalidInputNoCtx("partition block readers require a shareable membership filter")
+		}
+		// CombinedRelData is a partition-to-range mapping, not a splittable
+		// block list. Keep each child's shipped tombstones and the caller's
+		// snapshot on the remote reader path, without a local relation reader.
+		return buildPartitionBlockReaders(ctx, combined.tables, num, func(data engine.RelData) ([]engine.Reader, error) {
+			return e.BuildBlockReaders(ctx, proc, ts, expr, def, data, num, hint)
+		})
+	}
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
@@ -1179,34 +1305,50 @@ func (e *Engine) BuildBlockReaders(
 	}
 
 	shards := relData.Split(newNum)
-	return buildReadersWithMembershipFilter(
-		rds,
-		newNum,
-		hint,
-		mainFilter,
-		func(i int) (engine.DataSource, error) {
-			return readutil.NewRemoteDataSource(ctx, fs, ts, shards[i]), nil
-		},
-		func(ds engine.DataSource, readerHint engine.FilterHint) (engine.Reader, error) {
-			return readutil.NewReader(
-				ctx,
-				proc.Mp(),
-				e.packerPool,
-				e.fs,
-				def,
-				ts,
-				expr,
-				ds,
-				readutil.GetThresholdForReader(newNum),
-				readerHint,
-			)
-		},
-	)
+	for i := 0; i < newNum; i++ {
+		readerHint := hint
+		var readerFilter docfilter.MembershipFilter
+		if mainFilter != nil {
+			readerFilter = mainFilter.Share()
+			readerHint.BF = readerFilter
+		}
+		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
+		rd, err := readutil.NewReader(
+			ctx,
+			proc.Mp(),
+			e.packerPool,
+			e.fs,
+			def,
+			ts,
+			expr,
+			ds,
+			readutil.GetThresholdForReader(newNum),
+			readerHint,
+		)
+		if err != nil {
+			// NewReader owns the current source and filter share even when its
+			// construction fails.
+			closeReaders(rds)
+			return nil, err
+		}
+		rds = append(rds, rd)
+	}
+	return rds, nil
 }
 
 func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
+}
+
+// GetPrimaryTNShardID returns the shard selected by a transaction workspace.
+// A zero result makes durable cleanup ownership fail closed.
+func (e *Engine) GetPrimaryTNShardID(workspace client.Workspace) uint64 {
+	txn, ok := workspace.(*Transaction)
+	if !ok || len(txn.tnStores) == 0 || len(txn.tnStores[0].Shards) == 0 {
+		return 0
+	}
+	return txn.tnStores[0].Shards[0].ShardID
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {
@@ -1262,6 +1404,63 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 	return e.globalStats.Get(ctx, key, sync)
 }
 
+func (e *Engine) StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return e.globalStats.GetForRemote(ctx, key)
+}
+
+func (e *Engine) StatsAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	return e.globalStats.GetAtTableVersion(ctx, key, sync, tableDefVersion)
+}
+
+// RefreshTableStats synchronously replaces the local optimizer statistics for
+// key. The cache swap is the publication boundary observed by later plans.
+func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
+	return e.RefreshTableStatsWithOptions(ctx, key, engine.StatsRefreshOptions{})
+}
+
+func (e *Engine) RefreshTableStatsWithOptions(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, options, e.globalStats)
+}
+
+// PublishAnalyzedStats installs one successfully collected manual generation.
+// Collection and publication are separate so failed scans never expose a
+// partially populated statistics object.
+func (e *Engine) PublishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	tableDefVersion uint32,
+	stats *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	return e.globalStats.publishAnalyzedStats(ctx, key, tableDefVersion, stats)
+}
+
+type optimizerStatsStore interface {
+	refreshStatsWithMode(
+		context.Context,
+		pb.StatsInfoKey,
+		string,
+		engine.StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
+}
+
+func refreshTableStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+	store optimizerStatsStore,
+) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto", options)
+}
+
 // GetGlobalStats returns the GlobalStats instance
 func (e *Engine) GetGlobalStats() *GlobalStats {
 	return e.globalStats
@@ -1289,8 +1488,43 @@ func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
 }
 
-// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
-func (e *Engine) RunGCScheduler(ctx context.Context) {
+func (e *Engine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.pClient.AcquireLogtailReadBarrier(ctx)
+}
+
+// StartGCScheduler starts the engine-owned GC scheduler. The scheduler is
+// started at most once and is joined by Close.
+func (e *Engine) StartGCScheduler(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("engine GC scheduler context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine is closed")
+	}
+	if e.gcSchedulerDone != nil {
+		return nil
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	e.gcSchedulerCancel = cancel
+	e.gcSchedulerDone = make(chan struct{})
+	done := e.gcSchedulerDone
+	go func() {
+		defer close(done)
+		e.runGCScheduler(schedulerCtx)
+	}()
+	return nil
+}
+
+// runGCScheduler runs all GC tasks in a single goroutine with different intervals.
+func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)

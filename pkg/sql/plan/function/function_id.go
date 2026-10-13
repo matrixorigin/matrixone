@@ -804,25 +804,91 @@ const (
 	MAX_BY          = 559
 	MAX_BY_NON_NULL = 560
 
-	// LOAD_TEXT returns extracted datalink text for FULLTEXT2 maintenance.
-	LOAD_TEXT = 562
+	// Version-specific UUID generators. Plain uuid() generates UUIDv7 and
+	// uuid_v7 is registered as an alias for it.
+	UUID_V1 = 562
+	UUID_V4 = 563
+	UUID_V6 = 564
+	// PostgreSQL-style UUID inspection functions.
+	UUID_EXTRACT_VERSION   = 565
+	UUID_EXTRACT_TIMESTAMP = 566
+
+	// SQL ordered-set aggregate functions.
+	PERCENTILE_CONT = 567
+	PERCENTILE_DISC = 568
+
+	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
+	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
+	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
+	LOAD_TEXT = 569
+
+	// Manhattan distance. Completes the op_type set an IVF-FLAT index can be built
+	// with: vector_l1_ops was already accepted at CREATE INDEX, but without this
+	// function neither the user query nor the index's own generated search SQL
+	// (MetricTypeToDistFuncName) could name the metric (#25966).
+	// Takes 570 rather than 569: LOAD_TEXT reached main first, so keeping main's
+	// numbering intact leaves the next merge clean. Ids are referenced by name.
+	L1_DISTANCE = 570
+
+	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
+	JSON_ARRAY_APPEND = 571
 
 	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
-	ESQL_TVF_CONNECT    = 563
-	ESQL_TVF_DISCONNECT = 564
-	SQL_TVF_CONNECT     = 565
-	SQL_TVF_DISCONNECT  = 566
-
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
 	// Kafka external table (issue #27518).
-	LAST_KAFKA_MESSAGE_ID = 567
+	LAST_KAFKA_MESSAGE_ID = 576
 
+	INTERNAL_JSON_COMPARISON_PARAM = 577
+	INTERNAL_JSON_MEMBER_OF        = 578
+	// JSON_STORAGE_SIZE and JSON_STORAGE_FREE expose MatrixOne's ByteJson
+	// logical payload size and currently-supported free-space contract.
+	JSON_STORAGE_SIZE = 579
+	JSON_STORAGE_FREE = 580
+	JSON_DEPTH        = 584
+	// JSON_AGG_TO_DOUBLE is the MySQL warning-conversion boundary used by
+	// numeric aggregates (SUM/AVG/VAR_*/STDDEV_*). It is not public SQL.
+	JSON_AGG_TO_DOUBLE = 585
+	// JSON_ARRAY_INSERT inserts values before array elements selected by paths.
+	// Keep main's allocated id stable when adding newer internal functions.
+	JSON_ARRAY_INSERT = 586
+	// Internal schema-aware serializers used by index maintenance. They are
+	// deliberately separate from generic SERIAL, whose value round trip must
+	// remain lossless for SQL callers.
+	// Keep UUID_SHORT's main-branch id stable. The physical serializers are
+	// internal functions introduced by this change and therefore follow it.
+	PHYSICAL_SERIAL        = 588
+	PHYSICAL_SERIAL_FULL   = 589
+	PHYSICAL_COLLATION_KEY = 590
+
+	EXTRACTVALUE            = 581
+	UPDATEXML               = 582
+	TO_INTERVAL_MICROSECOND = 583
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 568
+	UUID_SHORT = 587
+
+	TANH  = 591
+	COSH  = 592
+	ASINH = 593
+	ACOSH = 594
+	ATANH = 595
+
+	FORMAT_BYTES     = 596
+	FORMAT_PICO_TIME = 597
+
+	FUNCTION_END_NUMBER = 598
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"format_bytes":            FORMAT_BYTES,
+	"format_pico_time":        FORMAT_PICO_TIME,
+	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"extractvalue":            EXTRACTVALUE,
+	"updatexml":               UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,
@@ -890,6 +956,7 @@ var functionIdRegister = map[string]int32{
 	"min":                          MIN,
 	"sum":                          SUM,
 	"group_concat":                 GROUP_CONCAT,
+	"listagg":                      GROUP_CONCAT,
 	"grouping":                     GROUPING,
 	"avg":                          AVG,
 	"avg_tw_cache":                 AVG_TW_CACHE,
@@ -919,6 +986,8 @@ var functionIdRegister = map[string]int32{
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
+	"percentile_cont":              PERCENTILE_CONT,
+	"percentile_disc":              PERCENTILE_DISC,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -942,6 +1011,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
@@ -1044,6 +1114,11 @@ var functionIdRegister = map[string]int32{
 	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
+	"tanh":                           TANH,
+	"cosh":                           COSH,
+	"asinh":                          ASINH,
+	"acosh":                          ACOSH,
+	"atanh":                          ATANH,
 	"space":                          SPACE,
 	"tan":                            TAN,
 	"week":                           WEEK,
@@ -1097,24 +1172,34 @@ var functionIdRegister = map[string]int32{
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
 	"json_arrayagg":                  JSON_ARRAYAGG,
+	"array_agg":                      JSON_ARRAYAGG,
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
+	JsonComparisonParamFunctionName:  INTERNAL_JSON_COMPARISON_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_array_append":              JSON_ARRAY_APPEND,
+	"json_array_insert":              JSON_ARRAY_INSERT,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_storage_size":              JSON_STORAGE_SIZE,
+	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
+	"json_storage_free":              JSON_STORAGE_FREE,
+	"json_depth":                     JSON_DEPTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge":                     JSON_MERGE_PRESERVE,
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"member of":                      INTERNAL_JSON_MEMBER_OF,
 	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
@@ -1138,6 +1223,13 @@ var functionIdRegister = map[string]int32{
 	"sql_tvf_connect":                SQL_TVF_CONNECT,
 	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
 	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
+	"uuid_v7":                        UUID,
+	"uuid_short":                     UUID_SHORT,
+	"uuid_v1":                        UUID_V1,
+	"uuid_v4":                        UUID_V4,
+	"uuid_v6":                        UUID_V6,
+	"uuid_extract_version":           UUID_EXTRACT_VERSION,
+	"uuid_extract_timestamp":         UUID_EXTRACT_TIMESTAMP,
 	"is_uuid":                        IS_UUID,
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
@@ -1158,6 +1250,9 @@ var functionIdRegister = map[string]int32{
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
+	"physical_serial":                PHYSICAL_SERIAL,
+	"physical_serial_full":           PHYSICAL_SERIAL_FULL,
+	"physical_collation_key":         PHYSICAL_COLLATION_KEY,
 	"hash_value":                     HASH,
 	"hash_partition":                 HASH_PARTITION,
 	"mo_tuple_expr":                  MO_TUPLE_EXPR,
@@ -1397,6 +1492,7 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,

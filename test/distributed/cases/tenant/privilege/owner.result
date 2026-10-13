@@ -7,12 +7,12 @@ create database db1;
 create table db1.t1(a int);
 insert into db1.t1 values(1);
 select * from db1.t1;
-a
+➤ a[4,32,0]  𝄀
 1
 truncate table db1.t1;
 insert into db1.t1 values(2);
 select * from db1.t1;
-a
+➤ a[4,32,0]  𝄀
 2
 drop account default_1;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
@@ -36,13 +36,14 @@ create table db1.t3(a int);
 internal error: do not have privilege to execute the statement
 set secondary role all;
 create table db1.t3(a int);
+internal error: do not have privilege to execute the statement
 select * from db1.t2;
 internal error: do not have privilege to execute the statement
 grant all on table db1.t2 to role1;
 select * from db1.t2;
-a
-1
-2
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
 3
 drop account default_1;
 create account ddl_orphan_owner ADMIN_NAME admin IDENTIFIED BY '111111';

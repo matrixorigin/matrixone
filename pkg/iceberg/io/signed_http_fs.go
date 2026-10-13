@@ -324,27 +324,30 @@ func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, en
 	if entry.Size > maxBytes {
 		return s.materializedReadTooLarge(ctx, target, maxBytes)
 	}
-	readLimit := maxBytes
-	if entry.Size >= 0 {
-		readLimit = entry.Size
-	}
 	var data []byte
-	if readLimit > 0 {
-		data, err = api.ReadAllBounded(reader, readLimit)
+	if entry.Size >= 0 {
+		// The exact range length is already bounded above. Allocate it once so a
+		// fragmented HTTP response cannot turn harmless transport chunking into
+		// a backing-array growth peak at the materialization boundary.
+		if entry.Size > 0 {
+			data = make([]byte, int(entry.Size))
+			_, err = io.ReadFull(reader, data)
+		}
+	} else {
+		data, err = api.ReadAllBounded(reader, maxBytes)
 	}
 	if err != nil {
 		if errors.Is(err, api.ErrMaterializationLimitExceeded) {
 			return s.materializedReadTooLarge(ctx, target, maxBytes)
 		}
+		if entry.Size >= 0 && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+			return io.ErrUnexpectedEOF
+		}
 		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP response read failed", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
 	}
-	if entry.Size >= 0 {
-		if int64(len(data)) < entry.Size {
-			return io.ErrUnexpectedEOF
-		}
-	} else {
+	if entry.Size < 0 {
 		entry.Size = int64(len(data))
 	}
 	*remainingMaterializedBytes -= int64(len(data))

@@ -31,14 +31,19 @@ func (bat *Batch) MarshalBinaryWithGroupingSize() (int, error) {
 	metadataFree := *bat
 	metadataFree.Attrs = nil
 	metadataFree.ExtraBuf = nil
+	metadataFree.extraBufMP = nil
 	size, err := metadataFree.MarshalBinarySize()
 	if err != nil {
 		return 0, err
 	}
-	if len(bat.Vecs) > math.MaxInt32 || size > math.MaxInt-4 {
+	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	if err != nil {
+		return 0, err
+	}
+	if len(bat.Vecs) > math.MaxInt32 || size > math.MaxInt-8-metadataSize {
 		return 0, moerr.NewInvalidInputNoCtx("batch grouping payload exceeds marshal format")
 	}
-	size += 4
+	size += 8 + metadataSize + 4
 	for _, vec := range bat.Vecs {
 		groupingSize := vec.GroupingMarshalBinarySize()
 		if groupingSize < 0 || groupingSize > math.MaxInt32 ||
@@ -57,7 +62,25 @@ func (bat *Batch) MarshalBinaryWithGroupingTo(w io.Writer) error {
 	metadataFree := *bat
 	metadataFree.Attrs = nil
 	metadataFree.ExtraBuf = nil
+	metadataFree.extraBufMP = nil
+	payloadSize, err := metadataFree.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	if err != nil {
+		return err
+	}
+	if payloadSize > math.MaxInt-metadataSize {
+		return moerr.NewInvalidInputNoCtx("batch grouping payload exceeds marshal format")
+	}
+	if err := writeBatchMarshalInt64(w, int64(payloadSize+metadataSize)); err != nil {
+		return err
+	}
 	if err := metadataFree.MarshalBinaryTo(w); err != nil {
+		return err
+	}
+	if err := bat.AppendPrepareParamKindMetadata(w); err != nil {
 		return err
 	}
 	return bat.marshalGroupingTo(w)
@@ -88,8 +111,19 @@ func (bat *Batch) UnmarshalFromReaderWithGrouping(
 	r io.Reader,
 	mp *mpool.MPool,
 ) error {
-	if err := bat.unmarshalFromReader(r, mp, false); err != nil {
+	payloadSize, err := types.ReadInt64(r)
+	if err != nil {
 		return err
+	}
+	if payloadSize < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch grouping payload size")
+	}
+	limited := &io.LimitedReader{R: r, N: payloadSize}
+	if err := bat.unmarshalFromReaderWithPrepareParamKinds(limited, payloadSize, mp, false); err != nil {
+		return err
+	}
+	if limited.N != 0 {
+		return moerr.NewInvalidInputNoCtx("batch grouping payload was not fully consumed")
 	}
 	return bat.unmarshalGroupingFromReader(r, mp)
 }

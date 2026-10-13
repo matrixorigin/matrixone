@@ -39,12 +39,12 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
-	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -105,30 +105,22 @@ func readColumnsData(
 	readColumns := columns
 	readTypes := typs
 	if extraTSColumn != nil {
-		readColumns = make([]uint16, len(columns), len(columns)+1)
+		readColumns = make([]uint16, len(columns), len(columns)+2)
 		copy(readColumns, columns)
-		readColumns = append(readColumns, *extraTSColumn)
-		readTypes = make([]types.Type, len(typs), len(typs)+1)
+		readColumns = append(readColumns, *extraTSColumn, objectio.SEQNUM_ABORT)
+		readTypes = make([]types.Type, len(typs), len(typs)+2)
 		copy(readTypes, typs)
-		readTypes = append(readTypes, objectio.TSType)
+		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
 	}
 
-	name := location.Name().UnsafeString()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
 		return ioVectors, false, err
 	}
+	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	ioVectors, err = objectio.ReadOneBlock(
-		ctx,
-		&dataMeta,
-		name,
-		location.ID(),
-		readColumns,
-		readTypes,
-		m,
-		fs,
-		policy,
+		ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
 	)
 	if err != nil {
 		return ioVectors, false, err
@@ -231,6 +223,19 @@ func LoadColumnsDataInto(
 			err = moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
 			return
 		}
+		var aborts vector.Vector
+		if err = objectio.MustVectorToCached(
+			&aborts,
+			ioVectors.Entries[len(columns)+1].CachedData,
+		); err != nil {
+			return
+		}
+		defer aborts.Free(nil)
+		hasAborts := !aborts.IsConstNull()
+		if hasAborts && (aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length()) {
+			err = moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+			return
+		}
 
 		deleteMask = objectio.GetReusableBitmap()
 		for i := 0; i < commits.Length(); i++ {
@@ -238,8 +243,13 @@ func LoadColumnsDataInto(
 				err = moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", i)
 				return
 			}
+			if hasAborts && aborts.IsNull(uint64(i)) {
+				err = moerr.NewInvalidInputNoCtxf("object abort row %d is null", i)
+				return
+			}
 			commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, i)
-			if commit.GT(visibilityTS) {
+			if commit.GT(visibilityTS) ||
+				(hasAborts && vector.GetFixedAtNoTypeCheck[bool](&aborts, i)) {
 				deleteMask.Add(uint64(i))
 			}
 		}
@@ -314,8 +324,9 @@ func LoadColumnDataBySearch(
 		return nil, false, err
 	}
 	if visibilityTS != nil {
-		sels, err = objectio.FilterCachedRowsByCommitTS(
+		sels, err = objectio.FilterCachedRowsByCommitTSAndAbort(
 			ioVectors.Entries[1].CachedData,
+			ioVectors.Entries[2].CachedData,
 			sels,
 			*visibilityTS,
 		)
@@ -340,30 +351,146 @@ func LoadColumnDataByTopN(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (sels []int64, dists []float64, fromCache bool, err error) {
-	if m == nil {
-		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column topn")
+	return objectio.ReadColumnTopN(ctx, column, typ, fs, location, selectRows, orderByLimit, m, policy)
+}
+
+// LoadColumnsDataIntoAndTopN reads residual-filter columns, the vector order
+// column, and deferred result columns in one ObjectIO request. Filter columns
+// are copied before selectTopRows is invoked. The vector and deferred columns
+// stay borrowed from pinned cache entries; after TopN only winner rows from the
+// deferred columns are copied into caller-owned destinations.
+//
+// materializeRows and the rows returned by selectTopRows use physical block
+// coordinates. A non-nil row slice is required from selectTopRows so an empty
+// filtered result cannot be confused with TopN's nil meaning "all rows".
+func LoadColumnsDataIntoAndTopN(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	materializeRows []int64,
+	topColumn uint16,
+	topType types.Type,
+	deferredColumns []uint16,
+	deferredTypes []types.Type,
+	deferredDestinations []*vector.Vector,
+	selectTopRows func() ([]int64, error),
+	orderByLimit *objectio.IndexReaderTopOp,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (sels []int64, dists []float64, fromCache bool, err error) {
+	if len(columns) != len(typs) || len(columns) != len(destinations) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+			"object filter column count %d does not match type count %d or destination count %d",
+			len(columns), len(typs), len(destinations),
+		)
 	}
-	ioVectors, fromCache, err := readColumnsData(
-		ctx,
-		[]uint16{column},
-		[]types.Type{typ},
-		fs,
-		location,
-		nil,
-		m,
-		policy,
-	)
+	if len(deferredColumns) != len(deferredTypes) ||
+		len(deferredColumns) != len(deferredDestinations) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+			"deferred object column count %d does not match type count %d or destination count %d",
+			len(deferredColumns), len(deferredTypes), len(deferredDestinations),
+		)
+	}
+	if len(columns) == 0 {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("no object filter columns for fused topn")
+	}
+	if selectTopRows == nil || orderByLimit == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil fused object topn input")
+	}
+	if m == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for fused object topn")
+	}
+	for i := range columns {
+		if destinations[i] == nil {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"nil destination for object column %d", columns[i],
+			)
+		}
+		if columns[i] == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"object topn column %d is also a filter column", topColumn,
+			)
+		}
+	}
+	for i := range deferredColumns {
+		if deferredDestinations[i] == nil {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"nil destination for deferred object column %d", deferredColumns[i],
+			)
+		}
+		if deferredColumns[i] == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"object topn column %d is also a deferred column", topColumn,
+			)
+		}
+		for _, filterColumn := range columns {
+			if deferredColumns[i] == filterColumn {
+				return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+					"deferred object column %d is also a filter column", deferredColumns[i],
+				)
+			}
+		}
+	}
+
+	readColumns := make([]uint16, len(columns)+1+len(deferredColumns))
+	copy(readColumns, columns)
+	readColumns[len(columns)] = topColumn
+	copy(readColumns[len(columns)+1:], deferredColumns)
+	readTypes := make([]types.Type, len(typs)+1+len(deferredTypes))
+	copy(readTypes, typs)
+	readTypes[len(typs)] = topType
+	copy(readTypes[len(typs)+1:], deferredTypes)
+
+	read, err := objectio.ReadBlockForTopN(ctx, readColumns, readTypes, fs, location,
+		len(columns), orderByLimit, m, policy)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	defer objectio.ReleaseIOVector(&ioVectors)
+	defer read.Release()
+	fromCache = read.FromCache()
+	for i := range columns {
+		if materializeRows == nil {
+			err = objectio.CopyCachedVectorAll(
+				destinations[i], read.Entry(i).CachedData, m,
+			)
+		} else {
+			err = objectio.CopyCachedVectorRows(
+				destinations[i], read.Entry(i).CachedData, materializeRows, m,
+			)
+		}
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
 
-	sels, dists, err = objectio.SearchCachedVectorTopN(
-		ctx,
-		ioVectors.Entries[0],
-		selectRows,
-		orderByLimit,
-	)
+	selectedRows, err := selectTopRows()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if selectedRows == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx(
+			"fused object topn selector returned nil rows",
+		)
+	}
+	sels, dists, err = read.TopN(ctx, selectedRows)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	deferredOffset := len(columns) + 1
+	for i := range deferredColumns {
+		err = objectio.CopyCachedVectorRows(
+			deferredDestinations[i],
+			read.Entry(deferredOffset+i).CachedData,
+			sels,
+			m,
+		)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
 	return sels, dists, fromCache, err
 }
 
@@ -388,11 +515,11 @@ func LoadColumnDataBySearchAndCheckTS(
 	}
 	ioVectors, fromCache, err := readColumnsData(
 		ctx,
-		[]uint16{column},
-		[]types.Type{typ},
+		[]uint16{column, commitTSColumn, objectio.SEQNUM_ABORT},
+		[]types.Type{typ, objectio.TSType, types.T_bool.ToType()},
 		fs,
 		location,
-		&commitTSColumn,
+		nil,
 		m,
 		policy,
 	)
@@ -412,8 +539,9 @@ func LoadColumnDataBySearchAndCheckTS(
 	if len(sels) == 0 {
 		return false, true, fromCache, nil
 	}
-	matched, usable, err = objectio.AnyCachedTSInRange(
+	matched, usable, err = objectio.AnyCachedTSInRangeWithAbort(
 		ioVectors.Entries[1].CachedData,
+		ioVectors.Entries[2].CachedData,
 		sels,
 		from,
 		to,
@@ -431,12 +559,12 @@ func LoadColumnsData2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
@@ -545,22 +673,42 @@ func LoadOneBlock(
 	key objectio.Location,
 	metaType objectio.DataMetaType,
 ) (*batch.Batch, uint16, error) {
+	bat, sortKey, _, err := LoadOneBlockWithSpecialLayout(ctx, fs, key, metaType)
+	return bat, sortKey, err
+}
+
+// LoadOneBlockWithSpecialLayout returns the physical special-column layout
+// alongside the loaded batch. Callers that expose logical rows must use this
+// metadata to remove storage-only columns without guessing from vector types or
+// the physical column count.
+func LoadOneBlockWithSpecialLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, objectio.SpecialColumnLayout, error) {
 	sortKey := uint16(math.MaxUint16)
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+		CommitTS:     objectio.InvalidSpecialColumnPosition,
+		Abort:        objectio.InvalidSpecialColumnPosition,
+	}
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, sortKey, err
+		return nil, sortKey, layout, err
 	}
 	data := meta.MustGetMeta(metaType)
 	if data.BlockHeader().Appendable() {
 		sortKey = data.BlockHeader().SortKey()
 	}
+	layout = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(key.ID())))
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, sortKey, err
+	return bat, sortKey, layout, err
 }
 
 func LoadOneBlockWithIndex(

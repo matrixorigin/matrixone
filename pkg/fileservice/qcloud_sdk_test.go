@@ -156,6 +156,85 @@ func TestQCloudSDKCopyObject(t *testing.T) {
 	require.False(t, copied)
 }
 
+func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
+	const lastModRaw = "Wed, 02 Sep 2026 03:04:05 GMT"
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Clone(context.Background()))
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchVersion</Code><Message>planned version was deleted</Message></Error>`)
+			return
+		}
+		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code><Message>object changed</Message></Error>`)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "6")
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.Header().Set("x-cos-version-id", "version-v1")
+			w.Header().Set("Last-Modified", lastModRaw)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", "3")
+		w.Header().Set("Content-Range", "bytes 1-3/6")
+		w.Header().Set("ETag", `"etag-v1"`)
+		w.Header().Set("Last-Modified", lastModRaw)
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "bcd")
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
+	require.NoError(t, err)
+	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
+	require.NoError(t, err)
+	require.Equal(t, ObjectIdentity{
+		VersionID: "version-v1", ETag: `"etag-v1"`, Size: 6, LastModified: wantLastModified,
+	}, identity)
+
+	min, max := int64(1), int64(4)
+	reader, err := sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, identity)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "bcd", string(data))
+	versionRequest := requests[len(requests)-1]
+	require.Equal(t, "version-v1", versionRequest.URL.Query().Get("versionId"))
+	require.Empty(t, versionRequest.Header.Get("If-Match"))
+	require.Equal(t, "bytes=1-3", versionRequest.Header.Get("Range"))
+
+	etagIdentity := identity
+	etagIdentity.VersionID = ""
+	reader, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, etagIdentity)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	etagRequest := requests[len(requests)-1]
+	require.Empty(t, etagRequest.URL.Query().Get("versionId"))
+	require.Equal(t, `"etag-v1"`, etagRequest.Header.Get("If-Match"))
+
+	stale := identity
+	stale.VersionID = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	stale.VersionID = ""
+	stale.ETag = `"stale"`
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
+	require.ErrorIs(t, err, ErrObjectChanged)
+}
+
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	data := bytes.Repeat([]byte("x"), int(smallObjectThreshold))
 	size := int64(len(data))
@@ -191,6 +270,187 @@ func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	}
 	if reader.seekStartCount == 0 {
 		t.Fatalf("expected QCloudSDK.Write to seek back before retry")
+	}
+}
+
+func TestQCloudSDKWriteRetriesHTTPEOF(t *testing.T) {
+	for _, seekable := range []bool{false, true} {
+		name := "buffered"
+		if seekable {
+			name = "seekable-with-offset"
+		}
+		t.Run(name, func(t *testing.T) {
+			payload := []byte("complete-object-payload")
+			var attempts atomic.Int32
+			var object atomic.Value
+			bodies := make(chan []byte, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.Method == http.MethodGet {
+					stored := object.Load()
+					if stored == nil {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					_, _ = w.Write(stored.([]byte))
+					return
+				}
+				if request.Method != http.MethodPut || request.URL.Path != "/object" {
+					t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				select {
+				case bodies <- body:
+				default:
+					t.Error("unexpected additional PUT")
+				}
+				object.Store(body)
+				if attempts.Add(1) == 1 {
+					connection, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					_ = connection.Close()
+					return
+				}
+				w.Header().Set("ETag", `"object-etag"`)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(server.Close)
+			sdk := newTestCOSClient(t, server)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			var source io.Reader = bytes.NewReader(payload)
+			size := int64(len(payload))
+			sizeHint := &size
+			if seekable {
+				reader := bytes.NewReader(append([]byte("prefix:"), payload...))
+				_, err := reader.Seek(int64(len("prefix:")), io.SeekStart)
+				require.NoError(t, err)
+				source, sizeHint = reader, nil
+			}
+			require.NoError(t, sdk.Write(ctx, "object", source, sizeHint, nil))
+			require.Equal(t, int32(2), attempts.Load())
+			for range 2 {
+				require.Equal(t, payload, <-bodies, "every PUT must replay the complete original content")
+			}
+			reader, err := sdk.Read(ctx, "object", nil, nil)
+			require.NoError(t, err)
+			defer reader.Close()
+			data, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			require.Equal(t, payload, data)
+		})
+	}
+}
+
+func TestQCloudPutRetryableError(t *testing.T) {
+	httpEOF := &url.Error{Op: "Put", URL: "http://cos.local/object", Err: io.EOF}
+	require.False(t, IsRetryableError(httpEOF), "the shared retry policy must remain unchanged")
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"source EOF", io.EOF, false},
+		{"wrapped source EOF", fmt.Errorf("source: %w", io.EOF), false},
+		{"untyped EOF", errors.New("EOF"), false},
+		{"PUT EOF", httpEOF, true},
+		{"wrapped PUT EOF", fmt.Errorf("upload: %w", httpEOF), true},
+		{"COS wrapped PUT EOF", &cos.RetryError{Errs: []error{errors.New("reader length unknown"), httpEOF}}, true},
+		{"COS wrapped source EOF", &cos.RetryError{Errs: []error{io.EOF}}, false},
+		{"POST EOF", &url.Error{Op: "Post", Err: io.EOF}, false},
+		{"GET EOF", &url.Error{Op: "Get", Err: io.EOF}, false},
+		{"canceled PUT", &url.Error{Op: "Put", Err: context.Canceled}, false},
+		{"unexpected EOF control", &url.Error{Op: "Put", Err: io.ErrUnexpectedEOF}, true},
+		{"permanent status", newTestCOSError(http.StatusForbidden), false},
+		{"retryable status control", newTestCOSError(http.StatusBadGateway), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, isRetryableQCloudPutError(test.err))
+		})
+	}
+}
+
+func TestQCloudPutEOFRetryBounds(t *testing.T) {
+	for _, cancelDuringAttempt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", cancelDuringAttempt), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errEOF := &cos.RetryError{Errs: []error{&url.Error{Op: "Put", Err: io.EOF}}}
+			attempts := 0
+			_, err := DoWithRetryContext(ctx, "test PUT", func() (int, error) {
+				attempts++
+				if cancelDuringAttempt {
+					cancel()
+				}
+				return 0, errEOF
+			}, 2, isRetryableQCloudPutError)
+			if cancelDuringAttempt {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, 1, attempts)
+			} else {
+				require.Same(t, errEOF, err)
+				require.Equal(t, 2, attempts)
+			}
+		})
+	}
+}
+
+func TestQCloudSDKWritePreservesPermanentFailures(t *testing.T) {
+	for _, shortSource := range []bool{false, true} {
+		name := "forbidden"
+		if shortSource {
+			name = "short-source"
+		}
+		t.Run(name, func(t *testing.T) {
+			var attempts atomic.Int32
+			requestDone := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				attempts.Add(1)
+				_, _ = io.Copy(io.Discard, request.Body)
+				if shortSource {
+					w.WriteHeader(http.StatusOK)
+				} else {
+					w.WriteHeader(http.StatusForbidden)
+				}
+				select {
+				case requestDone <- struct{}{}:
+				default:
+				}
+			}))
+			t.Cleanup(server.Close)
+			sdk := newTestCOSClient(t, server)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			payload := []byte("payload")
+			size := int64(len(payload))
+			if shortSource {
+				size++
+			}
+			err := sdk.Write(ctx, "object", bytes.NewReader(payload), &size, nil)
+			if shortSource {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch), "got %v", err)
+			} else {
+				var cosErr *cos.ErrorResponse
+				require.ErrorAs(t, err, &cosErr)
+				require.Equal(t, http.StatusForbidden, cosErr.Response.StatusCode)
+			}
+			select {
+			case <-requestDone:
+			case <-ctx.Done():
+				t.Fatal("HTTP request did not finish")
+			}
+			require.Equal(t, int32(1), attempts.Load())
+		})
 	}
 }
 
@@ -398,6 +658,115 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	if err := sdk.Delete(ctx, "dir/file1"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled delete, got %v", err)
 	}
+}
+
+func TestQCloudSDKReadOnlyOperationsPreserveInFlightCancellation(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(context.Context, *QCloudSDK) error
+	}{
+		{
+			name: "bucket head",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
+					return sdk.client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+				})
+				return err
+			},
+		},
+		{
+			name: "list",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.listObjects(ctx, "", "")
+				return err
+			},
+		},
+		{
+			name: "stat",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.statObject(ctx, "object")
+				return err
+			},
+		},
+		{
+			name: "read",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				reader, err := sdk.Read(ctx, "object", nil, nil)
+				if reader != nil {
+					_ = reader.Close()
+				}
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestStarted := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+				select {
+				case requestStarted <- struct{}{}:
+				default:
+				}
+				<-request.Context().Done()
+			}))
+			t.Cleanup(server.Close)
+
+			sdk := newTestCOSClient(t, server)
+			// Match production: MatrixOne owns retries, while the COS SDK still wraps
+			// the one attempted request in cos.RetryError.
+			sdk.client.Conf.RetryOpt.Count = 0
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancelDone := make(chan struct{})
+			go func() {
+				defer close(cancelDone)
+				select {
+				case <-requestStarted:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-cancelDone
+			})
+
+			err := test.run(ctx, sdk)
+			require.ErrorIs(t, err, context.Canceled)
+			var retryErr *cos.RetryError
+			require.False(t, errors.As(err, &retryErr),
+				"QCloudSDK must not leak the opaque COS cancellation wrapper")
+		})
+	}
+}
+
+func TestNormalizeQCloudContextErrorIsConservative(t *testing.T) {
+	t.Run("active context", func(t *testing.T) {
+		retryErr := &cos.RetryError{Errs: []error{context.Canceled}}
+		require.Same(t, retryErr, normalizeQCloudContextError(context.Background(), retryErr))
+	})
+
+	t.Run("unrelated error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		retryErr := &cos.RetryError{Errs: []error{errors.New("read failed")}}
+		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
+	})
+
+	t.Run("mixed errors", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		retryErr := &cos.RetryError{Errs: []error{context.Canceled, errors.New("read failed")}}
+		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
+	})
+
+	t.Run("matching deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		retryErr := &cos.RetryError{Errs: []error{fmt.Errorf("request failed: %w", context.DeadlineExceeded)}}
+		require.ErrorIs(t, normalizeQCloudContextError(ctx, retryErr), context.DeadlineExceeded)
+	})
 }
 
 func TestQCloudSDKListStopsRetryingAtContextDeadline(t *testing.T) {

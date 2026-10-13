@@ -17,6 +17,7 @@ package icebergio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,65 @@ func TestSignedHTTPFileServiceBoundsRangeReadWhenServerIgnoresRange(t *testing.T
 	}
 	if string(vec.Entries[0].Data) != "9ab" {
 		t.Fatalf("unexpected ignored-range data: %q", vec.Entries[0].Data)
+	}
+}
+
+func TestSignedHTTPFileServiceReadsFragmentedKnownLengthResponse(t *testing.T) {
+	payload := bytes.Repeat([]byte{'x'}, 4108)
+	body := &fragmentedReadCloser{data: payload, fragmentSize: 4096}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Range") != "bytes=21974-26081" {
+			t.Fatalf("unexpected range header: %q", req.Header.Get("Range"))
+		}
+		return &http.Response{
+			StatusCode:    http.StatusPartialContent,
+			Body:          body,
+			Header:        make(http.Header),
+			ContentLength: int64(len(payload)),
+			Request:       req,
+		}, nil
+	})}
+	fs, readPath, err := SignedHTTPFileServiceBuilder{HTTPClient: client}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.parquet"}, SignedRequest{
+		URL: "https://signed.example.test/data.parquet",
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{
+		Offset: 21974,
+		Size:   int64(len(payload)),
+	}}}
+	if err := fs.Read(context.Background(), &vec); err != nil {
+		t.Fatalf("read fragmented signed range: %v", err)
+	}
+	if !bytes.Equal(vec.Entries[0].Data, payload) {
+		t.Fatalf("unexpected fragmented range data: got=%d want=%d", len(vec.Entries[0].Data), len(payload))
+	}
+}
+
+func TestSignedHTTPFileServiceRejectsTruncatedKnownLengthResponse(t *testing.T) {
+	body := &countingReadCloser{reader: strings.NewReader("short")}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusPartialContent,
+			Body:          body,
+			Header:        make(http.Header),
+			ContentLength: 5,
+			Request:       req,
+		}, nil
+	})}
+	fs, readPath, err := SignedHTTPFileServiceBuilder{HTTPClient: client}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{
+		URL: "https://signed.example.test/data.bin",
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{Offset: 0, Size: 8}}}
+	if err := fs.Read(context.Background(), &vec); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected truncated range error, got %v", err)
+	}
+	if body.closeCalls != 1 {
+		t.Fatalf("truncated response body closed %d times", body.closeCalls)
 	}
 }
 
@@ -549,6 +609,25 @@ type countingReadCloser struct {
 	readBytes  int
 	closeCalls int
 }
+
+type fragmentedReadCloser struct {
+	data         []byte
+	fragmentSize int
+}
+
+func (r *fragmentedReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	if len(p) > r.fragmentSize {
+		p = p[:r.fragmentSize]
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func (r *fragmentedReadCloser) Close() error { return nil }
 
 func (r *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)

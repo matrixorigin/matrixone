@@ -34,4 +34,26 @@ select id, nth_value(id, 1 + 1) over (
 ) nth_id
 from t order by grp, id;
 
+-- A positional parameter marker is valid and is evaluated as an integer.
+prepare nth_param from 'select id, nth_value(id, ?) over (
+  partition by grp order by id
+  rows between unbounded preceding and unbounded following
+) nth_id from t order by grp, id';
+set @nth_offset = 2;
+execute nth_param using @nth_offset;
+set @nth_offset = 0;
+execute nth_param using @nth_offset;
+set @nth_offset = -1;
+execute nth_param using @nth_offset;
+set @nth_offset = null;
+execute nth_param using @nth_offset;
+set @nth_offset = 2.5;
+execute nth_param using @nth_offset;
+set @nth_offset = '2';
+execute nth_param using @nth_offset;
+-- A failed execution must not invalidate the prepared statement.
+set @nth_offset = 1;
+execute nth_param using @nth_offset;
+deallocate prepare nth_param;
+
 drop database mysql_compat_window_nth_value_arg;

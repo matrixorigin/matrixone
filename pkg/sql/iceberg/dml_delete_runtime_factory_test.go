@@ -115,6 +115,7 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsCoordinator(t *testing.T) {
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationDelete,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -206,6 +207,7 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsUpdateCoordinator(t *testing.
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationUpdate,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -294,6 +296,7 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsMergeCoordinator(t *testing.T
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationMerge,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-merge",
 		IdempotencyKey: "stmt-merge",
@@ -380,6 +383,7 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsOverwriteCoordinator(t *testi
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationOverwrite,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -479,6 +483,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSystemAccountZero(t *testing.T) {
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationOverwrite,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      0,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -569,6 +574,7 @@ func TestDMLDeleteRuntimeFactoryUsesWriteObjectProviderForOverwrite(t *testing.T
 	})
 	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationOverwrite,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -642,6 +648,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 	factory := dmlRuntimeFactoryForRawMetadata(t, rawMeta, api.CatalogCapabilities{})
 	req := icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationDelete,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -701,6 +708,7 @@ func TestDMLDeleteRuntimeFactoryRejectsBareTagRefFromMetadata(t *testing.T) {
 	factory := dmlRuntimeFactoryForRawMetadata(t, rawMeta, api.CatalogCapabilities{BranchTag: true})
 	_, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationDelete,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-1",
 		IdempotencyKey: "stmt-1",
@@ -745,6 +753,7 @@ func TestDMLDeleteRuntimeFactorySharesOverwriteCoordinatorByStatement(t *testing
 	factory := dmlRuntimeFactoryForRawMetadata(t, rawMeta, api.CatalogCapabilities{})
 	req := icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationOverwrite,
+		WriteMode:      model.WriteModeMergeOnRead,
 		AccountID:      42,
 		StatementID:    "stmt-shared",
 		IdempotencyKey: "stmt-shared",
@@ -788,6 +797,39 @@ func TestDMLDeleteRuntimeFactoryFallsBackForAppendAndValidatesDeleteConfig(t *te
 		ObjectIOProvider: icebergio.ScopedProvider{},
 	})
 	require.False(t, objectIOFactory.requireResidencyPolicy())
+}
+
+func TestDMLRuntimeFactoryRejectsAppendOnlyRowDMLBeforeCatalogAccess(t *testing.T) {
+	cfg := api.DefaultConfig()
+	cfg.Enable = true
+	cfg.Write.EnableWrite = true
+	cfg.Write.EnableDML = true
+	cfg.Write.EnableDelete = true
+	store := &fakeDMLDeleteRuntimeStore{}
+	factory := NewDMLDeleteRuntimeCoordinatorFactory(DMLDeleteRuntimeCoordinatorFactoryOptions{
+		Store:          store,
+		CatalogFactory: staticCatalogFactory{client: &icebergcatalog.MockClient{}},
+		Config:         cfg,
+	})
+
+	for _, operation := range []string{
+		icebergwrite.OperationDelete,
+		icebergwrite.OperationUpdate,
+		icebergwrite.OperationMerge,
+	} {
+		t.Run(operation, func(t *testing.T) {
+			_, err := factory.NewCoordinator(context.Background(), icebergwrite.AppendRequest{
+				Operation: operation,
+				WriteMode: model.WriteModeAppendOnly,
+				Table:     "orders",
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
+			require.Contains(t, err.Error(), "merge_on_read write mode")
+			require.Contains(t, err.Error(), model.WriteModeAppendOnly)
+		})
+	}
+	require.Zero(t, store.getCatalogCalls, "append-only DML must fail before external catalog access")
 }
 
 func TestDMLRuntimeCoordinatorCacheLifecycle(t *testing.T) {
@@ -929,9 +971,11 @@ type fakeDMLDeleteRuntimeStore struct {
 	catalog           model.Catalog
 	principalMaps     []model.PrincipalMap
 	residencyPolicies []model.ResidencyPolicy
+	getCatalogCalls   int
 }
 
 func (s *fakeDMLDeleteRuntimeStore) GetCatalogByName(ctx context.Context, accountID uint32, name string) (model.Catalog, error) {
+	s.getCatalogCalls++
 	if strings.TrimSpace(s.catalog.URI) == "" {
 		s.catalog.URI = "https://catalog.example.com/rest"
 	}

@@ -30,16 +30,16 @@ insert into c1_br values (4, 'dave', 4000.00, '2024-02-01 09:00:00', '1988-12-25
 -- full diff (baseline for comparison)
 data branch diff c1_br against c1{snapshot="c1_sp0"};
 
--- project single column
+-- project single non-PK column; explicit PK columns are retained automatically
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (name);
 
--- project two columns (non-PK)
+-- project two non-PK columns; explicit PK columns are retained automatically
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (name, balance);
 
 -- project PK + one column
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (id, balance);
 
--- project temporal columns only
+-- project temporal columns only; explicit PK columns are retained automatically
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (created_at, birthday);
 
 -- project all columns explicitly (same as no COLUMNS)
@@ -80,13 +80,13 @@ insert into c2_br values (5004, 'IR300', 'swap', 45000.00, 0.2500, 0.03);
 -- full diff
 data branch diff c2_br against c2{snapshot="c2_sp0"};
 
--- project only non-PK columns
+-- project only non-PK columns; all composite PK columns are retained automatically
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (exposure, delta, margin);
 
--- project partial PK + one value column
+-- project partial PK + one value column; the complete PK is retained in PK order
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (account_id, instrument, exposure);
 
--- project single non-PK column
+-- project single non-PK column; the complete PK is retained automatically
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (delta);
 
 drop snapshot c2_sp0;
@@ -163,10 +163,10 @@ insert into c4_br values (5, null, null, null, null);
 -- full diff
 data branch diff c4_br against c4{snapshot="c4_sp0"};
 
--- project columns with NULLs
+-- project columns with NULLs; the explicit PK is retained automatically
 data branch diff c4_br against c4{snapshot="c4_sp0"} columns (name, score);
 
--- project memo and ts (mix of null transitions)
+-- project memo and ts (mix of null transitions); the explicit PK is retained
 data branch diff c4_br against c4{snapshot="c4_sp0"} columns (memo, ts);
 
 -- project PK + one nullable column
@@ -238,13 +238,13 @@ insert into c6_br values ('south', 3, 301, 7000.00, '2024-01-01', 'new hire');
 -- full diff
 data branch diff c6_br against c6{snapshot="c6_sp0"};
 
--- project only value columns (no PK in projection)
+-- project only value columns; all composite PK columns are retained automatically
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (salary, notes);
 
--- project partial PK + value
+-- project partial PK + value; the complete PK is retained in PK order
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (region, emp_id, salary);
 
--- project hire_date which has NULL transitions
+-- project hire_date which has NULL transitions; the composite PK is retained
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (hire_date);
 
 drop snapshot c6_sp0;

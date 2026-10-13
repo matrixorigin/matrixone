@@ -14,7 +14,7 @@
 // size. The program hangs indefinitely.
 //
 // Configuration that reproduces it on our host (one RTX 5070 Laptop GPU,
-// CUDA 13.0, libcuvs 26.02.000 / libraft 26.02.000):
+// CUDA 13.3, libcuvs 26.08.01 / libraft 26.08.00):
 //
 //     max_batch_size       = 4
 //     n_queues             = 3
@@ -42,7 +42,7 @@
 //
 /* Build (against the conda-shipped cuVS / libraft / librmm)
  * ---------------------------------------------------------
- *   nvcc -O2 -std=c++17 -x cu \
+ *   nvcc -O2 -std=c++20 -x cu \
  *        -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE \
  *        -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
  *        --extended-lambda --expt-relaxed-constexpr \
@@ -57,7 +57,7 @@
  * Or, in this tree:
  *   make -C cgo/cuvs test_dynb
  *
- * Verified to build with libcuvs/libraft 26.02.000 + CUDA 13.0.
+ * Verified to build with libcuvs/libraft 26.08 + CUDA 13.3.
  */
 //
 // Run
@@ -80,6 +80,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <string>
 #include <thread>
@@ -160,12 +161,20 @@ Config parse_args(int argc, char** argv) {
     return c;
 }
 
+// cuVS 26.06+ split cagra::index<T,IdxT> into four concrete types keyed by the
+// dataset view. Building over a device dataset yields device_padded_index --
+// the same type MO's production path uses in cagra.hpp.
+using dynb_cagra_index    = cuvs::neighbors::cagra::device_padded_index<float, uint32_t>;
+using dynb_padded_dataset = cuvs::neighbors::device_padded_dataset<float, int64_t>;
+
 // Build a CAGRA index over a synthetic dataset on device 0.
-// Returns the index and keeps the underlying dataset alive in `dataset_dev`.
+// The index holds only a VIEW into the padded device storage, so that storage
+// is handed back through `padded_out` and must outlive the index -- the same
+// contract cagra.hpp satisfies with dataset_device_ptr_.
 auto build_cagra_index(raft::resources&       res,
                        const Config&          c,
-                       rmm::device_uvector<float>& dataset_dev)
-    -> cuvs::neighbors::cagra::index<float, uint32_t>
+                       std::unique_ptr<dynb_padded_dataset>& padded_out)
+    -> dynb_cagra_index
 {
     // Fill host dataset with deterministic pseudo-random floats.
     std::vector<float> host(static_cast<size_t>(c.n_rows) * c.dim);
@@ -173,20 +182,25 @@ auto build_cagra_index(raft::resources&       res,
     std::uniform_real_distribution<float> dist(0.f, 1.f);
     for (auto& x : host) x = dist(rng);
 
-    dataset_dev.resize(host.size(), raft::resource::get_cuda_stream(res));
-    CHECK_CUDA(cudaMemcpyAsync(dataset_dev.data(), host.data(),
-                               host.size() * sizeof(float),
-                               cudaMemcpyHostToDevice,
-                               raft::resource::get_cuda_stream(res)));
-    CHECK_CUDA(cudaStreamSynchronize(raft::resource::get_cuda_stream(res)));
-
-    auto dataset_view = raft::make_device_matrix_view<const float, int64_t>(
-        dataset_dev.data(), c.n_rows, c.dim);
+    auto host_view = raft::make_host_matrix_view<const float, int64_t>(
+        host.data(), c.n_rows, c.dim);
 
     cuvs::neighbors::cagra::index_params bp;
     bp.intermediate_graph_degree = 64;
     bp.graph_degree              = 32;
-    return cuvs::neighbors::cagra::build(res, bp, dataset_view);
+
+    // 26.06+: build() takes a dataset view, not a raw mdspan. Copy from the
+    // HOST buffer rather than staging through device memory first: the
+    // device-source overload of make_device_padded_dataset() REJECTS a buffer
+    // whose stride is already correct (common.hpp:1228) and demands
+    // make_device_padded_dataset_view() instead, which would make this depend
+    // on whether c.dim happens to be 16B-aligned. The host-source path always
+    // copies, so it works for any dim= passed on the command line.
+    padded_out = cuvs::neighbors::make_device_padded_dataset(res, host_view);
+    // `host` dies at return; make sure the copy off it has landed.
+    CHECK_CUDA(cudaStreamSynchronize(raft::resource::get_cuda_stream(res)));
+
+    return cuvs::neighbors::cagra::build(res, bp, padded_out->as_dataset_view());
 }
 
 struct ClientState {
@@ -197,7 +211,7 @@ struct ClientState {
 
 void client_thread(int                                         tid,
                    const Config&                               c,
-                   const cuvs::neighbors::cagra::index<float, uint32_t>& upstream,
+                   const dynb_cagra_index&                     upstream,
                    const cuvs::neighbors::dynamic_batching::index<float, uint32_t>& dynb,
                    ClientState&                                state)
 {
@@ -259,8 +273,9 @@ bool run_once(const Config& c, bool conservative)
     std::fflush(stdout);
 
     raft::resources build_res;
-    rmm::device_uvector<float> dataset_dev(0, raft::resource::get_cuda_stream(build_res));
-    auto upstream = build_cagra_index(build_res, c, dataset_dev);
+    // Must outlive `upstream`: the index only views it.
+    std::unique_ptr<dynb_padded_dataset> padded_owner;
+    auto upstream = build_cagra_index(build_res, c, padded_owner);
 
     cuvs::neighbors::cagra::search_params upstream_sp;
     upstream_sp.itopk_size = 64;

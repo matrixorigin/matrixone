@@ -18,6 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,16 +36,20 @@ type container struct {
 
 	// built for the smaller of the two relations
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	inserted      []uint8
 	resetInserted []uint8
 
 	buf *batch.Batch
+
+	keyEvaluator colexec.SetOperationKeyEvaluator
 }
 
 type IntersectAll struct {
 	// execution container
-	ctr container
+	ctr      container
+	KeyExprs []*plan.Expr
 
 	vm.OperatorBase
 }
@@ -83,6 +89,7 @@ func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bo
 	ctr := &intersectAll.ctr
 	ctr.state = Build
 	ctr.cleanHashMap()
+	ctr.keyEvaluator.Reset()
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -92,6 +99,7 @@ func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bo
 func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersectAll.ctr
 	ctr.cleanHashMap()
+	ctr.keyEvaluator.Free()
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
@@ -103,6 +111,8 @@ func (intersectAll *IntersectAll) ExecProjection(proc *process.Process, input *b
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

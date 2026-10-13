@@ -148,12 +148,27 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
+	transferredTombstoneCleanupDeadline time.Time
+
 	isOffline bool
 
 	wait struct {
 		tailCollect sync.WaitGroup
 		cmdMarshal  sync.WaitGroup
 	}
+}
+
+func (store *txnStore) adoptTransferredTombstoneCleanupDeadline(deadline time.Time) time.Time {
+	if deadline.IsZero() {
+		deadline = time.Now().Add(transferredTombstoneCleanupTimeout)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.transferredTombstoneCleanupDeadline.IsZero() ||
+		deadline.Before(store.transferredTombstoneCleanupDeadline) {
+		store.transferredTombstoneCleanupDeadline = deadline
+	}
+	return store.transferredTombstoneCleanupDeadline
 }
 
 var TxnStoreFactory = func(
@@ -248,15 +263,20 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 
 func (store *txnStore) Close() error {
 	var err error
-	for _, db := range store.dbs {
-		if err = db.Close(); err != nil {
-			break
+	for id, db := range store.dbs {
+		closeErr := db.Close()
+		err = combineTxnLifecycleErrors(err, closeErr)
+		if closeErr == nil {
+			delete(store.dbs, id)
 		}
 	}
-	store.dbs = nil
 	store.cmdMgr = nil
 	store.logs = nil
 	store.warChecker = nil
+	if len(store.dbs) != 0 {
+		return err
+	}
+	store.dbs = nil
 	return err
 }
 
@@ -741,6 +761,17 @@ func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err er
 	return db.SoftDeleteObject(id, isTombstone)
 }
 
+func (store *txnStore) SoftDeleteObjectByCN(isTombstone bool, id *common.ID) (err error) {
+	if err = store.WantWrite("SoftDeleteObjectByCN"); err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
+		return
+	}
+	return db.SoftDeleteObjectByCN(id, isTombstone)
+}
+
 func (store *txnStore) ApplyRollback() (err error) {
 	if store.cmdMgr.GetCSN() != 0 {
 		for _, db := range store.dbs {
@@ -920,9 +951,7 @@ func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	for _, db := range store.dbs {
-		if err = db.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, db.PrepareRollback())
 	}
 
 	return err

@@ -1,0 +1,1584 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package optools
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+func scheduleHarnessMock() string {
+	return `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_HEAVY_PARALLEL} "*) ;;
+  *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
+ esac
+fi
+if [[ "$1" == test && -n "${EXPECTED_LIGHT_PARALLEL:-}" && "$*" == *pkg/light-package* ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+  *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
+ esac
+fi
+if [[ "${EXPECT_ENGINE_BEFORE_HEAVY:-}" == 1 && "$1" == test && "$*" == *" -json "* && "$*" == *" -race "* ]]; then
+ [[ -e "$CASE_DIR/engine-joined" ]] || { printf 'heavy started before engine join\n' >&2; exit 95; }
+fi
+# The real env/go command must preserve both events around the report merge.
+printf 'heavy-start\n'
+printf started > "$CASE_DIR/heavy-started"
+if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+ while [[ ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
+fi
+printf 'heavy-end\n'
+touch "$CASE_DIR/heavy-finished"
+exit "$HEAVY_STATUS"
+`
+}
+
+// Source the real runner in a private repository layout. Its startup clears
+// diagnostics, so sourcing it in the actual checkout would corrupt another UT.
+func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMock(t, script, scheduleHarnessMock(), variables...)
+}
+
+func scheduleHarnessWithDefaultMockTransform(t *testing.T, script string, transform func(string) string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, variables...)
+}
+
+func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
+}
+
+// Assign in the caller: a command-substitution wrapper would identify its
+// subshell instead. The exec fallback also works with system Bash 3.2.
+const scheduleFixturePID = `function fixture_self_pid() {
+ if [[ -n "${BASHPID:-}" ]]; then
+  printf -v "$1" '%s' "$BASHPID"
+ else
+  printf -v "$1" '%s' "$(exec /bin/sh -c 'printf "%s" "$PPID"')"
+ fi
+}
+`
+
+func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
+	t.Helper()
+	script = scheduleFixturePID + script
+	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
+	root := t.TempDir()
+	dir := filepath.Join(root, "optools")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "run_ut.sh" {
+			text := string(data)
+			index := strings.Index(text, "if [[ 'SCA' == $TEST_TYPE ]]; then")
+			if index < 0 {
+				t.Fatal("missing runner dispatch")
+			}
+			text = text[:index]
+			if transform != nil {
+				text = transform(text)
+			}
+			data = []byte(text)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(mock), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
+	cmd.Env = append(cmd.Env, variables...)
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if diagnostic != "" {
+		t.Log(diagnostic)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("runner harness timed out: %v\n%s\n%s", err, out, diagnostic)
+	}
+	return out, err
+}
+
+func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
+	// diagnostics without cloning a repository or changing this worktree.
+	gitDir := filepath.Join(t.TempDir(), "git")
+	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir,
+		"GIT_AUTHOR_NAME=UT", "GIT_AUTHOR_EMAIL=ut@example.invalid",
+		"GIT_COMMITTER_NAME=UT", "GIT_COMMITTER_EMAIL=ut@example.invalid")
+	git := func(input string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Env = gitEnv
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Git fixture %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "--bare", "--quiet", gitDir)
+	tree := git("", "mktree")
+	commit := git("UT fixture\n", "commit-tree", tree)
+	for _, name := range []string{"HEAD", "shallow"} {
+		if err := os.WriteFile(filepath.Join(gitDir, name), []byte(commit+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, want      string
+		args            []string
+		accepted        bool
+		validationError string
+	}{
+		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "4 1 1", accepted: true},
+		{name: "issues-only-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "4 2 1", accepted: true},
+		{name: "embedded-only-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 1 2", accepted: true},
+		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
+		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
+		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "4 18446744073709551618 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 1 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
+			cmd := exec.CommandContext(t.Context(), "make", args...)
+			cmd.Dir = ".."
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\"\n")
+			// Test Make's defaults, not the enclosing UT's scheduling overrides.
+			for _, value := range os.Environ() {
+				key, _, _ := strings.Cut(value, "=")
+				switch key {
+				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+					continue
+				}
+				cmd.Env = append(cmd.Env, value)
+			}
+			cmd.Env = append(cmd.Env, "GIT_DIR="+gitDir)
+			var diagnostics bytes.Buffer
+			cmd.Stderr = &diagnostics
+			out, err := cmd.Output()
+			if err != nil || strings.TrimSpace(string(out)) != tc.want {
+				t.Fatalf("Make config: want %q, got %q: %v\nstderr: %s", tc.want, out, err, &diagnostics)
+			}
+			if diagnostics.Len() == 0 {
+				t.Fatal("detached untagged checkout did not produce its expected version diagnostic")
+			}
+			values := strings.Fields(string(out))
+			script := `source ./run_ut.sh UT
+function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
+# Stop at the existing post-validation boundary, before cache/native work.
+function mark_ut_stage() {
+ if [[ "$1" == prepare && "$3" == start ]]; then
+  [[ "$EXPECT_ACCEPTED" == true ]] || exit 90
+  exit 0
+ fi
+}
+run_tests
+[[ "$EXPECT_ACCEPTED" == false && "$UT_TEST_STATUS" == 1 ]] || exit 91
+grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
+`
+			out, err = scheduleHarness(t, script,
+				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
+				"EXPECT_VALIDATION_ERROR="+tc.validationError)
+			if err != nil {
+				t.Fatalf("runner config: %v\n%s", err, out)
+			}
+		})
+	}
+	for _, batches := range []string{"1", "4"} {
+		t.Run("direct-unset-defaults/batches="+batches, func(t *testing.T) {
+			script := `unset UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL
+UT_ISSUES_BATCHES="$BATCHES"
+source ./run_ut.sh UT
+[[ "$UT_ISSUES_BATCH_PARALLEL $UT_EMBEDDED_PACKAGE_PARALLEL" == "1 1" ]]
+`
+			out, err := scheduleHarness(t, script, "BATCHES="+batches)
+			if err != nil {
+				t.Fatalf("direct runner defaults: %v\n%s", err, out)
+			}
+		})
+	}
+
+}
+
+func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
+	}{
+		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184", "1"},
+		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296", "1"},
+		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592", "1"},
+		{"parent-pressure-within-looser-limit", "memory.max", "max", "17179869184", "8589934592", "leaf", "8589934592", "1"},
+		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown", "1"},
+		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown", "0"},
+		{"local-events-option", "memory.max", "max", "max", "8589934592", "leaf", "unknown", "0"},
+		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "cgroup")
+			parent := filepath.Join(root, "parent")
+			leaf := filepath.Join(parent, "leaf")
+			for _, dir := range []string{root, parent, leaf} {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mountInfoPath := filepath.Join(root, "mountinfo")
+			if tc.limitFile == "memory.max" {
+				mountOptions := "rw"
+				if tc.name == "local-events-option" {
+					mountOptions += ",memory_localevents"
+				}
+				mountInfo := "36 25 0:32 / " + root + " rw - cgroup2 cgroup " + mountOptions + "\n"
+				if err := os.WriteFile(mountInfoPath, []byte(mountInfo), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for dir, limit := range map[string]string{
+				root:   tc.rootLimit,
+				parent: tc.parentLimit,
+				leaf:   tc.leafLimit,
+			} {
+				if limit == "" {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if tc.limitFile == "memory.max" && limit != "max" {
+					peak := "2048"
+					if tc.name == "parent-pressure-within-looser-limit" {
+						if dir == parent {
+							peak = "17000000000"
+						} else if dir == leaf {
+							peak = "6442450944"
+						}
+					}
+					for name, value := range map[string]string{
+						"memory.current": "1024",
+						"memory.peak":    peak,
+						"memory.events":  "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				} else if tc.limitFile == "memory.limit_in_bytes" && limit == "8589934592" {
+					for name, value := range map[string]string{
+						"memory.usage_in_bytes":     "1024",
+						"memory.max_usage_in_bytes": "2048",
+						"memory.failcnt":            "0",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+
+			script := `source ./run_ut.sh UT
+resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE" "$CGROUP_TEST_MOUNTINFO"
+printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_EVENTS_HIERARCHICAL" "$CGROUP_MEMORY_HIERARCHY"
+`
+			out, err := scheduleHarness(t, script,
+				"CGROUP_TEST_ROOT="+root,
+				"CGROUP_TEST_LEAF="+leaf,
+				"CGROUP_LIMIT_FILE="+tc.limitFile,
+				"CGROUP_TEST_MOUNTINFO="+mountInfoPath,
+			)
+			if err != nil {
+				t.Fatalf("resolve cgroup memory boundary: %v\n%s", err, out)
+			}
+			wantPath := parent
+			if tc.wantScope == "leaf" {
+				wantPath = leaf
+			}
+			wantEvents := "1"
+			if tc.limitFile == "memory.limit_in_bytes" {
+				wantEvents = "not_applicable"
+			} else if tc.name == "local-events-option" {
+				wantEvents = "0"
+			}
+			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " events_hierarchical=" + wantEvents + " boundaries="
+			if !strings.HasPrefix(string(out), wantPrefix) {
+				t.Fatalf("unexpected boundary:\n got: %q\nwant prefix: %q", out, wantPrefix)
+			}
+			if tc.name == "parent-pressure-within-looser-limit" {
+				parentBoundary := parent + "|17179869184|1024|17000000000|oom=0,oom_kill=0"
+				leafBoundary := leaf + "|8589934592|1024|6442450944|oom=0,oom_kill=0"
+				if !strings.Contains(string(out), parentBoundary) || !strings.Contains(string(out), leafBoundary) {
+					t.Fatalf("did not retain metrics for both constraining ancestors:\n%s", out)
+				}
+			}
+		})
+	}
+}
+
+func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
+	for _, tc := range []struct{ name, budget, overlap, planParallel, engine, heavy, plan, expected string }{
+		{"default-safe", "", "1", "1", "0", "0", "0", "0"},
+		{"explicit-three", "3", "", "1", "0", "0", "0", "0"},
+		{"overlap", "3", "1", "1", "0", "0", "0", "0"},
+		{"plan-two-slots", "3", "1", "2", "0", "0", "0", "0"},
+		{"engine-failure", "3", "1", "1", "7", "0", "0", "1"},
+		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
+		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
+		{"plan-undrained", "3", "1", "1", "0", "0", "125", "1"},
+		{"plan-undrained-sequential", "3", "0", "1", "0", "0", "125", "1"},
+		{"engine-undrained", "3", "1", "1", "125", "0", "0", "1"},
+		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
+		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
+		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
+		{"one-budget-two-plan-slots", "1", "1", "2", "0", "0", "0", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expectedOverlap := "0"
+			effectiveBudget := tc.budget
+			if effectiveBudget == "" {
+				effectiveBudget = "3"
+			}
+			budget, err := strconv.Atoi(effectiveBudget)
+			if err != nil {
+				t.Fatalf("invalid test budget %q: %v", effectiveBudget, err)
+			}
+			planParallel, err := strconv.Atoi(tc.planParallel)
+			if err != nil {
+				t.Fatalf("invalid test plan parallelism %q: %v", tc.planParallel, err)
+			}
+			if tc.overlap != "0" && budget > planParallel {
+				expectedOverlap = "1"
+			}
+			script := `source ./run_ut.sh UT
+trap handle_ut_termination TERM
+function logger() { :; }
+function report_cgroup_memory_usage() {
+ if [[ "$1" == "Final race UT" ]]; then
+  [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
+  [[ -z "$ENGINE_RACE_REPORT$PLAN_RACE_REPORT" ]] || exit 98
+  touch "$CASE_DIR/final-memory"
+ fi
+}
+function make() { :; }
+function egrep() { echo fake.pb.go; }
+# Skip the unrelated native smoke, while retaining the real race scheduler.
+MO_CL_CUDA=1
+UT_SHARD=heavy-plan
+function list_embedded_cluster_test_packages() { echo example/embed; }
+function go() {
+ if [[ "$1" == clean ]]; then return 0; fi
+ shift 2
+ if [[ "$1" == ./... ]]; then
+  printf '%s\n' example/embed github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,backup,fileservice,sql/plan/function,vm/engine/tae/db/test}
+ else
+  for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
+ fi
+}
+	function run_engine_race_shards() {
+	 mkdir "$CASE_DIR/engine-once" || return 90
+	 [[ "${2:-}" == "${EXPECTED_ENGINE_SHARDS}" ]] || return 96
+	 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	 touch "$CASE_DIR/engine-finished"
+ if [[ "$ENGINE_STATUS" == 125 ]]; then touch "$ENGINE_RACE_TEST_BINARY"; fi
+ return "$ENGINE_STATUS"
+}
+	function run_plan_race_shards() {
+	 mkdir "$CASE_DIR/plan-once" || return 91
+	 [[ "${PLAN_RACE_PARALLEL}" == "${EXPECTED_PLAN_PARALLEL}" ]] || return 98
+	 [[ -e "$CASE_DIR/engine-finished" ]] || return 92
+ printf 'plan\n' > "$PLAN_RACE_REPORT"
+ touch "$CASE_DIR/plan-started"
+ if [[ "$PLAN_STATUS" == 125 ]]; then touch "$PLAN_RACE_TEST_BINARY"; fi
+ return "$PLAN_STATUS"
+}
+run_tests
+if [[ "$PLAN_STATUS" == 125 || "$ENGINE_STATUS" == 125 ]]; then
+ [[ "$UT_TEST_STATUS" == 1 && ! -e "$CASE_DIR/final-memory" ]] || exit 99
+ if [[ "$ENGINE_STATUS" == 125 ]]; then
+  retained_binary=$ENGINE_RACE_TEST_BINARY
+  retained_report=$ENGINE_RACE_REPORT
+  [[ ! -e "$CASE_DIR/plan-started" && ! -e "$CASE_DIR/heavy-started" ]] || exit 100
+ else
+  retained_binary=$PLAN_RACE_TEST_BINARY
+  retained_report=$PLAN_RACE_REPORT
+ fi
+ [[ -f "$retained_binary" && -s "$retained_report" && -z "$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 101
+ start_plan_race example/plan; [[ "$?" == 125 ]] || exit 102
+ start_engine_race example/engine 1; [[ "$?" == 125 ]] || exit 103
+ trap 'status=$?; [[ -f "$retained_binary" && -s "$retained_report" ]] || status=104; printf "UNDRAINED_RETAINED\n"; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 105
+fi
+[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
+[[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
+[[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
+[[ -e "$CASE_DIR/final-memory" ]] || exit 96
+printf '\nREPORT\n'
+	cat "$UT_REPORT"
+`
+			transform := func(text string) string {
+				const anchor = "            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED\n            engine_status=$?\n"
+				if got := strings.Count(text, anchor); got != 1 {
+					t.Fatalf("engine join anchor count = %d, want 1", got)
+				}
+				return strings.Replace(text, anchor, anchor+"            ut_test_after_engine_wait\n", 1)
+			}
+			script = "function ut_test_after_engine_wait() {\n touch \"$CASE_DIR/engine-joined\"\n [[ ! -e \"$CASE_DIR/heavy-started\" ]] || exit 97\n}\n" + script
+			expectedHeavyParallel := effectiveBudget
+			if expectedOverlap == "1" {
+				expectedHeavyParallel = strconv.Itoa(budget - planParallel)
+			}
+			if expectedHeavyParallel == "" {
+				expectedHeavyParallel = "3"
+			}
+			expectedEngineShards := "2"
+			if effectiveBudget == "1" {
+				expectedEngineShards = "1"
+			}
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
+			if tc.plan == "125" || tc.engine == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("failed-drain schedule: %v\n%s", err, out)
+				}
+				if !strings.Contains(string(out), "UNDRAINED_RETAINED") {
+					t.Fatalf("lost undrained plan artifact: %s", out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("schedule: %v\n%s", err, out)
+			}
+			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
+				t.Fatalf("lost or duplicated report events:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+UT_REPORT="$CASE_DIR/ut-report.json"
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
+exec 8<>"$CASE_DIR/engine-hold"
+exec 9<>"$CASE_DIR/engine-ready"
+function run_engine_race_shards() {
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
+	printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	touch "$CASE_DIR/engine-started"
+	printf 'ready\n' >&9
+	read -r _ <&8
+}
+cleanup() {
+	status=$?
+	exec 8>&- 9>&-
+	[[ -e "$CASE_DIR/engine-started" && -e "$CASE_DIR/engine-stopped" ]] || status=90
+	[[ ! -e "$CASE_DIR/report-consumed-early" ]] || status=91
+	[[ -f "$UT_REPORT" ]] || status=92
+	if [[ -f "$UT_REPORT" ]] && [[ "$(grep -c '^engine$' "$UT_REPORT")" != 1 ]]; then status=92; fi
+	[[ -z "$ENGINE_RACE_JOB_PID" ]] || status=93
+	if [[ -s "$CASE_DIR/engine-pid" ]] && kill -0 "$(<"$CASE_DIR/engine-pid")" 2>/dev/null; then status=94; fi
+	printf 'ENGINE_CANCEL status=%s\n' "$status"
+	exit "$status"
+}
+trap cleanup EXIT
+start_engine_race example/engine 2
+`
+	transform := func(text string) string {
+		const anchor = "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine launch anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor, "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+	}
+	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CANCEL status=143") {
+		t.Fatalf("engine cancellation ownership was not preserved: %s", out)
+	}
+}
+
+func TestEngineChildRegistrationSurvivesCancellation(t *testing.T) {
+	transform := func(text string) string {
+		const anchor = "        \"$@\" &\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine child registration anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"        \"$@\" &\n        ut_test_after_engine_child_spawn \"$!\"\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n", 1)
+	}
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_CHILD_PID_FILE="$CASE_DIR/engine-child.pid"
+cleanup() {
+    status=$?
+    if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
+        child_pid=$(<"$ENGINE_CHILD_PID_FILE")
+        if ut_process_group_alive "$child_pid"; then
+            kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+            status=90
+        fi
+    fi
+    printf 'ENGINE_CHILD_CANCEL status=%s\n' "$status"
+    exit "$status"
+}
+trap cleanup EXIT
+ut_test_after_engine_child_spawn() {
+	printf '%s\n' "$1" > "$ENGINE_CHILD_PID_FILE"
+	kill -TERM "$$"
+}
+function go() {
+    if [[ "$1" == list ]]; then
+        printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+        while :; do sleep 0.01; done
+    fi
+    return 0
+}
+run_engine_race_shards example/engine 1
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("engine child cancellation: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CHILD_CANCEL status=143") {
+		t.Fatalf("engine child registration was not fenced: %s", out)
+	}
+}
+
+func TestEngineRaceHelperPublishesCompleteReport(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function go() { command go "$@"; }
+run_engine_race_shards example/engine 2
+[[ -s "$ENGINE_RACE_REPORT" ]] || exit 90
+[[ -f "$ENGINE_RACE_REPORT.ready" ]] || exit 91
+[[ "$(grep -c '^engine-shard$' "$ENGINE_RACE_REPORT")" == 2 ]] || { cat "$ENGINE_RACE_REPORT"; exit 92; }
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    [[ " $* " == *' -ldflags=-w '* ]] || exit 98
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf 'engine-shard\n'
+    exit 0
+fi
+exit 99
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("engine helper report: %v\n%s", err, out)
+	}
+}
+
+// Inspect the real compile commands without compiling MO again in every UT.
+// A failed build must still propagate; omitting DWARF must not bypass race,
+// tags, the bounded build parallelism, or module/vet policy.
+func TestRaceBinaryBuildPolicyAndFailure(t *testing.T) {
+	for _, tc := range []struct{ name, command string }{
+		{"engine", "run_engine_race_shards example/engine 1"},
+		{"plan", "run_plan_race_shards example/plan"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+` + tc.command
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" example/package
+    exit 0
+fi
+if [[ "$1" == test ]]; then
+    for flag in -ldflags=-w -race -short -c -mod=readonly -vet=off; do
+        [[ " $* " == *" $flag "* ]] || exit 98
+    done
+    [[ " $* " == *' -tags matrixone_test '* && " $* " == *' -p 1 '* ]] || exit 99
+    printf 'COMPILE_POLICY_VERIFIED\n'
+    exit 42
+fi
+exit 97
+`
+			out, err := scheduleHarnessWithMock(t, script, mock)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 42 || !strings.Contains(string(out), "COMPILE_POLICY_VERIFIED") {
+				t.Fatalf("compile policy/failure propagation: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
+	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term", "marker-report-open", "marker-completion"} {
+		t.Run(mode, func(t *testing.T) {
+			transform := func(text string) string {
+				const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing unique shard report-open boundary")
+				}
+				text = strings.Replace(text, anchor, `            if (( index == 1 )); then
+                read -r -t 5 _ <&8 || exit 89
+                if [[ "$MODE" == marker-completion ]]; then
+                    :
+                elif [[ "$MODE" == marker-drain-term || "$MODE" == marker-cancel-term ]]; then
+                    touch "${expired[0]}.drain"
+                    if [[ "$MODE" == marker-cancel-term ]]; then
+                        touch "$CASE_DIR/term-sent"
+                        kill -TERM "$$"
+                    fi
+                else
+                    if [[ "$MODE" == marker-report-open ]]; then touch "${expired[0]}.drain"; fi
+                    mkdir "$CASE_DIR/blocked-report"
+                    reports[index]="$CASE_DIR/blocked-report"
+                fi
+            fi
+`+anchor, 1)
+				const completionAnchor = "\n            if ut_process_group_alive \"${test_pids[index]}\"; then\n"
+				if strings.Count(text, completionAnchor) != 1 {
+					t.Fatal("missing unique command completion poll")
+				}
+				text = strings.Replace(text, completionAnchor, `
+            if [[ "$MODE" == marker-completion && "$index" == 0 ]]; then
+                # Shard0's readiness was consumed at shard1 admission above.
+                # Observe shard1 active before publishing a late failure for shard0.
+                read -r -t 5 _ <&8 || exit 89
+                touch "${expired[index]}" "${expired[index]}.drain"
+                terminate_ut_process_group "${test_pids[index]}" KILL
+                wait_for_ut_process_group "${test_pids[index]}" 1 || exit 89
+            fi
+`+completionAnchor, 1)
+				for _, pid := range []string{"test_pids", "watchdog_pids"} {
+					anchor := "            " + pid + "[index]=$!\n"
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique execution owner publication")
+					}
+					text = strings.Replace(text, anchor, anchor+"            printf '%s\\n' \"$!\" >> \"$CASE_DIR/owned-pids\"\n", 1)
+				}
+				return text
+			}
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+mkfifo "$CASE_DIR/ready"
+exec 8<>"$CASE_DIR/ready"
+cat > "$CASE_DIR/helper.sh" <<'CHILD'
+cd "$CASE_DIR/optools"
+source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function exit() {
+ if [[ "$1" == 125 && ( "$MODE" == *-term || "$MODE" == marker-* ) ]]; then
+  touch "$CASE_DIR/term-sent"
+  kill -TERM "$$"
+ fi
+ builtin exit "$@"
+}
+if [[ "$MODE" == failed-drain* ]]; then
+ function terminate_ut_process_groups() {
+  function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
+  return 1
+ }
+fi
+run_engine_race_shards example/engine 2
+status=$?
+touch "$CASE_DIR/helper-returned"
+exit "$status"
+CHILD
+function run_engine_race_shards() { bash "$CASE_DIR/helper.sh"; }
+function cleanup_check() {
+ local status=$? pid
+ if [[ -f "$CASE_DIR/owned-pids" ]]; then
+  while read -r pid; do
+   terminate_ut_process_group "$pid" KILL
+   wait_for_ut_process_group "$pid" 1 || status=92
+  done < "$CASE_DIR/owned-pids"
+ fi
+ exit "$status"
+}
+trap cleanup_check EXIT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+start_engine_race example/engine 2
+status=0
+join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
+[[ -z "$ENGINE_RACE_JOB_PID" ]] || exit 90
+if [[ "$MODE" == drained ]]; then
+ [[ "$status" == 1 && -e "$CASE_DIR/helper-returned" ]] || exit 91
+ if ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")"; then exit 92; fi
+ exit 0
+fi
+[[ "$status" == 125 && -f "$ENGINE_RACE_TEST_BINARY" && -f "$ENGINE_RACE_REPORT.00" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 93
+if [[ "$MODE" == failed-drain* ]]; then ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")" || exit 94; fi
+if [[ "$MODE" == *-term || "$MODE" == marker-* ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
+if [[ "$MODE" == marker-* ]]; then [[ -f "$ENGINE_RACE_REPORT-expired.0.drain" ]] || exit 95; fi
+if [[ "$MODE" == marker-completion ]]; then
+ # The production stop must drain the other admitted shard and watchdog;
+ # fixture reclamation cannot satisfy this oracle after the fact.
+ while read -r pid; do ! ut_process_group_alive "$pid" || exit 94; done < "$CASE_DIR/owned-pids"
+fi
+consume_engine_race_report; [[ "$?" == 125 ]] || exit 96
+start_plan_race example/plan; [[ "$?" == 125 ]] || exit 97
+trap handle_ut_termination TERM
+kill -TERM "$$"
+exit 98
+`
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
+    printf 'ready\n' >&8
+    trap 'exit 143' TERM
+    while :; do sleep 0.01; done
+fi
+exit 99
+`
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform, "MODE="+mode)
+			if mode == "drained" {
+				if err != nil {
+					t.Fatalf("drained report-open failure: %v\n%s", err, out)
+				}
+				return
+			}
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
+				t.Fatalf("prebuilt failed-drain transfer: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+printf 'engine\n' > "$ENGINE_RACE_REPORT"
+mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
+exec 8<>"$CASE_DIR/writer-wait" 9<>"$CASE_DIR/writer-ready"
+start_ut_command heavy 'heavy writer' bash -c '
+ trap '\''printf "heavy-stopped\n"; exit 143'\'' TERM
+ printf "heavy-start\n"
+ printf "heavy\n" >&9
+ IFS= read -r _ <&8
+'
+function run_plan_race_shards() {
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
+ printf 'plan-start\n' > "$PLAN_RACE_REPORT"
+ printf 'plan\n' >&9
+ IFS= read -r _ <&8
+}
+start_plan_race example/plan
+IFS= read -r -t 10 first <&9 || exit 91
+IFS= read -r -t 10 second <&9 || exit 92
+[[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
+kill -TERM "$$"
+`
+	out, err := scheduleHarness(t, script)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nheavy-start\nheavy-stopped\nplan-start\nplan-stopped\nengine\n") {
+		t.Fatalf("writer was not stopped before merging: %s", out)
+	}
+}
+
+func TestCancellationReportsCompletedSlowCases(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { printf "%s\n" "$2"; }
+UT_REPORT="$CASE_DIR/report.json"
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+mkdir -p "$UT_DIAGNOSTIC_DIR"
+cat > "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}
+{"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}
+{"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestBlocked"}
+EOF
+trap handle_ut_termination TERM
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+[[ "$status" == 143 ]] || exit 90
+[[ -s "$UT_DIAGNOSTIC_DIR/top.txt" ]] || exit 91
+[[ -s "$UT_DIAGNOSTIC_DIR/ut-report.json" ]] || exit 92
+[[ -s "$UT_DIAGNOSTIC_DIR/ut-checkpoint.log" ]] || exit 93
+grep -q 'TestSlow' "$UT_DIAGNOSTIC_DIR/top.txt"
+`
+	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`)
+	if err != nil {
+		t.Fatalf("cancellation diagnostics: %v\n%s", err, out)
+	}
+}
+
+func TestCgroupResourceBreakdown(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkdir "$CASE_DIR/cgroup"
+printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
+printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
+printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf '800000 100000\n' > "$CASE_DIR/cgroup/cpu.max"
+printf '0-7\n' > "$CASE_DIR/cgroup/cpuset.cpus.effective"
+printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
+cgroup_resource_breakdown "$CASE_DIR/cgroup"
+cgroup_resource_breakdown "$CASE_DIR/missing"
+`
+	out, err := scheduleHarness(t, script)
+	if err != nil {
+		t.Fatalf("resource breakdown: %v\n%s", err, out)
+	}
+	for _, field := range []string{"cpu.max.quota=800000", "cpu.max.period=100000", "cpu.cpuset.effective=0-7", "memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+		if !strings.Contains(string(out), field) {
+			t.Errorf("missing %s in %s", field, out)
+		}
+	}
+	if strings.Contains(string(out), "unrelated") || strings.Contains(string(out), "avg10") {
+		t.Fatalf("unexpected fields: %s", out)
+	}
+}
+
+func TestUTHeartbeatStopsCleanly(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 9<> "$CASE_DIR/heartbeat-ready"
+trap 'stop_ut_heartbeat; exec 9>&-' EXIT
+function logger() {
+    printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
+    if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
+        printf 'ready\n' >&9
+    fi
+}
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+heartbeat_pid="$UT_HEARTBEAT_PID"
+stop_ut_heartbeat
+# The enclosing harness deadline is shorter than this 60-second interval.
+# Completion proves cancellation without making host scheduling speed an oracle.
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 90
+! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
+
+UT_HEARTBEAT_INTERVAL=1
+# Exercise the actual heartbeat formatting without exposing real process data.
+function ps() {
+    [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
+    printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
+}
+start_ut_heartbeat
+LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
+cat > "$LIGHT_RACE_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
+EOF
+cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
+EOF
+read -r -t 10 heartbeat_ready <&9 || exit 92
+stop_ut_heartbeat
+exec 9>&-
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
+grep -q 'event=heartbeat' "$UT_CHECKPOINT"
+grep -q 'active_cases=2' "$CASE_DIR/ut.log"
+grep -q 'TestPrivate' "$CASE_DIR/ut.log"
+grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'processes=9' "$CASE_DIR/ut.log"
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-child"
+mkfifo "$CASE_DIR/heartbeat-release"
+mkfifo "$CASE_DIR/timer-input"
+mkfifo "$CASE_DIR/heartbeat-stop"
+exec 7<> "$CASE_DIR/heartbeat-child"
+exec 8<> "$CASE_DIR/heartbeat-release"
+exec 9<> "$CASE_DIR/timer-input"
+exec 6<> "$CASE_DIR/heartbeat-stop"
+timer_pid=""
+heartbeat_pid=""
+heartbeat_int_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
+    fi
+    # Unblock the injected launch-window hook before terminating its owner.
+    printf 'cleanup\n' >&8 2>/dev/null || true
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$heartbeat_pid" ]]; then
+        kill -KILL "$heartbeat_pid" 2>/dev/null || true
+        wait "$heartbeat_pid" 2>/dev/null || true
+    fi
+    rm -f "$CASE_DIR/heartbeat-child.pid"
+    timer_pid=""
+    heartbeat_pid=""
+    exec 6>&-
+    exec 7>&-
+    exec 8>&-
+    exec 9>&-
+}
+trap cleanup EXIT
+
+heartbeat_int_handler() {
+    heartbeat_int_count=$((heartbeat_int_count + 1))
+    stop_ut_heartbeat
+}
+
+# The long timer is deliberately TERM-ignoring and has no cleanup contract.
+# The production stop path must use exact-PID KILL and then reap it. The short
+# polling sleeps used by stop_ut_heartbeat remain the system sleep command.
+sleep() {
+    if [[ "${1:-}" == 60 ]]; then
+        trap '' TERM INT
+        while :; do
+            IFS= read -r _ <&9 || true
+        done
+    fi
+    command sleep "$@"
+}
+
+# scheduleHarnessWithMockTransform injects this function call between the
+# timer spawn and production PID registration. It publishes the child PID,
+# then waits for the parent to deliver the stop request and release the launch
+# window. Bash 3.2 ignores INT for asynchronous helpers, so the INT case below
+# delivers INT to this foreground caller and lets the real stop function send
+# TERM to the helper.
+ut_test_before_heartbeat_sleep_registration() {
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
+    printf '%s\n' "$1" >&7
+    while ! read -r _ <&8; do
+        :
+    done
+}
+ut_test_heartbeat_stop_requested() {
+    printf '%s\n' "$heartbeat_stop_requested" >&6
+    printf 'release\n' >&8
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+heartbeat_pid="$UT_HEARTBEAT_PID"
+read -r -t 10 timer_pid <&7 || exit 90
+[[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
+    trap heartbeat_int_handler INT
+    kill -INT "$$" || exit 92
+else
+    kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+fi
+read -r -t 10 stop_state <&6 || exit 93
+[[ "$stop_state" == 1 ]] || exit 94
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT && "$heartbeat_int_count" != 1 ]]; then
+    exit 95
+fi
+heartbeat_status=0
+wait "$heartbeat_pid" || heartbeat_status=$?
+[[ "$heartbeat_status" == 0 ]] || exit 96
+if kill -0 "$heartbeat_pid" 2>/dev/null; then
+    exit 97
+fi
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 98
+fi
+rm -f "$CASE_DIR/heartbeat-child.pid"
+timer_pid=""
+UT_HEARTBEAT_PID=""
+heartbeat_pid=""
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const anchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("heartbeat registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, anchor,
+			"            ut_test_before_heartbeat_sleep_registration \"$!\"\n"+anchor, 1)
+		const stopAnchor = "            heartbeat_stop_requested=1\n"
+		if got := strings.Count(text, stopAnchor); got != 1 {
+			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, stopAnchor,
+			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
+	}
+	for _, signal := range []string{"TERM", "INT"} {
+		t.Run(strings.ToLower(signal), func(t *testing.T) {
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
+				"HEARTBEAT_STOP_SIGNAL="+signal)
+			if err != nil {
+				t.Fatalf("heartbeat registration lifecycle: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 7<> "$CASE_DIR/heartbeat-ready"
+helper_pid=""
+timer_pid=""
+restart_pid=""
+caller_term_count=0
+caller_seen_pid=""
+publication_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-timer.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-timer.pid")
+    fi
+    if [[ -z "$helper_pid" && -f "$CASE_DIR/heartbeat-helper.pid" ]]; then
+        helper_pid=$(cat "$CASE_DIR/heartbeat-helper.pid")
+    fi
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$helper_pid" ]]; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$restart_pid" ]]; then
+        kill -KILL "$restart_pid" 2>/dev/null || true
+        wait "$restart_pid" 2>/dev/null || true
+    fi
+    timer_pid=""
+    helper_pid=""
+    restart_pid=""
+    exec 7>&-
+}
+trap cleanup EXIT
+
+function logger() { :; }
+caller_term() {
+    caller_term_count=$((caller_term_count + 1))
+    caller_seen_pid="$UT_HEARTBEAT_PID"
+    stop_ut_heartbeat
+}
+trap caller_term TERM
+
+# The transformed helper reports its registered timer before the parent
+# launch hook sends TERM. This keeps the outer publication race deterministic
+# while also proving the published helper owns and reaps its timer.
+ut_test_heartbeat_ready() {
+    printf '%s\n' "$heartbeat_sleep_pid" > "$CASE_DIR/heartbeat-timer.pid"
+    printf '%s\n' "$heartbeat_sleep_pid" >&7
+}
+ut_test_before_heartbeat_registration() {
+    publication_count=$((publication_count + 1))
+    helper_pid="$1"
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-helper.pid"
+    read -r -t 10 timer_pid <&7 || exit 90
+    [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+    if [[ "$publication_count" == 1 ]]; then
+        kill -TERM "$$"
+    fi
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+[[ "$caller_term_count" == 1 ]] || exit 92
+[[ "$caller_seen_pid" == "$helper_pid" && -n "$caller_seen_pid" ]] || exit 93
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 94
+if kill -0 "$helper_pid" 2>/dev/null; then
+    exit 95
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 96
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+[[ "$(trap -p TERM)" == *caller_term* ]] || exit 97
+
+# The publication fence must not poison a later generation after cancellation.
+start_ut_heartbeat
+restart_pid="$UT_HEARTBEAT_PID"
+[[ -n "$restart_pid" ]] || exit 98
+[[ "$helper_pid" == "$restart_pid" ]] || exit 99
+# Transfer the second-generation owner token to restart_pid before any
+# operation can fail, so EXIT cleanup never owns the same PID twice.
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 100
+if kill -0 "$restart_pid" 2>/dev/null; then
+    exit 101
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+restart_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 102
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const readyAnchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, readyAnchor); got != 1 {
+			t.Fatalf("heartbeat timer registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, readyAnchor,
+			readyAnchor+"            ut_test_heartbeat_ready\n", 1)
+		const publicationAnchor = "    UT_HEARTBEAT_PID=$!\n"
+		if got := strings.Count(text, publicationAnchor); got != 1 {
+			t.Fatalf("heartbeat publication anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, publicationAnchor,
+			"    ut_test_before_heartbeat_registration \"$!\"\n"+publicationAnchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("heartbeat helper registration lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestLightIssuesOverlapPreservesReportsAndFailures(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *example/light-package* ]]; then
+ printf 'light-start\n'
+ touch "$CASE_DIR/light-started"
+ while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+ printf 'light-end\n'
+ exit "$LIGHT_STATUS"
+fi
+exit 99
+`
+	for _, tc := range []struct {
+		name, lightStatus, serialStatus string
+	}{
+		{name: "success", lightStatus: "0", serialStatus: "0"},
+		{name: "light-failure", lightStatus: "7", serialStatus: "0"},
+		{name: "light-undrained", lightStatus: "125", serialStatus: "0"},
+		{name: "serial-failure", lightStatus: "0", serialStatus: "9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+trap handle_ut_termination TERM
+start_light_race example/light-package 2
+start_ut_command serial 'exclusive issues package' bash -c '
+ printf "serial-start\n"
+ touch "$CASE_DIR/serial-started"
+ while [[ ! -e "$CASE_DIR/light-started" ]]; do sleep 0.01; done
+ printf "serial-end\n"
+ exit "$SERIAL_STATUS"
+'
+serial_status=0
+finish_ut_command || serial_status=$?
+light_status=0
+finish_light_race || light_status=$?
+[[ "$serial_status" == "$SERIAL_STATUS" ]] || exit 90
+[[ "$light_status" == "$LIGHT_STATUS" ]] || exit 91
+if [[ "$LIGHT_STATUS" == 125 ]]; then
+ retained_report=$LIGHT_RACE_REPORT
+ UT_LINK_DIR="$CASE_DIR/link-slots"
+ UT_LINK_PARALLEL=1
+ mkdir "$UT_LINK_DIR"
+ touch "$UT_LINK_DIR/slot-0"
+ [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
+ cleanup_light_link_gate; [[ "$?" == 125 ]] || exit 95
+ start_light_race example/light-package 2; [[ "$?" == 125 ]] || exit 96
+ trap 'status=$?; [[ -s "$retained_report" && -f "$UT_LINK_DIR/slot-0" && "$(cat "$UT_REPORT")" == $'"'"'serial-start\nserial-end'"'"' ]] || status=97; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 98
+fi
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$LIGHT_RACE_REPORT" ]] || exit 92
+report=$(cat "$UT_REPORT")
+[[ "$report" == $'serial-start\nserial-end\nlight-start\nlight-end' ]] || { printf 'REPORT=%q\n' "$report"; exit 93; }
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"LIGHT_STATUS="+tc.lightStatus, "SERIAL_STATUS="+tc.serialStatus)
+			if tc.lightStatus == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("undrained overlap: %v\n%s", err, out)
+				}
+			} else if err != nil {
+				t.Fatalf("overlap: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestLightIssuesCancellationStopsWritersBeforeMerge(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *example/light-package* ]]; then
+ trap 'printf "light-stopped\\n"; exit 143' TERM
+ printf 'light-start\n'
+ touch "$CASE_DIR/light-started"
+ while :; do sleep 0.01; done
+fi
+exit 99
+`
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+start_light_race example/light-package 2
+start_ut_command serial 'exclusive issues package' bash -c '
+ trap '\''printf "serial-stopped\n"; exit 143'\'' TERM
+ printf "serial-start\n"
+ touch "$CASE_DIR/serial-started"
+ while :; do sleep 0.01; done
+'
+while [[ ! -e "$CASE_DIR/light-started" || ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+kill -TERM "$$"
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nserial-start\nserial-stopped\nlight-start\nlight-stopped\n") {
+		t.Fatalf("writer was not stopped before merging: %s", out)
+	}
+}
+
+func TestRunTestsPlacesHNSWBeforeLightIssuesOverlap(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
+ printf 'hnsw\n'
+ touch "$CASE_DIR/hnsw-done"
+ exit 0
+fi
+if [[ "$*" == *pkg/light-package* ]]; then
+ if [[ -n "${EXPECTED_LIGHT_PARALLEL:-}" ]]; then
+  case " $* " in
+   *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+   *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
+  esac
+ fi
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  [[ -e "$CASE_DIR/hnsw-done" ]] || exit 81
+ fi
+ printf 'light\n'
+ touch "$CASE_DIR/light-started"
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+ fi
+ printf 'light-end\n'
+ exit 0
+fi
+if [[ "$*" == *pkg/tests/issues* ]]; then
+ printf 'serial\n'
+ touch "$CASE_DIR/serial-started"
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  while [[ ! -e "$CASE_DIR/light-started" ]]; do sleep 0.01; done
+ fi
+ printf 'serial-end\n'
+ exit 0
+fi
+if [[ "$*" == *pkg/tests/embedded* ]]; then
+ if [[ "$*" == *' -c '* ]]; then
+  printf 'prebuild-start\n'
+  touch "$CASE_DIR/prebuild-started"
+  if [[ "$EXPECT_PREBUILD_ACTIVE" == 1 ]]; then
+   while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+  fi
+  printf 'prebuild-end\n'
+  exit 0
+ fi
+ # Cluster admission does not bound a waiting binary's memory or linking.
+ # Check the real run_tests -> run_embedded_tests command boundary.
+ [[ " $* " == *' -p 1 '* ]] || { printf 'unexpected embedded parallelism: %s\n' "$*" >&2; exit 97; }
+ printf 'embedded\n'
+ exit "${EMBEDDED_STATUS:-0}"
+fi
+if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
+exit 0
+`
+	type lightScheduleCase struct {
+		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive, embeddedStatus string
+	}
+	cases := []lightScheduleCase{
+		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "overlap", parallel: "6", lightParallel: "__default__", expectedLightParallel: "2", overlap: "1", overlapParallel: "2", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-single-slot", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "single-slot-guard", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "1", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "embedded-failure", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0", embeddedStatus: "7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+if [[ "$UT_LIGHT_PARALLEL_VALUE" == "__default__" ]]; then unset UT_LIGHT_PARALLEL; else UT_LIGHT_PARALLEL="$UT_LIGHT_PARALLEL_VALUE"; fi
+source ./run_ut.sh UT
+function logger() { :; }
+function make() { :; }
+function egrep() { echo fake.pb.go; }
+	MO_CL_CUDA=1
+	UT_SHARD=all
+UT_PARALLEL=${UT_PARALLEL_VALUE}
+if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
+UT_OVERLAP_LIGHT_PARALLEL=${OVERLAP_PARALLEL_VALUE}
+UT_OVERLAP_PLAN=0
+UT_PREBUILD_EMBEDDED=${PREBUILD_VALUE:-0}
+if [[ "$FORCE_LIGHT_LAUNCH_FAILURE" == 1 ]]; then
+ function start_light_race() { return 1; }
+fi
+function go() {
+ if [[ "$1" == clean ]]; then return 0; fi
+ if [[ "$1" != list ]]; then return 0; fi
+ if [[ "$*" == *"./pkg/sql/plan"* ]]; then echo github.com/matrixorigin/matrixone/pkg/sql/plan; return 0; fi
+ if [[ "$*" == *"./pkg/vm/engine/test"* ]]; then echo github.com/matrixorigin/matrixone/pkg/vm/engine/test; return 0; fi
+ if [[ "$*" == *"./pkg/vectorindex/hnsw"* ]]; then echo github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw; return 0; fi
+ if [[ "$*" == *"./pkg/tests/issues"* ]]; then echo github.com/matrixorigin/matrixone/pkg/tests/issues; return 0; fi
+ if [[ "$*" == *"./pkg/backup"* ]]; then echo github.com/matrixorigin/matrixone/pkg/backup; return 0; fi
+ if [[ "$*" == *"./..."* ]]; then
+  printf '%s\n' github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,tests/embedded,light-package,backup}
+ fi
+}
+function list_embedded_cluster_test_packages() { echo github.com/matrixorigin/matrixone/pkg/tests/embedded; }
+function run_engine_race_shards() { printf 'engine\n' > "$ENGINE_RACE_REPORT"; return 0; }
+function run_plan_race_shards() { return 0; }
+trap handle_ut_termination TERM
+run_tests
+[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || { cat "$UT_REPORT" "$UT_STDERR"; exit 90; }
+if [[ -n "$EMBEDDED_STATUS" ]]; then
+ [[ "$(grep -c '^embedded$' "$UT_REPORT")" == 1 ]] || exit 97
+ grep -q "event=finish stage=embedded label=embedded-cluster race-test packages status=${EMBEDDED_STATUS}" "$UT_CHECKPOINT" || exit 98
+fi
+if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
+report=$(cat "$UT_REPORT")
+[[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
+if [[ "$PREBUILD_VALUE" == 1 ]]; then
+ [[ -e "$CASE_DIR/prebuild-started" && -e "$CASE_DIR/serial-started" ]] || exit 93
+ [[ "$(grep -c 'event=start stage=embedded-prebuild' "$UT_CHECKPOINT")" -ge 1 ]] || exit 94
+ [[ "$(grep -c 'event=join-start stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 95
+ [[ "$(grep -c 'event=join-finish stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 96
+fi
+`
+			runCase := func(caseData lightScheduleCase) ([]byte, error) {
+				return scheduleHarnessWithMock(t, script, mock,
+					"UT_PARALLEL_VALUE="+caseData.parallel,
+					"UT_LIGHT_PARALLEL_VALUE="+caseData.lightParallel,
+					"UT_OVERLAP_VALUE="+caseData.overlap,
+					"OVERLAP_PARALLEL_VALUE="+caseData.overlapParallel,
+					"EXPECT_OVERLAP="+caseData.expectOverlap,
+					"EXPECTED_LIGHT_PARALLEL="+caseData.expectedLightParallel,
+					"EXPECTED_STATUS="+caseData.expectedStatus,
+					"EXPECTED_REPORT="+caseData.expected,
+					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
+					"PREBUILD_VALUE="+caseData.prebuild,
+					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive,
+					"EMBEDDED_STATUS="+caseData.embeddedStatus)
+			}
+			out, err := runCase(tc)
+			if err != nil {
+				t.Fatalf("scheduler: %v\n%s", err, out)
+			}
+			if tc.name != "default-off" {
+				return
+			}
+
+			// Keep the existing subtest identity set stable while adding the
+			// new budget and fallback counterexamples as same-test harness runs.
+			for _, extra := range []lightScheduleCase{
+				{name: "explicit-light-six", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-fallback-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "0", expected: "hnsw\nlight\nlight-end\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "1"},
+				{name: "reject-zero-light-budget", parallel: "6", lightParallel: "0", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+				{name: "reject-malformed-light-budget", parallel: "6", lightParallel: "not-a-number", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+			} {
+				out, err = runCase(extra)
+				if err != nil {
+					t.Fatalf("scheduler case %s: %v\n%s", extra.name, err, out)
+				}
+			}
+
+			wrong := tc
+			wrong.expectedLightParallel = "3"
+			if out, err = runCase(wrong); err == nil {
+				t.Fatalf("scheduler accepted an intentionally wrong light budget assertion\n%s", out)
+			}
+
+			prebuild := tc
+			prebuild.prebuild = "1"
+			prebuild.expectPrebuildActive = "1"
+			if out, err = runCase(prebuild); err != nil {
+				t.Fatalf("default prebuild dispatch: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+// One outstanding TERM at a time tests parser reentry without a signal flood.
+// The main PID comes from Go; the subshell PID comes from its parent's $!.
+func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	script := scheduleFixturePID + `
+set -e
+scratch=$1
+fixture_self_pid main
+printf 'MAIN %s\n' "$main"
+mkfifo "$scratch/child" "$scratch/ack"
+exec 8<>"$scratch/child" 7<>"$scratch/ack"
+(fixture_self_pid child; printf '%s\n' "$child" >&8) &
+child_pid=$!
+read -r observed <&8
+wait "$child_pid"
+printf 'CHILD %s %s\n' "$observed" "$child_pid"
+handled=0
+pending_ack=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); pending_ack=1' TERM
+(
+ # Unblock the main loop on protocol failure as well as normal completion.
+ trap ': > "$scratch/done"' EXIT
+ for ((j=0; j<200; j++)); do
+  kill -TERM "$main"
+  read -r acknowledgment sequence pending <&7
+  [[ "$acknowledgment" == ack && "$sequence" == "$((j+1))" && "$pending" == 0 ]] || exit 98
+ done
+) &
+sender=$!
+trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
+while [[ ! -f "$scratch/done" ]]; do
+ # ACK means the previous trap has returned, so the sender can safely issue
+ # the next TERM. Publishing it inside the trap can lose that next signal.
+ if (( pending_ack )); then
+  pending_ack=0
+  printf 'ack %s %s\n' "$handled" "$pending_ack" >&7
+ fi
+ # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
+ # a child, whose output can be interrupted by TERM; its PID is checked
+ # at startup, in the subshell, and by each TERM handler instead.
+ if [[ -n "${BASHPID:-}" ]]; then
+  fixture_self_pid observed
+  [[ "$observed" == "$main" ]] || exit 99
+ fi
+done
+wait "$sender"
+trap - EXIT
+printf 'TERMS %s\n' "$handled"
+`
+	root := t.TempDir()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script, "fixture-pid", root)
+	cmd.Env = append(os.Environ(), "CASE_DIR="+root)
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if err != nil {
+		t.Fatalf("PID helper signal execution: %v\n%s\n%s", err, out, diagnostic)
+	}
+	mainPID := strconv.Itoa(cmd.Process.Pid)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 || lines[0] != "MAIN "+mainPID || lines[2] != "TERMS 200" {
+		t.Fatalf("unexpected PID/TERM result: %s", out)
+	}
+	child := strings.Fields(lines[1])
+	if len(child) != 3 || child[0] != "CHILD" || child[1] != child[2] || child[1] == mainPID {
+		t.Fatalf("subshell did not identify its actual process: %s", out)
+	}
+}

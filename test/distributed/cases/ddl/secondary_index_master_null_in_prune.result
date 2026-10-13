@@ -1,0 +1,90 @@
+drop database if exists master_null_in_prune;
+create database master_null_in_prune;
+use master_null_in_prune;
+create table t (id int primary key, a varchar(20));
+create index idx using master on t(a);
+set @tid = (select rel_id from mo_catalog.mo_tables where relname = 't' and reldatabase = database() limit 1);
+set @idx = (select index_table_name from mo_catalog.mo_indexes where table_id = @tid and name = 'idx' limit 1);
+insert into t values (1,'a');
+select mo_ctl('dn','flush', concat(database(), '.t'));
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush', concat(database(), '.', @idx));
+➤ mo_ctl(dn, flush, concat(database(), ., @idx))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (2,'z');
+select mo_ctl('dn','flush', concat(database(), '.t'));
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush', concat(database(), '.', @idx));
+➤ mo_ctl(dn, flush, concat(database(), ., @idx))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+create table t_ctl (id int primary key, a varchar(20));
+insert into t_ctl values (1,'a'),(2,'z');
+select id, a from t where a in ('a', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a
+select id, a from t_ctl where a in ('a', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a
+select id, a from t where a in ('a','z', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t_ctl where a in ('a','z', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t where a in ('z','a', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t_ctl where a in ('z','a', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t where a in ('a','z') order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t where a in ('z','a') order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  z
+select id, a from t where a in ('q', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]
+select id, a from t_ctl where a in ('q', NULL) order by id;
+➤ id[4,32,0]  ¦  a[12,20,0]
+drop database master_null_in_prune;

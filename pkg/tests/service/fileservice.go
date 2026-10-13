@@ -30,6 +30,7 @@ import (
 // fileServices contains all FileService instances.
 type fileServices struct {
 	sync.RWMutex
+	closeOnce sync.Once
 
 	t            *testing.T
 	tnServiceNum int
@@ -39,6 +40,33 @@ type fileServices struct {
 	cnLocalFSs []fileservice.FileService
 	s3FS       fileservice.FileService
 	etlFS      fileservice.FileService
+}
+
+// Close releases the file services owned by the test cluster. The composite
+// services handed to TN and CN are borrowers; only these root services own the
+// caches and directory handles. Close is idempotent so a failed cluster start
+// and a later cleanup cannot double-retire a backend.
+func (f *fileServices) Close(ctx context.Context) {
+	f.closeOnce.Do(func() {
+		f.RLock()
+		services := make([]fileservice.FileService, 0, len(f.tnLocalFSs)+len(f.cnLocalFSs)+2)
+		services = append(services, f.tnLocalFSs...)
+		services = append(services, f.cnLocalFSs...)
+		services = append(services, f.s3FS, f.etlFS)
+		f.RUnlock()
+
+		closed := make(map[fileservice.FileService]struct{}, len(services))
+		for _, service := range services {
+			if service == nil {
+				continue
+			}
+			if _, ok := closed[service]; ok {
+				continue
+			}
+			closed[service] = struct{}{}
+			service.Close(ctx)
+		}
+	})
 }
 
 func (c *testCluster) createFS(

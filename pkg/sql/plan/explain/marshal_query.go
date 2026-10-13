@@ -105,6 +105,15 @@ func (m MarshalNodeImpl) GetStats() models.Stats {
 
 func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	// Get the Node Name
+	if m.node.NodeType == plan.Node_PARTITION && m.node.Limit != nil && m.node.PartitionByCount > 0 {
+		return "Partition Top N", nil
+	}
+	if m.node.NodeType == plan.Node_PARTITION && m.node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		return "Hash Partition", nil
+	}
+	if m.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return IndexSearchScanLabel(m.node.IndexSearchScan), nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {
@@ -155,9 +164,9 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return "", err
 		}
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
-		exprs := NewExprListDescribeImpl(m.node.FilterList)
+		exprs := NewExprListDescribeImpl(explainFilterList(m.node))
 		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -192,8 +201,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "cte_scan", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
-	case plan.Node_ASSERT:
-		return "assert", nil
 	case plan.Node_BROADCAST:
 		return "broadcast", nil
 	case plan.Node_SPLIT:
@@ -205,6 +212,23 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	case plan.Node_FILL:
 		return "fill", nil
 	case plan.Node_PARTITION:
+		if m.node.Limit != nil && m.node.PartitionByCount > 0 && int(m.node.PartitionByCount) < len(m.node.OrderBy) {
+			buf.WriteString("Partition Keys: ")
+			partitionKeys := NewOrderByDescribeImpl(m.node.OrderBy[:m.node.PartitionByCount])
+			if err = partitionKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; Sort Keys: ")
+			orderKeys := NewOrderByDescribeImpl(m.node.OrderBy[m.node.PartitionByCount:])
+			if err = orderKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; N: ")
+			if err = describeExpr(ctx, m.node.Limit, options, buf); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(buf.String()), nil
+		}
 		return "partition", nil
 	case plan.Node_FUNCTION_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
@@ -213,6 +237,11 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		} else {
 			return "", moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
+	case plan.Node_INDEX_SEARCH_SCAN:
+		if m.node.IndexSearchScan == nil || m.node.IndexSearchScan.Index == nil {
+			return "", moerr.NewInvalidInput(ctx, "Vector index scan metadata not found")
+		}
+		fmt.Fprintf(buf, "%s[%s]", IndexSearchScanLabel(m.node.IndexSearchScan), m.node.IndexSearchScan.Index.IndexName)
 	case plan.Node_FUZZY_FILTER:
 		return "fuzzy_filter", nil
 	case plan.Node_SAMPLE:
@@ -239,6 +268,12 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "postdml", nil
 	case plan.Node_TABLE_CLONE:
 		return "table_clone", nil
+	case plan.Node_ADAPTIVE_TOP:
+		return "adaptive_top", nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return "vector_query_top", nil
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return "vector_query_source", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -337,6 +372,22 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Value: value,
 			})
 		}
+	case plan.Node_INDEX_SEARCH_SCAN:
+		if m.node.IndexSearchScan == nil || m.node.IndexSearchScan.Index == nil || m.node.TableDef == nil {
+			return nil, moerr.NewInternalError(ctx, "Vector index scan definition not found when plan is serialized to json")
+		}
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Name,
+			Value: m.node.IndexSearchScan.Index.IndexName,
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Columns,
+			Value: GetTableColsLableValue(ctx, m.node.TableDef.Cols, options),
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Scan_Columns,
+			Value: len(m.node.TableDef.Cols),
+		})
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		fullTableName := ""
@@ -381,6 +432,23 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Name:  Label_Grouping_Keys, //"Grouping keys",
 				Value: value,
 			})
+			if len(m.node.GroupByHashKey) > 0 {
+				hashExprs := make([]*plan.Expr, len(m.node.GroupByHashKey))
+				for i, idx := range m.node.GroupByHashKey {
+					if idx < 0 || int(idx) >= len(m.node.GroupBy) {
+						return nil, moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+					}
+					hashExprs[i] = m.node.GroupBy[idx]
+				}
+				value, err = GetExprsLabelValue(ctx, hashExprs, options)
+				if err != nil {
+					return nil, err
+				}
+				labels = append(labels, models.Label{
+					Name:  Label_Grouping_Hash_Keys,
+					Value: value,
+				})
+			}
 		}
 
 		// Get Aggregate function info
@@ -395,7 +463,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			})
 		}
 	case plan.Node_FILTER:
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
 		if err != nil {
 			return nil, err
 		}
@@ -569,9 +637,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
+		if err != nil {
+			return nil, err
+		}
 		labels = append(labels, models.Label{
 			Name:  Label_Assert,
-			Value: []string{},
+			Value: value,
 		})
 	case plan.Node_FUZZY_FILTER:
 		labels = append(labels, models.Label{
@@ -643,13 +715,23 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Table_Clone,
 			Value: []string{},
 		})
+	case plan.Node_ADAPTIVE_TOP:
+		labels = append(labels, models.Label{
+			Name:  Label_Unknown,
+			Value: []string{"post", "pre", "force"},
+		})
+	case plan.Node_VECTOR_QUERY_TOP:
+		labels = append(labels, models.Label{Name: Label_Unknown, Value: []string{"provider", "ann", "null-fallback"}})
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		labels = append(labels, models.Label{Name: Label_Unknown, Value: []string{"scalar-vector"}})
 	default:
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER {
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+	filters := explainFilterList(m.node)
+	if len(filters) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
+		value, err := GetExprsLabelValue(ctx, filters, options)
 		if err != nil {
 			return nil, err
 		}
@@ -988,7 +1070,7 @@ func GetDeleteTableLabelValue(deleteCtx *plan.DeleteCtx) []string {
 	if deleteCtx == nil {
 		return make([]string, 0)
 	}
-	result := make([]string, 0)
+	result := make([]string, 0, 1)
 	ref := deleteCtx.Ref
 	result = append(result, ref.SchemaName+"."+ref.ObjName)
 	return result

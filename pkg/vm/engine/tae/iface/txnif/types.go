@@ -112,6 +112,7 @@ type TxnChanger interface {
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
 	Commit(ctx context.Context) error
+	CommitWithCallback(ctx context.Context, onCommit func()) error
 	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupPolicy)
@@ -296,6 +297,7 @@ type TxnStore interface {
 	CreateObjectWithOpt(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(isTombstone bool, id *common.ID) error
+	SoftDeleteObjectByCN(isTombstone bool, id *common.ID) error
 
 	AddTxnEntry(TxnEntry)
 

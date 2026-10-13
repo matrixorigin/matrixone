@@ -58,10 +58,14 @@ func init() {
 	initShardingMetrics()
 	initGCMetrics()
 	initCCPRMetrics()
+	initExecutionResourceMetrics()
 	initHashBuildMetrics()
+	initArrowLoadMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
+	registry.MustRegister(ScheduleCommandPollHistogram)
+	registry.MustRegister(ScheduleCommandPollFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 	registry.MustRegister(statsTriggerCounter)
@@ -70,8 +74,25 @@ func init() {
 	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
+func initArrowLoadMetrics() {
+	registry.MustRegister(ArrowLoadObjectCounter)
+	registry.MustRegister(ArrowLoadShardCounter)
+	registry.MustRegister(ArrowLoadRecordCounter)
+	registry.MustRegister(ArrowLoadBatchCounter)
+	registry.MustRegister(ArrowLoadRowCounter)
+	registry.MustRegister(ArrowLoadPayloadBytesCounter)
+	registry.MustRegister(ArrowLoadCopyBytesCounter)
+	registry.MustRegister(ArrowLoadConversionColumnCounter)
+	registry.MustRegister(ArrowLoadFallbackCounter)
+	registry.MustRegister(ArrowLoadErrorCounter)
+	registry.MustRegister(ArrowLoadPhaseDurationHistogram)
+	registry.MustRegister(ArrowLoadPinnedBytesGauge)
+	registry.MustRegister(ArrowLoadPinnedBytesHighWaterGauge)
+}
+
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemObjectIOPooledSerialBytesGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(MemMPoolOnHeapOutstandingBytesGauge)
@@ -79,6 +100,7 @@ func initMemMetrics() {
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
+	registry.MustRegister(CAllocatorTrimCounter)
 }
 
 func initTaskMetrics() {
@@ -106,7 +128,9 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(sharedDecodeCounter, SharedDecodeActive, SharedDecodeReserved)
 	registry.MustRegister(fsCacheBytes)
+	registry.MustRegister(fsCacheAllocatorArenas)
 	registry.MustRegister(fsCachePressureCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)
 
@@ -125,6 +149,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
+	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
 func initLogtailMetrics() {
@@ -170,6 +196,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
+	registry.MustRegister(txnLoadLogtailReadBarrierDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
@@ -217,6 +244,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcClientRequestStartedCounter)
+	registry.MustRegister(rpcClientRequestCompletedCounter)
 	registry.MustRegister(rpcNetworkBytesCounter)
 	registry.MustRegister(rpcGCChannelDropCounter)
 	registry.MustRegister(rpcGCIdleBackendsCleanedCounter)
@@ -246,6 +275,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcWriteDurationHistogram)
 	registry.MustRegister(rpcWriteLatencyDurationHistogram)
 	registry.MustRegister(rpcBackendDoneDurationHistogram)
+	registry.MustRegister(rpcClientRequestDurationHistogram)
 
 }
 
@@ -289,7 +319,6 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamLifecycleGauge)
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
-	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initMongoDBMetrics() {

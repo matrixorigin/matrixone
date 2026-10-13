@@ -69,7 +69,7 @@ func TestIsDataStreamTableDef(t *testing.T) {
 
 func TestFormatDataStreamTableOptionsForShowCreate(t *testing.T) {
 	cfg := sqldatastream.Config{Server: "10.1.2.3", Port: 4444, Table: "src_t", Recheck: false}
-	got := formatDataStreamTableOptionsForShowCreate(cfg)
+	got := formatDataStreamTableOptionsForShowCreate(cfg, "")
 	require.Equal(t,
 		` ENGINE = DATASTREAM WITH ("server" = '10.1.2.3', "port" = '4444', "table" = 'src_t', "recheck" = 'false')`,
 		got)

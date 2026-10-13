@@ -25,16 +25,42 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-func TestWithDataBranchCloneLockContext(t *testing.T) {
+func TestShouldCheckPlainClonePrivileges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tenant *TenantInfo
+		want   bool
+	}{
+		{"internal", nil, false},
+		{"sys administrator", &TenantInfo{Tenant: "sys", User: "root", DefaultRole: "moadmin"}, false},
+		{"tenant administrator", &TenantInfo{Tenant: "app", User: "root", DefaultRole: "accountadmin"}, false},
+		{"sys ordinary role", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "reader"}, true},
+		{"tenant ordinary role", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "reader"}, true},
+		{"non-sys moadmin name", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "moadmin"}, true},
+		{"sys accountadmin name", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "accountadmin"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ses.SetTenantInfo(tc.tenant)
+			require.Equal(t, tc.want, shouldCheckPlainClonePrivileges(ses))
+		})
+	}
+}
+
+func TestWithCloneLockContext(t *testing.T) {
 	proc := newValidateSession(t).proc
 	oldCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -42,7 +68,7 @@ func TestWithDataBranchCloneLockContext(t *testing.T) {
 
 	lockCtx := context.WithValue(context.Background(), struct{}{}, "current")
 	wantErr := errors.New("lock failed")
-	err := withDataBranchCloneLockContext(proc, lockCtx, func() error {
+	err := withCloneLockContext(proc, lockCtx, func() error {
 		require.Same(t, lockCtx, proc.Ctx)
 		require.NoError(t, proc.Ctx.Err())
 		return wantErr
@@ -52,18 +78,173 @@ func TestWithDataBranchCloneLockContext(t *testing.T) {
 	require.Same(t, oldCtx, proc.Ctx)
 }
 
-func TestDataBranchCloneCatalogLockBatch(t *testing.T) {
+func TestResolveUdfInCallerTxnContext(t *testing.T) {
+	ctx := context.Background()
+	require.False(t, resolvesUdfInCallerTxn(ctx))
+	require.True(t, resolvesUdfInCallerTxn(withResolveUdfInCallerTxn(ctx)))
+}
+
+func TestRewriteCloneSequenceCreateSQL(t *testing.T) {
+	got, err := rewriteCloneSequenceCreateSQL(
+		"create sequence `source-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		"target-db",
+		"seq-name",
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create sequence `target-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		got)
+
+	_, err = rewriteCloneSequenceCreateSQL("create table t(a int)", "target-db", "seq-name", 0)
+	require.ErrorContains(t, err, "expected *tree.CreateSequence")
+}
+
+func TestCloneCatalogLockBatch(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
 	baseline := mp.CurrNB()
 
-	bat, err := dataBranchCloneCatalogLockBatch(ses.proc, 7, "db", "tbl")
+	bat, err := cloneCatalogLockBatch(ses.proc, 7, "db", "tbl")
 	require.NoError(t, err)
 	require.Len(t, bat.Vecs, 1)
 	require.Equal(t, 1, bat.Vecs[0].Length())
 	require.NotEmpty(t, bat.Vecs[0].GetBytesAt(0))
 	bat.Vecs[0].Free(mp)
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestGeneratedCloneRestoreSnapshotTS(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		optionBits uint32
+		want       int64
+	}{
+		{name: "autocommit keeps generated timestamp", want: 42},
+		{name: "explicit transaction keeps shared visibility", optionBits: OPTION_BEGIN},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := &Session{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{optionBits: test.optionBits},
+			}}
+			require.Equal(t, test.want, generatedCloneRestoreSnapshotTS(ses, 42))
+		})
+	}
+}
+
+type cloneSnapshotResolutionCompilerContext struct {
+	*plan2.MockCompilerContext
+	ctx        context.Context
+	resolveErr error
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) GetContext() context.Context {
+	return c.ctx
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) GetSnapshot() *plan2.Snapshot {
+	return nil
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) ResolveSnapshotWithSnapshotName(string) (*plan2.Snapshot, error) {
+	return nil, c.resolveErr
+}
+
+func TestGetOpAndToAccountIDNormalizesMissingNamedSnapshot(t *testing.T) {
+	const snapshotName = "missing_snapshot"
+	ctx := context.Background()
+
+	resolverContext := &cloneSnapshotResolutionCompilerContext{
+		MockCompilerContext: plan2.NewMockCompilerContext(false, newPlanTestProcess(t)),
+		ctx:                 ctx,
+		resolveErr:          moerr.NewInternalErrorf(ctx, "find 0 snapshot records by name(%s), expect only 1", snapshotName),
+	}
+	atTsExpr := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: snapshotName,
+		Expr:         tree.NewNumVal(snapshotName, snapshotName, false, tree.P_char),
+	}
+	_, resolveErr := plan2.NewQueryBuilder(
+		plan.Query_INSERT, resolverContext, false, true,
+	).ResolveTsHint(atTsExpr)
+	require.Error(t, resolveErr)
+	require.True(t, plan2.IsSnapshotNotFound(resolveErr))
+
+	originalResolver := resolveSnapshotForClone
+	resolveSnapshotForClone = func(*Session, *tree.AtTimeStamp) (*plan2.Snapshot, error) {
+		return nil, resolveErr
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForClone = originalResolver
+	})
+
+	_, _, snapshot, err := getOpAndToAccountId(ctx, nil, nil, nil, atTsExpr)
+	require.Nil(t, snapshot)
+	require.EqualError(t, err, "invalid input: snapshot 'missing_snapshot' not found")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.NotContains(t, err.Error(), "internal error")
+	require.NotContains(t, err.Error(), "snapshot records")
+}
+
+func TestGetOpAndToAccountIDPropagatesOtherSnapshotErrors(t *testing.T) {
+	ctx := context.Background()
+	wantErr := moerr.NewInternalError(ctx, "snapshot catalog unavailable")
+	atTsExpr := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: "snapshot",
+	}
+
+	originalResolver := resolveSnapshotForClone
+	resolveSnapshotForClone = func(*Session, *tree.AtTimeStamp) (*plan2.Snapshot, error) {
+		return nil, wantErr
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForClone = originalResolver
+	})
+
+	_, _, snapshot, err := getOpAndToAccountId(ctx, nil, nil, nil, atTsExpr)
+	require.Nil(t, snapshot)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestCloneForeignKeyChecksRestoresMigrationReplayability(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, test := range []struct {
+		name       string
+		tracked    bool
+		replayable bool
+	}{
+		{name: "untracked"},
+		{name: "tracked replayable", tracked: true, replayable: true},
+		{name: "tracked unreplayable", tracked: true, replayable: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			ses.migrationSystemVarReplayable = make(map[string]bool)
+			if test.tracked {
+				ses.markMigrationSystemVarReplayable(
+					"foreign_key_checks", test.replayable)
+			}
+
+			oldReplayable, hadReplayability :=
+				ses.getMigrationSystemVarReplayability("foreign_key_checks")
+			ses.markMigrationSystemVarReplayable("foreign_key_checks", false)
+			ses.restoreMigrationSystemVarReplayability(
+				"foreign_key_checks", oldReplayable, hadReplayability)
+
+			gotReplayable, gotReplayability :=
+				ses.getMigrationSystemVarReplayability("foreign_key_checks")
+			require.Equal(t, test.tracked, gotReplayability)
+			if test.tracked {
+				require.Equal(t, test.replayable, gotReplayable)
+			}
+			require.Equal(t, test.tracked && !test.replayable,
+				ses.hasUnreplayableMigrationSystemVars())
+		})
+	}
 }
 
 func TestShouldLockDataBranchCloneSource(t *testing.T) {
@@ -101,6 +282,102 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
 		dataBranchCtx, namedSnapshotSource,
 	))
+}
+
+func TestHandleCloneTableRejectsUnsupportedTemporaryOptionsBeforeExecution(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*tree.CloneTable)
+		wantErr string
+	}{
+		{
+			name: "to account",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+		{
+			name: "copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "if not exists copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CreateTable.IfNotExists = true
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "to account and copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt := tree.NewCloneTable()
+			t.Cleanup(stmt.Free)
+			stmt.CreateTable.Temporary = true
+			test.prepare(stmt)
+
+			// Nil execution dependencies prove this semantic rejection happens before
+			// opening a background transaction, resolving a snapshot/account, or
+			// publishing any temporary-table state.
+			_, err := handleCloneTable(nil, nil, stmt, nil, nil)
+			require.ErrorContains(t, err, test.wantErr)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
+func TestRemoveFailedTemporaryCloneAlias(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("failed clone removes its newly registered alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, errors.New("clone failed"))
+
+		_, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.False(t, exists)
+	})
+
+	t.Run("failed if not exists clone preserves a preexisting alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", true, errors.New("later failure"))
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
+
+	t.Run("successful clone preserves its new alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, nil)
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
 }
 
 func TestShouldLockNamedDataBranchCloneSnapshot(t *testing.T) {
@@ -141,11 +418,16 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 	t.Run("matching snapshot is locked", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		sourceCtx := defines.AttachAccountId(ctx, 47)
 		bh.sql2result[lockSQL] = newMrsForSnapshotRecord(
 			"id", "snap", 42, "table", "acc", "db", "tbl", 7,
 		)
-		require.NoError(t, lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot))
+		require.NoError(t, lockNamedDataBranchCloneSnapshot(sourceCtx, bh, snapshot))
 		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{47}, bh.executionAccountIDs)
+		accountID, err := defines.GetAccountId(sourceCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(47), accountID)
 	})
 
 	for _, tc := range []struct {
@@ -352,17 +634,19 @@ func TestValidateTimestampDataBranchSourceAfterLockFailures(t *testing.T) {
 	), wantErr)
 }
 
-func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
+func TestTimestampDataBranchDatabaseRevalidatesEveryLifecycleTableAfterAllLocks(t *testing.T) {
 	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
 	var catalogRows sync.RWMutex
 	catalogRows.Lock() // COPY ALTER holds one source row exclusively.
 
 	enteredLockPath := make(chan struct{})
 	allLocksHeld := make(chan struct{})
-	validated := make(chan string, 2)
+	validated := make(chan string, 3)
 	done := make(chan error, 1)
 	go func() {
 		// Database clone acquires all source locks before revalidating any table.
+		// The external row is part of this fence because view dependency sorting
+		// consults its catalog metadata after the timestamp advances.
 		close(enteredLockPath)
 		catalogRows.RLock()
 		close(allLocksHeld)
@@ -370,6 +654,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
 			{dbName: "db", tblName: "t1"},
 			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "external", relKind: catalog.SystemExternalRel},
 			{dbName: "db", tblName: "t2"},
 		}}
 		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
@@ -406,7 +691,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		t.Fatal("database clone did not acquire all source locks")
 	}
 	require.NoError(t, <-done)
-	require.ElementsMatch(t, []string{"t1", "t2"}, []string{<-validated, <-validated})
+	require.ElementsMatch(t, []string{"t1", "external", "t2"}, []string{<-validated, <-validated, <-validated})
 }
 
 func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
@@ -480,19 +765,450 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	t.Cleanup(ses.Close)
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
 	backExec := &failingBeginBackgroundExec{err: beginErr}
-	stub := gostub.StubFunc(&NewBackgroundExec, backExec)
-	t.Cleanup(stub.Reset)
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return backExec
+	}
 
 	returned, cleanup, err := getBackExecutor(context.Background(), ses)
 	require.ErrorIs(t, err, beginErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
+	require.False(t, forcedPessimisticRC)
 	require.Equal(t, 1, backExec.closeCalls)
+
+	returned, cleanup, err = getBackExecutor(
+		context.Background(), ses, &BackgroundExecOption{forcePessimisticRC: true},
+	)
+	require.ErrorIs(t, err, beginErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, 2, backExec.closeCalls)
+}
+
+func TestGetBackExecutorWithTxnHandlerUsesTxnHandlerBeginState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	staleTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = staleTxn
+	ses.GetTxnHandler().txnOp = sharedTxn
+	ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+
+	bh, cleanup, err := getBackExecutorWithTxnHandler(context.Background(), ses)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NotNil(t, cleanup)
+	back := bh.(*backExec)
+	require.Same(t, sharedTxn, back.backSes.GetTxnHandler().GetTxn())
+	require.True(t, back.backSes.GetTxnHandler().IsShareTxn())
+	require.Same(t, staleTxn, ses.proc.GetTxnOperator())
+	require.NoError(t, cleanup(nil))
+}
+
+func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+		return nil
+	})
+	t.Cleanup(stub.Reset)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	er := mock_frontend.NewMockExecResult(ctrl)
+	er.EXPECT().GetRowCount().Return(uint64(1))
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(
+		gomock.Any(),
+		"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' AND account_id = 0 LIMIT 1",
+	).DoAndReturn(func(gotCtx context.Context, _ string) error {
+		accountID, err := defines.GetAccountId(gotCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(sysAccountID), accountID)
+		return nil
+	})
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+	receipts, err := handleCloneDatabaseWithSource(
+		execCtx,
+		ses,
+		bh,
+		&tree.CloneDatabase{
+			IfNotExists: true,
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("missing_source"),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Empty(t, receipts)
+}
+
+func TestHandleCloneDatabaseWithSourceIfNotExistsPropagatesLookupErrors(t *testing.T) {
+	stmt := &tree.CloneDatabase{
+		IfNotExists: true,
+		DstDatabase: tree.Identifier("destination"),
+		SrcDatabase: tree.Identifier("source"),
+	}
+
+	t.Run("target account context is missing", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(context.Background(), ctrl),
+			ses,
+			mock_frontend.NewMockBackgroundExec(ctrl),
+			stmt,
+			nil,
+		)
+		require.Error(t, err)
+	})
+
+	t.Run("destination existence query fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		wantErr := errors.New("destination lookup failed")
+		stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+			return nil
+		})
+		t.Cleanup(stub.Reset)
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet()
+		bh.EXPECT().Exec(
+			gomock.Any(),
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' AND account_id = 0 LIMIT 1",
+		).Return(wantErr)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses,
+			bh,
+			stmt,
+			nil,
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+}
+
+func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	lockCalled := false
+	stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+		lockCalled = true
+		return nil
+	})
+	t.Cleanup(stub.Reset)
+
+	_, err := handleCloneDatabaseWithSource(
+		newTestExecCtx(defines.AttachAccountId(context.Background(), 1), ctrl),
+		ses,
+		mock_frontend.NewMockBackgroundExec(ctrl),
+		&tree.CloneDatabase{
+			IfNotExists: true,
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("source"),
+			ToAccountOpt: &tree.ToAccountOpt{
+				AccountName: tree.Identifier("target"),
+			},
+		},
+		&cloneDatabaseSource{
+			opAccountId:     1,
+			toAccountId:     2,
+			snapshot:        &plan.Snapshot{},
+			requestSnapshot: &plan.Snapshot{},
+		},
+	)
+	require.EqualError(t, err, "internal error: only sys can clone table to another account")
+	require.False(t, lockCalled)
+}
+
+func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
+	newSource := func() *cloneDatabaseSource {
+		return &cloneDatabaseSource{
+			srcResolveDBName: "source",
+			opAccountId:      sysAccountID,
+			toAccountId:      sysAccountID,
+			userDefinedFuncs: []userDefinedFunctionDefinition{{
+				name:    "f_answer",
+				args:    "{}",
+				retType: "int",
+				body:    "select 42",
+				lang:    "sql",
+				sqlMode: "",
+				dbName:  "source",
+			}},
+			storedProcedures: []storedProcedureDefinition{{
+				name:    "p_answer",
+				args:    "[]",
+				lang:    "sql",
+				body:    "begin select 42; end",
+				sqlMode: "",
+				dbName:  "source",
+			}},
+		}
+	}
+	newStatement := func() *tree.CloneDatabase {
+		return &tree.CloneDatabase{
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("source"),
+			AtTsExpr:    &tree.AtTimeStamp{},
+		}
+	}
+
+	t.Run("restores functions before procedures after creating destination", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.NoError(t, err)
+		require.Len(t, bh.executedSQLs, 4)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_stored_procedure")
+	})
+
+	t.Run("propagates procedure restoration failures", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		wantErr := errors.New("procedure lookup failed")
+		bh.sql2err[checkSQL] = wantErr
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
+	})
+
+	t.Run("rejects imported functions before target database creation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		source := newSource()
+		source.userDefinedFuncs[0] = userDefinedFunctionDefinition{
+			name: "f_imported", args: "{}", retType: "int", lang: "python",
+			body:   `{"handler":"f_imported","import":true,"body":"shared:udf/source/f_imported.py"}`,
+			dbName: "source",
+		}
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), source,
+		)
+		require.ErrorContains(t, err, "imported python function f_imported is not supported")
+		require.Empty(t, bh.executedSQLs)
+	})
+}
+
+func TestCheckCloneDatabaseTargetSerializesConcurrentIfNotExistsDecisions(t *testing.T) {
+	firstLocked := make(chan struct{})
+	secondWaiting := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var lockCalls int
+	var lockCallsMu sync.Mutex
+	stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+		lockCallsMu.Lock()
+		lockCalls++
+		call := lockCalls
+		lockCallsMu.Unlock()
+		if call == 1 {
+			close(firstLocked)
+			return nil
+		}
+		close(secondWaiting)
+		<-releaseFirst
+		return nil
+	})
+	t.Cleanup(stub.Reset)
+
+	firstCtrl := gomock.NewController(t)
+	firstResult := mock_frontend.NewMockExecResult(firstCtrl)
+	firstResult.EXPECT().GetRowCount().Return(uint64(0))
+	firstBH := mock_frontend.NewMockBackgroundExec(firstCtrl)
+	firstBH.EXPECT().ClearExecResultSet()
+	firstBH.EXPECT().Exec(
+		gomock.Any(),
+		"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' AND account_id = 7 LIMIT 1",
+	).Return(nil)
+	firstBH.EXPECT().GetExecResultSet().Return([]interface{}{firstResult})
+
+	secondCtrl := gomock.NewController(t)
+	secondResult := mock_frontend.NewMockExecResult(secondCtrl)
+	secondResult.EXPECT().GetRowCount().Return(uint64(1))
+	secondBH := mock_frontend.NewMockBackgroundExec(secondCtrl)
+	secondBH.EXPECT().ClearExecResultSet()
+	secondBH.EXPECT().Exec(
+		gomock.Any(),
+		"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' AND account_id = 7 LIMIT 1",
+	).Return(nil)
+	secondBH.EXPECT().GetExecResultSet().Return([]interface{}{secondResult})
+
+	type result struct {
+		exists bool
+		err    error
+	}
+	firstDone := make(chan result, 1)
+	go func() {
+		exists, err := checkCloneDatabaseTarget(context.Background(), nil, firstBH, 7, "destination")
+		firstDone <- result{exists: exists, err: err}
+	}()
+	<-firstLocked
+	first := <-firstDone
+	require.NoError(t, first.err)
+	require.False(t, first.exists)
+
+	secondDone := make(chan result, 1)
+	go func() {
+		exists, err := checkCloneDatabaseTarget(context.Background(), nil, secondBH, 7, "destination")
+		secondDone <- result{exists: exists, err: err}
+	}()
+	<-secondWaiting
+	select {
+	case second := <-secondDone:
+		t.Fatalf("second clone decided before the first transaction released the target lock: %+v", second)
+	default:
+	}
+
+	close(releaseFirst)
+	second := <-secondDone
+	require.NoError(t, second.err)
+	require.True(t, second.exists)
+}
+
+func TestCheckCloneDatabaseTargetReturnsLockErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "unretryable", err: errors.New("target lock failed")},
+		{name: "retryable without owning background transaction", err: moerr.NewTxnNeedRetryNoCtx()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+				return test.err
+			})
+			t.Cleanup(stub.Reset)
+
+			exists, err := checkCloneDatabaseTarget(
+				context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl), 7, "destination",
+			)
+			require.False(t, exists)
+			require.ErrorIs(t, err, test.err)
+		})
+	}
+}
+
+func TestNewCloneDatabaseTargetLockProcessRequiresBackgroundExecutor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_, err := newCloneDatabaseTargetLockProcess(
+		context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl),
+	)
+	require.EqualError(t, err, "internal error: database clone target lock requires a background executor")
+}
+
+func TestLockCloneDatabaseTargetRequiresBackgroundExecutor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	err := lockCloneDatabaseTarget(
+		context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl), 7, "destination",
+	)
+	require.EqualError(t, err, "internal error: database clone target lock requires a background executor")
+}
+
+func TestIsCloneDatabaseTargetLockRetry(t *testing.T) {
+	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryNoCtx()))
+	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryWithDefChangedNoCtx()))
+	require.False(t, isCloneDatabaseTargetLockRetry(errors.New("not retryable")))
+}
+
+func TestRestartOwnedCloneDatabaseTargetLockTxnReentersLifecycle(t *testing.T) {
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	for _, test := range []struct {
+		name      string
+		failedSQL string
+		wantSQLs  []string
+	}{
+		{
+			name:     "success",
+			wantSQLs: []string{"rollback;", "begin;", gateSQL},
+		},
+		{
+			name:      "rollback failure",
+			failedSQL: "rollback;",
+			wantSQLs:  []string{"rollback;"},
+		},
+		{
+			name:      "begin failure",
+			failedSQL: "begin;",
+			wantSQLs:  []string{"rollback;", "begin;"},
+		},
+		{
+			name:      "lifecycle failure",
+			failedSQL: gateSQL,
+			wantSQLs:  []string{"rollback;", "begin;", gateSQL},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			wantErr := errors.New("restart failed")
+			if test.failedSQL != "" {
+				bh.sql2err[test.failedSQL] = wantErr
+			}
+
+			err := restartOwnedCloneDatabaseTargetLockTxn(context.Background(), bh)
+			if test.failedSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, wantErr)
+			}
+			require.Equal(t, test.wantSQLs, bh.executedSqls)
+		})
+	}
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {
@@ -663,19 +1379,44 @@ func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_rewriteCloneCreateSQL_RoundTripsInformationSchemaTables(t *testing.T) {
-	got, err := rewriteCloneCreateSQL(
-		sysview.InformationSchemaTablesDDL,
-		"information_schema",
-		"information_schema_new",
-		1,
-	)
-	require.NoError(t, err)
-	require.NotContains(t, got, " reg_match ")
-	require.Contains(t, got, "regexp_like(")
+func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		ddl               string
+		privateFunction   string
+		localCatalogToken string
+	}{
+		{
+			name:              "tables",
+			ddl:               sysview.InformationSchemaTablesDDL,
+			privateFunction:   "mo_subscription_tables()",
+			localCatalogToken: "from `__mo_visible_tables` as `tbl`",
+		},
+		{
+			name:              "columns",
+			ddl:               sysview.InformationSchemaColumnsDDL,
+			privateFunction:   "mo_subscription_columns()",
+			localCatalogToken: "from `mo_catalog`.`mo_columns` as `mc`",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rewriteCloneCreateSQL(
+				tc.ddl,
+				"information_schema",
+				"information_schema_new",
+				1,
+			)
+			require.NoError(t, err)
+			require.Contains(t, got, "create view `information_schema_new`")
+			require.Contains(t, got, tc.localCatalogToken)
+			require.NotContains(t, got, tc.privateFunction)
+			require.NotContains(t, got, " reg_match ")
+			require.Contains(t, got, "regexp_like(")
 
-	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
-	require.NoError(t, err)
+			_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) {
@@ -687,4 +1428,18 @@ func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
+}
+
+func Test_rewriteCloneCreateSQL_PreservesModeTwoNames(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view `SrcDB`.`ViewName` as select `SrcDB`.`TableName`.`ID` from `SrcDB`.`TableName`",
+		"SrcDB",
+		"DstDB",
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create view `DstDB`.`ViewName` as select `DstDB`.`TableName`.`ID` from `DstDB`.`TableName`;",
+		got,
+	)
 }

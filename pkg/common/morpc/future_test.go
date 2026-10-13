@@ -16,12 +16,17 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -272,6 +277,325 @@ func TestTimeout(t *testing.T) {
 	assert.False(t, f.timeout())
 	cancel()
 	assert.True(t, f.timeout())
+}
+
+func TestFutureRequestLifecycleMetricsTerminalOutcomes(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome requestOutcome
+		run     func(*testing.T, *Future, context.CancelFunc)
+	}{
+		{
+			name:    "success",
+			outcome: requestOutcomeSuccess,
+			run: func(t *testing.T, f *Future, _ context.CancelFunc) {
+				f.messageSent(nil)
+				require.True(t, f.done(newTestMessage(f.id), nil))
+				_, err := f.Get()
+				require.NoError(t, err)
+				f.Close()
+			},
+		},
+		{
+			name:    "timeout",
+			outcome: requestOutcomeTimeout,
+			run: func(t *testing.T, f *Future, _ context.CancelFunc) {
+				f.messageSent(nil)
+				_, err := f.Get()
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				f.Close()
+			},
+		},
+		{
+			name:    "canceled",
+			outcome: requestOutcomeCanceled,
+			run: func(t *testing.T, f *Future, cancel context.CancelFunc) {
+				cancel()
+				f.messageSent(nil)
+				_, err := f.Get()
+				require.ErrorIs(t, err, context.Canceled)
+				f.Close()
+			},
+		},
+		{
+			name:    "send-error",
+			outcome: requestOutcomeSendError,
+			run: func(t *testing.T, f *Future, _ context.CancelFunc) {
+				sendErr := errors.New("send failed")
+				f.messageSent(sendErr)
+				_, err := f.Get()
+				require.ErrorIs(t, err, sendErr)
+				f.Close()
+			},
+		},
+		{
+			name:    "backend-error",
+			outcome: requestOutcomeBackendError,
+			run: func(t *testing.T, f *Future, _ context.CancelFunc) {
+				backendErr := errors.New("backend failed")
+				f.messageSent(nil)
+				require.True(t, f.error(f.id, backendErr, nil))
+				_, err := f.Get()
+				require.ErrorIs(t, err, backendErr)
+				f.Close()
+			},
+		},
+		{
+			name:    "abandoned",
+			outcome: requestOutcomeAbandoned,
+			run: func(_ *testing.T, f *Future, _ context.CancelFunc) {
+				f.Close()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newMetrics(t.Name())
+			startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+			completedBefore := requestCompletedCount(m)
+			outcomeBefore := testutil.ToFloat64(m.requestCompletedCounters[tt.outcome])
+			histogramCountBefore, _ := observerHistogram(t, m.requestDurationHistogram)
+
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if tt.outcome == requestOutcomeTimeout {
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), time.Hour)
+			}
+			defer cancel()
+
+			f := newFuture(nil)
+			f.init(newTestRPCMessage(ctx, 1))
+			f.ref()
+			f.enableRequestMetrics(m)
+			tt.run(t, f, cancel)
+
+			require.Equal(t, startedBefore+1, testutil.ToFloat64(m.requestStartedCounter))
+			require.Equal(t, completedBefore+1, requestCompletedCount(m))
+			require.Equal(t, outcomeBefore+1, testutil.ToFloat64(m.requestCompletedCounters[tt.outcome]))
+			histogramCount, histogramSum := observerHistogram(t, m.requestDurationHistogram)
+			require.Equal(t, histogramCountBefore+1, histogramCount)
+			require.GreaterOrEqual(t, histogramSum, float64(0))
+		})
+	}
+}
+
+func TestFutureRequestLifecycleMetricsFirstTerminalOutcomeWins(t *testing.T) {
+	m := newMetrics(t.Name())
+	completedBefore := requestCompletedCount(m)
+	sendErrorBefore := testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSendError])
+	histogramBefore, _ := observerHistogram(t, m.requestDurationHistogram)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	f := newFuture(nil)
+	f.init(newTestRPCMessage(ctx, 1))
+	f.ref()
+	f.enableRequestMetrics(m)
+	f.messageSent(errors.New("first send failure"))
+	cancel()
+	require.False(t, f.done(newTestMessage(1), nil))
+	require.False(t, f.error(1, errors.New("late backend failure"), nil))
+	f.Close()
+
+	require.Equal(t, completedBefore+1, requestCompletedCount(m))
+	require.Equal(t, sendErrorBefore+1, testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSendError]))
+	count, _ := observerHistogram(t, m.requestDurationHistogram)
+	require.Equal(t, histogramBefore+1, count)
+}
+
+func TestFutureRequestLifecycleContextWinsLaterTransportFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		context func() (context.Context, context.CancelFunc)
+		outcome requestOutcome
+	}{
+		{
+			name: "deadline",
+			context: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+			outcome: requestOutcomeTimeout,
+		},
+		{
+			name: "cancel",
+			context: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+				cancel()
+				return ctx, cancel
+			},
+			outcome: requestOutcomeCanceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newMetrics(t.Name())
+			outcomeBefore := testutil.ToFloat64(m.requestCompletedCounters[tt.outcome])
+			ctx, cancel := tt.context()
+			defer cancel()
+			f := newFuture(nil)
+			f.init(newTestRPCMessage(ctx, 1))
+			f.ref()
+			f.enableRequestMetrics(m)
+
+			f.messageSent(errors.New("late socket failure"))
+			f.Close()
+			require.Equal(t, outcomeBefore+1,
+				testutil.ToFloat64(m.requestCompletedCounters[tt.outcome]))
+		})
+	}
+}
+
+func TestFutureRequestLifecycleMetricsConcurrentTerminals(t *testing.T) {
+	m := newMetrics(t.Name())
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+	const futures = 256
+
+	for i := range futures {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		f := newFuture(nil)
+		f.init(newTestRPCMessage(ctx, uint64(i+1)))
+		f.ref()
+		f.enableRequestMetrics(m)
+
+		var wg sync.WaitGroup
+		wg.Add(4)
+		go func() {
+			defer wg.Done()
+			f.done(newTestMessage(f.id), nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.error(f.id, errors.New("backend failed"), nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.messageSent(errors.New("send failed"))
+		}()
+		go func() {
+			defer wg.Done()
+			f.Close()
+		}()
+		wg.Wait()
+		cancel()
+	}
+
+	require.Equal(t, startedBefore+futures, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+futures, requestCompletedCount(m))
+}
+
+func TestFutureRequestLifecycleMetricsPoolReuseHasNoGenerationLeak(t *testing.T) {
+	m := newMetrics(t.Name())
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+	sendErrorBefore := testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSendError])
+	successBefore := testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSuccess])
+	histogramBefore, _ := observerHistogram(t, m.requestDurationHistogram)
+	released := make(chan *Future, 1)
+	f := newFuture(func(f *Future) {
+		f.reset()
+		released <- f
+	})
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), time.Hour)
+	f.init(newTestRPCMessage(ctx1, 1))
+	f.ref()
+	f.enableRequestMetrics(m)
+	f.messageSent(errors.New("send failed"))
+	f.Close()
+	f = <-released
+	cancel1()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel2()
+	f.init(newTestRPCMessage(ctx2, 2))
+	f.ref()
+	f.enableRequestMetrics(m)
+	f.messageSent(nil)
+	require.True(t, f.done(newTestMessage(2), nil))
+	_, err := f.Get()
+	require.NoError(t, err)
+	f.Close()
+	<-released
+
+	require.Equal(t, startedBefore+2, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+2, requestCompletedCount(m))
+	require.Equal(t, sendErrorBefore+1, testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSendError]))
+	require.Equal(t, successBefore+1, testutil.ToFloat64(m.requestCompletedCounters[requestOutcomeSuccess]))
+	count, _ := observerHistogram(t, m.requestDurationHistogram)
+	require.Equal(t, histogramBefore+2, count)
+}
+
+func TestFutureRequestLifecycleMetricsExcludeNonUnaryTraffic(t *testing.T) {
+	m := newMetrics(t.Name())
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	messages := []RPCMessage{
+		{Ctx: context.Background(), Message: newTestMessage(1), internal: true},
+		{Ctx: context.Background(), Message: newTestMessage(2), oneWay: true},
+		{Ctx: ctx, Message: newTestMessage(3), stream: true},
+	}
+	for _, message := range messages {
+		f := newFuture(nil)
+		f.init(message)
+		f.enableRequestMetrics(m)
+		f.Close()
+	}
+
+	require.Equal(t, startedBefore, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore, requestCompletedCount(m))
+}
+
+func TestFutureReleaseCommitsBeforeCallbackWithoutHoldingFutureLock(t *testing.T) {
+	callbackStarted := make(chan struct{})
+	allowCallback := make(chan struct{})
+	callbackDone := make(chan struct{})
+	f := newFuture(func(f *Future) {
+		if !f.mu.TryLock() {
+			panic("Future release callback ran while Future lock was held")
+		}
+		f.mu.Unlock()
+		close(callbackStarted)
+		<-allowCallback
+		close(callbackDone)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	f.init(newTestRPCMessage(ctx, 1))
+	f.ref()
+	f.Close()
+
+	go f.messageSent(nil)
+	<-callbackStarted
+	require.False(t, f.tryRef(),
+		"terminal delivery must not pin a Future whose return to the pool is committed")
+	close(allowCallback)
+	<-callbackDone
+}
+
+func requestCompletedCount(m *metrics) float64 {
+	var total float64
+	for _, counter := range m.requestCompletedCounters {
+		total += testutil.ToFloat64(counter)
+	}
+	return total
+}
+
+func observerHistogram(t *testing.T, observer prometheus.Observer) (uint64, float64) {
+	t.Helper()
+	metric, ok := observer.(prometheus.Metric)
+	require.True(t, ok)
+	value := &dto.Metric{}
+	require.NoError(t, metric.Write(value))
+	require.NotNil(t, value.Histogram)
+	return value.Histogram.GetSampleCount(), value.Histogram.GetSampleSum()
 }
 
 func TestEarliestDeadline(t *testing.T) {

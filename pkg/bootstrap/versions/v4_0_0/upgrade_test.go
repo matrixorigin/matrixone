@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -61,8 +63,17 @@ func Test_Upgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
 
 			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					result.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendStringRows(result, 0,
+						[]string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:46"}`}))
+					return result.GetResult(), nil
+				}
 				return executor.Result{}, nil
 			}, txnOperator)
 

@@ -60,80 +60,23 @@ type BackupDeltaLocDataSource struct {
 	needShrink bool
 }
 
-const invalidBackupSpecialColumnPosition = math.MaxUint16
-
-// backupSpecialColumnLayout is the 4.2-local equivalent of the special-column
-// metadata resolver used by newer branches. Keeping it local avoids pulling the
-// later appendable-object format changes into this maintenance backport.
-type backupSpecialColumnLayout struct {
-	PhysicalAddr uint16
-	CommitTS     uint16
-	Abort        uint16
-}
-
-func (layout backupSpecialColumnLayout) resolve(seqnum uint16) (uint16, bool) {
-	switch seqnum {
-	case objectio.SEQNUM_COMMITTS:
-		return layout.CommitTS, layout.CommitTS != invalidBackupSpecialColumnPosition
-	case objectio.SEQNUM_ABORT:
-		return layout.Abort, layout.Abort != invalidBackupSpecialColumnPosition
-	default:
-		return invalidBackupSpecialColumnPosition, false
-	}
-}
-
-func resolveBackupSpecialColumnLayout(block objectio.BlockObject) backupSpecialColumnLayout {
-	layout := backupSpecialColumnLayout{
-		PhysicalAddr: invalidBackupSpecialColumnPosition,
-		CommitTS:     invalidBackupSpecialColumnPosition,
-		Abort:        invalidBackupSpecialColumnPosition,
-	}
-	metaColumnCount := block.GetMetaColumnCount()
-	if metaColumnCount == 0 {
-		return layout
-	}
-
-	pos := block.GetMaxSeqnum() + 1
-	if pos < metaColumnCount && block.ColumnMeta(pos).DataType() == uint8(types.T_Rowid) {
-		layout.PhysicalAddr = pos
-		pos++
-	}
-	if pos >= metaColumnCount || block.ColumnMeta(pos).DataType() != uint8(types.T_TS) {
-		if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(block); ok {
-			layout.CommitTS = legacyCommitTS
-		}
-		return layout
-	}
-	layout.CommitTS = pos
-
-	pos++
-	if pos < metaColumnCount && block.ColumnMeta(pos).DataType() == uint8(types.T_Rowid) {
-		layout.PhysicalAddr = pos
-		pos++
-	}
-	if pos < metaColumnCount && block.ColumnMeta(pos).DataType() == uint8(types.T_bool) {
-		layout.Abort = pos
-	}
-	return layout
-}
-
 func loadSpecialColumnLayout(
 	ctx context.Context,
 	fs fileservice.FileService,
 	location objectio.Location,
-) (backupSpecialColumnLayout, error) {
+) (objectio.SpecialColumnLayout, error) {
 	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
-		return backupSpecialColumnLayout{}, err
+		return objectio.SpecialColumnLayout{}, err
 	}
 	blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-	return resolveBackupSpecialColumnLayout(blockMeta), nil
+	return objectio.ResolveSpecialColumnLayout(blockMeta), nil
 }
 
 func visibleAppendableRows(
 	ctx context.Context,
 	bat *batch.Batch,
-	layout backupSpecialColumnLayout,
+	layout objectio.SpecialColumnLayout,
 	ts *types.TS,
 ) ([]int64, error) {
 	commitPos, err := validateBackupTombstoneBatch(ctx, bat, layout)
@@ -153,7 +96,7 @@ func visibleAppendableRows(
 		)
 	}
 	var abortVec *vector.Vector
-	if abortPos, ok := layout.resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
 		abortVec = bat.Vecs[abortPos]
 	}
 	rowCount := bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length()
@@ -182,7 +125,7 @@ func visibleAppendableRows(
 func validateBackupTombstoneBatch(
 	ctx context.Context,
 	bat *batch.Batch,
-	layout backupSpecialColumnLayout,
+	layout objectio.SpecialColumnLayout,
 ) (uint16, error) {
 	if bat == nil || len(bat.Vecs) < len(objectio.TombstoneSeqnums_DN_Created) {
 		return 0, moerr.NewInternalError(ctx, "appendable tombstone has too few columns")
@@ -211,7 +154,7 @@ func validateBackupTombstoneBatch(
 		}
 	}
 
-	commitPos, ok := layout.resolve(objectio.SEQNUM_COMMITTS)
+	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
 	if !ok || int(commitPos) >= len(bat.Vecs) || int(commitPos) < len(objectio.TombstoneSeqnums_CN_Created) {
 		return 0, moerr.NewInternalError(ctx, "appendable tombstone has no commit timestamp")
 	}
@@ -220,12 +163,12 @@ func validateBackupTombstoneBatch(
 		return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid commit timestamp column")
 	}
 
-	if physicalPos := layout.PhysicalAddr; physicalPos != invalidBackupSpecialColumnPosition {
+	if physicalPos := layout.PhysicalAddr; physicalPos != objectio.InvalidSpecialColumnPosition {
 		if int(physicalPos) >= len(bat.Vecs) || bat.Vecs[physicalPos].GetType().Oid != types.T_Rowid {
 			return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid physical rowid column")
 		}
 	}
-	if abortPos, ok := layout.resolve(objectio.SEQNUM_ABORT); ok {
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
 		if int(abortPos) >= len(bat.Vecs) {
 			return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid abort column")
 		}
@@ -551,26 +494,11 @@ func trimTombstoneData(
 func canonicalizeBackupTombstone(
 	ctx context.Context,
 	data *batch.Batch,
-	layout backupSpecialColumnLayout,
+	layout objectio.SpecialColumnLayout,
 ) (*batch.Batch, error) {
 	commitPos, err := validateBackupTombstoneBatch(ctx, data, layout)
 	if err != nil {
 		return nil, err
-	}
-	commitVec := data.Vecs[commitPos]
-	if commitVec.IsConst() {
-		// BlockWriter's metadata builder scans fixed-width backing bytes and
-		// cannot consume a logical N-row constant backed by one physical value.
-		// Materialize only this hidden column before transferring ownership.
-		materialized := vector.NewVec(*commitVec.GetType())
-		if err = materialized.UnionBatch(
-			commitVec, 0, commitVec.Length(), nil, common.DebugAllocator,
-		); err != nil {
-			materialized.Free(common.DebugAllocator)
-			return nil, err
-		}
-		commitVec.Free(common.DebugAllocator)
-		data.Vecs[commitPos] = materialized
 	}
 	result := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
 	result.Vecs[objectio.TombstoneAttr_Rowid_Idx] = data.Vecs[objectio.TombstoneAttr_Rowid_Idx]
@@ -992,6 +920,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				logutil.Info("[Data Empty] ReWrite Checkpoint",
 					zap.String("object", oData.stats.ObjectName().String()),
 					zap.Uint64("tid", oData.tid))
+				bat.Clean(common.DebugAllocator)
 				return true, nil
 			}
 			oData.sortKey = sortKey
@@ -1000,9 +929,25 @@ func ReWriteCheckpointAndBlockFromKey(
 			if oData.sortKey != math.MaxUint16 {
 				writer.SetPrimaryKey(oData.sortKey)
 			}
-			result := batch.NewWithSize(len(oData.data[0].Vecs) - 2)
-			for i := range result.Vecs {
-				result.Vecs[i] = oData.data[0].Vecs[i]
+			layout, err := loadSpecialColumnLayout(ctx, fs, oData.stats.ObjectLocation())
+			if err != nil {
+				return true, err
+			}
+			specialPositions := map[uint16]struct{}{}
+			for _, pos := range []uint16{layout.PhysicalAddr, layout.CommitTS, layout.Abort} {
+				if pos != objectio.InvalidSpecialColumnPosition {
+					specialPositions[pos] = struct{}{}
+				}
+			}
+			result := batch.NewWithSize(len(oData.data[0].Vecs) - len(specialPositions))
+			resultPos := 0
+			for pos, vec := range oData.data[0].Vecs {
+				if _, special := specialPositions[uint16(pos)]; special {
+					vec.Free(common.DebugAllocator)
+					continue
+				}
+				result.Vecs[resultPos] = vec
+				resultPos++
 			}
 			result = formatData(result)
 			oData.data[0] = result

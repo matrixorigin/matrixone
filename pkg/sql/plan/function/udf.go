@@ -107,9 +107,10 @@ func (u *Udf) GetRetType() types.Type {
 
 func type2PlanType(typ types.Type) *plan.Type {
 	return &plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id:      int32(typ.Oid),
+		Width:   typ.Width,
+		Scale:   typ.Scale,
+		Charset: uint32(typ.Charset),
 	}
 }
 

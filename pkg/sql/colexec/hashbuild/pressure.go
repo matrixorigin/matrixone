@@ -26,7 +26,7 @@ import (
 // MemoryPressureReason is the single classification used by HashBuild and all
 // spilled join consumers. Only Capacity may enter reclaim/spill/reduce/degrade
 // control flow. Sealed and invariant failures are lifecycle bugs and must
-// remain terminal. HashBuildBudgetError now exposes disjoint lifecycle and
+// remain terminal. ExecutionResourceError now exposes disjoint lifecycle and
 // capacity identities; this classifier is the one control-flow boundary for
 // physical-allocation and spill-resource failures.
 type MemoryPressureReason uint8
@@ -70,24 +70,24 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 		return MemoryPressureInvariant
 	}
 
-	var budgetErr *process.HashBuildBudgetError
+	var budgetErr *process.ExecutionResourceError
 	if errors.As(err, &budgetErr) {
 		switch budgetErr.Kind {
-		case process.HashBuildBudgetErrorAdmission:
+		case process.ExecutionResourceErrorAdmission:
 			switch budgetErr.Component {
-			case process.HashBuildBudgetComponentMemory:
+			case process.ExecutionResourceComponentMemory:
 				return MemoryPressureCapacity
-			case process.HashBuildBudgetComponentSpillDisk:
+			case process.ExecutionResourceComponentSpillDisk:
 				return MemoryPressureSpillDiskLimit
-			case process.HashBuildBudgetComponentSpillFD:
+			case process.ExecutionResourceComponentSpillFD:
 				return MemoryPressureSpillFDLimit
 			default:
 				return MemoryPressureInvalid
 			}
-		case process.HashBuildBudgetErrorClosed:
+		case process.ExecutionResourceErrorClosed:
 			return MemoryPressureSealed
-		case process.HashBuildBudgetErrorInvalid,
-			process.HashBuildBudgetErrorCeilingMissing:
+		case process.ExecutionResourceErrorInvalid,
+			process.ExecutionResourceErrorCeilingMissing:
 			return MemoryPressureInvalid
 		default:
 			return MemoryPressureInvalid
@@ -95,11 +95,11 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 	}
 
 	// Resource-ledger helpers may still return a bare lifecycle sentinel.
-	if errors.Is(err, process.ErrHashBuildBudgetClosed) {
+	if errors.Is(err, process.ErrExecutionResourceClosed) {
 		return MemoryPressureSealed
 	}
-	if errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
-		errors.Is(err, process.ErrHashBuildCeilingMissing) {
+	if errors.Is(err, process.ErrExecutionResourceInvalid) ||
+		errors.Is(err, process.ErrExecutionMemoryCeilingMissing) {
 		return MemoryPressureInvalid
 	}
 	return MemoryPressureNone
@@ -119,13 +119,16 @@ type MinimumAllocationPressureError struct {
 	Response string
 	Used     uint64
 	Limit    uint64
+	// LastRefusal is diagnostic only: unwrapping it would turn the terminal
+	// minimum-unit failure back into a retryable capacity failure.
+	LastRefusal string
 }
 
 func (e *MinimumAllocationPressureError) Error() string {
 	if e == nil {
 		return "minimum allocation cannot be admitted"
 	}
-	return fmt.Sprintf(
+	detail := fmt.Sprintf(
 		"minimum allocation cannot be admitted: owner=%s site=%s response=%s used=%d limit=%d",
 		e.Owner,
 		e.Site,
@@ -133,12 +136,17 @@ func (e *MinimumAllocationPressureError) Error() string {
 		e.Used,
 		e.Limit,
 	)
+	if e.LastRefusal != "" {
+		detail += "; last capacity refusal: " + e.LastRefusal
+	}
+	return detail
 }
 
 func NewMinimumAllocationPressureError(
 	owner string,
 	site string,
 	account *mpool.AllocationAccount,
+	lastRefusal ...error,
 ) error {
 	err := &MinimumAllocationPressureError{
 		Owner:    owner,
@@ -149,6 +157,9 @@ func NewMinimumAllocationPressureError(
 		snapshot := account.Snapshot()
 		err.Used = snapshot.Used
 		err.Limit = snapshot.Limit
+	}
+	if len(lastRefusal) > 0 && lastRefusal[0] != nil {
+		err.LastRefusal = lastRefusal[0].Error()
 	}
 	return err
 }
@@ -178,11 +189,11 @@ func NewPressureRetryGuard(initial PressureProgress, limit int) *PressureRetryGu
 
 func (g *PressureRetryGuard) Advance(next PressureProgress) error {
 	if g == nil || next.InputUnits < 0 {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	if g.attempts >= g.limit {
 		return errors.Join(
-			process.ErrHashBuildBudgetInvalid,
+			process.ErrExecutionResourceInvalid,
 			moerr.NewInternalErrorNoCtx(
 				"memory-pressure retry limit exceeded",
 			),
@@ -194,7 +205,7 @@ func (g *PressureRetryGuard) Advance(next PressureProgress) error {
 		(!g.previous.OptionalDisabled && next.OptionalDisabled)
 	if !progress {
 		return errors.Join(
-			process.ErrHashBuildBudgetInvalid,
+			process.ErrExecutionResourceInvalid,
 			moerr.NewInternalErrorNoCtx(
 				"memory-pressure retry made no progress",
 			),

@@ -46,7 +46,9 @@ type streamSink struct {
 	err          error
 	stopped      bool
 	wantInclude  bool // covered fast path: also carry each doc's INCLUDE values through emit
-	scoreRange   *ScoreRange
+	// scoreRange drops a scored doc outside the pushed relevance interval before it is
+	// batched, so out-of-range rows never leave the TVF. nil ⇒ keep everything.
+	scoreRange *ScoreRange
 }
 
 // newStreamSink resolves the index's pk type (all segments share it). The batch buffer

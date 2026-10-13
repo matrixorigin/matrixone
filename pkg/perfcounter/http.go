@@ -52,7 +52,7 @@ func format(w io.Writer, v reflect.Value, t reflect.Type) {
 			formatStruct(w, v, t)
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			fmt.Fprintf(w, "%v", v.Int())
-		case reflect.Ptr, reflect.Interface:
+		case reflect.Pointer, reflect.Interface:
 			format(w, v.Elem(), t.Elem())
 		case reflect.Map:
 			formatMap(w, v, t)

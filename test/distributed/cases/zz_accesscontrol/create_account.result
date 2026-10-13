@@ -128,7 +128,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 create account 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
 create account 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+internal error: the name "非常" is invalid
 create account "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
 create account 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
@@ -199,6 +199,8 @@ mo_user
 mo_user_defined_function
 mo_user_grant
 mo_variables
+mo_view_dependencies
+mo_view_refresh
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2

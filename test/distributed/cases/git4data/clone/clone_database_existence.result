@@ -1,0 +1,130 @@
+drop database if exists clone_existence_src;
+drop database if exists clone_existence_existing;
+drop database if exists clone_existence_ifne_dst;
+drop database if exists clone_existence_empty_src;
+drop database if exists clone_existence_empty_dst;
+drop database if exists clone_existence_missing_dst;
+drop database if exists clone_existence_missing_ifne_dst;
+drop database if exists clone_existence_table_dst;
+drop database if exists clone_existence_snapshot_dst;
+drop snapshot if exists clone_existence_snapshot;
+create database clone_existence_src;
+create table clone_existence_src.payload(id int primary key, note varchar(20));
+insert into clone_existence_src.payload values (1, 'source row');
+create database clone_existence_existing;
+create table clone_existence_existing.sentinel(v int);
+insert into clone_existence_existing.sentinel values (11);
+create database if not exists clone_existence_existing clone clone_existence_src;
+show tables from clone_existence_existing;
+➤ Tables_in_clone_existence_existing[12,3750,0]  𝄀
+sentinel
+select * from clone_existence_existing.sentinel;
+➤ v[4,32,0]  𝄀
+11
+create database if not exists clone_existence_existing clone clone_existence_missing_src;
+show tables from clone_existence_existing;
+➤ Tables_in_clone_existence_existing[12,3750,0]  𝄀
+sentinel
+select * from clone_existence_existing.sentinel;
+➤ v[4,32,0]  𝄀
+11
+create database clone_existence_existing clone clone_existence_src;
+database clone_existence_existing already exists
+show tables from clone_existence_existing;
+➤ Tables_in_clone_existence_existing[12,3750,0]  𝄀
+sentinel
+select * from clone_existence_existing.sentinel;
+➤ v[4,32,0]  𝄀
+11
+create database if not exists clone_existence_ifne_dst clone clone_existence_src;
+show create table clone_existence_ifne_dst.payload;
+➤ Table[12,5,0]  ¦  Create Table[12,77,0]  𝄀
+payload  ¦  CREATE TABLE `payload` (
+  `id` int NOT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select * from clone_existence_ifne_dst.payload;
+➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
+1  ¦  source row
+create database clone_existence_empty_src;
+create database clone_existence_empty_dst clone clone_existence_empty_src;
+show tables from clone_existence_empty_dst;
+➤ Tables_in_clone_existence_empty_dst[12,3750,0]
+select count(*) from mo_catalog.mo_database where datname = 'clone_existence_empty_dst';
+➤ count(*)[-5,64,0]  𝄀
+1
+create database clone_existence_missing_dst clone clone_existence_missing_src;
+Unknown database clone_existence_missing_src
+select count(*) from mo_catalog.mo_database where datname = 'clone_existence_missing_dst';
+➤ count(*)[-5,64,0]  𝄀
+0
+create database if not exists clone_existence_missing_ifne_dst clone clone_existence_missing_src;
+Unknown database clone_existence_missing_src
+select count(*) from mo_catalog.mo_database where datname = 'clone_existence_missing_ifne_dst';
+➤ count(*)[-5,64,0]  𝄀
+0
+create database clone_existence_table_dst;
+create table clone_existence_table_dst.missing clone clone_existence_src.missing;
+SQL parser error: table clone_existence_src-missing does not exist
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_existence_table_dst' and relname = 'missing';
+➤ count(*)[-5,64,0]  𝄀
+0
+create snapshot clone_existence_snapshot for database clone_existence_src;
+drop database clone_existence_src;
+create database clone_existence_snapshot_dst clone clone_existence_src {snapshot = 'clone_existence_snapshot'};
+show create table clone_existence_snapshot_dst.payload;
+➤ Table[12,5,0]  ¦  Create Table[12,77,0]  𝄀
+payload  ¦  CREATE TABLE `payload` (
+  `id` int NOT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select * from clone_existence_snapshot_dst.payload;
+➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
+1  ¦  source row
+drop account if exists clone_existence_tenant;
+create account clone_existence_tenant admin_name "root" identified by "111";
+create database clone_existence_account_collision;
+create table clone_existence_account_collision.tenant_sentinel(v int);
+insert into clone_existence_account_collision.tenant_sentinel values (7);
+create database clone_existence_tenant_only_source;
+create snapshot clone_existence_cross_account_snapshot for database clone_existence_tenant_only_source;
+create database clone_existence_account_collision_source;
+create table clone_existence_account_collision_source.payload(id int primary key);
+insert into clone_existence_account_collision_source.payload values (2);
+create database if not exists clone_existence_account_collision clone clone_existence_account_collision_source;
+select * from clone_existence_account_collision.payload;
+➤ id[4,32,0]  𝄀
+2
+create database clone_existence_tenant_only_destination clone clone_existence_tenant_only_source;
+Unknown database clone_existence_tenant_only_source
+select count(*) from mo_catalog.mo_database
+where datname = 'clone_existence_tenant_only_destination' and account_id = 0;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop account if exists clone_existence_target;
+create account clone_existence_target admin_name "root" identified by "111";
+create database clone_existence_target_probe;
+create table clone_existence_target_probe.sentinel(v int);
+insert into clone_existence_target_probe.sentinel values (8);
+create database if not exists clone_existence_target_probe clone clone_existence_tenant_only_source {snapshot = 'clone_existence_cross_account_snapshot'} to account clone_existence_target;
+internal error: only sys can clone table to another account
+select * from clone_existence_target_probe.sentinel;
+➤ v[4,32,0]  𝄀
+8
+drop snapshot clone_existence_cross_account_snapshot;
+drop database clone_existence_account_collision;
+drop database clone_existence_account_collision_source;
+drop database if exists clone_existence_tenant_only_destination;
+drop account clone_existence_target;
+drop account clone_existence_tenant;
+drop snapshot clone_existence_snapshot;
+drop database clone_existence_snapshot_dst;
+drop database clone_existence_table_dst;
+drop database clone_existence_empty_dst;
+drop database clone_existence_empty_src;
+drop database if exists clone_existence_missing_ifne_dst;
+drop database clone_existence_ifne_dst;
+drop database clone_existence_existing;

@@ -49,3 +49,92 @@ func TestLeakFree(t *testing.T) {
 		c.gc(p)
 	})
 }
+
+func TestCheckerActivationScopes(t *testing.T) {
+	var activation checkerActivation
+	activation.beginScope()
+	epoch := activation.current()
+	assert.NotZero(t, epoch)
+
+	activation.beginScope()
+	assert.Equal(t, epoch, activation.current())
+	activation.endScope()
+	assert.Equal(t, epoch, activation.current())
+
+	activation.endScope()
+	assert.Zero(t, activation.current())
+	activation.beginScope()
+	assert.Greater(t, activation.current(), epoch)
+	activation.endScope()
+}
+
+func TestCheckerActivationOverlappingScopes(t *testing.T) {
+	var activation checkerActivation
+	activation.beginScope()
+	epoch := activation.current()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		activation.beginScope()
+		close(started)
+		<-release
+		activation.endScope()
+		close(done)
+	}()
+
+	<-started
+	activation.endScope()
+	assert.Equal(t, epoch, activation.current())
+	close(release)
+	<-done
+	assert.Zero(t, activation.current())
+}
+
+func TestCheckerActivationPreservesPermanentMode(t *testing.T) {
+	var activation checkerActivation
+	activation.enablePermanently()
+	epoch := activation.current()
+	assert.NotZero(t, epoch)
+
+	activation.beginScope()
+	activation.endScope()
+	assert.Equal(t, epoch, activation.current())
+}
+
+func TestCheckerGCCleansDiagnosticMetadata(t *testing.T) {
+	oldVerbose := enableVerbose.Swap(true)
+	defer enableVerbose.Store(oldVerbose)
+
+	RunReuseTests(func() {
+		c := newChecker[person](true)
+		p := &person{}
+		c.created(p)
+		c.got(p)
+		c.free(p)
+		c.gc(p)
+
+		assert.Empty(t, c.mu.m)
+		assert.Empty(t, c.mu.createStack)
+		assert.Empty(t, c.mu.lastFreeStack)
+	})
+}
+
+func TestCheckerAcceptsStatusFromOlderGeneration(t *testing.T) {
+	c := newChecker[person](true)
+	p := &person{}
+	RunReuseTests(func() {
+		c.created(p)
+		c.got(p)
+		c.mu.Lock()
+		for key, status := range c.mu.m {
+			status.epoch = 0
+			c.mu.m[key] = status
+		}
+		c.mu.Unlock()
+		assert.NotPanics(t, func() {
+			c.got(p)
+		})
+		c.free(p)
+	})
+}

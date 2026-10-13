@@ -15,7 +15,7 @@
 // CPU-only unit coverage for the fulltext2 plan-layer hooks. plan.go's inert
 // vector-sort redirects (CanApply / ApplyForSort), schema.go's hidden-table
 // builder (BuildFullTextIndexDefs) + buildFullText2Params, and tablefunc.go's
-// pure TVF builders (buildFullText2Create / buildFullText2Search /
+// pure TVF builders (buildFullText2Create /
 // getFullText2Params) are all reachable without a live cluster. The
 // happy-path builders call two planplugin helper vars (production wires them
 // in pkg/sql/plan's init) which the init() below stubs to avoid an import
@@ -34,6 +34,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
@@ -90,6 +91,10 @@ func ftIndexInclude(name, indexedCol string, includeCols ...string) *tree.FullTe
 type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
+
+// These tested paths do not require a process or service runtime.
+func (c stubCompilerContext) GetProcess() *process.Process { return nil }
+
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }
@@ -308,11 +313,13 @@ func TestBuildFullTextIndexDefs_OK(t *testing.T) {
 	require.Equal(t, []string{"body"}, idxDefs[0].Parts)
 	require.NotEmpty(t, idxDefs[0].IndexAlgoParams)
 
-	// storage table: 4 declared cols + hidden composite pk; metadata: 6 cols.
+	// storage table: 4 declared cols + hidden composite pk; metadata: 7 cols
+	// (build_ts appended last, after the pre-existing nrow).
 	require.Equal(t, catalog.FullText2Index_TblType_Storage, tblDefs[0].TableType)
 	require.Equal(t, catalog.FullText2Index_TblType_Metadata, tblDefs[1].TableType)
 	require.Len(t, tblDefs[0].Cols, 5)
-	require.Len(t, tblDefs[1].Cols, 6)
+	require.Len(t, tblDefs[1].Cols, 7)
+	require.Equal(t, catalog.FullText2Index_TblCol_Metadata_Build_Ts, tblDefs[1].Cols[6].Name)
 	require.NotNil(t, tblDefs[0].Pkey)
 	require.NotNil(t, tblDefs[1].Pkey)
 }
@@ -364,7 +371,8 @@ func TestBuildFullTextIndexDefs_IncludeOK(t *testing.T) {
 
 	// Hidden tables are unchanged (no per-include SQL column).
 	require.Len(t, tblDefs[0].Cols, 5)
-	require.Len(t, tblDefs[1].Cols, 6)
+	require.Len(t, tblDefs[1].Cols, 7)
+	require.Equal(t, catalog.FullText2Index_TblCol_Metadata_Build_Ts, tblDefs[1].Cols[6].Name)
 }
 
 // TestBuildFullTextIndexDefs_IncludeUnsupportedType: an INCLUDE column of a type outside
@@ -478,19 +486,19 @@ func TestGetFullText2Params_Error(t *testing.T) {
 
 func TestBuildFullText2Create_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
+	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
+	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
@@ -501,36 +509,11 @@ func TestBuildFullText2Create_OK(t *testing.T) {
 
 // --- tablefunc.go: buildFullText2Search ------------------------------------
 
-func TestBuildFullText2Search_BadArgCount(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
-	require.Error(t, err)
-	_, err = buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_BadParams(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_OK(t *testing.T) {
-	b := newStubPlanBuilder()
-	id, err := buildFullText2Search(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
-	require.NoError(t, err)
-	node := b.nodes[id]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-	require.Equal(t, FullText2SearchFuncName, node.TableDef.TblFunc.Name)
-	require.False(t, node.TableDef.TblFunc.IsSingle)
-	require.Len(t, node.TblFuncExprList, 3) // param stripped from the 4 args
-}
-
 // --- tablefunc.go: buildFullText2Compact -----------------------------------
 
 func TestBuildFullText2Compact_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)

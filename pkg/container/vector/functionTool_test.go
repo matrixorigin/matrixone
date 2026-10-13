@@ -22,9 +22,66 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	result := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer result.Free()
+	input, err := NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+	result.UseOptFunctionParamFrame(1)
+	first := OptGetParamFromWrapper[int64](result, 0, input)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, first, OptGetParamFromWrapper[int64](result, 0, input))
+	second := OptGetParamFromWrapper[int64](result, 1, input)
+	value, isNull := second.GetValue(0)
+	require.Equal(t, int64(7), value)
+	require.False(t, isNull)
+	result.UseOptFunctionParamFrame(1)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, second, OptGetParamFromWrapper[int64](result, 1, input))
+}
+
+func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_blob.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+
+	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
+		for i := range dst {
+			dst[i] = byte(i)
+		}
+		return nil
+	}))
+	require.Equal(t, byte(63), vec.GetBytesAt(0)[63])
+	beforeLength, beforeArea := vec.Length(), len(vec.GetArea())
+	require.Error(t, AppendBytesWithWriter(vec, 128, mp, func([]byte) error { return errors.New("reject") }))
+	require.Equal(t, beforeLength, vec.Length())
+	require.Equal(t, beforeArea, len(vec.GetArea()))
+}
+
+func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1, 1)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	called := false
+
+	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, called)
+	require.Zero(t, vec.Length())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
 
 func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
@@ -52,6 +109,87 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	transferred.Free(mp)
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	result := MustFunctionResult[int64](wrapper)
+	require.NoError(t, result.Append(42, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	// A folded result resets before growing, while an ordinary reused result
+	// resets after capacity growth. Both generations must publish the same
+	// owner-provided NULL row bound.
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.False(t, result.vec.IsConst())
+	require.EqualValues(t, 64, result.vec.GetNulls().GetBitmap().Len())
+	result.AddNullAt(63)
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+
+	result = MustFunctionResult[int64](wrapper)
+	capacityRows := result.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity() * 64
+	require.GreaterOrEqual(t, capacityRows, 4)
+	source := nulls.NewWithSize(capacityRows + 1)
+	source.Add(1, uint64(capacityRows))
+
+	require.NotPanics(t, func() {
+		result.AddNulls(source)
+	})
+	require.True(t, result.GetNullAt(1))
+	require.False(t, result.GetNullAt(uint64(capacityRows)))
+	require.EqualValues(t, 4, result.GetResultVector().GetNulls().GetBitmap().Len())
+
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultUnaccountedKeepsLazyNullBitmap(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+
+	bitmap := wrapper.GetResultVector().GetNulls().GetBitmap()
+	require.False(t, bitmap.HasExternalStorage())
+	require.Zero(t, bitmap.Len())
+	require.Zero(t, bitmap.Size())
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestFunctionResultAppendMultiBytesSharesPayload(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	payload := []byte("non-inline-payload-shared-by-every-row")
+
+	require.NoError(t, result.AppendMultiBytes(payload, false, 3))
+	result.AddNullAt(1)
+
+	vec := result.GetResultVector()
+	require.Equal(t, 3, vec.Length())
+	require.Len(t, vec.GetArea(), len(payload))
+	require.False(t, vec.VarlenaAreaIsDisjoint())
+	require.Equal(t, payload, vec.GetBytesAt(0))
+	require.True(t, vec.IsNull(1))
+	require.Equal(t, payload, vec.GetBytesAt(2))
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestAppendByteJsonUsesStorageCompatibleTypeCodes(t *testing.T) {
@@ -236,6 +374,27 @@ func TestPreExtendAndReset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPreExtendAndResetExpandsFoldedFixedResult(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_decimal128.ToType(), mp)
+	defer wrapper.Free()
+	result := MustFunctionResult[types.Decimal128](wrapper)
+
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.Append(types.Decimal128{B0_63: 1}, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+	require.False(t, result.vec.IsConst())
+	require.Len(t, result.cols, 4)
+	for i := int64(0); i < 4; i++ {
+		require.NoError(t, result.Append(types.Decimal128{B0_63: uint64(i + 2)}, false))
+	}
+	require.Equal(t, 4, result.vec.Length())
+}
+
 func TestAppendByteJsonEncoded(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
@@ -329,76 +488,123 @@ func TestAppendByteJsonEncodedConstResult(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestReuseFunctionParameterStr(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_varchar.ToType())
-	for i := uint64(0); i < 10; i++ {
-		err := appendOneBytes(vec, []byte("x"), false, mp)
-		require.NoError(t, err)
-	}
-	g1 := GenerateFunctionStrParameter(vec)
-	ok := ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	err := appendOneBytes(vec, []byte("x"), true, mp)
-	require.NoError(t, err)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, false, ok)
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	vec = NewConstNull(types.T_varchar.ToType(), 0, mp)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, false, ok)
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	err = appendOneBytes(vec, []byte("x"), false, mp)
-	require.Error(t, err)
-
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
+func TestFunctionParameterReuseTransitions(t *testing.T) {
+	t.Run("fixed", func(t *testing.T) {
+		exerciseParameterReuse(t, types.T_int32.ToType(), 1, GenerateFunctionFixedTypeParameter[int32], ReuseFunctionFixedTypeParameter[int32], OptGetParamFromWrapper[int32],
+			func(v *Vector, n, changed bool, mp *mpool.MPool) error {
+				value := int32(7)
+				if changed {
+					value = 9
+				}
+				return appendOneFixed(v, value, n, mp)
+			},
+			func(p FunctionParameterWrapper[int32], i uint64, n, changed bool) {
+				value, isNull := p.GetValue(i)
+				want := int32(7)
+				if changed {
+					want = 9
+				}
+				if n {
+					want = 0
+				}
+				if value != want || isNull != n {
+					t.Fatalf("value=%d null=%v; want=%d null=%v", value, isNull, want, n)
+				}
+			})
+	})
+	t.Run("string", func(t *testing.T) {
+		exerciseParameterReuse(t, types.T_varchar.ToType(), 0, GenerateFunctionStrParameter, ReuseFunctionStrParameter, OptGetBytesParamFromWrapper,
+			func(v *Vector, n, changed bool, mp *mpool.MPool) error {
+				value := "x"
+				if changed {
+					value = "y"
+				}
+				return appendOneBytes(v, []byte(value), n, mp)
+			},
+			func(p FunctionParameterWrapper[types.Varlena], i uint64, n, changed bool) {
+				value, isNull := p.GetStrValue(i)
+				want := "x"
+				if changed {
+					want = "y"
+				}
+				if n {
+					want = ""
+				}
+				if string(value) != want || isNull != n {
+					t.Fatalf("value=%q null=%v; want=%q null=%v", value, isNull, want, n)
+				}
+			})
+	})
 }
 
-func TestReuseFunctionParameterFixed(t *testing.T) {
-	mp := mpool.MustNewZero()
-	var err error
-	vec1 := NewVec(types.T_int32.ToType())
-	for i := uint64(0); i < 10; i++ {
-		err = appendOneFixed(vec1, int32(i), false, mp)
-		require.NoError(t, err)
-	}
-	g2 := GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok := ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	err = appendOneFixed(vec1, 0, true, mp)
-	require.NoError(t, err)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	vec1 = NewConstNull(types.T_int32.ToType(), 1, mp)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	err = appendOneFixed(vec1, int32(0), false, mp)
-	require.Error(t, err)
-
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
+func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, scalarLength int,
+	generate func(*Vector) FunctionParameterWrapper[T], reuse func(*Vector, FunctionParameterWrapper[T]) bool,
+	acquire func(FunctionResultWrapper, int, *Vector) FunctionParameterWrapper[T],
+	appendValue func(*Vector, bool, bool, *mpool.MPool) error, checkValue func(FunctionParameterWrapper[T], uint64, bool, bool)) {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	func() {
+		v := NewVec(typ)
+		defer v.Free(mp)
+		require.NoError(t, appendValue(v, false, false, mp))
+		parameter := generate(v)
+		check := func(p FunctionParameterWrapper[T], source *Vector, index uint64, isNull, changed bool) {
+			t.Helper()
+			if p.GetSourceVector() != source || p.GetType() != *source.GetType() {
+				t.Fatal("parameter source or complete type changed")
+			}
+			checkValue(p, index, isNull, changed)
+		}
+		require.True(t, reuse(v, parameter))
+		check(parameter, v, 0, false, false)
+		require.NoError(t, appendValue(v, true, false, mp))
+		require.False(t, reuse(v, parameter))
+		parameter = generate(v)
+		require.True(t, reuse(v, parameter))
+		check(parameter, v, 0, false, false)
+		check(parameter, v, 1, true, false)
+		scalar := NewConstNull(typ, scalarLength, mp)
+		defer scalar.Free(mp)
+		require.False(t, reuse(scalar, parameter))
+		parameter = generate(scalar)
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		require.Error(t, appendValue(scalar, false, false, mp))
+		require.Equal(t, scalarLength, scalar.Length())
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		parameter = generate(scalar)
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		// A NULL wrapper rejects both value shapes without changing its source.
+		constant := NewVec(typ)
+		defer constant.Free(mp)
+		require.NoError(t, appendValue(constant, false, false, mp))
+		constant.SetClass(CONSTANT)
+		require.False(t, reuse(constant, parameter))
+		require.False(t, reuse(v, parameter))
+		check(parameter, scalar, 0, true, false)
+		parameter = generate(constant)
+		require.True(t, reuse(constant, parameter))
+		check(parameter, constant, 0, false, false)
+		changed := typ
+		changed.Width++
+		other := NewVec(changed)
+		defer other.Free(mp)
+		require.NoError(t, appendValue(other, false, true, mp))
+		require.NoError(t, appendValue(other, true, true, mp))
+		result := NewFunctionResultWrapper(typ, mp)
+		defer result.Free()
+		result.UseOptFunctionParamFrame(1)
+		old := acquire(result, 0, v)
+		require.False(t, reuse(other, old))
+		check(old, v, 0, false, false)
+		fresh := acquire(result, 0, other)
+		require.NotSame(t, old, fresh)
+		require.True(t, reuse(other, fresh))
+		check(fresh, other, 0, false, true)
+		check(fresh, other, 1, true, true)
+		check(old, v, 0, false, false)
+	}()
+	require.Zero(t, mp.CurrNB())
 }

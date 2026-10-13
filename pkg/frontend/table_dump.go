@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path"
 	"path/filepath"
@@ -30,12 +31,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -49,13 +53,15 @@ import (
 )
 
 const (
-	tableDumpFormatVersion = 1
-	tableDumpManifestName  = "manifest.json"
-	tableDumpReadyName     = "READY"
-	tableDumpMaxManifest   = 64 << 20
-	tableDumpMaxRelations  = 4_096
-	tableDumpMaxObjects    = 250_000
-	tableDumpMaxBlocks     = 1_000_000
+	tableDumpFormatVersion      = 1
+	tableDumpBoundFormatVersion = 2
+	tableDumpManifestName       = "manifest.json"
+	tableDumpReadyName          = "READY"
+	tableDumpMaxManifest        = 64 << 20
+	tableDumpMaxRelations       = 4_096
+	tableDumpMaxObjects         = 250_000
+	tableDumpMaxBlocks          = 1_000_000
+	tableDumpMaxAutoIncr        = tableDumpMaxRelations * 16
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -64,22 +70,33 @@ const (
 )
 
 type tableDumpManifest struct {
-	Version        int                 `json:"version"`
-	SourceDatabase string              `json:"source_database"`
-	SourceTable    string              `json:"source_table"`
-	CreateSQL      string              `json:"create_sql,omitempty"`
-	SchemaHash     string              `json:"schema_hash"`
-	MetadataOnly   bool                `json:"metadata_only"`
-	Relations      []tableDumpRelation `json:"relations"`
+	Version          int                 `json:"version"`
+	SourceDatabase   string              `json:"source_database"`
+	SourceTable      string              `json:"source_table"`
+	CreateSQL        string              `json:"create_sql,omitempty"`
+	SchemaHash       string              `json:"schema_hash"`
+	BoundExpressions []byte              `json:"bound_expressions,omitempty"`
+	ExpressionHash   string              `json:"expression_hash,omitempty"`
+	MetadataOnly     bool                `json:"metadata_only"`
+	Relations        []tableDumpRelation `json:"relations"`
 }
 
 type tableDumpRelation struct {
-	Role               string            `json:"role"`
-	IndexName          string            `json:"index_name,omitempty"`
-	IndexAlgoTableType string            `json:"index_algo_table_type,omitempty"`
-	SourceTable        string            `json:"source_table"`
-	SchemaHash         string            `json:"schema_hash"`
-	Objects            []tableDumpObject `json:"objects"`
+	Role               string              `json:"role"`
+	IndexName          string              `json:"index_name,omitempty"`
+	IndexAlgoTableType string              `json:"index_algo_table_type,omitempty"`
+	SourceTable        string              `json:"source_table"`
+	SchemaHash         string              `json:"schema_hash"`
+	LogicalSchemaHash  string              `json:"logical_schema_hash,omitempty"`
+	AutoIncrement      []tableDumpAutoIncr `json:"auto_increment,omitempty"`
+	Objects            []tableDumpObject   `json:"objects"`
+}
+
+// HighWatermark is the last AUTO_INCREMENT value already used or reserved by
+// the source relation. The next generated value starts after it.
+type tableDumpAutoIncr struct {
+	Column        string `json:"column"`
+	HighWatermark uint64 `json:"high_watermark"`
 }
 
 type tableDumpObject struct {
@@ -163,6 +180,51 @@ func tableDumpRelationKey(role, indexName, indexAlgoTableType string) string {
 	return role + "\x00" + indexName + "\x00" + indexAlgoTableType
 }
 
+func tableDumpRelationSchemaMatches(target, dump tableDumpRelation) bool {
+	if dump.LogicalSchemaHash != "" {
+		return target.LogicalSchemaHash == dump.LogicalSchemaHash
+	}
+	return target.SchemaHash == dump.SchemaHash
+}
+
+func tableDumpLegacyTinyTextResolver(
+	ses *Session,
+	defaultDB string,
+	defaultDatabase engine.Database,
+) sqlplan.LegacyTinyTextTableResolver {
+	return func(
+		ctx context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = defaultDB
+		}
+		database := defaultDatabase
+		if database == nil || !strings.EqualFold(sourceDB, defaultDB) {
+			var err error
+			database, err = ses.GetTxnHandler().GetStorage().Database(
+				ctx, sourceDB, ses.GetTxnHandler().GetTxn(),
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		relation, err := database.Relation(ctx, sourceTable, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		sourceDef := sqlplan.CloneTableDefForPlan(relation.GetTableDef(ctx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}
+}
+
 func getTableDumpRelations(
 	ctx context.Context,
 	ses *Session,
@@ -177,13 +239,15 @@ func getTableDumpRelations(
 	if err != nil {
 		return nil, err
 	}
-	masterHash, err := tableSchemaHash(def)
+	resolve := tableDumpLegacyTinyTextResolver(ses, dbName, db)
+	masterHash, err := tableSchemaHashWithResolver(ctx, def, resolve)
 	if err != nil {
 		return nil, err
 	}
 	refs := []tableDumpRelationRef{{
 		tableDumpRelation: tableDumpRelation{
 			Role: "main", SourceTable: master.GetTableName(), SchemaHash: masterHash,
+			LogicalSchemaHash: masterHash,
 		},
 		relation: master,
 	}}
@@ -199,7 +263,12 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHash(indexRel.GetTableDef(ctx))
+		indexDef := indexRel.GetTableDef(ctx)
+		indexHash, err := tableSchemaHashWithResolver(ctx, indexDef, resolve)
+		if err != nil {
+			return nil, err
+		}
+		indexLogicalHash, err := tableLogicalSchemaHashWithResolver(ctx, indexDef, resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -211,6 +280,7 @@ func getTableDumpRelations(
 				IndexAlgoTableType: index.IndexAlgoTableType,
 				SourceTable:        index.IndexTableName,
 				SchemaHash:         indexHash,
+				LogicalSchemaHash:  indexLogicalHash,
 			},
 			relation: indexRel,
 		})
@@ -219,19 +289,61 @@ func getTableDumpRelations(
 }
 
 func tableSchemaHash(def *plan.TableDef) (string, error) {
+	return tableSchemaHashWithResolver(context.Background(), def, nil)
+}
+
+func tableSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, false)
+}
+
+func tableLogicalSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, true)
+}
+
+func tableSchemaHashWithOptions(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+	logicalIndexSchema bool,
+) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	// Catalogs written before TINYTEXT had a durable width marker retain the
+	// subtype only in Createsql. Normalize a planner-owned clone before hashing
+	// so DUMP and LOAD compare the same logical schema without mutating the
+	// catalog definition shared by the engine cache. Keeping this at the common
+	// hash boundary covers both main and index relations.
+	def = sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
+	}
+	// LOAD can recreate internal index relations with equivalent columns but
+	// different catalog-only defaults and CREATE SQL provenance. Normalize those
+	// identities for the new index hash without changing the engine-owned catalog
+	// definition. Keep the legacy hash above for old manifest compatibility.
+	if logicalIndexSchema {
+		normalizeTableDumpIndexSchema(def)
+		// Programmatically created index relations can have no Createsql, while
+		// the same relations recreated from SHOW CREATE retain one. Use the
+		// structural fallback for both forms so that the presence of catalog DDL
+		// does not select two different hashing representations.
+		def.Createsql = ""
+	} else if tableDumpHasLegacyTextMetadata(def) {
+		normalizeTableDumpLegacyTextMetadata(def)
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
-	canReconstruct := def.TableType != catalog.SystemClusterRel &&
-		def.TableType != catalog.SystemExternalRel &&
-		def.Partition == nil && len(def.Fkeys) == 0 && def.ViewSql == nil && def.TblFunc == nil
-	for _, col := range def.Cols {
-		canReconstruct = canReconstruct && col != nil && col.Default != nil
-	}
-	if canReconstruct {
+	if canReconstructTableSchema(def) {
 		clone := *def
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
@@ -273,6 +385,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	clone.Name2ColIndex = nil
 	clone.IsLocked = false
 	clone.AutoIncrOffset = 0
+	clone.AutoIncrEpoch = 0
 	clone.LogicalId = 0
 	clone.OriginalName = ""
 	data, err := clone.Marshal()
@@ -281,6 +394,120 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// Internal index relations cannot be altered directly, so their table-level
+// default charset does not affect stored objects. It is also not stable: an
+// index created with an implicit legacy default and the same index recreated
+// from SHOW CREATE can have identical column charsets but a different default.
+// Normalize that non-storage metadata while retaining each column's effective
+// charset, including binary containers used for packed index keys.
+func normalizeTableDumpIndexSchema(def *plan.TableDef) {
+	def.DefaultCharset = uint32(types.CharsetLegacy)
+	for i, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				cloned := *col
+				cloned.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				def.Cols[i] = &cloned
+			}
+		}
+	}
+}
+
+func canReconstructTableSchema(def *plan.TableDef) bool {
+	if def == nil || def.TableType == catalog.SystemClusterRel ||
+		def.TableType == catalog.SystemExternalRel || def.Partition != nil ||
+		len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func tableDumpManifestCreateSQL(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
+	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
+	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
+		!canReconstructTableSchema(def) {
+		return def.Createsql, nil
+	}
+	clone := sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
+	}
+	if needsLegacyCollationRebuild {
+		// CharsetLegacy was persisted before the charset field had semantics, but
+		// its text ordering was bytewise. A bare historical CREATE statement is
+		// no longer replay-safe now that newly authored text defaults to
+		// general_ci. Use the same public compatibility identity as SHOW CREATE
+		// and CREATE LIKE so dump/load preserves both the table default and any
+		// partially migrated column overrides.
+		normalizeTableDumpLegacyTextMetadata(clone)
+	}
+	canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, clone, nil, false, nil)
+	if err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
+	}
+	return canonical, nil
+}
+
+func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {
+	for _, col := range def.Cols {
+		if col != nil && types.T(col.Typ.Id) == types.T_blob && col.Typ.Width == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {
+	hasText := false
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			hasText = true
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				return true
+			}
+		}
+	}
+	return hasText && def.DefaultCharset == uint32(types.CharsetLegacy)
+}
+
+func normalizeTableDumpLegacyTextMetadata(def *plan.TableDef) {
+	if def.DefaultCharset == uint32(types.CharsetLegacy) {
+		def.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	}
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
 }
 
 func validateTableDumpSchema(def *plan.TableDef) error {
@@ -306,11 +533,6 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	if def.Partition != nil {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with partitions")
 	}
-	for _, col := range def.Cols {
-		if col != nil && col.Typ.AutoIncr {
-			return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with auto-increment columns")
-		}
-	}
 	if len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with foreign key constraints")
 	}
@@ -324,6 +546,93 @@ func validateTableDumpRelations(ctx context.Context, refs []tableDumpRelationRef
 		}
 	}
 	return nil
+}
+
+func collectTableDumpAutoIncrementState(
+	ctx context.Context,
+	ses *Session,
+	dbName string,
+	ref tableDumpRelationRef,
+) ([]tableDumpAutoIncr, error) {
+	def := ref.relation.GetTableDef(ctx)
+	cols := incrservice.GetAutoColumnFromDef(def)
+	if len(cols) == 0 {
+		return nil, nil
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	return collectTableDumpAutoIncrementStateWithExec(ctx, bh, dbName, ref, cols)
+}
+
+func collectTableDumpAutoIncrementStateWithExec(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	ref tableDumpRelationRef,
+	cols []incrservice.AutoColumn,
+) ([]tableDumpAutoIncr, error) {
+	offsets := make(map[string]uint64, len(cols))
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select col_name, offset from mo_catalog.mo_increment_columns where table_id = %d",
+		ref.relation.GetTableID(ctx),
+	)); err != nil {
+		return nil, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			name, err := result.GetString(ctx, row, 0)
+			if err != nil {
+				return nil, err
+			}
+			offset, err := result.GetUint64(ctx, row, 1)
+			if err != nil {
+				return nil, err
+			}
+			offsets[strings.ToLower(name)] = offset
+		}
+	}
+
+	state := make([]tableDumpAutoIncr, 0, len(cols))
+	for _, col := range cols {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		column := sqlquote.Ident(col.ColName)
+		table := sqlquote.QualifiedIdent(dbName, ref.SourceTable)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(ctx, fmt.Sprintf(
+			"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+			column, column, table,
+		)); err != nil {
+			return nil, err
+		}
+		results, err = getResultSet(ctx, bh)
+		if err != nil {
+			return nil, err
+		}
+		var maxValue uint64
+		for _, result := range results {
+			if result.GetRowCount() == 0 {
+				continue
+			}
+			maxValue, err = result.GetUint64(ctx, 0, 0)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+		state = append(state, tableDumpAutoIncr{
+			Column:        col.ColName,
+			HighWatermark: max(offsets[strings.ToLower(col.ColName)], maxValue),
+		})
+	}
+	return state, nil
 }
 
 func hashTableDumpFile(ctx context.Context, fs fileservice.FileService, name string) (int64, string, error) {
@@ -536,13 +845,20 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
-	if manifest.Version != tableDumpFormatVersion {
+	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
+	}
+	if manifest.Version == tableDumpBoundFormatVersion &&
+		(len(manifest.BoundExpressions) == 0 || manifest.ExpressionHash == "") {
+		return nil, moerr.NewInvalidInputNoCtx("table dump is missing bound expression metadata")
 	}
 	return manifest, nil
 }
 
 func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
+	if err := rejectDuplicateTableDumpFields(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	start, err := decoder.Token()
 	if err != nil {
@@ -555,6 +871,7 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 	manifest := new(tableDumpManifest)
 	relationCount := 0
 	objectCount := 0
+	autoIncrCount := 0
 	for decoder.More() {
 		name, err := decodeTableDumpFieldName(decoder)
 		if err != nil {
@@ -571,10 +888,16 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 			err = decoder.Decode(&manifest.CreateSQL)
 		case "schema_hash":
 			err = decoder.Decode(&manifest.SchemaHash)
+		case "bound_expressions":
+			err = decoder.Decode(&manifest.BoundExpressions)
+		case "expression_hash":
+			err = decoder.Decode(&manifest.ExpressionHash)
 		case "metadata_only":
 			err = decoder.Decode(&manifest.MetadataOnly)
 		case "relations":
-			manifest.Relations, err = decodeTableDumpRelations(decoder, &relationCount, &objectCount)
+			manifest.Relations, err = decodeTableDumpRelations(
+				decoder, &relationCount, &objectCount, &autoIncrCount,
+			)
 		default:
 			err = skipTableDumpJSONValue(decoder)
 		}
@@ -597,7 +920,61 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 	return manifest, nil
 }
 
-func decodeTableDumpRelations(decoder *json.Decoder, relationCount, objectCount *int) ([]tableDumpRelation, error) {
+// encoding/json accepts duplicate object keys and silently keeps the last
+// value. A dump is an untrusted restore instruction, so reject ambiguous
+// metadata at every nesting level before interpreting it.
+func rejectDuplicateTableDumpFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	type frame struct {
+		object    bool
+		fieldName bool
+		seen      map[string]struct{}
+	}
+	var stack []frame
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '}' || delimiter == ']') {
+			if len(stack) == 0 {
+				return moerr.NewInvalidInputNoCtx("invalid table dump JSON")
+			}
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object && stack[len(stack)-1].fieldName {
+			name, ok := token.(string)
+			if !ok {
+				return moerr.NewInvalidInputNoCtx("invalid table dump field name")
+			}
+			current := &stack[len(stack)-1]
+			if _, exists := current.seen[name]; exists {
+				return moerr.NewInvalidInputNoCtxf("duplicate table dump field %s", name)
+			}
+			current.seen[name] = struct{}{}
+			current.fieldName = false
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].fieldName = true
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '{' || delimiter == '[') {
+			if len(stack) >= 64 {
+				return moerr.NewInvalidInputNoCtx("table dump JSON nesting exceeds limit")
+			}
+			stack = append(stack, frame{object: delimiter == '{', fieldName: delimiter == '{', seen: make(map[string]struct{})})
+		}
+	}
+}
+
+func decodeTableDumpRelations(
+	decoder *json.Decoder,
+	relationCount, objectCount, autoIncrCount *int,
+) ([]tableDumpRelation, error) {
 	start, err := decoder.Token()
 	if err != nil {
 		return nil, err
@@ -616,7 +993,7 @@ func decodeTableDumpRelations(decoder *json.Decoder, relationCount, objectCount 
 			)
 		}
 		(*relationCount)++
-		relation, err := decodeTableDumpRelation(decoder, objectCount)
+		relation, err := decodeTableDumpRelation(decoder, objectCount, autoIncrCount)
 		if err != nil {
 			return nil, err
 		}
@@ -631,7 +1008,10 @@ func decodeTableDumpRelations(decoder *json.Decoder, relationCount, objectCount 
 	return relations, nil
 }
 
-func decodeTableDumpRelation(decoder *json.Decoder, objectCount *int) (tableDumpRelation, error) {
+func decodeTableDumpRelation(
+	decoder *json.Decoder,
+	objectCount, autoIncrCount *int,
+) (tableDumpRelation, error) {
 	var relation tableDumpRelation
 	start, err := decoder.Token()
 	if err != nil {
@@ -656,6 +1036,10 @@ func decodeTableDumpRelation(decoder *json.Decoder, objectCount *int) (tableDump
 			err = decoder.Decode(&relation.SourceTable)
 		case "schema_hash":
 			err = decoder.Decode(&relation.SchemaHash)
+		case "logical_schema_hash":
+			err = decoder.Decode(&relation.LogicalSchemaHash)
+		case "auto_increment":
+			relation.AutoIncrement, err = decodeTableDumpAutoIncrement(decoder, autoIncrCount)
 		case "objects":
 			relation.Objects, err = decodeTableDumpObjects(decoder, objectCount)
 		default:
@@ -672,6 +1056,43 @@ func decodeTableDumpRelation(decoder *json.Decoder, objectCount *int) (tableDump
 		return relation, moerr.NewInvalidInputNoCtx("invalid table dump relation object")
 	}
 	return relation, nil
+}
+
+func decodeTableDumpAutoIncrement(
+	decoder *json.Decoder,
+	autoIncrCount *int,
+) ([]tableDumpAutoIncr, error) {
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start == nil {
+		return nil, nil
+	}
+	if start != json.Delim('[') {
+		return nil, moerr.NewInvalidInputNoCtx("table dump auto_increment must be a JSON array")
+	}
+	state := make([]tableDumpAutoIncr, 0)
+	for decoder.More() {
+		if *autoIncrCount >= tableDumpMaxAutoIncr {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"table dump contains more than %d auto-increment columns", tableDumpMaxAutoIncr,
+			)
+		}
+		(*autoIncrCount)++
+		var item tableDumpAutoIncr
+		if err = decoder.Decode(&item); err != nil {
+			return nil, err
+		}
+		state = append(state, item)
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInputNoCtx("invalid table dump auto_increment array")
+	}
+	return state, nil
 }
 
 func decodeTableDumpObjects(decoder *json.Decoder, objectCount *int) ([]tableDumpObject, error) {
@@ -824,11 +1245,13 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err = validateTableDumpSchema(def); err != nil {
 		return err
 	}
-	schemaHash, err := tableSchemaHash(def)
+	refs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
 	}
-	refs, err := getTableDumpRelations(ctx, ses, dbName, rel)
+	manifestCreateSQL, err := tableDumpManifestCreateSQL(
+		ctx, def, tableDumpLegacyTinyTextResolver(ses, dbName, nil),
+	)
 	if err != nil {
 		return err
 	}
@@ -838,8 +1261,22 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
+	}
+	if tableDumpMayDependOnDivision(def) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), def, def)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			manifest.Version = tableDumpBoundFormatVersion
+			manifest.BoundExpressions, manifest.ExpressionHash, err = tableDumpBoundExpressions(def)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
 	if err != nil {
@@ -858,6 +1295,11 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	// fixture lifecycle.
 	objectCount := 0
 	for _, ref := range refs {
+		autoIncrement, err := collectTableDumpAutoIncrementState(ctx, ses, dbName, ref)
+		if err != nil {
+			return err
+		}
+		ref.AutoIncrement = autoIncrement
 		relationDump, _, err := dumpTableRelationObjects(
 			ctx, ref, stmt.MetadataOnly, sourceFS, dumpFS, ses.GetMemPool(),
 		)
@@ -1054,6 +1496,113 @@ func submitTableDumpObjects(
 	return submitted, nil
 }
 
+type tableDumpAutoIncrRestore struct {
+	column incrservice.AutoColumn
+	offset uint64
+}
+
+func validateTableDumpAutoIncrementRestore(
+	ctx context.Context,
+	rel engine.Relation,
+	state []tableDumpAutoIncr,
+) ([]tableDumpAutoIncrRestore, uint64, error) {
+	def := rel.GetTableDef(ctx)
+	if def == nil {
+		return nil, 0, moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	columns := incrservice.GetAutoColumnFromDef(def)
+	if len(state) == 0 {
+		if len(columns) == 0 {
+			return nil, 0, nil
+		}
+		return nil, 0, moerr.NewInvalidInputNoCtxf(
+			"table dump auto-increment metadata does not match target relation %s",
+			rel.GetTableName(),
+		)
+	}
+	byName := make(map[string]incrservice.AutoColumn, len(columns))
+	for _, column := range columns {
+		byName[strings.ToLower(column.ColName)] = column
+	}
+
+	restores := make([]tableDumpAutoIncrRestore, 0, len(state))
+	seen := make(map[string]struct{}, len(state))
+	schemaOffset := def.AutoIncrOffset
+	for _, item := range state {
+		name := strings.ToLower(item.Column)
+		column, ok := byName[name]
+		if !ok {
+			return nil, 0, moerr.NewInvalidInputNoCtxf(
+				"auto-increment column %s is not present in target relation %s",
+				item.Column, rel.GetTableName(),
+			)
+		}
+		if _, ok = seen[name]; ok {
+			return nil, 0, moerr.NewInvalidInputNoCtxf(
+				"duplicate auto-increment column %s in table dump", item.Column,
+			)
+		}
+		seen[name] = struct{}{}
+		offset := item.HighWatermark
+		colDef := def.Cols[column.ColIndex]
+		if !colDef.Hidden {
+			offset = max(offset, def.AutoIncrOffset)
+			schemaOffset = max(schemaOffset, offset)
+		}
+		if err := incrservice.ValidateAutoColumnOffset(ctx, types.MustTypeFromPlan(colDef.Typ), offset); err != nil {
+			return nil, 0, err
+		}
+		restores = append(restores, tableDumpAutoIncrRestore{column: column, offset: offset})
+	}
+	if len(seen) != len(columns) {
+		return nil, 0, moerr.NewInvalidInputNoCtxf(
+			"table dump auto-increment metadata does not match target relation %s",
+			rel.GetTableName(),
+		)
+	}
+	return restores, schemaOffset, nil
+}
+
+func applyTableDumpAutoIncrementRestore(
+	ctx context.Context,
+	ses *Session,
+	rel engine.Relation,
+	restores []tableDumpAutoIncrRestore,
+	schemaOffset uint64,
+) (resetInstalled bool, err error) {
+	if len(restores) == 0 {
+		return false, nil
+	}
+	proc := ses.GetProc()
+	if proc == nil || proc.GetTxnOperator() == nil || proc.GetIncrService() == nil {
+		return false, moerr.NewInternalErrorNoCtx("LOAD TABLE requires an auto-increment service")
+	}
+	def := rel.GetTableDef(ctx)
+	if def == nil {
+		return false, moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	tableID := rel.GetTableID(ctx)
+	if err = rel.AlterTable(ctx, nil, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(def.DbId, tableID, schemaOffset, 0),
+	}); err != nil {
+		return false, err
+	}
+	resetInstalled = true
+	for _, restore := range restores {
+		if err = proc.GetIncrService().SetOffset(
+			incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache),
+			tableID,
+			restore.column.ColIndex,
+			restore.column.ColName,
+			restore.offset,
+			proc.GetTxnOperator(),
+		); err != nil {
+			return resetInstalled, err
+		}
+	}
+	return resetInstalled, nil
+}
+
 type cloneFileProtector interface {
 	ProtectCloneFiles(names ...string)
 }
@@ -1096,7 +1645,8 @@ var lockTableDumpLoadTargets = func(
 		if len(primaryKeys) != 1 {
 			return moerr.NewInternalErrorNoCtxf("target relation %s has invalid primary key metadata", ref.relation.GetTableName())
 		}
-		if err = lockTableForTableDump(ctx, eng, proc, tableID, primaryKeys[0].Type, false); err != nil {
+		changeDef := len(incrservice.GetAutoColumnFromDef(ref.relation.GetTableDef(ctx))) != 0
+		if err = lockTableForTableDump(ctx, eng, proc, tableID, primaryKeys[0].Type, changeDef); err != nil {
 			return err
 		}
 	}
@@ -1131,19 +1681,37 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewInvalidInputNoCtx("table dump is incomplete: READY marker is missing")
 		}
 	}
-	targetHash, err := tableSchemaHash(targetDef)
-	if err != nil {
-		return err
-	}
-	if targetHash != manifest.SchemaHash {
-		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
-	}
 	targetRefs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
 	}
 	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
 		return err
+	}
+	if targetRefs[0].SchemaHash != manifest.SchemaHash {
+		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
+	}
+	var restoredDef *plan.TableDef
+	var restoreExpressions bool
+	if manifest.Version == tableDumpBoundFormatVersion {
+		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
+			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
+		if err != nil {
+			return err
+		}
+		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+			return err
+		}
+	} else if tableDumpMayDependOnDivision(targetDef) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			return moerr.NewInvalidInputNoCtx(
+				"legacy table dump cannot verify persisted division bindings; create a new dump")
+		}
 	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
@@ -1164,6 +1732,25 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if err = lockTableDumpLoadTargets(ctx, ses, targetRefs, !manifest.MetadataOnly); err != nil {
 		return err
 	}
+	autoRestores := make(map[string][]tableDumpAutoIncrRestore, len(manifest.Relations))
+	autoSchemaOffsets := make(map[string]uint64, len(manifest.Relations))
+	for _, relationDump := range manifest.Relations {
+		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)
+		targetRef, ok := targetByKey[key]
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
+		}
+		restores, schemaOffset, validateErr := validateTableDumpAutoIncrementRestore(
+			ctx, targetRef.relation, relationDump.AutoIncrement,
+		)
+		if validateErr != nil {
+			return validateErr
+		}
+		if len(restores) != 0 {
+			autoRestores[key] = restores
+			autoSchemaOffsets[key] = schemaOffset
+		}
+	}
 	protector, ok := workspace.(cloneFileProtector)
 	if !ok {
 		return moerr.NewNotSupportedNoCtx("LOAD TABLE reusing existing objects with this transaction workspace")
@@ -1175,7 +1762,6 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewNotSupportedNoCtx("LOAD TABLE installing objects with this transaction workspace")
 		}
 	}
-	sharedObjects := make([]string, 0)
 	seenRelations := make(map[string]struct{}, len(manifest.Relations))
 	seenObjects := make(map[string]struct{})
 	var totalBlocks uint64
@@ -1186,7 +1772,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		seenRelations[key] = struct{}{}
 		targetRef, ok := targetByKey[key]
-		if !ok || targetRef.SchemaHash != relationDump.SchemaHash {
+		if !ok || !tableDumpRelationSchemaMatches(targetRef.tableDumpRelation, relationDump) {
 			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 		}
 		existingRows, err := targetRef.relation.Rows(ctx)
@@ -1224,6 +1810,27 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 					return moerr.NewInvalidInputNoCtxf("metadata-only object %s is not present in target storage", item.Name)
 				}
 			}
+		}
+	}
+	if restoreExpressions {
+		if err = sqlplan.RequirePersistedExpressionProtocol(ctx, ses.GetProc(), restoredDef); err != nil {
+			return err
+		}
+		creator, owner, createdTime, ownerErr := tableDumpTargetOwnership(ctx, ses, targetDef.TblId)
+		if ownerErr != nil {
+			return ownerErr
+		}
+		if err = rel.AlterTable(ctx, nil, []*api.AlterTableReq{
+			api.NewGuardedReplaceDefReq(
+				targetDef.DbId, targetDef.TblId, targetDef.Version,
+				creator, owner, createdTime, restoredDef),
+		}); err != nil {
+			return err
+		}
+	}
+	sharedObjects := make([]string, 0)
+	for _, relationDump := range manifest.Relations {
+		for _, item := range relationDump.Objects {
 			// Object creation has no cross-CN ownership token. Protect every
 			// installed or reused name from transaction rollback and let the
 			// reference-aware object GC reclaim files left by a failed LOAD.
@@ -1253,6 +1860,32 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		)
 		if submitErr != nil {
 			err = submitErr
+			return err
+		}
+	}
+	resetTables := make([]uint64, 0, len(autoRestores))
+	defer func() {
+		if err == nil || len(resetTables) == 0 {
+			return
+		}
+		cleanupCtx := context.WithoutCancel(ctx)
+		for _, tableID := range resetTables {
+			_ = ses.GetProc().GetIncrService().DiscardOffsetReset(
+				cleanupCtx, tableID, ses.GetProc().GetTxnOperator(),
+			)
+		}
+	}()
+	for _, relationDump := range manifest.Relations {
+		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)
+		restores := autoRestores[key]
+		installed, restoreErr := applyTableDumpAutoIncrementRestore(
+			ctx, ses, targetByKey[key].relation, restores, autoSchemaOffsets[key],
+		)
+		if installed {
+			resetTables = append(resetTables, targetByKey[key].relation.GetTableID(ctx))
+		}
+		if restoreErr != nil {
+			err = restoreErr
 			return err
 		}
 	}

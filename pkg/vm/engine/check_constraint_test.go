@@ -19,9 +19,35 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+func TestPlanColsToExeColsPreservesCharset(t *testing.T) {
+	defs := PlanColsToExeCols([]*plan.ColDef{
+		{
+			Name:       "name",
+			OriginName: "name",
+			Typ: plan.Type{
+				Id:      int32(types.T_varchar),
+				Width:   32,
+				Charset: uint32(types.CharsetBinary),
+			},
+		},
+		{
+			Name:       "payload",
+			OriginName: "payload",
+			Typ: plan.Type{
+				Id:    int32(types.T_binary),
+				Width: 8,
+			},
+		},
+	})
+	require.Len(t, defs, 2)
+	require.Equal(t, types.CharsetBinary, defs[0].(*AttributeDef).Attr.Type.Charset)
+	require.Equal(t, types.CharsetBinary, defs[1].(*AttributeDef).Attr.Type.Charset)
+}
 
 func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
 	check := &plan.CheckDef{
@@ -31,16 +57,20 @@ func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
 		},
 	}
 	_, extra, err := PlanDefsToExeDefs(&plan.TableDef{
-		Name:   "t",
-		Checks: []*plan.CheckDef{check},
+		Name:           "t",
+		Checks:         []*plan.CheckDef{check},
+		DefaultCharset: uint32(types.CharsetBinary),
 	})
 	require.NoError(t, err)
 	require.Equal(t, []*plan.CheckDef{check}, extra.Checks)
+	require.Equal(t, uint32(types.CharsetBinary), extra.DefaultCharset)
 
 	roundTrip := api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(extra))
 	require.Equal(t, extra.Checks, roundTrip.Checks)
+	require.Equal(t, extra.DefaultCharset, roundTrip.DefaultCharset)
 
 	clone := api.CloneExtra(extra)
 	require.Equal(t, extra.Checks, clone.Checks)
+	require.Equal(t, extra.DefaultCharset, clone.DefaultCharset)
 	require.NotSame(t, extra.Checks[0], clone.Checks[0])
 }

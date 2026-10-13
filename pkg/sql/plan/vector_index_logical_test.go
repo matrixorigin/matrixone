@@ -37,14 +37,15 @@ func makeVectorIndexDefForLogicalTest(name, algo, algoTableType string, parts, i
 }
 
 func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, []string{"title", "category"})
 	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, []string{"title", "category"})
 	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, []string{"title", "category"})
+	centroidsDef.Visible = false
 
 	indexes, err := builder.collectVectorIndexes(&planpb.Node{
 		TableDef: &planpb.TableDef{
-			Indexes: []*planpb.IndexDef{metaDef, centroidsDef, entriesDef},
+			Indexes: []*planpb.IndexDef{nil, metaDef, centroidsDef, entriesDef},
 		},
 	})
 	require.NoError(t, err)
@@ -63,7 +64,7 @@ func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
 }
 
 func TestCollectVectorIndexesRejectsInconsistentIvfFlatIncludeMetadata(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, []string{"title", "category"})
 	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, []string{"title", "category"})
 	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, []string{"title"})

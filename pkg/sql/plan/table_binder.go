@@ -30,9 +30,9 @@ func NewTableBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 	return b
 }
 
-// NewJoinOnBinder creates the table-expression binder used only for INNER JOIN
-// ON predicates. Other TableBinder callers must continue rejecting subqueries
-// because they do not lower Expr_Sub before execution.
+// NewJoinOnBinder creates the table-expression binder used for JOIN ON
+// predicates whose build path lowers Expr_Sub before execution. Other
+// TableBinder callers must continue rejecting subqueries.
 func NewJoinOnBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 	b := NewTableBinder(builder, ctx)
 	b.allowSubquery = true

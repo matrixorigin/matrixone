@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	mrand "math/rand"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -691,6 +692,60 @@ func testFileServiceWithContext(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 	})
 
+	t.Run("empty file path never aliases root", func(t *testing.T) {
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
+		defer fs.Close(ctx)
+
+		assertFileNotFound := func(operation string, err error) {
+			t.Helper()
+			assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+				"%s returned %v", operation, err)
+		}
+
+		readVector := &IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: -1}},
+			Policy:   policy,
+		}
+		assertFileNotFound("Read", fs.Read(ctx, readVector))
+		assertFileNotFound("ReadCache", fs.ReadCache(ctx, readVector))
+		assertFileNotFound("Write", fs.Write(ctx, IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+			Policy:   policy,
+		}))
+		_, err := fs.StatFile(ctx, "")
+		assertFileNotFound("StatFile", err)
+		assertFileNotFound("PrefetchFile", fs.PrefetchFile(ctx, ""))
+		assertFileNotFound("Delete", fs.Delete(ctx, ""))
+		assertFileNotFound("Delete dot root alias", fs.Delete(ctx, "."))
+
+		if rwFS, ok := fs.(ReaderWriterFileService); ok {
+			reader, err := rwFS.NewReader(ctx, "")
+			if reader != nil {
+				_ = reader.Close()
+			}
+			assertFileNotFound("NewReader", err)
+			writer, err := rwFS.NewWriter(ctx, "")
+			if writer != nil {
+				_ = writer.Close()
+			}
+			assertFileNotFound("NewWriter", err)
+		}
+
+		_, err = SortedList(fs.List(ctx, ""))
+		assert.NoError(t, err, "List must keep accepting the root path")
+		switch local := fs.(type) {
+		case *LocalFS:
+			_, err = os.Stat(local.rootPath)
+			assert.NoError(t, err, "empty file operations removed the LocalFS root")
+		case *LocalETLFS:
+			_, err = os.Stat(local.rootPath)
+			assert.NoError(t, err, "empty file operations removed the LocalETLFS root")
+		}
+	})
+
 	t.Run("cache data", func(t *testing.T) {
 		ctx := testCtx
 		fs := newFS(ctx, fsName)
@@ -1025,6 +1080,19 @@ func testFileServiceWithContext(
 		err = fs.Read(ctx, &IOVector{
 			Policy: policy,
 		})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		err = fs.ReadCache(ctx, &IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: -1}},
+			Policy:   policy,
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		_, err = fs.StatFile(ctx, "")
+		assert.ErrorIs(t, err, context.Canceled)
+
+		err = fs.PrefetchFile(ctx, "")
 		assert.ErrorIs(t, err, context.Canceled)
 
 		_, err = SortedList(fs.List(ctx, ""))

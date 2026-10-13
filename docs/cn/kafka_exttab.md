@@ -2,7 +2,7 @@
 
 Implements issue #27518: read a Kafka topic partition through an external
 table, with per-message metadata columns, WHERE-driven read controls, and
-`LAST_KAFKA_MESSAGE_ID()` for exactly-once chaining.
+`LAST_KAFKA_MESSAGE_ID()` for explicit gap-free chaining.
 
 ## 1. DDL
 
@@ -85,7 +85,7 @@ where __mo_read_start_id = 1000
 An explicit start id is validated against the partition's real bounds at scan
 open: below the log start (messages expired) or beyond the partition end is a
 clear error, never a silent reset (Kafka clients otherwise auto-reset an
-out-of-range offset, which would replay or skip data under the exactly-once
+out-of-range offset, which would replay or skip data under the gap-free
 contract; a mid-scan retention race can at worst skip, never replay). The
 same open-time check makes an unreachable broker or a missing
 topic/partition a loud error instead of an empty result. Control values that
@@ -96,13 +96,17 @@ commits and never updates LAST_KAFKA_MESSAGE_ID().
 
 Contradictory duplicate controls are an error. Any other use of a control
 column (ranges, ORs) stays an ordinary row filter over the effective value.
+The pre-read Kafka group commit used by `autocommit=false` is a replay marker,
+not a transaction checkpoint: Kafka and MatrixOne do not share a transaction.
+Use the regular MatrixOne checkpoint-table pattern below for atomic progress.
 
 ## 5. `LAST_KAFKA_MESSAGE_ID()`
 
 Session builtin (`id 576`): the offset of the last message a **completed**
 Kafka scan returned in this session, NULL before any scan. With
 `autocommit=false`, feeding it back as the next `__mo_read_start_id` gives
-exactly-once consumption:
+non-overlapping, gap-free read windows. Atomic destination+offset semantics
+require the checkpoint-table workflow below.
 
 ```sql
 select * from kt where __mo_read_start_id = 1000 and __mo_read_size = 100000;
@@ -110,14 +114,53 @@ select last_kafka_message_id();      -- e.g. 4711
 select * from kt where __mo_read_start_id = 4711 and ...;  -- continues after
 ```
 
-Progress side effects publish only when the WHOLE statement succeeds, not
-when the source merely reaches end-of-stream: a drained scan hands its
-pending progress (committed-offset advance and session last id) to the
-statement terminal, which publishes on success and discards on any failure
-or cancellation — including a downstream operator error after the source
-finished. An aborted statement therefore never advances the exactly-once
-chain (retry replays, never skips). With `autocommit=true` a successful
-statement commits `last+1` (Kafka next-to-read convention).
+Progress side effects publish when the WHOLE Kafka statement succeeds, not
+when the source merely reaches end-of-stream. A drained scan hands its pending
+progress (committed-offset advance for `autocommit=true`, plus the session last
+id) to the statement terminal, which publishes on success and discards on any
+statement error or cancellation. The frontend transaction manager does not
+own, defer, publish, or roll back Kafka state.
+
+Consequently, `LAST_KAFKA_MESSAGE_ID()` is session state, not transactional
+state. It becomes available immediately after a successful Kafka statement
+inside `BEGIN`, and a later `ROLLBACK` does not restore its previous value.
+Likewise, automatic Kafka group-offset commits are not atomic with a
+MatrixOne transaction. Do not use `autocommit=true` when the Kafka position
+must commit atomically with destination rows.
+
+For transaction-consistent consumption, create the Kafka table with
+`autocommit=false` and store the last consumed offset explicitly in a regular
+MatrixOne table. Lock/read that checkpoint, consume from it, and update it
+with `LAST_KAFKA_MESSAGE_ID()` in the same transaction as the destination
+write:
+
+```sql
+create table kafka_checkpoint (
+    source varchar(128) primary key,
+    last_id bigint not null
+);
+insert into kafka_checkpoint values ('orders', -1);
+
+begin;
+select last_id from kafka_checkpoint where source = 'orders' for update;
+-- The application supplies the returned value as :last_id.
+insert into orders
+select id, name from kafka_orders
+where __mo_read_start_id = :last_id
+  and __mo_read_size = 1000
+  and __mo_read_timeout = 10;
+update kafka_checkpoint
+set last_id = last_kafka_message_id()
+where source = 'orders';
+commit;
+```
+
+If any statement or `COMMIT` fails, roll back the MatrixOne transaction. Both
+the destination rows and `kafka_checkpoint.last_id` then remain unchanged;
+the next attempt reads the durable checkpoint again and safely replays the
+batch. Run the sequence on one pinned connection because the builtin is
+session-scoped. Update the checkpoint only after a non-empty Kafka read, and
+do not reuse the session's last id after rollback as the retry start.
 
 ## 6. Execution
 
@@ -131,9 +174,10 @@ the scan's single reusable CSV parser per message (~16 B and 2 allocs per
 small record, gated by an allocation-budget test), exactly-one-record
 enforced on each message's own boundary, jsonl via one object parse per
 value — so record↔message pairing is exact by construction;
-`getFieldFromLine` synthesizes the metadata columns. A drained scan hands
-its progress to the session, and the statement terminal publishes it only
-when the whole statement succeeds.
+`getFieldFromLine` synthesizes the metadata columns. A drained scan hands its
+progress to the session, and the whole-statement terminal publishes or
+discards it. Transaction-consistent checkpoints are ordinary MatrixOne table
+rows managed explicitly by SQL, not hidden frontend transaction state.
 
 v1 limits: one partition per table (create several tables for several
 partitions), plaintext brokers (no SASL/TLS yet), no discovery of committed
@@ -156,11 +200,13 @@ autocommit earliest/latest).
   harnesses): `optools/kafka_ci.bash` boots a single-node KRaft Kafka via
   docker compose plus a fresh mo-service; the driver
   (`test/kafkaexttab/kafka_e2e_local.go`) seeds the topic itself and proves
-  the exactly-once contract end to end — a drain-the-stream read that ends
+  the read-window chaining contract end to end — a drain-the-stream read that ends
   by timeout is not an error and records the right last id; chaining
   LAST_KAFKA_MESSAGE_ID() into the next __mo_read_start_id tiles the stream
   with no overlap or gap; a repeated start id replays the same data; after
   new messages the chained read resumes at the right offset; a 0-message
-  read leaves the last id NULL in a fresh session and untouched in a
-  chained one. The same script also runs broker-free as a unit test against
-  an offset-semantics simulator (kafka_e2e_local_test.go).
+  read leaves the last id NULL in a fresh session and untouched in a chained
+  one; and an `autocommit=false` workflow proves that destination rows and a
+  regular checkpoint-table row roll back or commit together. The same script
+  also runs broker-free as a unit test against an offset-semantics simulator
+  (`kafka_e2e_local_test.go`).

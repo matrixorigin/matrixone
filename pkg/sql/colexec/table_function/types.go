@@ -39,10 +39,9 @@ type TableFunction struct {
 	Limit    *plan.Expr
 	IsSingle bool
 
-	// probe side runtime filter specs
-	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
-	IndexReaderParam *plan.IndexReaderParam
+	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
+	// the planner only, never from TVF arguments (#27941).
+	ScanSnapshot *plan.Snapshot
 
 	OffsetTotal [][2]int64
 	CanOpt      bool

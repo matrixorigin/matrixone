@@ -179,7 +179,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer(false)
+			mock := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -189,6 +189,79 @@ func TestSingleTableQueryPrune(t *testing.T) {
 				t.Fatalf("%+v", err)
 			}
 			require.Equal(t, c.wantTableCol, columns)
+		})
+	}
+}
+
+func TestCountStarInnerJoinPrunesOutputColumns(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		countOnly bool
+	}{
+		{
+			name:      "inner equi join",
+			sql:       "select count(*) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+			countOnly: true,
+		},
+		{
+			name: "volatile projection",
+			sql:  "select rand() from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "sum constant",
+			sql:  "select sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "count constant",
+			sql:  "select count(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "multiple aggregates",
+			sql:  "select count(*), sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "constant grouping",
+			sql: "select cast(1 as signed), count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey group by cast(1 as signed)",
+		},
+		{
+			name: "inner non-equi join",
+			sql:  "select count(*) from nation n inner join region r on n.n_regionkey < r.r_regionkey",
+		},
+		{
+			name: "inner equi join with residual",
+			sql: "select count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey and n.n_nationkey > r.r_regionkey",
+		},
+		{
+			name: "left equi join",
+			sql:  "select count(*) from region r left join nation n on r.r_regionkey = n.n_regionkey",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+
+			var join *plan.Node
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				if node.NodeType == plan.Node_JOIN {
+					require.Nil(t, join, "query should contain exactly one join")
+					join = node
+				}
+			}
+			require.NotNil(t, join)
+			if test.countOnly {
+				require.Empty(t, join.ProjectList,
+					"pure inner equi COUNT(*) should expose row count only")
+				require.True(t, join.EmitCompressedRowCount,
+					"the executor contract must be explicit")
+			} else {
+				require.NotEmpty(t, join.ProjectList,
+					"non-count-only join shape needs a row carrier")
+				require.False(t, join.EmitCompressedRowCount)
+			}
 		})
 	}
 }
@@ -383,7 +456,7 @@ func TestJoinQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer(false)
+			mock := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -448,13 +521,17 @@ func TestNestedQueryPrune(t *testing.T) {
 					tableName: "lineitem",
 					colNames:  []string{"l_partkey", "l_quantity"},
 				},
+				{
+					tableName: "part",
+					colNames:  []string{"p_partkey", "p_brand", "p_container"},
+				},
 			},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer(false)
+			mock := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -541,7 +618,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer(false)
+			mock := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			if err != nil {
 				t.Fatalf("%+v", err)
@@ -697,7 +774,7 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := plan2.NewMockOptimizer(false)
+			mock := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildOneStmt(mock, t, c.sql)
 			require.NoError(t, err)
 			columns, err := getPrunedTableColumns(logicPlan)
@@ -710,7 +787,7 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 func TestColumnPruneOperatorShape(t *testing.T) {
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from nation",
 		)
@@ -725,7 +802,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("union all compacts output positions", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_name from (select n_name, n_comment from nation union all select r_name, r_comment from region) u",
 		)
@@ -744,7 +821,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("union all chooses low-cost discarded position", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from (select n_name, n_regionkey from nation union all select r_name, r_regionkey from region) u",
 		)
@@ -769,7 +846,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("scalar aggregate chooses low-cost row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from (select group_concat(n_name), count(*) from nation) g",
 		)
@@ -787,11 +864,11 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
 	})
 
-	t.Run("scalar aggregate handles interval carrier candidate", func(t *testing.T) {
+	t.Run("scalar aggregate handles consumed interval carrier candidate", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
-			"select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s",
+			"select 1 from (select count(date_add(date '2026-01-01', interval n_regionkey day)), count(*) from nation) s",
 		)
 		require.NoError(t, err)
 
@@ -809,7 +886,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("union all retains side-effecting positions", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select a from (select n_name as a, sleep(0) as side_effect from nation union all select r_name, sleep(0) from region) u",
 		)
@@ -828,7 +905,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("aggregate compacts having slots", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select c_custkey from (select c_custkey, count(c_comment) as cnt, sum(c_acctbal) as total from customer group by c_custkey having sum(c_acctbal) > 0) g",
 		)
@@ -852,7 +929,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("aggregate retains side-effecting inputs", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select c_custkey from (select c_custkey, sum(sleep(0)) as side_effect from customer group by c_custkey) g",
 		)
@@ -871,7 +948,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("sample compacts discarded output slots", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_regionkey from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
 		)
@@ -899,7 +976,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("sample chooses low-cost discarded carrier", func(t *testing.T) {
 		consumedPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_name, n_regionkey from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
 		)
@@ -911,7 +988,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		}, consumedColumns)
 
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
 		)
@@ -937,7 +1014,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("sample compacts having-only output", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_nationkey from (select n_nationkey, sample(n_name, n_regionkey, 2 rows) from nation group by n_nationkey) s where n_regionkey > 0",
 		)
@@ -981,7 +1058,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		},
 	} {
 		t.Run("sample retains side-effecting output "+test.name, func(t *testing.T) {
-			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			var sampleNode *plan.Node
@@ -999,7 +1076,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("order consumes retained volatile project", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select attname, mo_table_col_max(att_database, att_relname, attname), mo_table_col_min(att_database, att_relname, attname) from mo_catalog.mo_columns order by attnum",
 		)
@@ -1062,7 +1139,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 	} {
 		t.Run("join retains volatile input project "+test.name, func(t *testing.T) {
 			logicPlan, err := buildOneStmt(
-				plan2.NewMockOptimizer(false),
+				plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 				t,
 				"select count(*) from (select "+test.expr+" as s from nation) l join region r on l.s <= r.r_regionkey",
 			)
@@ -1092,7 +1169,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("project retains volatile sibling evaluation order", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2) as times",
 		)
@@ -1118,7 +1195,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
 		)
@@ -1143,7 +1220,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("unused window operators are unreachable", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_name from (select n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w",
 		)
@@ -1156,7 +1233,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("unused window with side effects remains reachable", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_name from (select n_name, row_number() over (order by sleep(0)) as rn from nation) w",
 		)
@@ -1174,7 +1251,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("order sensitive aggregate retains window without exposing its output", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select n_regionkey, json_arrayagg(n_name) from (select n_regionkey, n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w group by n_regionkey",
 		)
@@ -1194,7 +1271,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("discarded order sensitive carrier does not retain window order", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select 1 from (select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_comment) as rn from nation) w) g",
 		)
@@ -1208,7 +1285,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("order sensitive aggregate retains stacked windows", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_regionkey) as rn1, row_number() over (order by n_comment) as rn2 from nation) w",
 		)
@@ -1225,7 +1302,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 
 	t.Run("cte consumers expose only referenced columns", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
+			plan2.NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			"with c as (select n_name, n_comment from nation) select x.n_name from c x join c y on x.n_name = y.n_name",
 		)

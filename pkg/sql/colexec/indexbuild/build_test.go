@@ -62,7 +62,7 @@ func indexBuildRawSpec(tag, upperLimit int32, typ types.Type) *plan.RuntimeFilte
 }
 
 func indexBuildTestProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	return proc
 }
@@ -252,6 +252,7 @@ func TestIndexBuildExactRuntimeFilterContract(t *testing.T) {
 		payload := vector.NewVec(types.T_any.ToType())
 		require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 		require.Equal(t, types.T_int32, payload.GetType().Oid)
+		require.True(t, payload.GetSorted())
 		require.Equal(t, []int32{3, 7},
 			vector.MustFixedColNoTypeCheck[int32](payload))
 		payload.Free(proc.Mp())
@@ -322,6 +323,8 @@ func TestIndexBuildFloatRuntimeFilterClosesConstSignedZero(t *testing.T) {
 				payload := vector.NewVec(types.T_any.ToType())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, 2, payload.Length())
+				require.True(t, payload.GetSorted(),
+					"signed-zero closure must remain ordered without compaction")
 				var positiveZero, negativeZero bool
 				for _, value := range vector.MustFixedColNoTypeCheck[float64](payload) {
 					switch math.Float64bits(value) {
@@ -353,7 +356,7 @@ func TestIndexBuildRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	sourceMP := mpool.MustNewZero()
@@ -425,7 +428,7 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, service, limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, service, limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := NewArgument()
 	arg.RuntimeFilterSpec = spec
@@ -476,7 +479,7 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			spec := indexBuildRawSpec(111, 16, typ)
 			arg := NewArgument()
 			arg.RuntimeFilterSpec = spec
-			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -497,15 +500,15 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			} else {
 				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
-					int(remaining), account, 63, 255)
+					int(remaining), account, mpool.AllocationOwnerDML, 255)
 				require.NoError(t, err)
 			}
 
 			err = arg.ctr.handleRuntimeFilter(arg, proc)
 			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
 			if test.closed {
-				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
-				require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+				require.ErrorIs(t, err, process.ErrExecutionResourceClosed)
+				require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 				require.False(t, arg.ctr.runtimeFilterDone)
 				require.Zero(t,
 					stats["IndexBuildRuntimeFilterBudgetFallbacks"])

@@ -31,8 +31,8 @@
 #
 ################################################################################
 
-# Location of the CUDA Toolkit
-CUDA_PATH ?= /usr/local/cuda
+# Share the provider contract with libmo, cuVS, Go, and the test runner.
+include ../gpu-toolchain.mk
 
 ##############################
 # start deprecated interface #
@@ -160,8 +160,8 @@ else ifneq ($(TARGET_ARCH),$(HOST_ARCH))
         HOST_COMPILER ?= powerpc64le-linux-gnu-g++
     endif
 endif
-HOST_COMPILER ?= g++
-NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
+HOST_COMPILER := $(MO_GPU_CXX)
+NVCC          := $(MO_GPU_NVCC) -ccbin $(HOST_COMPILER)
 
 # internal flags
 NVCCFLAGS   := -m${TARGET_SIZE}
@@ -254,9 +254,17 @@ else ifeq ($(TARGET_ARCH),ppc64le)
     CUDA_INSTALL_TARGET_DIR = targets/ppc64le-linux/
 endif
 
-# Debug build flags
+# Debug build flags. Keep optimization explicit because cuda.o used to add a
+# hard-coded -O3 after the debug flags and produced an optimized "debug" object.
+CUDA_OPT_LEVEL := -O3
+CUDA_HOST_OPT_LEVEL :=
 ifeq ($(dbg),1)
-      NVCCFLAGS += -g -G
+      override NVCCFLAGS := $(filter-out -O%,$(NVCCFLAGS)) -g -G
+      override EXTRA_NVCCFLAGS := $(filter-out -O%,$(EXTRA_NVCCFLAGS))
+      override CCFLAGS := $(filter-out -O%,$(CCFLAGS))
+      override EXTRA_CCFLAGS := $(filter-out -O%,$(EXTRA_CCFLAGS))
+      override CUDA_OPT_LEVEL := -O0
+      override CUDA_HOST_OPT_LEVEL := -Xcompiler -O0
       BUILD_TYPE := debug
 else
       BUILD_TYPE := release
@@ -278,7 +286,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I../../thirdparties/cuda/Common
+INCLUDES  := -I../../thirdparties/cuda/Common $(MO_GPU_CFLAGS)
 LIBRARIES :=
 
 ################################################################################
@@ -313,7 +321,9 @@ GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
 
-ifeq ($(TARGET_OS),darwin)
+ifneq ($(MO_GPU_CUDA_STUB_DIRS),)
+  LIBRARIES += $(addprefix -L,$(MO_GPU_CUDA_STUB_DIRS)) -lcuda
+else ifeq ($(TARGET_OS),darwin)
   ALL_LDFLAGS += -Xcompiler -F/Library/Frameworks -Xlinker -framework -Xlinker CUDA
 else
   ifeq ($(TARGET_ARCH),x86_64)
@@ -392,13 +402,13 @@ else
 endif
 
 $(FATBIN_FILE): mocl.cu
-	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -fatbin $<
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) $(CUDA_OPT_LEVEL) $(CUDA_HOST_OPT_LEVEL) -o $@ -fatbin $<
 
 cuda.o: cuda.cpp
-	$(EXEC) $(NVCC) $(INCLUDES) -O3 --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) $(CUDA_OPT_LEVEL) $(CUDA_HOST_OPT_LEVEL) -o $@ -c $<
 
 mytest.o: cuda.cpp $(FATBIN_FILE)
-	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g -O0 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g $(ALL_CCFLAGS) $(GENCODE_FLAGS) -O0 -Xcompiler -O0 -o $@ -c $<
 
 mytest: mytest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)

@@ -15,9 +15,11 @@
 package colexec
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
@@ -44,12 +46,13 @@ func TestServerIsIsolatedByCNService(t *testing.T) {
 	proc1 := &process.Process{}
 	ch0 := make(process.RemotePipelineInformationChannel)
 	ch1 := make(process.RemotePipelineInformationChannel)
-	require.NoError(t, server0.PutProcIntoUuidMap(uid, proc0, ch0))
-	require.NoError(t, server1.PutProcIntoUuidMap(uid, proc1, ch1))
+	require.NoError(t, server0.PutProcIntoUuidMapWithTerminal(uid, proc0, ch0, NewRemoteReceiverTerminal(nil)))
+	require.NoError(t, server1.PutProcIntoUuidMapWithTerminal(uid, proc1, ch1, NewRemoteReceiverTerminal(nil)))
 
 	server1.RemoveUuidsOwned([]uuid.UUID{uid}, ch1)
-	gotProc, gotCh, ok := server0.GetProcByUuid(uid, false)
-	require.True(t, ok)
+	gotProc, gotCh, attachState, lookupWaiter, _ := server0.AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, RemoteReceiverAttachedNow, attachState)
 	require.Same(t, proc0, gotProc)
 	require.Equal(t, ch0, gotCh)
 }
@@ -67,14 +70,15 @@ func TestPutProcIntoUuidMapConflictIncludesUuidAndState(t *testing.T) {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, conflictingCh)
 		})
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, ownerProc, ownerCh))
-		err := srv.PutProcIntoUuidMap(uid, &process.Process{}, conflictingCh)
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, ownerProc, ownerCh, NewRemoteReceiverTerminal(nil)))
+		err := srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, conflictingCh, NewRemoteReceiverTerminal(nil))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), uid.String())
 		require.Contains(t, err.Error(), "state: ready")
 
-		gotProc, gotCh, ok := srv.GetProcByUuid(uid, false)
-		require.True(t, ok)
+		gotProc, gotCh, attachState, lookupWaiter, _ := srv.AttachProcByUuidOrWait(uid)
+		lookupWaiter.Close()
+		require.Equal(t, RemoteReceiverAttachedNow, attachState)
 		require.Same(t, ownerProc, gotProc)
 		require.Equal(t, ownerCh, gotCh)
 	})
@@ -89,13 +93,14 @@ func TestPutProcIntoUuidMapConflictIncludesUuidAndState(t *testing.T) {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, conflictingCh)
 		})
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, ownerProc, ownerCh))
-		gotProc, gotCh, ok := srv.GetProcByUuid(uid, false)
-		require.True(t, ok)
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, ownerProc, ownerCh, NewRemoteReceiverTerminal(nil)))
+		gotProc, gotCh, attachState, lookupWaiter, _ := srv.AttachProcByUuidOrWait(uid)
+		lookupWaiter.Close()
+		require.Equal(t, RemoteReceiverAttachedNow, attachState)
 		require.Same(t, ownerProc, gotProc)
 		require.Equal(t, ownerCh, gotCh)
 
-		err := srv.PutProcIntoUuidMap(uid, &process.Process{}, conflictingCh)
+		err := srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, conflictingCh, NewRemoteReceiverTerminal(nil))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), uid.String())
 		require.Contains(t, err.Error(), "state: attached")
@@ -111,44 +116,78 @@ func TestPutProcIntoUuidMapConflictIncludesUuidAndState(t *testing.T) {
 		require.Equal(t, ownerCh, item.ownerCh)
 	})
 
-	t.Run("tombstone", func(t *testing.T) {
-		uid := uuid.Must(uuid.NewV7())
-		srv.GetProcByUuid(uid, true)
-		conflictingCh := make(process.RemotePipelineInformationChannel)
-		t.Cleanup(func() {
-			srv.RemoveUuidsOwned([]uuid.UUID{uid}, conflictingCh)
-		})
-
-		err := srv.PutProcIntoUuidMap(uid, &process.Process{}, conflictingCh)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), uid.String())
-		require.Contains(t, err.Error(), "state: tombstone")
-
-		srv.uuidCsChanMap.Lock()
-		_, exists := srv.uuidCsChanMap.mp[uid]
-		srv.uuidCsChanMap.Unlock()
-		require.False(t, exists)
-	})
 }
 
 func TestPutProcIntoUuidMapRejectsIncompleteRegistration(t *testing.T) {
 	srv := NewServer("")
 
 	uid := uuid.Must(uuid.NewV7())
-	err := srv.PutProcIntoUuidMap(
+	err := srv.PutProcIntoUuidMapWithTerminal(
 		uid,
 		nil,
 		make(process.RemotePipelineInformationChannel),
+		NewRemoteReceiverTerminal(nil),
 	)
 	require.ErrorContains(t, err, "requires a non-nil process")
 
-	err = srv.PutProcIntoUuidMap(uid, &process.Process{}, nil)
+	err = srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, nil, NewRemoteReceiverTerminal(nil))
 	require.ErrorContains(t, err, "requires a non-nil process")
+	err = srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, make(process.RemotePipelineInformationChannel), nil)
+	require.ErrorContains(t, err, "terminal")
 
 	srv.uuidCsChanMap.Lock()
 	_, exists := srv.uuidCsChanMap.mp[uid]
 	srv.uuidCsChanMap.Unlock()
 	require.False(t, exists)
+}
+
+func TestRemoteReceiverFinishedResultSurvivesCleanup(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			srv := NewServer("")
+			uid := uuid.MustParse("00000000-0000-0000-0000-000000028313")
+			_, _, _, waiter, _ := srv.AttachProcByUuidOrWait(uid)
+			t.Cleanup(waiter.Close)
+			ch := make(process.RemotePipelineInformationChannel)
+			terminal := NewRemoteReceiverTerminal(nil)
+			require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ch, terminal))
+			var cause error
+			if failed {
+				cause = moerr.NewInternalErrorNoCtx("source failed")
+			}
+			terminal.Finish(cause)
+			terminal.Finish(nil) // repeated cleanup cannot erase the first outcome
+			srv.CloseRemoteReceivers([]uuid.UUID{uid}, ch)
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+			proc, notify, state, _, got := srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverFinished, state)
+			require.Nil(t, proc)
+			require.Nil(t, notify)
+			<-got.Done()
+			require.Equal(t, cause, got.Err())
+			_, _, duplicate, _, _ := srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverAlreadyClosed, duplicate)
+			waiter.Close()
+			require.Empty(t, srv.uuidCsChanMap.mp)
+			require.Empty(t, srv.uuidCsChanMap.waiters)
+			// Delayed old-owner Reset and terminal completion cannot affect reuse.
+			nextCh := make(process.RemotePipelineInformationChannel)
+			next := NewRemoteReceiverTerminal(nil)
+			require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, nextCh, next))
+			srv.CloseRemoteReceivers([]uuid.UUID{uid}, ch)
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+			_, _, state, _, got = srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverAttachedNow, state)
+			require.Same(t, next, got)
+			select {
+			case <-got.Done():
+				t.Fatal("old generation terminated replacement")
+			default:
+			}
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, nextCh)
+			require.Empty(t, srv.uuidCsChanMap.mp)
+		})
+	}
 }
 
 func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
@@ -158,18 +197,20 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerProc := &process.Process{}
 		ownerCh := make(process.RemotePipelineInformationChannel)
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, ownerProc, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, ownerProc, ownerCh, NewRemoteReceiverTerminal(nil)))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		srv.CloseRemoteReceivers([]uuid.UUID{uid}, nil) // No owner cannot close this generation.
+
+		gotProc, gotCh, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAttachedNow, state)
 		require.Same(t, ownerProc, gotProc)
 		require.Equal(t, ownerCh, gotCh)
 		require.Nil(t, waiter)
 
-		gotProc, gotCh, state, waiter = srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ = srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAlreadyAttached, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
@@ -183,20 +224,24 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		require.Equal(t, ownerCh, item.ownerCh)
 	})
 
-	t.Run("closed before attach", func(t *testing.T) {
+	t.Run("finished before attach", func(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		terminal := NewRemoteReceiverTerminal(nil)
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ownerCh, terminal))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
-		srv.DeleteUuids([]uuid.UUID{uid})
+		terminal.Finish(nil)
+		srv.CloseRemoteReceivers([]uuid.UUID{uid}, ownerCh)
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
-		require.Equal(t, RemoteReceiverAlreadyClosed, state)
+		gotProc, gotCh, state, waiter, gotTerminal := srv.AttachProcByUuidOrWait(uid)
+		require.Equal(t, RemoteReceiverFinished, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
 		require.Nil(t, waiter)
+		require.Same(t, terminal, gotTerminal)
+		require.NoError(t, gotTerminal.Err())
 		srv.uuidCsChanMap.Lock()
 		_, exists := srv.uuidCsChanMap.mp[uid]
 		srv.uuidCsChanMap.Unlock()
@@ -207,13 +252,13 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
 		require.NotNil(t, waiter)
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ownerCh, NewRemoteReceiverTerminal(nil)))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
@@ -231,8 +276,8 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid2 := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid1)
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid2)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid1)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid2)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.NotNil(t, waiter1)
@@ -240,7 +285,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		t.Cleanup(waiter1.Close)
 		t.Cleanup(waiter2.Close)
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid1, &process.Process{}, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid1, &process.Process{}, ownerCh, NewRemoteReceiverTerminal(nil)))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid1}, ownerCh)
 		})
@@ -266,8 +311,8 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid)
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.Same(t, waiter1.state, waiter2.state)
@@ -279,7 +324,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		srv.uuidCsChanMap.Unlock()
 		require.Equal(t, 1, refs)
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ownerCh, NewRemoteReceiverTerminal(nil)))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
@@ -295,17 +340,17 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		oldDone := waiter1.Done()
 		waiter1.Close()
 
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.NotEqual(t, oldDone, waiter2.Done())
 		waiter1.Close()
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ownerCh, NewRemoteReceiverTerminal(nil)))
 		t.Cleanup(func() {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
@@ -326,11 +371,11 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		_, _, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state)
 		require.NotNil(t, waiter)
 
-		require.NoError(t, srv.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ownerCh, NewRemoteReceiverTerminal(nil)))
 		srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		select {
 		case <-waiter.Done():
@@ -338,7 +383,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 			t.Fatal("receiver publication did not wake before owner cleanup")
 		}
 
-		gotProc, gotCh, attachState, nextWaiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, attachState, nextWaiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAlreadyClosed, attachState)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)

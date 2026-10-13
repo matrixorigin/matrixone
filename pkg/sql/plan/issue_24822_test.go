@@ -40,8 +40,8 @@ func (o *issue24822Optimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	return logicPlan.GetQuery(), nil
 }
 
-func newIssue24822Optimizer() *issue24822Optimizer {
-	ctx := newFullTextJoinMockCompilerContext()
+func newIssue24822Optimizer(t testing.TB) *issue24822Optimizer {
+	ctx := newFullTextJoinMockCompilerContext(t)
 
 	ftDef := makeFullTextJoinTestTableDef("ft", true)
 	ftDef.TblId = 24822
@@ -88,6 +88,39 @@ func newIssue24822Optimizer() *issue24822Optimizer {
 	return &issue24822Optimizer{ctx: ctx}
 }
 
+func newIssue24822FullText2Optimizer(t testing.TB) *issue24822Optimizer {
+	optimizer := newIssue24822Optimizer(t)
+	ftDef := optimizer.ctx.tables["ft"]
+	logical := ftDef.Indexes[0]
+	store := *logical
+	store.IndexAlgo = catalog.MoIndexFullText2Algo.ToString()
+	store.IndexAlgoParams = `{"parser":"default"}`
+	store.IndexAlgoTableType = catalog.FullText2Index_TblType_Storage
+	store.IndexTableName = logical.IndexTableName + "_store"
+	meta := store
+	meta.IndexAlgoTableType = catalog.FullText2Index_TblType_Metadata
+	meta.IndexTableName = logical.IndexTableName + "_meta"
+	ftDef.Indexes = []*planpb.IndexDef{&store, &meta}
+	for _, indexTableName := range []string{store.IndexTableName, meta.IndexTableName} {
+		optimizer.ctx.objects[indexTableName] = &planpb.ObjectRef{
+			SchemaName: "tpch",
+			ObjName:    indexTableName,
+		}
+		optimizer.ctx.tables[indexTableName] = &planpb.TableDef{
+			Name: indexTableName,
+			Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+				{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+			},
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName:   0,
+				catalog.IndexTablePrimaryColName: 1,
+			},
+		}
+	}
+	return optimizer
+}
+
 func countReachableFullTextScans(query *planpb.Query) int {
 	seen := make(map[int32]bool)
 	var visit func(int32) int
@@ -98,8 +131,33 @@ func countReachableFullTextScans(query *planpb.Query) int {
 		seen[nodeID] = true
 		node := query.Nodes[nodeID]
 		count := 0
-		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
-			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
+		if isFullTextSearchScan(node) {
+			count++
+		}
+		for _, childID := range node.Children {
+			count += visit(childID)
+		}
+		return count
+	}
+
+	count := 0
+	for _, step := range query.Steps {
+		count += visit(step)
+	}
+	return count
+}
+
+func countReachableFullText2Scans(query *planpb.Query) int {
+	seen := make(map[int32]bool)
+	var visit func(int32) int
+	visit = func(nodeID int32) int {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+			return 0
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		count := 0
+		if isFulltext2SearchScan(node) {
 			count++
 		}
 		for _, childID := range node.Children {
@@ -183,6 +241,37 @@ func countReachableFullTextMatches(query *planpb.Query) int {
 	return count
 }
 
+func hasReachableSortAboveAggregate(query *planpb.Query) bool {
+	seen := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+			return false
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_SORT && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID].NodeType == planpb.Node_AGG {
+				return true
+			}
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, step := range query.Steps {
+		if visit(step) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIssue24822FullTextComposesWithNestedQueries(t *testing.T) {
 	tests := []struct {
 		name string
@@ -229,11 +318,138 @@ func TestIssue24822FullTextComposesWithNestedQueries(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, test.sql)
+			logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.GreaterOrEqual(t, countReachableFullTextScans(query), 1)
 			require.Zero(t, countReachableFullTextMatches(query))
+		})
+	}
+}
+
+func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
+	tests := []struct {
+		name               string
+		sql                string
+		sortAboveAggregate bool
+	}{
+		{
+			name: "grouped aggregate",
+			sql: `SELECT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+		{
+			name: "sort above grouped aggregate",
+			sql: `SELECT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id
+				ORDER BY base_id`,
+			sortAboveAggregate: true,
+		},
+		{
+			name: "window above grouped aggregate",
+			sql: `SELECT base_id, COUNT(*), ROW_NUMBER() OVER (ORDER BY COUNT(*))
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+		{
+			name: "distinct above grouped aggregate",
+			sql: `SELECT DISTINCT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, test.sortAboveAggregate, hasReachableSortAboveAggregate(query))
+			require.Equal(t, 1, countReachableFullTextScans(query))
+			require.Zero(t, countReachableFullTextMatches(query))
+		})
+	}
+}
+
+func TestFullTextWrappedPassengerUsesBareMatchStream(t *testing.T) {
+	logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, `
+		SELECT id
+		FROM ft
+		WHERE MATCH(title, body) AGAINST('hello')
+		  AND MATCH(title, body) AGAINST('hello') < 0.0125`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.Zero(t, countReachableFullTextMatches(query),
+		"the score passenger must be rewritten against the bare MATCH stream")
+	require.Equal(t, 1, countReachableFullTextScans(query))
+}
+
+func TestFullText2WrappedPassengerUsesBareMatchStream(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "exclusive upper bound",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') < 0.0125`,
+		},
+		{
+			name: "inclusive upper bound",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') <= 0.013416502`,
+		},
+		{
+			name: "or residual",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND (MATCH(title, body) AGAINST('hello') > 0.0138 OR id = '1')`,
+		},
+		{
+			name: "limit",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') < 0.0118
+				LIMIT 1`,
+		},
+		{
+			name: "aggregate over limited passenger",
+			sql: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT id
+					FROM ft
+					WHERE MATCH(title, body) AGAINST('hello')
+					  AND MATCH(title, body) AGAINST('hello') < 0.0132
+					LIMIT 1
+				) q`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newIssue24822FullText2Optimizer(t), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Zero(t, countReachableFullTextMatches(query),
+				"the score passenger must be rewritten against the bare MATCH2 stream")
+			require.Equal(t, 1, countReachableFullText2Scans(query))
 		})
 	}
 }

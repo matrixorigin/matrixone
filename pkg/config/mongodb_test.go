@@ -40,34 +40,6 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	require.Error(t, parameters.Validate(t.Context()))
 }
 
-func TestMongoDBEnableDefaultPreservesExplicitDisable(t *testing.T) {
-	var omitted FrontendParameters
-	_, err := toml.Decode("", &omitted)
-	require.NoError(t, err)
-	omitted.SetDefaultValues()
-	require.True(t, omitted.MongoDB.Enable)
-	require.False(t, omitted.MongoDB.EnablePerAccount)
-
-	var disabled FrontendParameters
-	_, err = toml.Decode(`[mongodb]
-enable = false
-enable-per-account = true
-allowed-accounts = [7, 8]
-connect-timeout = "3s"
-max-pool-size = 20
-max-conversion-error-rate = 0.2
-`, &disabled)
-	require.NoError(t, err)
-	disabled.SetDefaultValues()
-	require.False(t, disabled.MongoDB.Enable)
-	require.True(t, disabled.MongoDB.EnablePerAccount)
-	require.Equal(t, []uint32{7, 8}, disabled.MongoDB.AllowedAccounts)
-	require.Equal(t, 3*time.Second, disabled.MongoDB.ConnectTimeout.Duration)
-	require.Equal(t, uint64(20), disabled.MongoDB.MaxPoolSize)
-	require.InDelta(t, 0.2, disabled.MongoDB.MaxConversionErrorRate, 0)
-
-}
-
 func TestMongoDBParametersProgrammaticOptOutSurvivesRepeatedDefaulting(t *testing.T) {
 	parameters := NewMongoDBParameters()
 	parameters.SetDefaultValues()
@@ -77,24 +49,75 @@ func TestMongoDBParametersProgrammaticOptOutSurvivesRepeatedDefaulting(t *testin
 	require.False(t, parameters.Enable)
 }
 
-func TestMongoDBParametersCaseInsensitiveEnablement(t *testing.T) {
-	for _, input := range []string{
-		"[mongodb]\nEnable = false\n",
-		"[mongodb]\nENABLE = false\n",
-		"[mongodb]\neNaBlE = false\n",
+func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "mongodb section omitted", input: "", wantEnabled: true},
+		{name: "enable omitted", input: "[mongodb]\nallow-loopback = false\n", wantEnabled: true},
+		{name: "explicit disable", input: "[mongodb]\nenable = false\n", wantEnabled: false},
+		{name: "field case explicit disable", input: "[mongodb]\nEnable = false\n", wantEnabled: false},
+		{name: "upper case explicit disable", input: "[mongodb]\nENABLE = false\n", wantEnabled: false},
+		{name: "mixed case explicit disable", input: "[mongodb]\neNaBlE = false\n", wantEnabled: false},
+		{name: "explicit enable", input: "[mongodb]\nenable = true\n", wantEnabled: true},
 	} {
-		var parameters FrontendParameters
-		_, err := toml.Decode(input, &parameters)
-		require.NoError(t, err)
-		parameters.SetDefaultValues()
-		require.False(t, parameters.MongoDB.Enable)
+		t.Run(tc.name, func(t *testing.T) {
+			parameters := struct {
+				MongoDB MongoDBParameters `toml:"mongodb"`
+			}{MongoDB: *NewMongoDBParameters()}
+			_, err := toml.Decode(tc.input, &parameters)
+			require.NoError(t, err)
+			parameters.MongoDB.SetDefaultValues()
+			require.Equal(t, tc.wantEnabled, parameters.MongoDB.Enable)
+			require.False(t, parameters.MongoDB.EnablePerAccount)
+			require.False(t, parameters.MongoDB.AllowLoopback)
+			require.Empty(t, parameters.MongoDB.AllowedHostSuffixes)
+			require.Empty(t, parameters.MongoDB.AllowedCIDRs)
+			require.NoError(t, parameters.MongoDB.Validate(t.Context()))
+
+			// Re-running defaulting models validation/reload paths and must not
+			// overwrite an explicit false value.
+			parameters.MongoDB.SetDefaultValues()
+			require.Equal(t, tc.wantEnabled, parameters.MongoDB.Enable)
+		})
 	}
 }
 
 func TestMongoDBParametersRejectConflictingEnableKeys(t *testing.T) {
-	var parameters FrontendParameters
+	var parameters struct {
+		MongoDB MongoDBParameters `toml:"mongodb"`
+	}
 	_, err := toml.Decode("[mongodb]\nenable = false\nEnable = true\n", &parameters)
 	require.ErrorContains(t, err, "conflicting enable keys")
+}
+
+func TestMongoDBParametersUnmarshalPreservesOtherSettings(t *testing.T) {
+	var parameters struct {
+		MongoDB MongoDBParameters `toml:"mongodb"`
+	}
+	_, err := toml.Decode(`[mongodb]
+enable = false
+enable-per-account = true
+allowed-accounts = [7, 8]
+allow-loopback = true
+allowed-host-suffixes = ["mongo.example"]
+allowed-cidrs = ["10.0.0.0/8"]
+connect-timeout = "3s"
+max-pool-size = 17
+`, &parameters)
+	require.NoError(t, err)
+	parameters.MongoDB.SetDefaultValues()
+	require.False(t, parameters.MongoDB.Enable)
+	require.True(t, parameters.MongoDB.EnablePerAccount)
+	require.Equal(t, []uint32{7, 8}, parameters.MongoDB.AllowedAccounts)
+	require.True(t, parameters.MongoDB.AllowLoopback)
+	require.Equal(t, []string{"mongo.example"}, parameters.MongoDB.AllowedHostSuffixes)
+	require.Equal(t, []string{"10.0.0.0/8"}, parameters.MongoDB.AllowedCIDRs)
+	require.Equal(t, 3*time.Second, parameters.MongoDB.ConnectTimeout.Duration)
+	require.Equal(t, uint64(17), parameters.MongoDB.MaxPoolSize)
+	require.NoError(t, parameters.MongoDB.Validate(t.Context()))
 }
 
 func TestMongoDBParametersRejectMalformedEndpointPolicy(t *testing.T) {

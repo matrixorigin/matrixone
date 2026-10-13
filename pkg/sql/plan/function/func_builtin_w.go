@@ -34,16 +34,32 @@ import (
 // the result is also returned as string.  For other types (and multiple args),
 // user must econde the args into string -- usually using json.
 //
-// try_wasm is the same as startlark, but it will error if there is error
-// when running wasm.  Instead, it will just return NULL.
+// try_wasm has the same setup contract as wasm: URL parsing, image loading,
+// and plugin construction errors are returned. Once the plugin is ready,
+// per-row call errors are returned as NULL instead.
 
 type opBuiltInWasm struct {
-	// do we need to call plugin.Close()?
 	plugin *extism.Plugin
 }
 
 func newOpBuiltInWasm() *opBuiltInWasm {
 	return &opBuiltInWasm{}
+}
+
+// Close releases the plugin owned by this expression instance.  The function
+// framework calls it both when an executor is reset for another query and when
+// it is freed.
+func (op *opBuiltInWasm) Close() error {
+	if op.plugin == nil {
+		return nil
+	}
+	plugin := op.plugin
+	op.plugin = nil
+	return plugin.Close()
+}
+
+func (op *opBuiltInWasm) Reset() error {
+	return op.Close()
 }
 
 func (op *opBuiltInWasm) buildWasm(proc *process.Process, wasmurl string) error {
@@ -88,8 +104,18 @@ func (op *opBuiltInWasm) buildWasm(proc *process.Process, wasmurl string) error 
 	config := extism.PluginConfig{
 		EnableWasi: true,
 	}
-	op.plugin, err = extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
-	return err
+	// wasmurl is an external input and may name a different image on every
+	// evaluation. Do not cache it across batches, but close the preceding batch's
+	// instance before replacing it so the operator owns at most one plugin.
+	if err = op.Close(); err != nil {
+		return err
+	}
+	plugin, err := extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
+	if err != nil {
+		return err
+	}
+	op.plugin = plugin
+	return nil
 }
 
 func (op *opBuiltInWasm) runWasm(fn string, arg []byte) ([]byte, error) {
@@ -109,6 +135,15 @@ func (op *opBuiltInWasm) tryWasm(params []*vector.Vector, result vector.Function
 
 func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList, isTry bool) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(params[0])
 	if !params[0].IsConst() {
 		return moerr.NewInvalidInput(proc.Ctx, "wasm url must be constant.")
@@ -121,36 +156,44 @@ func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.Func
 		return err
 	}
 
-	rs := vector.MustFunctionResult[types.Varlena](result)
 	p2 := vector.GenerateFunctionStrParameter(params[1])
 	p3 := vector.GenerateFunctionStrParameter(params[2])
 
-	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		fn, isnull := p2.GetStrValue(i)
 		if isnull {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 			continue
 		}
 		arg, isnull := p3.GetStrValue(i)
 		if isnull {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 			continue
 		}
 
 		res, err := op.runWasm(string(fn), arg)
 		if err != nil {
 			if isTry {
-				rs.AppendBytes(nil, true)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				return err
 			}
 		} else {
-			rs.AppendBytes(res, false)
+			if err = rs.AppendBytes(res, false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

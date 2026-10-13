@@ -383,6 +383,9 @@ func (p *IoPipeline) doAsyncFetch(
 }
 
 func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
+	if err = validatePrefetchLocation(params.key); err != nil {
+		return err
+	}
 	return p.prefetchFunc(params)
 }
 
@@ -424,9 +427,8 @@ func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
 		putJob(job)
 	} else {
 		if _, err := p.waitQ.Enqueue(job); err != nil {
-			job.DoneWithErr(err)
 			logutil.Debugf("err is %v", err.Error())
-			putJob(job)
+			waitAndRecyclePrefetchJob(job)
 		}
 	}
 }
@@ -504,18 +506,21 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 
 func (p *IoPipeline) onWait(jobs ...any) {
 	for _, item := range jobs {
-		job := item.(*tasks.Job)
-		res := job.WaitDone()
-		if res == nil {
-			logutil.Infof("job is %v", job.String())
-			putJob(job)
-			return
-		}
-		if res.Err != nil {
-			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
-		}
-		putJob(job)
+		waitAndRecyclePrefetchJob(item.(*tasks.Job))
 	}
+}
+
+// waitAndRecyclePrefetchJob is the terminal owner after a scheduler accepts a
+// job. A wait-queue rejection only moves that ownership back to the submitter;
+// it must not complete or recycle a job that may still be running.
+func waitAndRecyclePrefetchJob(job *tasks.Job) {
+	res := job.WaitDone()
+	if res == nil {
+		logutil.Infof("job is %v", job.String())
+	} else if res.Err != nil {
+		logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
+	}
+	putJob(job)
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {

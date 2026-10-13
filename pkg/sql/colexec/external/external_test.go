@@ -19,6 +19,8 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -127,7 +129,6 @@ func (r *checkLockTableBindsReader) Close() error {
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
-	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -195,7 +196,7 @@ func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
 	require.Equal(t, 1, op.calls)
 }
 
-func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -241,8 +242,7 @@ func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
 		proc,
 	)
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
-	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 
 	bat.CleanOnlyData()
 	err = getColData(
@@ -405,6 +405,135 @@ func TestPrepareSetsLoadEmptyNumericAsZeroForParallelRequestedLoad(t *testing.T)
 	if arg.ctr.buf != nil {
 		arg.ctr.buf.Clean(proc.Mp())
 	}
+}
+
+func TestPrepareAllocatesArrowVectorsByPhysicalColumnIndex(t *testing.T) {
+	proc := newArrowLoadTestProc(t)
+	defer proc.Free()
+
+	fs, err := fileservice.NewMemoryFS("arrow-prepare", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	param := externalArrowParam(fs, "arrow-prepare:unused.arrow", 0, tree.ARROW_CONTAINER_FILE)
+	param.Attrs = []plan.ExternAttr{
+		{ColName: "payload", ColIndex: 0},
+		{ColName: "id", ColIndex: 2},
+	}
+	param.Cols = []*plan.ColDef{
+		{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+		{Name: "generated", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	arg := NewArgument().WithEs(param)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+
+	// Attrs is the physical-column projection. The second output slot maps to
+	// Cols[2], even though Cols[1] is a generated column omitted from Attrs.
+	require.Equal(t, types.T_int64, arg.ctr.buf.Vecs[1].GetType().Oid)
+
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Release()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+type closeErrorExternalReader struct{ err error }
+
+func (r *closeErrorExternalReader) Open(*ExternalParam, *process.Process) (bool, error) {
+	return false, nil
+}
+
+func (r *closeErrorExternalReader) ReadBatch(context.Context, *batch.Batch, *process.Process, process.Analyzer) (bool, error) {
+	return true, nil
+}
+
+func (r *closeErrorExternalReader) Close() error { return r.err }
+
+func TestExternalCallPropagatesTerminalReaderCloseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}}},
+		ExParam:      ExParam{Fileparam: &ExFileparam{}},
+	}
+	external := &External{Es: param, reader: &closeErrorExternalReader{err: errors.New("deferred stream close failed")}, fileOpened: true}
+	external.OpAnalyzer = process.NewAnalyzer(0, true, true, "external-close-test")
+
+	_, err := external.Call(proc)
+	require.ErrorContains(t, err, "deferred stream close failed")
+	require.False(t, external.fileOpened)
+	require.True(t, param.Fileparam.End)
+}
+
+func TestExternalPrepareRejectsMissingFileParam(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			FileList: []string{"unused.csv"},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Format: tree.CSV,
+					Tail:   &tree.TailParameter{},
+				},
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+	}
+	arg := &External{Es: param}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = arg.Prepare(proc)
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "external file parameter is missing")
+}
+
+func TestExternalPrepareRejectsInvalidAttrIndexWithoutPartialState(t *testing.T) {
+	proc := newArrowLoadTestProc(t)
+	defer proc.Free()
+
+	fs, err := fileservice.NewMemoryFS("arrow-prepare-invalid-attr", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	param := externalArrowParam(fs, "arrow-prepare-invalid-attr:unused.arrow", 0, tree.ARROW_CONTAINER_FILE)
+	param.Attrs = []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "missing", ColIndex: 2},
+	}
+	param.Cols = []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	arg := NewArgument().WithEs(param)
+	defer func() {
+		arg.Free(proc, true, err)
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+	}()
+	require.NoError(t, arg.SetAllocationAccount(account))
+
+	err = arg.Prepare(proc)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "external output column index 2 is invalid")
+	require.Nil(t, arg.reader)
+	require.Nil(t, arg.ctr.buf)
 }
 
 func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
@@ -1297,6 +1426,7 @@ func TestIcebergParquetProfileStats(t *testing.T) {
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
@@ -1587,7 +1717,6 @@ func TestReadDirSymlink(t *testing.T) {
 			case ev := <-evChan:
 				t.Logf("notify: %+v", ev)
 			case <-testDone:
-				time.Sleep(time.Second * 3) // wait event
 				// drain
 				for {
 					select {
@@ -1712,6 +1841,9 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Test file removed, waiting for file system events to settle")
 
+	if evChan != nil {
+		notify.Stop(evChan)
+	}
 	close(testDone)
 	<-fsLogDone
 	t.Logf("TestReadDirSymlink completed successfully")
@@ -2564,4 +2696,57 @@ func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
 	require.Equal(t, types.T_array_float32, vectorType.Oid)
 	require.Equal(t, int32(3), vectorType.Width)
 	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
+}
+
+func TestGetColDataEmptyDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		domain  string
+		input   string
+		null    bool
+		want    uint64
+		invalid bool
+	}{
+		{"empty enum", types.T_enum, "", "", false, 1, false}, {"enum null", types.T_enum, "", "", true, 0, false},
+		{"enum ordinal", types.T_enum, "", "1", false, 1, false}, {"enum invalid", types.T_enum, "", "2", false, 0, true},
+		{"empty set", types.T_uint64, ",", "", false, 0, false}, {"set bitmap", types.T_uint64, ",", "1", false, 1, false},
+		{"set null", types.T_uint64, ",", "", true, 0, false}, {"set invalid", types.T_uint64, ",", "2", false, 0, true},
+		{"uint64 control", types.T_uint64, "", "2", false, 2, false},
+	} {
+		for _, parallel := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/parallel=%v", tc.name, parallel), func(t *testing.T) {
+				col := &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}}
+				param := &ExternalParam{ExParamConst: ExParamConst{ParallelLoad: parallel, Cols: []*plan.ColDef{col}, Extern: &tree.ExternParam{ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+				typ := tc.oid.ToType()
+				if parallel {
+					typ = types.T_varchar.ToType()
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(typ)
+				defer bat.Clean(proc.Mp())
+				field := csvparser.Field{Val: tc.input, IsNull: tc.null}
+				err := getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "v", ColIndex: 0, ColFieldIndex: 0}, proc)
+				if !parallel && tc.invalid {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.null, bat.Vecs[0].IsNull(0))
+				if tc.null {
+					return
+				}
+				if parallel {
+					require.Equal(t, tc.input, bat.Vecs[0].GetStringAt(0))
+				} else if tc.oid == types.T_enum {
+					require.Equal(t, types.Enum(tc.want), vector.GetFixedAtWithTypeCheck[types.Enum](bat.Vecs[0], 0))
+				} else {
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+				}
+				require.Equal(t, !tc.invalid, isLegalLine(param.Extern, []*plan.ColDef{col}, []csvparser.Field{field}))
+			})
+		}
+	}
 }

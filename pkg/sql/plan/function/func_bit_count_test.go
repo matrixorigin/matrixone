@@ -33,7 +33,7 @@ func TestBitCountInteger(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 1, 64, 63}, nil),
 		BitCountInteger[int64])
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -59,16 +59,26 @@ func TestBitCountString(t *testing.T) {
 			1,
 		}, nil),
 		BitCountNonBinaryString)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
-func TestBitCountStringInvalidFormat(t *testing.T) {
-	_, err := bitCountFromMysqlIntegerString("123abc")
-	require.Error(t, err)
-
-	_, err = bitCountFromMysqlIntegerString("1.9")
-	require.Error(t, err)
+func TestBitCountStringNumericPrefixCoercion(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  uint64
+	}{
+		{input: "abc", want: 0},
+		{input: "12x", want: 2},
+		{input: "123abc", want: 6},
+		{input: "1.9", want: 1},
+		{input: "+x", want: 0},
+		{input: "-12x", want: 61},
+	} {
+		got, err := bitCountFromMysqlIntegerString(tc.input)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got, tc.input)
+	}
 }
 
 func TestBitCountFloat(t *testing.T) {
@@ -89,7 +99,7 @@ func TestBitCountFloat(t *testing.T) {
 			64, 1,
 		}, nil),
 		BitCountFloat[float64])
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	_, err := bitCountFromFloat(math.NaN(), proc)
@@ -113,7 +123,7 @@ func TestBitCountDecimal64(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 1, 2, 64, 63, 63}, nil),
 		BitCountDecimal64)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	got, err := bitCountFromDecimal64(types.Decimal64Max, 0)
@@ -149,7 +159,7 @@ func TestBitCountDecimal128(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 1, 64, 64, 1, 1}, nil),
 		BitCountDecimal128)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	overflow, err := types.ParseDecimal128("18446744073709551616", typ.Width, typ.Scale)
@@ -178,7 +188,7 @@ func TestBitCountDecimal256(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 63, 63, 1, 64, 64, 1}, nil),
 		BitCountDecimal256)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	overflow := mustParseDecimal256(t, "18446744073709551616.0", typ.Scale)
@@ -194,7 +204,7 @@ func TestBitCountBinaryString(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{7, 1, 8}, nil),
 		BitCountBinaryString)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -218,6 +228,27 @@ func TestBitCountVarcharWithIsBin(t *testing.T) {
 	require.Equal(t, []uint64{7, 1, 0, 8}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
+func TestBitCountVarcharUsesRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("64"), []byte("64"), []byte("64")},
+		nil,
+		types.T_varchar.ToType(),
+		mp,
+	)
+	defer input.Free(mp)
+	require.NoError(t, input.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
+	require.NoError(t, input.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
+
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+
+	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.Equal(t, []uint64{7, 1, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+}
+
 func TestBitCountTypeCheck(t *testing.T) {
 	ctx := context.Background()
 
@@ -225,6 +256,12 @@ func TestBitCountTypeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(BIT_COUNT), get.fid)
 	require.Equal(t, int32(13), get.overloadId)
+
+	get, err = GetFunctionByName(ctx, "bit_count", []types.Type{types.T_any.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, int32(14), get.overloadId)
+	require.True(t, get.needCast)
+	require.Equal(t, types.T_varbinary, get.targetTypes[0].Oid)
 
 	get, err = GetFunctionByName(ctx, "bit_count", []types.Type{types.T_binary.ToType()})
 	require.NoError(t, err)

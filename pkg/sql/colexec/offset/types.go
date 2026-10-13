@@ -30,10 +30,12 @@ type container struct {
 	offset         uint64
 	offsetExecutor colexec.ExpressionExecutor
 	buf            *batch.Batch
+	inputRows      uint64
 }
 type Offset struct {
-	ctr        container
-	OffsetExpr *plan.Expr
+	ctr           container
+	OffsetExpr    *plan.Expr
+	calcFoundRows bool
 
 	vm.OperatorBase
 }
@@ -68,6 +70,15 @@ func (offset *Offset) WithOffset(offsetExpr *plan.Expr) *Offset {
 	return offset
 }
 
+func (offset *Offset) WithFoundRows(enabled bool) *Offset {
+	offset.calcFoundRows = enabled
+	return offset
+}
+
+func (offset *Offset) IsFoundRowsOwner() bool {
+	return offset.calcFoundRows
+}
+
 func (offset *Offset) Release() {
 	if offset != nil {
 		reuse.Free[Offset](offset, nil)
@@ -89,6 +100,7 @@ func (offset *Offset) Reset(proc *process.Process, pipelineFailed bool, err erro
 		}
 	}
 	offset.ctr.seen = 0
+	offset.ctr.inputRows = 0
 }
 
 func (offset *Offset) Free(proc *process.Process, pipelineFailed bool, err error) {

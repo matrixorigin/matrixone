@@ -25,14 +25,23 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,6 +49,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRetainingOperatorsActivateAllocationLifecycle(t *testing.T) {
+	group := groupop.NewArgument()
+	defer group.Release()
+	_, ownsAllocation := any(group).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	localOrder := order.NewArgument()
+	defer localOrder.Release()
+	_, ownsAllocation = any(localOrder).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeGroup := groupop.NewArgumentMergeGroup()
+	defer mergeGroup.Release()
+	_, ownsAllocation = any(mergeGroup).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	order := mergeorder.NewArgument()
+	defer order.Release()
+	_, ownsAllocation = any(order).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	topN := top.NewArgument()
+	defer topN.Release()
+	_, ownsAllocation = any(topN).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeTopN := mergetop.NewArgument()
+	defer mergeTopN.Release()
+	_, ownsAllocation = any(mergeTopN).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+}
 
 func TestJoinAllocationLifecycleErrorsPreservesSingle(t *testing.T) {
 	primary := moerr.NewDuplicateEntryNoCtx("duplicate", "primary")
@@ -199,7 +240,7 @@ func newRunLifecycleCompile(
 	)
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	c.anal = newAnalyzeModule()
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := budget.AllocationAccountRegistry()
 	require.NoError(t, err)
@@ -467,10 +508,8 @@ func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing
 	require.Nil(t, c.allocationAccountRegistry)
 	require.NoError(t, c.attachRuntimeAllocationOwners(c.scopes))
 
-	transportOwners := []executionAllocationAccountOwner{
-		connectorOp,
-		dispatchOp,
-	}
+	transportOwners := make([]executionAllocationAccountOwner, 0, 3)
+	transportOwners = append(transportOwners, connectorOp, dispatchOp)
 	require.False(t, hasAllocationAccountActivator(transportOwners))
 
 	active := &allocationLifecycleOwnerOperator{
@@ -480,6 +519,56 @@ func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing
 	require.ErrorIs(t, c.attachRuntimeAllocationOwners([]*Scope{{
 		RootOp: active,
 	}}), mpool.ErrAllocationAccountInvariant)
+}
+
+func TestMaterializedSourceActivatesAllocationLifecycle(t *testing.T) {
+	c := &Compile{
+		proc:                testutil.NewProcess(t),
+		MessageBoard:        message.NewMessageBoard(),
+		materializedSources: map[int32]*materialized.Source{1: materialized.NewSource(1)},
+	}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	}))
+	require.NotNil(t, c.allocationControllerProvider)
+	require.NotNil(t, c.allocationAccountRegistry)
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NotNil(t, attempt)
+	require.NotNil(t, attempt.account)
+	require.NoError(t, c.finishAllocationAccountAttempt())
+}
+
+func TestCompileClearClosesMaterializedSourceBeforeAccountTerminal(t *testing.T) {
+	c, _ := newRunLifecycleCompile(t)
+	proc := c.proc
+	source := materialized.NewSource(1)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c.materializedSources = map[int32]*materialized.Source{1: source}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	}))
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NoError(t, source.Begin(proc.Mp(), materialized.SpillConfig{
+		AllocationAccount: attempt.account,
+	}))
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
+	input.SetRowCount(1)
+	require.NoError(t, source.Append(input))
+	input.Clean(proc.Mp())
+	require.Positive(t, attempt.account.Snapshot().Used)
+
+	c.clear()
+
+	require.Len(t, exported, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
+	require.Zero(t, exported[0].Used)
 }
 
 func TestAllocationAccountCollectsProductConsumerAndHashBuild(t *testing.T) {
@@ -550,6 +639,49 @@ func TestParallelRuntimeClonesJoinAllocationAttempt(t *testing.T) {
 	require.Len(t, exported, 1)
 	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
 	require.Zero(t, exported[0].Used)
+	parallel.release()
+	template.Release()
+}
+
+func TestOrderedTopRuntimeGatherJoinsAllocationAttempt(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	c := newTestAllocationLifecycleCompile(t, registry,
+		func(mpool.AllocationAccountTerminalSnapshot) {})
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(100)
+	orderBy := []*plan.OrderBySpec{{Expr: &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}}}
+	template := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy).WithOrderedOutput()
+	source := &Scope{
+		RootOp: template,
+		Proc:   c.proc,
+		NodeInfo: engine.Node{
+			Mcpu: 2,
+		},
+	}
+	c.scopes = []*Scope{source}
+	_, err = c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+
+	parallel, workers := newParallelScope(source)
+	require.Len(t, workers, 2)
+	require.NoError(t, c.attachRuntimeAllocationOwners([]*Scope{parallel}))
+	gather := parallel.RootOp.(*mergetop.MergeTop)
+	require.NoError(t, gather.Prepare(parallel.Proc))
+	for _, worker := range workers {
+		workerTop := worker.RootOp.(*connector.Connector).
+			GetOperatorBase().GetChildren(0).(*top.Top)
+		require.NoError(t, workerTop.Prepare(worker.Proc))
+		workerTop.Free(worker.Proc, false, nil)
+	}
+	for _, reg := range parallel.Proc.Reg.MergeReceivers {
+		require.True(t, reg.SendEnd())
+	}
+	gather.Free(parallel.Proc, false, nil)
+	require.NoError(t, c.finishAllocationAccountAttempt())
+
 	parallel.release()
 	template.Release()
 }

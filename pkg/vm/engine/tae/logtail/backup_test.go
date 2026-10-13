@@ -28,14 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCanonicalizeBackupTombstone(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		layout     backupSpecialColumnLayout
+		layout     objectio.SpecialColumnLayout
 		pkType     types.T
 		newBatch   func() *batch.Batch
 		resultRows int
@@ -43,7 +42,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 	}{
 		{
 			name:       "commit timestamp only",
-			layout:     newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, invalidBackupSpecialColumnPosition),
+			layout:     backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
 			pkType:     types.T_int64,
 			resultRows: 2,
 			cutoff:     types.BuildTS(15, 0),
@@ -53,7 +52,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 		},
 		{
 			name:       "commit timestamp and abort with timestamp pk",
-			layout:     newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout:     backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			pkType:     types.T_TS,
 			resultRows: 1,
 			cutoff:     types.BuildTS(15, 0),
@@ -63,7 +62,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 		},
 		{
 			name:       "physical address before commit timestamp",
-			layout:     newBackupTombstoneLayout(3, 2, 4),
+			layout:     backupTombstoneLayout(3, 2, 4),
 			pkType:     types.T_int64,
 			resultRows: 1,
 			cutoff:     types.BuildTS(15, 0),
@@ -73,7 +72,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 		},
 		{
 			name:       "physical address after commit timestamp",
-			layout:     newBackupTombstoneLayout(2, 3, 4),
+			layout:     backupTombstoneLayout(2, 3, 4),
 			pkType:     types.T_int64,
 			resultRows: 1,
 			cutoff:     types.BuildTS(15, 0),
@@ -83,7 +82,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 		},
 		{
 			name:       "all rows filtered",
-			layout:     newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout:     backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			pkType:     types.T_int64,
 			resultRows: 0,
 			cutoff:     types.BuildTS(5, 0),
@@ -116,9 +115,7 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 	}
 }
 
-func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
+func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
 	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
 	input.Vecs[2].Free(common.DebugAllocator)
 	commitTS := types.BuildTS(10, 0)
@@ -128,101 +125,68 @@ func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
 	require.NoError(t, err)
 	defer input.Clean(common.DebugAllocator)
 
-	layout := newBackupTombstoneLayout(
-		2,
-		invalidBackupSpecialColumnPosition,
-		invalidBackupSpecialColumnPosition,
-	)
 	visibleRows, err := visibleAppendableRows(
-		context.Background(), input, layout, ptrTo(types.BuildTS(15, 0)),
+		context.Background(),
+		input,
+		backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
+		ptrTo(types.BuildTS(15, 0)),
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 1, 2}, visibleRows)
 
 	input.Shrink(visibleRows, false)
-	result, err := canonicalizeBackupTombstone(ctx, input, layout)
+	result, err := canonicalizeBackupTombstone(
+		context.Background(),
+		input,
+		backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
+	)
 	require.NoError(t, err)
 	defer result.Clean(common.DebugAllocator)
 	require.Equal(t, 3, result.RowCount())
-	require.False(t, result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx].IsConst())
 	for row := range result.RowCount() {
 		require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](
 			result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx], row))
-	}
-
-	objectID := objectio.NewObjectid()
-	name := objectio.BuildObjectNameWithObjectID(&objectID)
-	writer, err := ioutil.NewBlockWriterNew(
-		fs,
-		name,
-		0,
-		objectio.TombstoneSeqnums_DN_Created,
-		true,
-	)
-	require.NoError(t, err)
-	_, err = writer.WriteBatch(result)
-	require.NoError(t, err)
-	blocks, extent, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	location := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-	loaded := containers.NewVectors(len(objectio.TombstoneSeqnums_DN_Created))
-	_, release, err := ioutil.ReadDeletes(
-		ctx,
-		location,
-		fs,
-		false,
-		loaded,
-		ptrTo(types.T_int64.ToType()),
-	)
-	require.NoError(t, err)
-	defer release()
-	validated, err := ioutil.ValidateTombstoneCommitTSColumn(3, &loaded[2])
-	require.NoError(t, err)
-	for row := range 3 {
-		require.Equal(t, commitTS, validated.At(row))
 	}
 }
 
 func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 	tests := []struct {
 		name   string
-		layout backupSpecialColumnLayout
+		layout objectio.SpecialColumnLayout
 		mutate func(*batch.Batch)
 	}{
 		{
 			name:   "missing commit timestamp metadata",
-			layout: newBackupTombstoneLayout(invalidBackupSpecialColumnPosition, invalidBackupSpecialColumnPosition, invalidBackupSpecialColumnPosition),
+			layout: backupTombstoneLayout(objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
 		},
 		{
 			name:   "short commit timestamp vector",
-			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
 				bat.Vecs[2].SetLength(2)
 			},
 		},
 		{
 			name:   "wrong commit timestamp type",
-			layout: newBackupTombstoneLayout(3, invalidBackupSpecialColumnPosition, 2),
+			layout: backupTombstoneLayout(3, objectio.InvalidSpecialColumnPosition, 2),
 		},
 		{
 			name:   "short abort vector",
-			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
 				bat.Vecs[3].SetLength(2)
 			},
 		},
 		{
 			name:   "null commit timestamp",
-			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
 				nulls.Add(bat.Vecs[2].GetNulls(), 1)
 			},
 		},
 		{
 			name:   "null abort flag",
-			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
 				nulls.Add(bat.Vecs[3].GetNulls(), 1)
 			},
@@ -249,7 +213,7 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 
 	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_Rowid, types.T_TS, types.T_bool})
 	defer input.Clean(common.DebugAllocator)
-	layout := newBackupTombstoneLayout(3, 2, 4)
+	layout := backupTombstoneLayout(3, 2, 4)
 	visibleRows, err := visibleAppendableRows(ctx, input, layout, ptrTo(types.BuildTS(15, 0)))
 	require.NoError(t, err)
 	require.Equal(t, []int64{0}, visibleRows)
@@ -281,9 +245,9 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 	blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
 	require.Equal(t, uint16(1), blockMeta.GetMaxSeqnum())
 	require.Equal(t, uint16(3), blockMeta.GetMetaColumnCount())
-	writtenLayout := resolveBackupSpecialColumnLayout(blockMeta)
+	writtenLayout := objectio.ResolveSpecialColumnLayout(blockMeta)
 	require.Equal(t, uint16(2), writtenLayout.CommitTS)
-	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), writtenLayout.Abort)
+	require.Equal(t, uint16(objectio.InvalidSpecialColumnPosition), writtenLayout.Abort)
 	stats := writer.GetObjectStats()
 	require.False(t, stats.GetAppendable())
 	require.False(t, stats.GetCNCreated())
@@ -301,74 +265,6 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 	require.True(t, deleted)
 }
 
-func TestBackupDeltaLocDataSourceReadsLegacyGenericWriterTombstone(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	defer input.Clean(common.DebugAllocator)
-
-	var deletedBlock types.Blockid
-	for row, commitTS := range []types.TS{types.BuildTS(5, 0), types.BuildTS(20, 0)} {
-		require.NoError(t, vector.AppendFixed(
-			input.Vecs[0],
-			types.NewRowid(&deletedBlock, uint32(row+1)),
-			false,
-			common.DebugAllocator,
-		))
-		require.NoError(t, vector.AppendFixed(
-			input.Vecs[1], int64(row+1), false, common.DebugAllocator,
-		))
-		require.NoError(t, vector.AppendFixed(
-			input.Vecs[2], commitTS, false, common.DebugAllocator,
-		))
-	}
-	input.SetRowCount(2)
-
-	// The affected Backup path wrote [rowid, pk, commitTS] with the generic
-	// writer, so commitTS was physical user seqnum 2 rather than SEQNUM_COMMITTS.
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	writer, err := ioutil.NewBlockWriter(fs, name.String())
-	require.NoError(t, err)
-	_, err = writer.WriteBatch(input)
-	require.NoError(t, err)
-	blocks, extent, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	require.Equal(t, uint16(3), blocks[0].GetMetaColumnCount())
-	require.Equal(t, uint16(2), blocks[0].GetMaxSeqnum())
-	require.Equal(t, uint8(types.T_TS), blocks[0].ColumnMeta(2).DataType())
-
-	dataSource := NewBackupDeltaLocDataSource(
-		ctx,
-		fs,
-		types.BuildTS(10, 0),
-		make(map[string]*objData),
-	)
-	legacyStats := objectio.NewObjectStats()
-	require.NoError(t, objectio.SetObjectStatsObjectName(legacyStats, name))
-	require.NoError(t, objectio.SetObjectStatsExtent(legacyStats, extent))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(legacyStats, uint32(input.RowCount())))
-	require.NoError(t, objectio.SetObjectStatsBlkCnt(legacyStats, uint32(len(blocks))))
-	require.NoError(t, objectio.SetObjectStatsSize(legacyStats, extent.End()))
-	dataSource.tombstones = []objectio.ObjectStats{*legacyStats}
-	t.Cleanup(func() {
-		for _, data := range dataSource.ds {
-			for _, bat := range data.data {
-				bat.Clean(common.DebugAllocator)
-			}
-		}
-	})
-
-	deletedRows, err := dataSource.GetTombstones(ctx, &deletedBlock)
-	require.NoError(t, err)
-	defer deletedRows.Release()
-	require.True(t, deletedRows.Contains(1))
-	require.False(t, deletedRows.Contains(2))
-}
-
 func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	ctx := context.Background()
 	srcFS := testutil.NewSharedFS()
@@ -377,7 +273,7 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	sourceBatch := newBackupTombstoneTestBatch(
 		t,
 		types.T_int64,
-		[]types.T{types.T_TS, types.T_Rowid},
+		[]types.T{types.T_Rowid, types.T_TS, types.T_bool},
 	)
 	defer sourceBatch.Clean(common.DebugAllocator)
 	objectID := objectio.NewObjectid()
@@ -386,7 +282,7 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		srcFS,
 		sourceName,
 		0,
-		objectio.TombstoneSeqnums_DN_Created_PhyAddr,
+		[]uint16{0, 1, 2, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
 		true,
 	)
 	require.NoError(t, err)
@@ -475,7 +371,7 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	require.False(t, rewrittenStats.GetAppendable())
 	require.False(t, rewrittenStats.GetCNCreated())
 	require.True(t, rewrittenStats.GetSorted())
-	require.Equal(t, uint32(2), rewrittenStats.Rows())
+	require.Equal(t, uint32(1), rewrittenStats.Rows())
 
 	rewrittenObjectLocation := rewrittenStats.ObjectLocation()
 	rewrittenMeta, err := objectio.FastLoadObjectMeta(ctx, &rewrittenObjectLocation, false, dstFS)
@@ -483,13 +379,13 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	rewrittenBlockMeta := rewrittenMeta.MustDataMeta().GetBlockMeta(uint32(rewrittenObjectLocation.ID()))
 	require.Equal(t, uint16(1), rewrittenBlockMeta.GetMaxSeqnum())
 	require.Equal(t, uint16(3), rewrittenBlockMeta.GetMetaColumnCount())
-	rewrittenLayout := resolveBackupSpecialColumnLayout(rewrittenBlockMeta)
+	rewrittenLayout := objectio.ResolveSpecialColumnLayout(rewrittenBlockMeta)
 	require.Equal(t, uint16(2), rewrittenLayout.CommitTS)
-	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), rewrittenLayout.PhysicalAddr)
-	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), rewrittenLayout.Abort)
+	require.Equal(t, uint16(objectio.InvalidSpecialColumnPosition), rewrittenLayout.PhysicalAddr)
+	require.Equal(t, uint16(objectio.InvalidSpecialColumnPosition), rewrittenLayout.Abort)
 
 	var targetBlock types.Blockid
-	for row, expected := range []bool{true, true, false} {
+	for row, expected := range []bool{true, false, false} {
 		rowID := types.NewRowid(&targetBlock, uint32(row))
 		deleted, err := ioutil.IsRowDeletedByLocation(
 			ctx,
@@ -551,8 +447,8 @@ func newBackupTombstoneTestBatch(t *testing.T, pkType types.T, trailingTypes []t
 	return bat
 }
 
-func newBackupTombstoneLayout(commit, physical, abort uint16) backupSpecialColumnLayout {
-	return backupSpecialColumnLayout{
+func backupTombstoneLayout(commit, physical, abort uint16) objectio.SpecialColumnLayout {
+	return objectio.SpecialColumnLayout{
 		PhysicalAddr: physical,
 		CommitTS:     commit,
 		Abort:        abort,

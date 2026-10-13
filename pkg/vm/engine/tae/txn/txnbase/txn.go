@@ -181,14 +181,20 @@ func (txn *Txn) Rollback(ctx context.Context) (err error) {
 
 // Commit commits a transaction.
 func (txn *Txn) Commit(ctx context.Context) (err error) {
+	return txn.CommitWithCallback(ctx, nil)
+}
+
+// CommitWithCallback publishes an in-memory side effect after a successful
+// commit, while the transaction is still tracked for shutdown and mode changes.
+func (txn *Txn) CommitWithCallback(ctx context.Context, onCommit func()) (err error) {
 	probe := trace.StartRegion(context.Background(), "Commit")
 	defer probe.End()
 
-	err = txn.doCommit(ctx)
+	err = txn.doCommitWithCallback(ctx, onCommit)
 	return
 }
 
-func (txn *Txn) doCommit(ctx context.Context) (err error) {
+func (txn *Txn) doCommitWithCallback(ctx context.Context, onCommit func()) (err error) {
 	if txn.GetStore().IsOffline() {
 		return
 	}
@@ -202,7 +208,7 @@ func (txn *Txn) doCommit(ctx context.Context) (err error) {
 		return nil
 	}
 
-	return txn.commit1PC(ctx)
+	return txn.commit1PC(ctx, onCommit)
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {
@@ -271,10 +277,14 @@ func (txn *Txn) ApplyRollback() (err error) {
 	}
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()
-		if err == nil {
-			err = txn.Store.Close()
-		} else {
-			txn.Store.Close()
+		closeErr := txn.Store.Close()
+		if err == nil && txn.GetError() == nil {
+			// An explicit rollback has no earlier transaction error, so its
+			// caller must observe a Close failure. During commit-abort rollback,
+			// however, the transaction already owns the primary error. Returning
+			// a cleanup failure here would make DoneApply replace that moerr and
+			// change the RPC-visible retry classification.
+			err = closeErr
 		}
 	}()
 	err = txn.Store.ApplyRollback()

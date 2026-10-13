@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -37,8 +38,18 @@ type PrefetchParams struct {
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
+	if err := validatePrefetchLocation(key); err != nil {
+		return PrefetchParams{}, err
+	}
 	pp := buildPrefetchParams(service, key)
 	return pp, nil
+}
+
+func validatePrefetchLocation(key objectio.Location) error {
+	if key.IsEmpty() {
+		return moerr.NewInvalidInputNoCtx("object location is empty")
+	}
+	return nil
 }
 
 type fetchParams struct {

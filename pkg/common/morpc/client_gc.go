@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"sync"
@@ -168,14 +169,16 @@ func InitGlobalGCManager(checkInterval time.Duration, channelBufferSize int) {
 // unregistration. This works correctly even in single-process multi-service scenarios
 // (e.g., multiple CN/TN/Proxy nodes in integration tests).
 type clientGCManager struct {
-	mu       sync.RWMutex
-	clients  map[*client]struct{}
-	started  bool
-	stopping bool
-	stopC    chan struct{}
-	stopDone chan struct{}
-	wg       sync.WaitGroup
-	logger   *zap.Logger
+	mu           sync.RWMutex
+	clients      map[*client]struct{}
+	started      bool
+	stopping     bool
+	createCtx    context.Context
+	cancelCreate context.CancelFunc
+	stopC        chan struct{}
+	stopDone     chan struct{}
+	wg           sync.WaitGroup
+	logger       *zap.Logger
 
 	// Config values captured at creation time to avoid race conditions
 	gcIdleCheckInterval     time.Duration
@@ -241,8 +244,11 @@ func newClientGCManager() *clientGCManager {
 	idleBackendsCleanedCounter := v2.GetRPCGCIdleBackendsCleanedCounter()
 	idleBackendsCleanedCounter.Add(0)
 
+	createCtx, cancelCreate := context.WithCancel(context.Background())
 	return &clientGCManager{
 		clients:                    make(map[*client]struct{}),
+		createCtx:                  createCtx,
+		cancelCreate:               cancelCreate,
 		stopC:                      make(chan struct{}),
 		stopDone:                   make(chan struct{}),
 		gcIdleCheckInterval:        interval,
@@ -405,14 +411,13 @@ func (m *clientGCManager) triggerCreateAtGenerationLocked(
 		// caller's demand. A different generation must never be coalesced.
 		return pending, pending.generation == generation
 	}
-	pending := newBackendCreateState(generation)
-	c.mu.creating[backend] = pending
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.stopping {
-		c.releaseBackendCreateLocked(backend, pending)
 		return nil, false
 	}
+	pending := newBackendCreateState(generation, m.createCtx)
+	c.mu.creating[backend] = pending
 	select {
 	case m.createC <- createRequest{
 		c:       c,
@@ -572,7 +577,8 @@ func (m *clientGCManager) runCreateLoop(updateQueueGauge bool) {
 					req.state,
 					true,
 				); err != nil {
-					if !moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+					if req.state.ctx.Err() == nil &&
+						!moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
 						!moerr.IsMoErrCode(err, moerr.ErrClientClosed) &&
 						!isBackendCreateQueueCongestion(err) {
 						req.c.logger.Error("create backend failed",
@@ -630,6 +636,10 @@ func (m *clientGCManager) stop() {
 		return
 	}
 	m.stopping = true
+	// Cancel the incarnation before joining workers. Context-aware factories
+	// leave the fixed worker pool promptly; queued states are still drained
+	// below so every waiter observes terminal ownership.
+	m.cancelCreate()
 	started := m.started
 	if started {
 		close(m.stopC)
@@ -650,6 +660,7 @@ func (m *clientGCManager) stop() {
 	m.mu.Lock()
 	m.started = false
 	m.clients = make(map[*client]struct{})
+	m.createCtx, m.cancelCreate = context.WithCancel(context.Background())
 	m.stopC = make(chan struct{})
 	m.gcInactiveC = make(chan gcInactiveRequest, m.channelBufferSize)
 	m.createC = make(chan createRequest, m.channelBufferSize)

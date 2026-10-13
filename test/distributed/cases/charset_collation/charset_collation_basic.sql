@@ -28,10 +28,44 @@ SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 CREATE DATABASE charset_test;
 USE charset_test;
 
+-- @case
+-- @desc: UTF32 DDL compatibility uses existing UTF8MB4 identities only
+-- @label:bvt
+CREATE TABLE t_utf32_alias (
+    ci VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_general_ci,
+    bin VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_bin
+) DEFAULT CHARSET=utf32;
+SHOW CREATE TABLE t_utf32_alias;
+INSERT INTO t_utf32_alias VALUES ('😀', '😀');
+SELECT HEX(ci), HEX(bin) FROM t_utf32_alias;
+SELECT column_name, character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf32_alias'
+ORDER BY ordinal_position;
+DROP TABLE t_utf32_alias;
+SET NAMES utf32;
+SET NAMES utf32 COLLATE utf32_general_ci;
+SET collation_connection = 'utf32_bin';
+
+-- @case
+-- @desc: Expression and durable view admission must not use DDL-only UTF32 compatibility
+-- @label:bvt
+SELECT CONVERT('😀' USING utf32);
+CREATE VIEW v_utf32_expr AS SELECT CONVERT('😀' USING utf32) AS c;
+SELECT COUNT(*) AS rejected_view_count FROM information_schema.views
+WHERE table_schema = 'charset_test' AND table_name = 'v_utf32_expr';
+SELECT HEX(CONVERT('😀' USING utf8)) AS utf8_hex, HEX(CONVERT('😀' USING utf8mb3)) AS utf8mb3_hex;
+CREATE VIEW v_utf8mb3_expr AS SELECT CONVERT('😀' USING utf8mb3) AS c;
+SELECT HEX(c) AS view_hex FROM v_utf8mb3_expr;
+DROP VIEW v_utf8mb3_expr;
+
+-- @case
+-- @desc: Test information_schema character metadata used by ODBC SQLColumns
+-- @label:bvt
 -- information_schema metadata used by ODBC SQLColumns
 CREATE TABLE charset_metadata_repro (
     c_char CHAR(8),
     c_varchar VARCHAR(128),
+    c_tinytext TINYTEXT,
     c_text TEXT
 );
 SELECT c.data_type, c.character_set_name,
@@ -41,7 +75,7 @@ LEFT JOIN information_schema.character_sets cs
   ON c.character_set_name = cs.character_set_name
 WHERE c.table_schema = 'charset_test'
   AND c.table_name = 'charset_metadata_repro'
-  AND c.column_name IN ('c_char', 'c_varchar', 'c_text')
+  AND c.column_name IN ('c_char', 'c_varchar', 'c_tinytext', 'c_text')
 ORDER BY c.ordinal_position;
 DROP TABLE charset_metadata_repro;
 
@@ -78,9 +112,20 @@ SHOW CREATE TABLE t_default;
 -- UTF8 charset table
 CREATE TABLE t_utf8 (
     id INT PRIMARY KEY,
-    name VARCHAR(100)
+    name VARCHAR(100),
+    name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci
 ) CHARACTER SET utf8;
 SHOW CREATE TABLE t_utf8;
+
+-- utf8/utf8mb3 兼容声明仍接收四字节字符，不启用三字节限制。
+INSERT INTO t_utf8 VALUES (1, '😀', '😀');
+SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
+ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
+SELECT column_name, character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name <> 'id'
+ORDER BY ordinal_position;
+SELECT HEX(CONVERT('😀' USING utf8)), HEX(CONVERT('😀' USING utf8mb3));
 
 -- UTF8MB4 with different collations
 CREATE TABLE t_utf8mb4_bin (
@@ -99,7 +144,22 @@ CREATE TABLE t_utf8mb4_unicode_ci (
     id INT PRIMARY KEY,
     name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-SHOW CREATE TABLE t_utf8mb4_unicode_ci;
+
+-- Native Unicode collation must be used consistently by predicates, grouping,
+-- ORDER BY, and window peer/partition evaluation.
+INSERT INTO t_utf8mb4_unicode_ci VALUES
+(1, 'Z'), (2, 'a'), (3, 'A'), (4, 'b');
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name = 'a' ORDER BY id;
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name IN ('a') ORDER BY id;
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name NOT IN ('a') ORDER BY id;
+SELECT id, DENSE_RANK() OVER (ORDER BY name) AS r
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+SELECT id, COUNT(*) OVER (PARTITION BY name) AS c
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+SELECT COUNT(*) AS group_count
+FROM (SELECT name FROM t_utf8mb4_unicode_ci GROUP BY name) AS grouped;
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id;
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id LIMIT 2;
 
 -- @case
 -- @desc: Test column level charset and collation
@@ -567,6 +627,116 @@ CREATE TABLE t_minmax_bin (
 INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
+
+CREATE TABLE t_minmax_bin_pad (
+    name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+INSERT INTO t_minmax_bin_pad VALUES ('a '), (CONCAT('a', CHAR(0)));
+
+SELECT HEX(MIN(name)) AS min_name, HEX(MAX(name)) AS max_name
+FROM t_minmax_bin_pad;
+
+CREATE TABLE t_minmax_cast_ci (
+    name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+INSERT INTO t_minmax_cast_ci VALUES ('a'), ('B');
+
+SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
+FROM t_minmax_cast_ci;
+
+CREATE TABLE t_minmax_derived_bin (
+    name VARCHAR(100),
+    wide_name VARCHAR(200)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+INSERT INTO t_minmax_derived_bin VALUES ('a', 'a'), ('B', 'B');
+
+SELECT MIN(CONVERT(name USING binary)) AS min_binary,
+       MAX(CONVERT(name USING binary)) AS max_binary
+FROM t_minmax_derived_bin;
+SELECT MIN(CONVERT(name USING utf8mb4)) AS min_utf8,
+       MAX(CONVERT(name USING utf8mb4)) AS max_utf8
+FROM t_minmax_derived_bin;
+SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
+       MAX(SUBSTRING(name, 1)) AS max_substring
+FROM t_minmax_derived_bin;
+SELECT MIN(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS min_case,
+       MAX(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS max_case
+FROM t_minmax_derived_bin;
+SELECT MIN(COALESCE(name, wide_name)) AS min_coalesce,
+       MAX(COALESCE(name, wide_name)) AS max_coalesce
+FROM t_minmax_derived_bin;
+SELECT MIN(IF(name IS NOT NULL, name, wide_name)) AS min_if,
+       MAX(IF(name IS NOT NULL, name, wide_name)) AS max_if
+FROM t_minmax_derived_bin;
+
+CREATE TABLE t_minmax_least_greatest_bin (
+    varchar_name VARCHAR(100),
+    text_name TEXT
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_least_greatest_bin VALUES ('a', 'a'), ('B', 'B');
+SELECT MIN(LEAST(varchar_name, text_name)) AS min_least,
+       MAX(GREATEST(text_name, varchar_name)) AS max_greatest
+FROM t_minmax_least_greatest_bin;
+
+CREATE TABLE t_minmax_json_least_greatest_bin (
+    varchar_name VARCHAR(100),
+    json_name JSON
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_json_least_greatest_bin VALUES
+    ('a', JSON_EXTRACT('"a"', '$')), ('B', JSON_EXTRACT('"B"', '$'));
+SELECT MIN(LEAST(varchar_name, json_name)) AS min_json_least,
+       MAX(GREATEST(json_name, varchar_name)) AS max_json_greatest
+FROM t_minmax_json_least_greatest_bin;
+
+SELECT MIN(x) AS min_union, MAX(x) AS max_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT NULL AS x
+) AS u;
+
+SELECT MIN(x) AS min_derived_null_union, MAX(x) AS max_derived_null_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT x FROM (SELECT NULL AS x) AS n
+) AS u;
+
+WITH n AS (SELECT NULL AS x)
+SELECT MIN(x) AS min_cte_null_union, MAX(x) AS max_cte_null_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT x FROM n
+) AS u;
+
+SELECT MIN(binary_gc) AS min_binary_gc, MAX(binary_gc) AS max_binary_gc,
+       MIN(bin_gc) AS min_bin_gc, MAX(bin_gc) AS max_bin_gc
+FROM (
+    SELECT GROUP_CONCAT(CONVERT(name USING binary)) AS binary_gc,
+           GROUP_CONCAT(name) AS bin_gc
+    FROM t_minmax_derived_bin
+    GROUP BY name
+) AS g;
+
+CREATE TABLE t_binary_default_general_columns (
+    id INT,
+    create_col VARCHAR(100) CHARACTER SET utf8mb4,
+    modify_col VARCHAR(100) COLLATE utf8mb4_bin
+) CHARACTER SET binary;
+ALTER TABLE t_binary_default_general_columns
+    ADD COLUMN add_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+ALTER TABLE t_binary_default_general_columns
+    MODIFY COLUMN modify_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+INSERT INTO t_binary_default_general_columns VALUES
+    (1, 'a', 'a', 'a'), (2, 'B', 'B', 'B');
+SELECT MIN(create_col) AS min_create, MAX(create_col) AS max_create,
+       MIN(add_col) AS min_add, MAX(add_col) AS max_add,
+       MIN(modify_col) AS min_modify, MAX(modify_col) AS max_modify
+FROM t_binary_default_general_columns;
 
 -- @case
 -- @desc: Test CAST with charset

@@ -1,0 +1,77 @@
+drop database if exists issue_28256_truncate;
+create database issue_28256_truncate;
+use issue_28256_truncate;
+create table truncate_target (
+id int auto_increment primary key,
+value int
+);
+create table transaction_marker (
+id int primary key
+);
+insert into truncate_target(value) values (10), (20);
+start transaction;
+insert into transaction_marker values (1);
+truncate table truncate_target;
+rollback;
+select 'success' as scenario,
+(select count(*) from truncate_target) as target_rows,
+(select count(*) from transaction_marker) as marker_rows;
+➤ scenario[12,7,0]  ¦  target_rows[-5,64,0]  ¦  marker_rows[-5,64,0]  𝄀
+success  ¦  0  ¦  1
+insert into truncate_target(value) values (30);
+select 'auto_increment_reset' as scenario, id from truncate_target;
+➤ scenario[12,20,0]  ¦  id[4,32,0]  𝄀
+auto_increment_reset  ¦  1
+create table truncate_parent (id int primary key);
+create table truncate_child (
+id int primary key,
+parent_id int,
+foreign key(parent_id) references truncate_parent(id)
+);
+insert into truncate_parent values (1);
+insert into truncate_child values (1, 1);
+start transaction;
+insert into transaction_marker values (2);
+truncate table truncate_parent;
+internal error: can not truncate table 'truncate_parent' referenced by some foreign key constraint
+rollback;
+select 'foreign_key_rejection' as scenario,
+(select count(*) from truncate_parent) as parent_rows,
+(select count(*) from truncate_child) as child_rows,
+(select count(*) from transaction_marker where id = 2) as marker_rows;
+➤ scenario[12,21,0]  ¦  parent_rows[-5,64,0]  ¦  child_rows[-5,64,0]  ¦  marker_rows[-5,64,0]  𝄀
+foreign_key_rejection  ¦  1  ¦  1  ¦  1
+start transaction;
+insert into transaction_marker values (3);
+truncate table missing_truncate_target;
+no such table issue_28256_truncate.missing_truncate_target
+rollback;
+select 'missing_target' as scenario,
+(select count(*) from transaction_marker where id = 3) as marker_rows;
+➤ scenario[12,14,0]  ¦  marker_rows[-5,64,0]  𝄀
+missing_target  ¦  1
+set autocommit = 0;
+insert into transaction_marker values (4);
+truncate table truncate_target;
+insert into truncate_target(value) values (40);
+rollback;
+select 'autocommit_off' as scenario,
+(select count(*) from truncate_target) as target_rows,
+(select count(*) from transaction_marker where id = 4) as marker_rows;
+➤ scenario[12,14,0]  ¦  target_rows[-5,64,0]  ¦  marker_rows[-5,64,0]  𝄀
+autocommit_off  ¦  0  ¦  1
+set autocommit = 1;
+create table prepared_truncate_target (id int primary key);
+insert into prepared_truncate_target values (1), (2);
+prepare truncate_prepared from 'truncate table prepared_truncate_target';
+start transaction;
+insert into transaction_marker values (5);
+execute truncate_prepared;
+rollback;
+select 'prepared_execute' as scenario,
+(select count(*) from prepared_truncate_target) as target_rows,
+(select count(*) from transaction_marker where id = 5) as marker_rows;
+➤ scenario[12,16,0]  ¦  target_rows[-5,64,0]  ¦  marker_rows[-5,64,0]  𝄀
+prepared_execute  ¦  0  ¦  1
+deallocate prepare truncate_prepared;
+drop database issue_28256_truncate;

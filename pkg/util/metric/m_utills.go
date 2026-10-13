@@ -21,3 +21,12 @@ func CPUTotalTime(c cpu.TimesStat) float64 {
 	return c.User + c.System + c.Idle + c.Nice + c.Iowait + c.Irq +
 		c.Softirq + c.Steal + c.Guest + c.GuestNice
 }
+
+// cpuBusyTime mirrors gopsutil's cumulative busy-time definition without
+// subtracting large counters. Iowait is not CPU busy time and Linux documents
+// that it may decrease. Guest and GuestNice are already included in User and
+// Nice on Linux (the only platform where gopsutil populates them), so adding
+// them again both double-counts work and can break counter monotonicity.
+func cpuBusyTime(c cpu.TimesStat) float64 {
+	return c.User + c.System + c.Nice + c.Irq + c.Softirq + c.Steal
+}

@@ -1,0 +1,12 @@
+DROP DATABASE IF EXISTS unicode_identifier_repro;
+CREATE DATABASE unicode_identifier_repro;
+USE unicode_identifier_repro;
+CREATE TABLE t_ãg (a INT);
+INSERT INTO t_ãg VALUES (7);
+SELECT a FROM t_ãg;
+a
+7
+DROP TABLE t_ãg;
+CREATE TABLE 😀 (a INT);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near " 😀 (a INT);";
+DROP DATABASE unicode_identifier_repro;

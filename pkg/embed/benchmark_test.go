@@ -25,7 +25,7 @@ import (
 
 // BenchmarkRoTx benchmarks the performance of read-only, noop transactions.
 func BenchmarkRoTx(b *testing.B) {
-	RunBaseClusterTests(b,
+	RunSingleCNBaseClusterTests(b,
 		func(c Cluster) {
 
 			cn0, err := c.GetCNService(0)
@@ -54,7 +54,7 @@ func BenchmarkRoTx(b *testing.B) {
 // BenchmarkSelect1Conn benchmarks the performance of running select 1
 // from one connection, in autocommit mode.
 func BenchmarkSelect1Conn(b *testing.B) {
-	RunBaseClusterTests(b,
+	RunSingleCNBaseClusterTests(b,
 		func(c Cluster) {
 
 			cn0, err := c.GetCNService(0)

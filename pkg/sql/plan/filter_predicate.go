@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -77,18 +76,22 @@ func parseIncludedColumnsFromParams(indexAlgoParams string) ([]string, error) {
 	if indexAlgoParams == "" {
 		return nil, nil
 	}
-	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
+	params, err := decodeVectorIndexAlgoParams(indexAlgoParams)
 	if err != nil {
-		val, err = sonic.Get([]byte(indexAlgoParams), "include_columns")
-		if err != nil {
-			return nil, nil
-		}
-	}
-	joined, err := val.StrictString()
-	if err != nil || joined == "" {
 		return nil, nil
 	}
-	return catalog.ParseIncludeColumnsValue(joined)
+	raw, ok := params[catalog.IncludedColumns]
+	if !ok {
+		raw, ok = params["include_columns"]
+	}
+	if !ok {
+		return nil, nil
+	}
+	var joined *string
+	if err := json.Unmarshal(raw, &joined); err != nil || joined == nil || *joined == "" {
+		return nil, nil
+	}
+	return catalog.ParseIncludeColumnsValue(*joined)
 }
 
 // filterJSONPred mirrors one entry of the predicate array (see file header

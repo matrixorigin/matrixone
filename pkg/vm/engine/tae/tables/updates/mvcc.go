@@ -340,12 +340,6 @@ func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 	return n.appends.IsCommitted()
 }
 
-// DeleteAppendNodeLocked deletes the appendnode from the append list.
-// it is called when txn of the appendnode is aborted.
-func (n *AppendMVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
-	n.appends.DeleteNode(node)
-}
-
 func (n *AppendMVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
 	n.appendListener = l
 }

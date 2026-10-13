@@ -16,6 +16,10 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,6 +70,60 @@ func Test_replaceFuncId(t *testing.T) {
 	case1Expr, err := getDefaultExpr(context.Background(), case1ColDef)
 	assert.NoError(t, err)
 	assert.NotNil(t, case1Expr)
+}
+
+func TestForeignKeyDetectionSQLQuotesIdentifiers(t *testing.T) {
+	t.Run("external reference", func(t *testing.T) {
+		foreignKey := &plan.ForeignKeyDef{
+			Cols:        []uint64{1},
+			ForeignCols: []uint64{2},
+		}
+		sql, err := genSqlForCheckFKConstraints(
+			context.Background(),
+			foreignKey,
+			"child`db",
+			"child`table",
+			[]*plan.ColDef{{ColId: 1, Name: "child`column"}},
+			"parent`db",
+			"parent`table",
+			[]*plan.ColDef{{ColId: 2, Name: "parent`column"}},
+		)
+		require.NoError(t, err)
+		require.Contains(t, sql, "select distinct `child``table`.`child``column`")
+		require.Contains(t, sql, "from `child``db`.`child``table`")
+		require.Contains(t, sql, "where `child``table`.`child``column` is not null")
+		require.Contains(t, sql, "select distinct `parent``table`.`parent``column` from `parent``db`.`parent``table`")
+
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+	})
+
+	t.Run("self reference", func(t *testing.T) {
+		foreignKey := &plan.ForeignKeyDef{
+			Cols:        []uint64{1},
+			ForeignCols: []uint64{2},
+		}
+		sqls, err := genSqlsForCheckFKSelfRefer(
+			context.Background(),
+			"self`db",
+			"self`table",
+			[]*plan.ColDef{
+				{ColId: 1, Name: "child`column"},
+				{ColId: 2, Name: "parent`column"},
+			},
+			[]*plan.ForeignKeyDef{foreignKey},
+		)
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+		require.Contains(t, sqls[0], "from `self``db`.`self``table`")
+		require.Contains(t, sqls[0], "select distinct `self``table`.`child``column`")
+		require.Contains(t, sqls[0], "select distinct `self``table`.`parent``column`")
+
+		statements, err := mysql.Parse(context.Background(), sqls[0], 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+	})
 }
 
 // TestRewriteCountNotNullColToStarcount ensures plan-level rewrite sets both ObjName and Obj
@@ -146,7 +204,7 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
 
@@ -163,6 +221,76 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 			require.Equal(t, tc.scale, expr.Typ.Scale)
 		})
 	}
+}
+
+func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
+	testCases := []struct {
+		definition  string
+		wantOID     types.T
+		wantCharset uint32
+	}{
+		{definition: "char(10)", wantOID: types.T_char, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "varchar(10)", wantOID: types.T_varchar, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "text", wantOID: types.T_text, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "binary(10)", wantOID: types.T_binary, wantCharset: uint32(types.CharsetBinary)},
+		{definition: "varbinary(10)", wantOID: types.T_varbinary, wantCharset: uint32(types.CharsetBinary)},
+		{definition: "blob", wantOID: types.T_blob, wantCharset: uint32(types.CharsetBinary)},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantCharset, typ.Charset)
+		})
+	}
+}
+
+func TestGetTypeFromAstBuildsMediumIntAliases(t *testing.T) {
+	testCases := []struct {
+		definition string
+		wantOID    types.T
+		wantWidth  int32
+	}{
+		{definition: "mediumint", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "mediumint unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "int3", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "int3 unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "mediumint zerofill", wantOID: types.T_uint32, wantWidth: 24},
+		// Integer display width is not physical width and must not make INT(24)
+		// acquire MEDIUMINT semantics.
+		{definition: "int(24)", wantOID: types.T_int32, wantWidth: 32},
+		{definition: "int(24) unsigned", wantOID: types.T_uint32, wantWidth: 32},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantWidth, typ.Width)
+		})
+	}
+}
+
+func TestBuildCastToMediumIntIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT CAST(1 AS MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
 }
 
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
@@ -309,6 +437,67 @@ func TestGetTypeFromAstArrayAsJson(t *testing.T) {
 	require.Equal(t, "array(varchar(20))", typ.Enumvalues)
 }
 
+func TestGetTypeFromAstTinyTextPreservesByteLimit(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (value tinytext)", 1)
+	require.NoError(t, err)
+
+	createTable := stmt.(*tree.CreateTable)
+	colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_text), typ.Id)
+	require.Equal(t, int32(types.MaxTinyTextLen), typ.Width)
+}
+
+func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "text", sql: "text", width: 0},
+		{name: "mediumtext", sql: "mediumtext", width: types.MaxMediumTextLen},
+		{name: "longtext", sql: "longtext", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_text), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
+func TestGetTypeFromAstPreservesBlobFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "tinyblob", sql: "tinyblob", width: types.MaxTinyTextLen},
+		{name: "blob", sql: "blob", width: types.MaxStringSize},
+		{name: "mediumblob", sql: "mediumblob", width: types.MaxMediumTextLen},
+		{name: "longblob", sql: "longblob", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_blob), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
 func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(16777217)))", 1)
 	require.NoError(t, err)
@@ -388,7 +577,7 @@ func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot have default value")
 }
@@ -407,9 +596,77 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, def)
+}
+
+func TestBuildDefaultExprJSONExpressionDefaults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name       string
+		sql        string
+		wantOrigin string
+		wantErr    string
+	}{
+		{
+			name:       "json array expression",
+			sql:        "create table t (j json default (json_array()))",
+			wantOrigin: "(json_array())",
+		},
+		{
+			name:       "parenthesized object literal",
+			sql:        `create table t (j json default ('{"source":"default"}'))`,
+			wantOrigin: `('{"source":"default"}')`,
+		},
+		{
+			name:       "null literal",
+			sql:        "create table t (j json default null)",
+			wantOrigin: "null",
+		},
+		{
+			name:       "parenthesized null",
+			sql:        "create table t (j json default (null))",
+			wantOrigin: "(null)",
+		},
+		{
+			name:    "bare non-null literal",
+			sql:     `create table t (j json default '{"source":"default"}')`,
+			wantErr: "JSON column 'j' cannot have default value",
+		},
+		{
+			name:    "malformed json expression",
+			sql:     `create table t (j json default ('{"source":'))`,
+			wantErr: "invalid input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+
+			def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, def)
+			require.NotNil(t, def.Expr)
+			require.Equal(t, int32(types.T_json), def.Expr.Typ.Id)
+			require.Equal(t, tt.wantOrigin, def.OriginString)
+		})
+	}
 }
 
 func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
@@ -448,7 +705,7 @@ func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.wantErr)
@@ -474,7 +731,7 @@ func TestBuildDefaultExprAllowsParenthesizedUuidForStringDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, def)
 	require.NotNil(t, def.Expr)
@@ -495,13 +752,13 @@ func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid default value for column 'a'")
 }
 
 // Column DEFAULT / ON UPDATE validation must use the strict assignment cast for
-// CHAR/VARCHAR targets: an over-length value is rejected, not silently truncated.
+// width-constrained string targets: an over-length value is rejected, not silently truncated.
 func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -515,7 +772,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeDefault{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err := buildDefaultExpr(defaultCol, typ, proc)
+		_, err := buildDefaultExpr(proc.Ctx, defaultCol, typ, proc)
 		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 
@@ -526,10 +783,28 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err = buildOnUpdate(onUpdateCol, typ, proc)
+		_, err = buildOnUpdate(proc.Ctx, onUpdateCol, typ, proc)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
+}
+
+func TestBuildDefaultExprRejectsOversizedTinyText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := strings.Repeat("a", types.MaxTinyTextLen+1)
+	defaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("a"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: tree.NewNumVal(value, value, false, tree.P_char)},
+		},
+	)
+
+	_, err := buildDefaultExpr(proc.Ctx, defaultCol, plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 }
 
 // A value that fits the CHAR/VARCHAR width is accepted as a column DEFAULT.
@@ -543,9 +818,116 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 			&tree.AttributeDefault{Expr: tree.NewNumVal("abc", "abc", false, tree.P_char)},
 		},
 	)
-	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
+	defaultValue, err := buildDefaultExpr(proc.Ctx, defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
+}
+
+func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	const ddl = "create table t(v varchar(16) default (hex(cast(15.5 as double))))"
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	_, err := buildSingleStmt(mock, t, ddl)
+	require.ErrorContains(t, err, "protocol version 85")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	_, err = buildSingleStmt(mock, t, ddl)
+	require.ErrorContains(t, err, "protocol version 85")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	built, err := buildSingleStmt(mock, t, ddl)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
+	require.Equal(t, "F", def.Expr.GetLit().GetSval())
+	require.NotNil(t, def.Expr.GetLit().GetSrc())
+}
+
+func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+
+	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
+		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	def, err := buildDefaultExpr(proc.Ctx, col, plan.Type{Id: int32(types.T_varchar), Width: 16}, proc)
+	require.NoError(t, err)
+	require.Equal(t, "1000000", def.Expr.GetLit().GetSval())
+
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}, Default: def,
+	}}}
+	wire, err := tableDef.Marshal()
+	require.NoError(t, err)
+	loaded := new(plan.TableDef)
+	require.NoError(t, loaded.Unmarshal(wire))
+	require.NotNil(t, loaded.Cols[0].Default.Expr.GetLit().Src)
+	for range 2 {
+		require.NoError(t, MigrateLegacyHexTableDef(proc, loaded))
+		require.Equal(t, "1000000", loaded.Cols[0].Default.Expr.GetLit().GetSval())
+	}
+	// Removing provenance models an old mode-sensitive catalog: the lexical
+	// whitelist must still refuse REAL rather than guess DOUBLE.
+	loaded.Cols[0].Default.Expr.GetLit().Src = nil
+	require.NoError(t, MigrateLegacyHexTableDef(proc, loaded))
+	require.Equal(t, "1000000", loaded.Cols[0].Default.Expr.GetLit().GetSval())
+}
+
+func TestMigrateLegacyHexFoldedDefaultWhitelist(t *testing.T) {
+	// Legacy negative FLOAT-to-uint conversion is platform-dependent. Produce
+	// its historical value at runtime; the corrected decimal oracle is exact.
+	negativeReal, err := strconv.ParseFloat("-9007199254740993", 64)
+	require.NoError(t, err)
+	negativeLegacy := fmt.Sprintf("%X", uint64(math.Round(negativeReal)))
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct{ name, sql, old, want string }{
+		{"double", "(hex(cast(15.5 as double)))", "10", "F"},
+		{"decimal", "(hex(cast(9007199254740993 as decimal(38,0))))", "20000000000000", "20000000000001"},
+		{"negative_decimal", "(hex(cast(-9007199254740993 as decimal(38,0))))", negativeLegacy, "FFDFFFFFFFFFFFFF"},
+		{"bool_true", "(hex(true))", "31", "1"},
+		{"bool_false", "(hex(false))", "30", "0"},
+		{"already_new", "(hex(cast(15.5 as double)))", "F", "F"},
+		{"unrelated_value", "(hex(true))", "wrong", "wrong"},
+		{"real_ambiguous", "(hex(cast(16777215.9 as real)))", "1000000", "1000000"},
+		{"quoted_operand", "(hex(cast('15.5' as double)))", "10", "10"},
+		{"nested_expression", "(hex(cast(15 + 0.5 as double)))", "10", "10"},
+		{"explicit_string", "(hex(cast(true as varchar)))", "31", "31"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := &plan.TableDef{Cols: []*plan.ColDef{{Name: "v",
+				Typ:     plan.Type{Id: int32(types.T_varchar), Width: 32},
+				Default: &plan.Default{OriginString: tc.sql, Expr: MakePlan2StringConstExprWithType(tc.old)},
+			}}}
+			wire, err := catalog.Marshal()
+			require.NoError(t, err)
+			loaded := new(plan.TableDef)
+			require.NoError(t, loaded.Unmarshal(wire))
+			execution := CloneTableDefForPlan(loaded, true)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+			require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
+			require.Equal(t, tc.old, execution.Cols[0].Default.Expr.GetLit().GetSval())
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+			for range 2 {
+				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
+				require.Equal(t, tc.want, execution.Cols[0].Default.Expr.GetLit().GetSval())
+				features, err := plan.RequiredRemoteExpressionFeatures(execution)
+				require.NoError(t, err)
+				require.False(t, features.IntegerParameterCoercion, "v74 catalog repair must not publish a v85 private cast")
+			}
+			after, err := loaded.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wire, after, "catalog owner must not be mutated")
+		})
+	}
 }
 
 func TestMapDDLAssignmentCastErrorOnlyMapsStringWidthFailures(t *testing.T) {
@@ -573,8 +955,18 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
-		target := plan.Type{Id: int32(oid), Width: 3}
+	targets := []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_char), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
+		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
+		{Id: int32(types.T_datetime), Width: 3},
+		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
+	}
+	for _, target := range targets {
 
 		strictExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
@@ -591,16 +983,51 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
+func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
+		{Id: int32(types.T_year), Width: 4},
+		{Id: int32(types.T_time), Scale: 6},
+	} {
+		expr, err := MakePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_assign", expr.GetF().GetFunc().GetObjName())
+	}
+
+	dateExpr, err := MakePlan2AssignmentCastExpr(
+		ctx,
+		DeepCopyExpr(srcText),
+		plan.Type{Id: int32(types.T_date)},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+}
+
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
-		target := plan.Type{Id: int32(oid), Width: 3}
+	targets := []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_char), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
+		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
+		{Id: int32(types.T_datetime), Width: 3},
+		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
+	}
+	for _, target := range targets {
 		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		want := "cast_strict"
-		if oid == types.T_varchar || oid == types.T_char {
+		if useSqlModeAssignmentCast(target) {
 			want = "cast_assign"
 		}
 		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
@@ -608,6 +1035,75 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		genericExpr, err := forceCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
+	}
+}
+
+func TestForceAssignmentCastExprPreservesSameTypeTimeBoundary(t *testing.T) {
+	ctx := context.Background()
+	timeType := plan.Type{Id: int32(types.T_time), Scale: 6}
+	source := &Expr{Typ: timeType}
+
+	assignment, err := forceAssignmentCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", assignment.GetF().GetFunc().GetObjName())
+
+	expression, err := forceCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Same(t, source, expression)
+}
+
+func TestTinyTextSameTypeAssignmentStillValidates(t *testing.T) {
+	ctx := context.Background()
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	source := &Expr{Typ: tinyText}
+
+	for _, funcName := range []string{"cast_assign", "cast_ignore", "cast_strict"} {
+		casted, err := forceAssignmentCastExprWithName(ctx, DeepCopyExpr(source), tinyText, funcName)
+		require.NoError(t, err)
+		require.Equal(t, funcName, casted.GetF().GetFunc().GetObjName())
+	}
+
+	// Generic casts retain the ordinary same-type no-op behavior. Only a
+	// constrained assignment boundary must revalidate recovered legacy rows.
+	generic, err := forceCastExprWithName(ctx, DeepCopyExpr(source), tinyText, "cast")
+	require.NoError(t, err)
+	require.Nil(t, generic.GetF())
+
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	target := &plan.Expr{Typ: tinyText, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	for _, test := range []struct {
+		version int64
+		ignore  bool
+		want    string
+	}{
+		{version: defines.MORPCVersion4, want: "cast_strict"},
+		{version: defines.MORPCVersion4, ignore: true, want: "cast"},
+		{version: defines.MORPCVersion5, want: "cast_assign"},
+		{version: defines.MORPCVersion5, ignore: true, want: "cast_ignore"},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+		casted, err := forceCastExpr2WithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			makeTypeByPlan2Type(tinyText),
+			DeepCopyExpr(target),
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+
+		casted, err = forceAssignmentCastExprWithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			tinyText,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
 }
 
@@ -659,7 +1155,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.NotNil(t, genCol)
 
 	existingCols := []*ColDef{{Name: "t", Typ: plan.Type{Id: int32(types.T_text)}}}
-	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
+	gen, err := buildGeneratedExpr(proc.Ctx, genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
 	require.NoError(t, err)
 	require.NotNil(t, gen)
 	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
@@ -668,13 +1164,80 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
 
 	// A non-CHAR/VARCHAR generated target keeps the generic cast.
-	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
+	genInt, err := buildGeneratedExpr(proc.Ctx, genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
 	require.NoError(t, err)
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
+func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name             string
+		expr             string
+		baseColumn       string
+		baseSQLType      string
+		baseType         plan.Type
+		generatedSQLType string
+		generatedType    plan.Type
+	}{
+		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
+		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},
+		{name: "inet6_ntoa", expr: "inet6_ntoa(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
+		{name: "is_ipv4", expr: "is_ipv4(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv6", expr: "is_ipv6(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv4_compat", expr: "is_ipv4_compat(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv4_mapped", expr: "is_ipv4_mapped(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(
+				"create table t (%s %s, g %s generated always as (%s) stored)",
+				tc.baseColumn, tc.baseSQLType, tc.generatedSQLType, tc.expr,
+			)
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+
+			var genCol *tree.ColumnTableDef
+			for _, def := range createTable.Defs {
+				if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+					genCol = cd
+				}
+			}
+			require.NotNil(t, genCol)
+
+			gen, err := buildGeneratedExpr(proc.Ctx, genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
+			require.NoError(t, err)
+			require.NotNil(t, gen)
+		})
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table t (ip_text varchar(39), g bigint unsigned generated always as (inet_aton(uuid())) stored)", 1)
+	require.NoError(t, err)
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	var genCol *tree.ColumnTableDef
+	for _, def := range createTable.Defs {
+		if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+			genCol = cd
+		}
+	}
+	require.NotNil(t, genCol)
+	_, err = buildGeneratedExpr(proc.Ctx,
+		genCol,
+		plan.Type{Id: int32(types.T_uint64)},
+		[]*ColDef{{Name: "ip_text", Typ: plan.Type{Id: int32(types.T_varchar), Width: 39}}},
+		proc,
+	)
+	require.ErrorContains(t, err, "non-deterministic function 'uuid'")
+}
+
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
@@ -686,22 +1249,49 @@ func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
 		stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, storedName)
 		require.NoError(t, err)
 
-		normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		require.NoError(t, err)
 		require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
 
-		ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		require.NoError(t, err)
 		require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
 	}
 
-	require.Nil(t, builder.applyGeneratedColumnAssignmentCast(nil, false))
-	require.Same(t, source, builder.applyGeneratedColumnAssignmentCast(source, false))
+	unchanged, err := builder.applyGeneratedColumnAssignmentCast(nil, false)
+	require.NoError(t, err)
+	require.Nil(t, unchanged)
+	plain := &Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	unchanged, err = builder.applyGeneratedColumnAssignmentCast(plain, false)
+	require.NoError(t, err)
+	require.Same(t, plain, unchanged)
+
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	missingAssignment := &Expr{Typ: tinyText, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
+	require.Equal(t, tinyText, normal.Typ)
+	ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), true)
+	require.NoError(t, err)
+	require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
+
+	explicit, err := forceCastExprWithName(context.Background(),
+		&Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 1024}}, tinyText, "cast")
+	require.NoError(t, err)
+	preserved, err := builder.applyGeneratedColumnAssignmentCast(explicit, false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", preserved.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast", preserved.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, "cast_assign")
 	require.NoError(t, err)
-	normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	normal, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	require.NoError(t, err)
 	require.Equal(t, "cast_strict", normal.GetF().GetFunc().GetObjName())
-	ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	ignore, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	require.NoError(t, err)
 	require.Equal(t, "cast", ignore.GetF().GetFunc().GetObjName())
 }
 
@@ -724,6 +1314,11 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	for _, test := range tests {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
 		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+		blobTarget := plan.Type{Id: int32(types.T_blob), Width: types.MaxStringSize}
+		require.Equal(t, test.want, assignmentCastFunctionName(blobTarget, test.ignore, proc))
+		require.Equal(t, test.want, assignmentCastFunctionName(
+			plan.Type{Id: int32(types.T_year), Width: 4}, test.ignore, proc,
+		))
 
 		source := makePlan2Int64ConstExprWithType(1)
 		targetType := &plan.Expr{
@@ -740,8 +1335,81 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		blobTargetType := &plan.Expr{
+			Typ:  blobTarget,
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		blobCasted, err := forceCastExpr2WithProcess(
+			t.Context(),
+			makePlan2Int64ConstExprWithType(1),
+			makeTypeByPlan2Type(blobTarget),
+			blobTargetType,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, false, proc))
+	require.Equal(t, "cast_ignore", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, true, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_blob), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
+}
+
+func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	targets := []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "signed integer", typ: types.T_int32.ToType(), text: "abc"},
+		{name: "unsigned integer", typ: types.T_uint32.ToType(), text: "-1"},
+		{name: "decimal", typ: types.New(types.T_decimal64, 10, 2), text: "abc"},
+		{name: "date", typ: types.T_date.ToType(), text: "2024-02-30"},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			targetPlanType := makePlan2Type(&target.typ)
+			require.Equal(t, "cast_ignore", assignmentCastFunctionName(targetPlanType, true, proc))
+
+			expr, err := MakeInsertValueConstExpr(
+				proc,
+				tree.NewNumVal(target.text, target.text, false, tree.P_char),
+				&target.typ,
+				true,
+			)
+			require.NoError(t, err)
+			require.Equal(t, "cast_ignore", expr.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_varchar), expr.GetF().GetArgs()[0].Typ.Id)
+		})
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	for _, target := range targets {
+		want := "cast"
+		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+			want = "cast_strict"
+		}
+		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)
+	}
 }
 
 func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
@@ -768,4 +1436,83 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}
+
+func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	proc := builder.compCtx.GetProcess()
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}
+		source := &Expr{Typ: plan.Type{Id: int32(oid), Width: types.MaxStringSize},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		for _, root := range []string{"unwrapped", "cast", "cast_strict", "cast_assign", "cast_ignore"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, root), func(t *testing.T) {
+				stored := DeepCopyExpr(source)
+				if root != "unwrapped" {
+					var err error
+					stored, err = forceAssignmentCastExprWithName(proc.Ctx, stored, target, root)
+					require.NoError(t, err)
+				}
+				col := &plan.ColDef{Typ: target, Default: &plan.Default{Expr: stored}}
+				before := DeepCopyExpr(stored)
+				for _, ignore := range []bool{false, true} {
+					got, err := getDefaultExprForAssignment(proc.Ctx, col, proc, ignore)
+					require.NoError(t, err)
+					want := "cast_assign"
+					if ignore {
+						want = "cast_ignore"
+					}
+					require.Equal(t, want, got.GetF().GetFunc().GetObjName())
+					require.Equal(t, target, got.Typ)
+					inner := got.GetF().Args[0]
+					if root == "cast" {
+						require.Equal(t, "cast", inner.GetF().GetFunc().GetObjName())
+						inner = inner.GetF().Args[0]
+					}
+					require.Equal(t, int32(1), inner.GetCol().GetColPos())
+					require.Equal(t, before, stored, "catalog default must remain immutable")
+				}
+			})
+		}
+		sameType := DeepCopyExpr(source)
+		sameType.Typ = target
+		ddl, err := makePlan2AssignmentCastExpr(proc.Ctx, sameType, target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
+		require.NoError(t, err)
+		require.True(t, null.GetLit().GetIsnull())
+	}
+}
+
+func TestEmptyDomainTypeReplay(t *testing.T) {
+	for _, tc := range []struct {
+		ddl               string
+		oid               types.T
+		domain, formatted string
+	}{
+		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+	} {
+		t.Run(tc.ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), typ.Id)
+			require.Equal(t, tc.domain, typ.Enumvalues)
+			require.Equal(t, tc.formatted, FormatColType(typ))
+			encoded, err := typ.Marshal()
+			require.NoError(t, err)
+			var recovered plan.Type
+			require.NoError(t, recovered.Unmarshal(encoded))
+			require.Equal(t, typ, recovered)
+			replay, err := mysql.ParseOne(context.Background(), "create table replay(v "+FormatColType(recovered)+")", 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			replayType, err := getTypeFromAst(context.Background(), replay.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, typ, replayType)
+		})
+	}
 }

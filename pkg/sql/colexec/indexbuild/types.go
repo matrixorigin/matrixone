@@ -33,8 +33,6 @@ const (
 	End
 )
 
-const indexBuildAllocationOwner mpool.AllocationOwner = 1
-
 const (
 	indexBuildAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
 	indexBuildAllocationSiteRuntimeFilterArea
@@ -72,7 +70,7 @@ func (indexBuild *IndexBuild) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		indexBuildAllocationOwner,
+		mpool.AllocationOwnerIndexBuild,
 		indexBuildAllocationSiteRuntimeFilterData,
 		indexBuildAllocationSiteRuntimeFilterArea,
 		indexBuildAllocationSiteRuntimeFilterNulls,

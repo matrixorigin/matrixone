@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -224,7 +225,10 @@ type serverValue struct {
 	requiredLsn  uint64
 	entries      []logservice.LogRecord
 	// fake error
-	fakeErr map[string]struct{}
+	fakeErr      map[string]struct{}
+	fakeErrCount map[string]int
+	callCount    map[string]int
+	failureCount map[string]int
 }
 
 type mockLogServer struct {
@@ -240,8 +244,11 @@ func newMockServer() *mockLogServer {
 }
 
 type mockLogClient struct {
-	shardID uint64
-	s       *mockLogServer
+	shardID              uint64
+	s                    *mockLogServer
+	getLeaderIDEvent     chan<- uint64
+	readEntriesEvent     chan<- struct{}
+	getTruncatedLsnEvent chan<- struct{}
 }
 
 func newMockLogClient(s *mockLogServer, shardID uint64) LogClient {
@@ -250,7 +257,10 @@ func newMockLogClient(s *mockLogServer, shardID uint64) LogClient {
 	_, ok := s.values[shardID]
 	if !ok || s.values[shardID] == nil {
 		s.values[shardID] = &serverValue{
-			fakeErr: make(map[string]struct{}),
+			fakeErr:      make(map[string]struct{}),
+			fakeErrCount: make(map[string]int),
+			callCount:    make(map[string]int),
+			failureCount: make(map[string]int),
 		}
 	}
 	return &mockLogClient{
@@ -267,13 +277,33 @@ var (
 	fakeError = moerr.NewInternalErrorNoCtx("fake error")
 )
 
-func (m *mockLogClient) getLeaderID(_ context.Context) (uint64, error) {
+func signalTestEvent(ch chan<- struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (m *mockLogClient) getLeaderID(ctx context.Context) (uint64, error) {
 	m.s.mu.Lock()
-	defer m.s.mu.Unlock()
-	if _, ok := m.s.values[m.shardID].fakeErr["getLeaderID"]; ok {
+	leader := m.s.values[m.shardID].shardID
+	_, failed := m.s.values[m.shardID].fakeErr["getLeaderID"]
+	m.s.mu.Unlock()
+	if failed {
 		return 0, fakeError
 	}
-	return m.s.values[m.shardID].shardID, nil
+	// Publish the captured return value without holding the server mutex.
+	if m.getLeaderIDEvent != nil {
+		select {
+		case m.getLeaderIDEvent <- leader:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	return leader, nil
 }
 
 func (m *mockLogClient) write(_ context.Context, data []byte) (uint64, error) {
@@ -296,6 +326,7 @@ func (m *mockLogClient) write(_ context.Context, data []byte) (uint64, error) {
 func (m *mockLogClient) readEntries(_ context.Context, lsn uint64) ([]logservice.LogRecord, uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
+	defer signalTestEvent(m.readEntriesEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["readEntries"]; ok {
 		return nil, 0, fakeError
 	}
@@ -322,6 +353,7 @@ func (m *mockLogClient) truncate(_ context.Context, lsn uint64) error {
 func (m *mockLogClient) getTruncatedLsn(_ context.Context) (uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
+	defer signalTestEvent(m.getTruncatedLsnEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["getTruncatedLsn"]; ok {
 		return 0, fakeError
 	}
@@ -331,7 +363,7 @@ func (m *mockLogClient) getTruncatedLsn(_ context.Context) (uint64, error) {
 func (m *mockLogClient) getLatestLsn(_ context.Context) (uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
-	if _, ok := m.s.values[m.shardID].fakeErr["getLatestLsn"]; ok {
+	if m.shouldFakeErrorLocked("getLatestLsn") {
 		return 0, fakeError
 	}
 	return m.s.values[m.shardID].latestLsn, nil
@@ -340,7 +372,7 @@ func (m *mockLogClient) getLatestLsn(_ context.Context) (uint64, error) {
 func (m *mockLogClient) setRequiredLsn(_ context.Context, lsn uint64) error {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
-	if _, ok := m.s.values[m.shardID].fakeErr["setRequiredLsn"]; ok {
+	if m.shouldFakeErrorLocked("setRequiredLsn") {
 		return fakeError
 	}
 	m.s.values[m.shardID].requiredLsn = lsn
@@ -390,8 +422,142 @@ func (m *mockLogClient) clearFakeError(tag string) {
 	delete(m.s.values[m.shardID].fakeErr, tag)
 }
 
+func (m *mockLogClient) failNext(tag string, count int) {
+	m.s.mu.Lock()
+	defer m.s.mu.Unlock()
+	v := m.s.values[m.shardID]
+	v.fakeErrCount[tag] = count
+	v.callCount[tag] = 0
+	v.failureCount[tag] = 0
+}
+
+func (m *mockLogClient) callStats(tag string) (calls, failures int) {
+	m.s.mu.Lock()
+	defer m.s.mu.Unlock()
+	v := m.s.values[m.shardID]
+	return v.callCount[tag], v.failureCount[tag]
+}
+
+func (m *mockLogClient) shouldFakeErrorLocked(tag string) bool {
+	v := m.s.values[m.shardID]
+	v.callCount[tag]++
+	if v.fakeErrCount[tag] > 0 {
+		v.fakeErrCount[tag]--
+		v.failureCount[tag]++
+		return true
+	}
+	if _, ok := v.fakeErr[tag]; ok {
+		v.failureCount[tag]++
+		return true
+	}
+	return false
+}
+
 func (m *mockLogClient) setLeaderID(id uint64) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
 	m.s.values[m.shardID].shardID = id
+}
+
+// retryStandbyClient exercises production logClient retries without a cluster.
+type retryStandbyClient struct {
+	logservice.StandbyClient
+	call   func(context.Context) (uint64, error)
+	setLSN uint64
+}
+
+func (c *retryStandbyClient) Append(ctx context.Context, _ pb.LogRecord) (logservice.Lsn, error) {
+	return c.call(ctx)
+}
+
+func (c *retryStandbyClient) GetTruncatedLsn(ctx context.Context) (logservice.Lsn, error) {
+	return c.call(ctx)
+}
+
+func (c *retryStandbyClient) GetLatestLsn(ctx context.Context) (logservice.Lsn, error) {
+	return c.call(ctx)
+}
+
+func (c *retryStandbyClient) GetRequiredLsn(ctx context.Context) (logservice.Lsn, error) {
+	return c.call(ctx)
+}
+
+func (c *retryStandbyClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {
+	c.setLSN = lsn
+	_, err := c.call(ctx)
+	return err
+}
+
+func (c *retryStandbyClient) Close() error { return nil }
+
+func TestLogClientRetryContext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*logClient, context.Context) (uint64, error)
+		want uint64
+	}{
+		{"write", func(c *logClient, ctx context.Context) (uint64, error) {
+			return c.writeWithRetry(ctx, nil, 2)
+		}, 41},
+		{"get truncated", (*logClient).getTruncatedLsnWithRetry, 41},
+		{"get latest", (*logClient).getLatestLsnWithRetry, 41},
+		{"get required", (*logClient).getRequiredLsnWithRetry, 41},
+		{"set required", func(c *logClient, ctx context.Context) (uint64, error) {
+			return 0, c.setRequiredLsnWithRetry(ctx, 99)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range []string{"precanceled", "cancel on error", "retry succeeds"} {
+				t.Run(mode, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					calls := 0
+					c := &logClient{client: &retryStandbyClient{call: func(context.Context) (uint64, error) {
+						calls++
+						if calls == 1 && mode != "precanceled" {
+							if mode == "cancel on error" {
+								cancel()
+							}
+							return 0, fakeError
+						}
+						return 41, nil
+					}}}
+					defer c.close()
+					if mode == "precanceled" {
+						cancel()
+					}
+					lsn, err := tc.call(c, ctx)
+					if tc.name == "set required" && calls > 0 {
+						require.Equal(t, uint64(99), c.client.(*retryStandbyClient).setLSN)
+					}
+					if mode == "retry succeeds" {
+						require.NoError(t, err)
+						require.NoError(t, ctx.Err())
+						require.Equal(t, tc.want, lsn)
+						require.Equal(t, 2, calls)
+						return
+					}
+					require.ErrorIs(t, err, context.Canceled)
+					require.Zero(t, lsn)
+					wantCalls := 1
+					if mode == "precanceled" {
+						wantCalls = 0
+					}
+					require.Equal(t, wantCalls, calls)
+				})
+			}
+		})
+	}
+
+	t.Run("write retry limit", func(t *testing.T) {
+		calls := 0
+		c := &logClient{client: &retryStandbyClient{call: func(context.Context) (uint64, error) {
+			calls++
+			return 0, fakeError
+		}}}
+		defer c.close()
+		_, err := c.writeWithRetry(context.Background(), nil, 1)
+		require.ErrorIs(t, err, fakeError)
+		require.Equal(t, 1, calls)
+	})
 }

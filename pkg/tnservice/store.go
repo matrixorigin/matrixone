@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -52,6 +54,19 @@ import (
 var (
 	retryCreateStorageInterval = time.Second * 5
 )
+
+// FJ_TNStoreHandlersDrained is triggered after all accepted TN handlers have
+// left the active set and before replica, WAL, and storage teardown starts.
+const FJ_TNStoreHandlersDrained = "fj/tn/store/handlers-drained"
+
+// txnServerLifecycle is deliberately kept private so adding the ordered
+// shutdown hooks does not change the public rpc.TxnServer contract. The
+// production RPC server implements it; a server without these hooks cannot be
+// safely drained before the TN storage is closed.
+type txnServerLifecycle interface {
+	Quiesce() error
+	Drain(context.Context) error
+}
 
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
@@ -113,6 +128,22 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	closeOnce           sync.Once
+	closeErr            error
+	quiesced            atomic.Bool
+	localHandlers       localHandlerLifecycle
+	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
+	commandPollWakeup   chan struct{}
+	heartbeatWakeup     chan struct{}
+	commandMu           sync.Mutex
+	shutdownAckMu       sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
+	shutdownBatchID     atomic.Uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -142,15 +173,101 @@ type store struct {
 	queryClient client.QueryClient
 }
 
+// localHandlerLifecycle covers requests dispatched through TxnSender's local
+// fast path.  A sender may cache a handler, so checking quiesced only during
+// lookup is insufficient; every invocation must acquire this lease.
+type localHandlerLifecycle struct {
+	sync.Mutex
+	quiesced bool
+	active   int
+	zero     chan struct{}
+}
+
+func (s *store) quiesceLocalHandlers() {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	s.localHandlers.quiesced = true
+	if s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) acquireLocalHandler() (func(), bool) {
+	s.localHandlers.Lock()
+	defer s.localHandlers.Unlock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	if s.localHandlers.quiesced {
+		return nil, false
+	}
+	if s.localHandlers.active == 0 {
+		// A closed zero channel belongs to the previous drain epoch.  Keep a
+		// fresh channel for the handler that is about to become active.
+		select {
+		case <-s.localHandlers.zero:
+			s.localHandlers.zero = make(chan struct{})
+		default:
+		}
+	}
+	s.localHandlers.active++
+	return func() { s.releaseLocalHandler() }, true
+}
+
+func (s *store) releaseLocalHandler() {
+	s.localHandlers.Lock()
+	if s.localHandlers.active > 0 {
+		s.localHandlers.active--
+	}
+	if s.localHandlers.quiesced && s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) drainLocalHandlers(ctx context.Context) error {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+		if s.localHandlers.active == 0 {
+			close(s.localHandlers.zero)
+		}
+	}
+	zero := s.localHandlers.zero
+	s.localHandlers.Unlock()
+	select {
+	case <-zero:
+		return nil
+	case <-ctx.Done():
+		return errors.Join(rpc.ErrTxnDrainTimeout, ctx.Err())
+	}
+}
+
 // NewService create TN Service
 func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
-	opts ...Option) (Service, error) {
+	publish func(Service),
+	opts ...Option) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+
+	if publish == nil {
+		return nil, moerr.NewInvalidStateNoCtx("TN service requires an owner")
 	}
 
 	configKVMap, _ := dumpTnConfig(*cfg)
@@ -165,17 +282,25 @@ func NewService(
 		return nil, err
 	}
 
-	// start I/O pipeline
-	ioutil.Start(cfg.UUID)
-
 	s := &store{
 		cfg:                 cfg,
 		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
 		shutdownC:           shutdownC,
+		heartbeatWakeup:     make(chan struct{}, 1),
 		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if closeErr := s.Close(); closeErr != nil {
+				result = s
+				s.rt.Logger().Error("failed to retire TN construction", zap.Error(closeErr))
+			}
+		}
+	}()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -194,12 +319,8 @@ func NewService(
 	if err := s.initHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := s.initLockTableAllocator(); err != nil {
-		return nil, err
-	}
-	if err := s.initShardServer(); err != nil {
-		return nil, err
-	}
+	s.initLockTableAllocator()
+	s.initShardServer()
 	if err := s.initTxnSender(); err != nil {
 		return nil, err
 	}
@@ -213,15 +334,22 @@ func NewService(
 		return nil, err
 	}
 
-	s.initQueryService(cfg.InStandalone)
+	if err := s.initQueryService(cfg.InStandalone); err != nil {
+		return nil, err
+	}
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
 	s.setupStatusServer()
+	ioutil.Start(cfg.UUID)
+	constructed = true
 	return s, nil
 }
 
 func (s *store) Start() error {
+	if s.quiesced.Load() {
+		return moerr.NewInvalidStateNoCtx("TN service is closed")
+	}
 	if err := s.startTNShards(); err != nil {
 		return err
 	}
@@ -234,49 +362,97 @@ func (s *store) Start() error {
 		}
 	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
-	return s.stopper.RunTask(s.heartbeatTask)
+	return s.stopper.RunTask(s.controlTask)
 }
 
 func (s *store) Close() error {
-	// Reject new replica calls and cancel active start contexts before waiting
-	// for store tasks. Storage remains open until the RPC server drains below.
-	s.replicas.Range(func(_, value any) bool {
-		r := value.(*replica)
-		r.cancelStart(false)
-		return true
-	})
-	s.stopper.Stop()
-	s.moCluster.Close()
+	s.closeOnce.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
 
-	var err error
+func (s *store) drainHandlers(ctx context.Context) error {
+	// Stop accepting new RPCs first, but keep replicas, WAL and storage alive
+	// while already accepted handlers finish. This prevents an in-flight commit
+	// from observing a cancelled replica context before WAL durability settles.
+	s.quiesced.Store(true)
+	s.quiesceLocalHandlers()
+	if s.server != nil {
+		lifecycle, ok := s.server.(txnServerLifecycle)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("txn server does not support lifecycle drain")
+		}
+		if err := lifecycle.Quiesce(); err != nil {
+			return err
+		}
+		if err := lifecycle.Drain(ctx); err != nil {
+			return err
+		}
+	}
+	return s.drainLocalHandlers(ctx)
+}
+
+func (s *store) close() error {
+	// Both network and cached local dispatch share the same drain budget.
+	// Starting a fresh local deadline after network drain could double it.
+	drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	err := s.drainHandlers(drainCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	fault.TriggerFault(FJ_TNStoreHandlersDrained)
+
+	// No handler can acquire a replica after the drain gate. It is now safe to
+	// cancel replica start contexts and close their storage.
+	if s.replicas != nil {
+		s.replicas.Range(func(_, value any) bool {
+			r := value.(*replica)
+			r.cancelStart(false)
+			return true
+		})
+	}
+	if s.stopper != nil {
+		s.stopper.Stop()
+	}
+	if s.moCluster != nil {
+		s.moCluster.Close()
+		runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.ClusterService, s.moCluster)
+	}
+
+	err = nil
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
-	if s.cfg.ShardService.Enable {
+	if s.shardServer != nil {
 		err = errors.Join(err, s.shardServer.Close())
 	}
-	err = errors.Join(err, s.server.Close())
-	s.replicas.Range(func(_, value any) bool {
-		r := value.(*replica)
-		if e := r.close(false); e != nil {
-			err = errors.Join(err, e)
-		}
-		return true
-	})
-	err = errors.Join(
-		err,
-		s.hakeeperClient.Close(),
-		s.sender.Close(),
-		s.lockTableAllocator.Close(),
-	)
-	if s.queryClient != nil {
-		err = errors.Join(err, s.queryClient.Close())
+	if s.server != nil {
+		err = errors.Join(err, s.server.Close())
+	}
+	if s.replicas != nil {
+		s.replicas.Range(func(_, value any) bool {
+			r := value.(*replica)
+			err = errors.Join(err, r.close(false))
+			return true
+		})
 	}
 	s.task.RLock()
 	ts := s.task.serviceHolder
 	s.task.RUnlock()
 	if ts != nil {
 		err = errors.Join(err, ts.Close())
+	}
+	if s.sender != nil {
+		err = errors.Join(err, s.sender.Close())
+	}
+	if s.lockTableAllocator != nil {
+		err = errors.Join(err, s.lockTableAllocator.Close())
+	}
+	if s.hakeeperClient != nil {
+		err = errors.Join(err, s.hakeeperClient.Close())
+	}
+	if s.queryClient != nil {
+		err = errors.Join(err, s.queryClient.Close())
 	}
 	// stop I/O pipeline
 	ioutil.Stop(s.cfg.UUID)
@@ -387,6 +563,9 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
 				}
+				if err == nil && r.started() {
+					s.notifyHeartbeat()
+				}
 				return
 			}
 		}
@@ -482,25 +661,24 @@ func (s *store) initClocker() error {
 	return nil
 }
 
-func (s *store) initLockTableAllocator() error {
-	s.lockTableAllocator = lockservice.NewLockTableAllocator(
+func (s *store) initLockTableAllocator() {
+	lockservice.NewLockTableAllocator(
 		s.cfg.UUID,
 		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC,
+		func(owner lockservice.LockTableAllocator) { s.lockTableAllocator = owner },
 	)
-	return nil
 }
 
-func (s *store) initShardServer() error {
+func (s *store) initShardServer() {
 	if !s.cfg.ShardService.Enable {
-		return nil
+		return
 	}
 
 	s.cfg.ShardService.RPC = s.cfg.RPC
 	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
-	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger())
-	return nil
+	shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger(), func(owner shardservice.ShardServer) { s.shardServer = owner })
 }
 
 func (s *store) initHAKeeperClient() error {
@@ -539,18 +717,18 @@ func (s *store) initClusterService() {
 //
 //	true: tn is boosted in a standalone cluster. cn has a queryservice already.
 //	false: tn is boosted in an independent process. tn needs a queryservice.
-func (s *store) initQueryService(inStandalone bool) {
+func (s *store) initQueryService(inStandalone bool) error {
 	if inStandalone {
-		s.queryService = nil
-		return
+		return nil
 	}
 	var err error
 	s.queryService, err = queryservice.NewQueryService(s.cfg.UUID,
 		s.queryServiceListenAddr(), s.cfg.RPC)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	s.initQueryCommandHandler()
+	return nil
 }
 
 func (s *store) initQueryCommandHandler() {

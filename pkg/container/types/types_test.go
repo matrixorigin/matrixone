@@ -15,11 +15,10 @@
 package types
 
 import (
+	"cmp"
 	"math"
 	"sort"
 	"testing"
-
-	"golang.org/x/exp/constraints"
 
 	"github.com/stretchr/testify/require"
 )
@@ -96,7 +95,6 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 		Oid:     T(1),
 		Charset: 2,
 		notNull: 0,
-		dummy2:  4,
 		Size:    5,
 		Width:   6,
 		Scale:   -1,
@@ -114,6 +112,33 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, typ, ret)
 }
 
+func TestTextCharsetIdentitiesDistinguishLegacyMetadata(t *testing.T) {
+	require.Equal(t, uint8(0), CharsetLegacy)
+	require.NotEqual(t, CharsetLegacy, CharsetUTF8)
+
+	require.Equal(t, CharsetUTF8, New(T_varchar, 32, 0).Charset)
+	require.Equal(t, CharsetUTF8, T_varchar.ToType().Charset)
+	require.Equal(t, CharsetLegacy,
+		NewWithCharset(T_varchar, 32, 0, CharsetLegacy).Charset)
+	// A zero charset on an intrinsically binary OID is an old plan, not a
+	// request to reinterpret the value as text.
+	require.Equal(t, CharsetBinary,
+		NewWithCharset(T_varbinary, 32, 0, CharsetLegacy).Charset)
+	require.Equal(t, CharsetLegacy, CharsetType(T_int64))
+}
+
+func TestMergeStringCharset(t *testing.T) {
+	general := T_varchar.ToType()
+	legacy := NewWithCharset(T_text, 32, 0, CharsetLegacy)
+	utf8mb4Bin := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
+	opaqueBinary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+
+	require.Equal(t, CharsetUTF8, MergeStringCharset([]Type{general, T_int64.ToType()}, CharsetUTF8))
+	require.Equal(t, CharsetLegacy, MergeStringCharset([]Type{general, legacy}, CharsetUTF8))
+	require.Equal(t, CharsetUTF8MB4Bin, MergeStringCharset([]Type{legacy, utf8mb4Bin}, CharsetUTF8))
+	require.Equal(t, CharsetBinary, MergeStringCharset([]Type{utf8mb4Bin, opaqueBinary}, CharsetUTF8))
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())
@@ -123,6 +148,17 @@ func TestType_Eq(t *testing.T) {
 	myType := T_int64.ToType()
 	myType1 := T_int64.ToType()
 	require.True(t, myType.Eq(myType1))
+
+	utf8 := New(T_varchar, 32, 0)
+	binary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+	binaryCollation := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
+	require.False(t, utf8.Eq(binary))
+	require.False(t, utf8.Eq(binaryCollation))
+	require.False(t, binary.Eq(binaryCollation))
+
+	legacyVarbinary := New(T_varbinary, 32, 0)
+	legacyVarbinary.Charset = CharsetUTF8
+	require.True(t, legacyVarbinary.Eq(New(T_varbinary, 32, 0)))
 }
 
 func TestT_ToType(t *testing.T) {
@@ -205,7 +241,7 @@ func BenchmarkCopy(b *testing.B) {
 	}
 }
 
-func sliceCopyG[T constraints.Ordered](a, b []T) {
+func sliceCopyG[T cmp.Ordered](a, b []T) {
 	for i := range a {
 		b[i] = a[i] + a[i]
 	}
@@ -312,7 +348,7 @@ func TestTypeCompare(t *testing.T) {
 	obj1 := NewObjectid()
 	blockId_1_1291 := NewBlockidWithObjectID(&obj1, 1291)
 	blockId_1_1036 := NewBlockidWithObjectID(&obj1, 1036)
-	var blocks []Blockid
+	blocks := make([]Blockid, 0, 2)
 	blocks = append(blocks, blockId_1_1291)
 	blocks = append(blocks, blockId_1_1036)
 
@@ -322,7 +358,7 @@ func TestTypeCompare(t *testing.T) {
 	require.Equal(t, uint16(1036), blocks[0].Sequence())
 	require.Equal(t, uint16(1291), blocks[1].Sequence())
 
-	var blocks2 []Blockid
+	blocks2 := make([]Blockid, 0, len(blocks))
 	blocks2 = append(blocks2, blocks...)
 	sort.Slice(blocks2, func(i, j int) bool {
 		return blocks[j].LT(&blocks[i])

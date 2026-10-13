@@ -1,0 +1,96 @@
+drop database if exists unique_index_extra_filter;
+create database unique_index_extra_filter;
+use unique_index_extra_filter;
+create table t (
+id int primary key,
+a varchar(32),
+payload varchar(32),
+unique index uq_a(a)
+);
+insert into t values
+(1, 'abcdx', 'p1'),
+(2, 'abce0', 'p2');
+select id, a, payload from t where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t force index(uq_a) where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t ignore index(uq_a) where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t force index(uq_a) where a = 'abcdx' and a > 'abcdw';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t force index(uq_a) where 'abcdw' < a and a = 'abcdx';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t force index(uq_a) where a = 'abcdx' and payload = 'p1';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select mo_ctl('dn', 'flush', 'unique_index_extra_filter.t');
+➤ mo_ctl(dn, flush, unique_index_extra_filter.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, a, payload from t where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t force index(uq_a) where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select id, a, payload from t ignore index(uq_a) where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+create table composite_control (
+id int primary key,
+a varchar(32),
+b int,
+payload varchar(32),
+unique index uq_ab(a, b)
+);
+insert into composite_control values
+(1, 'abcdx', 10, 'p1'),
+(2, 'abce0', 20, 'p2');
+select id, a, b, payload
+from composite_control force index(uq_ab)
+where a = 'abcdx' and b = 10 and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  10  ¦  p1
+create table prefix_control (
+id int primary key,
+a varchar(32),
+payload varchar(32),
+unique index uq_a(a(4))
+);
+insert into prefix_control values
+(1, 'abcdx', 'p1'),
+(2, 'abce0', 'p2');
+select id, a, payload
+from prefix_control force index(uq_a)
+where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+select mo_ctl('dn', 'flush', 'unique_index_extra_filter.prefix_control');
+➤ mo_ctl(dn, flush, unique_index_extra_filter.prefix_control)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, a, payload
+from prefix_control force index(uq_a)
+where a = 'abcdx' and a like 'abcdx%';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  abcdx  ¦  p1
+drop database unique_index_extra_filter;

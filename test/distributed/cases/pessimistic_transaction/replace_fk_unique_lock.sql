@@ -71,7 +71,7 @@ create table child_generated(id int primary key, parent_id int,
   foreign key(parent_id) references parent_generated(id) on delete cascade);
 insert into parent_generated(id, u) values (1, 10), (2, 20);
 insert into child_generated values (1, 1), (2, 2);
-replace into parent_generated values (3, 10);
+replace into parent_generated values (3, default, 10);
 replace into parent_generated(id, g, u) values (4, default, 20);
 select id, g, u from parent_generated order by id;
 select * from child_generated;

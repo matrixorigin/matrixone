@@ -18,9 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -824,25 +826,87 @@ func Test_floatArrayToString(t *testing.T) {
 }
 
 func Test_openDbConn(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
+	deadlineSeen := false
+	stub := gostub.Stub(&tryConn, func(ctx context.Context, _ *mysql.Config) (*sql.DB, error) {
+		deadline, ok := ctx.Deadline()
+		remaining := time.Until(deadline)
+		deadlineSeen = ok && remaining > 0 && remaining <= openDbConnAttemptTimeout
 		return nil, nil
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
+	assert.True(t, deadlineSeen)
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
-		return nil, moerr.NewInternalErrorNoCtx("")
+	synctest.Test(t, func(t *testing.T) {
+		var attempts int
+		failure := errors.New("connection failed")
+		stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+			attempts++
+			return nil, failure
+		})
+		t.Cleanup(stub.Reset)
+
+		conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		require.Error(t, err)
+		require.ErrorIs(t, err, failure)
+		require.True(t, IsRetryableConnectionError(err))
+		require.Nil(t, conn)
+		require.Equal(t, 3, attempts)
+	})
+}
+
+func TestOpenDbConnConfigurationErrorIsNotRetryable(t *testing.T) {
+	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, "invalid timeout")
+	require.Error(t, err)
+	require.False(t, IsRetryableConnectionError(err))
+	require.Nil(t, conn)
+}
+
+func TestOpenDbConnClosesSuccessfulConnectionAfterConcurrentCancellation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectClose()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		cancel()
+		return db, nil
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
-	assert.Error(t, err)
-	assert.Nil(t, conn)
+	conn, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, conn)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestOpenDbConnCancellationStopsRetryBackoff(t *testing.T) {
+	attempted := make(chan struct{})
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		close(attempted)
+		return nil, errors.New("connect failed")
+	})
+	defer stub.Reset()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		done <- err
+	}()
+	<-attempted
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("connection retry did not observe caller cancellation")
+	}
 }
 
 func Test_makeMysqlConfig(t *testing.T) {
@@ -860,9 +924,10 @@ func Test_makeMysqlConfig(t *testing.T) {
 }
 
 func Test_tryConn(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
 	mock.ExpectPing()
+	mock.ExpectClose()
 
 	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
 		return db
@@ -871,9 +936,31 @@ func Test_tryConn(t *testing.T) {
 
 	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	require.NoError(t, err)
-	got, err := tryConn(cfg)
+	got, err := tryConn(context.Background(), cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, db, got)
+	require.NoError(t, got.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTryConnClosesDatabaseAfterPingFailure(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	pingErr := errors.New("ping failed")
+	mock.ExpectPing().WillReturnError(pingErr)
+	mock.ExpectClose()
+
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
+	})
+	defer stub.Reset()
+
+	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	got, err := tryConn(context.Background(), cfg)
+	require.ErrorIs(t, err, pingErr)
+	require.Nil(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetTxnOp(t *testing.T) {

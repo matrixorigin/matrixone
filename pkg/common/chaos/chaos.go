@@ -16,29 +16,40 @@ package chaos
 
 import (
 	"database/sql"
+	"sync"
 	"time"
 )
 
 // ChaosTester chaos tester
 type ChaosTester struct {
-	testers []tester
+	mu        sync.Mutex
+	testers   []tester
+	started   bool
+	stopped   bool
+	stopC     chan struct{}
+	startOnce sync.Once
+	startDone chan struct{}
 }
 
 // NewChaosTester create chaos tester
 func NewChaosTester(cfg Config) *ChaosTester {
-	t := &ChaosTester{}
+	t := &ChaosTester{stopC: make(chan struct{}), startDone: make(chan struct{})}
 	t.testers = append(t.testers, newRestartTester(cfg))
 	return t
 }
 
-func (t *ChaosTester) waitSystemBootStrapCompleted() {
+func (t *ChaosTester) waitSystemBootStrapCompleted() bool {
 	for {
 		ok, err := t.doCheckBootStrapCompleted()
 		if err != nil || !ok {
-			time.Sleep(time.Second * 5)
+			select {
+			case <-t.stopC:
+				return false
+			case <-time.After(time.Second * 5):
+			}
 			continue
 		}
-		return
+		return true
 	}
 }
 
@@ -75,19 +86,47 @@ func (t *ChaosTester) doCheckBootStrapCompleted() (bool, error) {
 }
 
 func (t *ChaosTester) Start() error {
-	go func() {
-		t.waitSystemBootStrapCompleted()
-		for _, tester := range t.testers {
-			if err := tester.start(); err != nil {
-				panic(err)
+	return t.startWith(t.waitSystemBootStrapCompleted)
+}
+
+func (t *ChaosTester) startWith(wait func() bool) error {
+	t.startOnce.Do(func() {
+		go func() {
+			defer close(t.startDone)
+			if !wait() {
+				return
 			}
-		}
-	}()
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if t.stopped {
+				return
+			}
+			for _, tester := range t.testers {
+				if err := tester.start(); err != nil {
+					panic(err)
+				}
+			}
+			t.started = true
+		}()
+	})
 	return nil
 }
 
 func (t *ChaosTester) Stop() error {
-	for _, tester := range t.testers {
+	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return nil
+	}
+	t.stopped = true
+	close(t.stopC)
+	if !t.started {
+		t.mu.Unlock()
+		return nil
+	}
+	testers := append([]tester(nil), t.testers...)
+	t.mu.Unlock()
+	for _, tester := range testers {
 		if err := tester.stop(); err != nil {
 			return err
 		}

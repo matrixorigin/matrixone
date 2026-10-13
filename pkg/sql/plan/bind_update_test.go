@@ -17,14 +17,87 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
+	stmts, err := mysql.Parse(ctx.GetContext(),
+		"UPDATE constraint_test.t_on_update_gen SET val = CASE WHEN id = 1 THEN 111 ELSE val END WHERE id IN (1,2)",
+		1)
+	require.NoError(t, err)
+	plan, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	found := false
+	foundCast := false
+	for _, node := range plan.GetQuery().Nodes {
+		for _, project := range node.ProjectList {
+			require.NoError(t, planpb.VisitExprTree(project, func(expr *planpb.Expr) error {
+				fn := expr.GetF()
+				if fn != nil && fn.Func.GetObjName() == "cast" && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
+					foundCast = true
+				}
+				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "<=>" || len(fn.Args) != 2 {
+					return nil
+				}
+				if fn.Args[0].Typ.Id == int32(types.T_int32) &&
+					fn.Args[1].Typ.Id == int32(types.T_int32) {
+					found = true
+				}
+				return nil
+			}))
+		}
+	}
+	require.True(t, found, "changed-row comparison must consume target-typed values")
+	require.True(t, foundCast, "mixed numeric RHS must be cast in its producer before changed-row comparison")
+}
+
+func TestOnUpdateReusesFinalVolatileAssignment(t *testing.T) {
+	for _, assignments := range []string{
+		"val = IF(RAND() < 0.5, 0, 1)",
+		"id = id, val = IF(RAND() < 0.5, 0, 1)",
+		"val = IF(RAND() < 0.5, 0, 1), id = id",
+		"t.val = IF(RAND() < 0.5, 0, 1)",
+		"t.id = t.id, t.val = IF(RAND() < 0.5, 0, 1)",
+	} {
+		t.Run(assignments, func(t *testing.T) {
+			ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
+			target := "constraint_test.t_on_update_gen"
+			if strings.Contains(assignments, "t.") {
+				target += " AS t JOIN constraint_test.t_on_update_gen AS u ON t.id = u.id"
+			}
+			stmts, err := mysql.Parse(ctx.GetContext(), "UPDATE "+target+" SET "+assignments, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			calls := 0
+			for _, node := range p.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+						if f := e.GetF(); f != nil && f.Func.GetObjName() == "rand" {
+							calls++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Equal(t, 1, calls, "storage, generated columns and ON UPDATE must consume one materialized RHS")
+		})
+	}
+}
 
 func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	tableDef := &TableDef{
@@ -62,6 +135,359 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	}
 }
 
+func TestIrregularIndexAffectedByGeneratedColumnSourceUpdate(t *testing.T) {
+	tableDef := &TableDef{
+		Pkey:          &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "src": 1, "gmid": 2, "gvec": 3, "payload": 4, "ginclude": 5},
+		Cols: []*ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "src", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "gmid", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}}}}},
+			{Name: "gvec", Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "ginclude", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+		},
+	}
+	idx := &IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"gvec"}, IncludedColumns: []string{"ginclude"}}
+	for _, tc := range []struct {
+		name string
+		cols map[string]tree.Expr
+		want bool
+	}{
+		{name: "generated part", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "generated include", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "unrelated", cols: map[string]tree.Expr{"payload": nil}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := idx
+			if tc.name == "generated include" {
+				candidate = &IndexDef{IndexAlgo: idx.IndexAlgo, Parts: []string{"payload"}, IncludedColumns: []string{"ginclude"}}
+			}
+			got, err := irregularIndexAffectedByUpdate(tableDef, candidate, tc.cols)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Each generated expression references its predecessor twice. The number of
+// dependency paths doubles per level, but the number of distinct columns does
+// not. Use the same shape for functional controls and the scale benchmark.
+func repeatedGeneratedDependencies(depth int) *TableDef {
+	tableDef := &TableDef{
+		Name2ColIndex: map[string]int32{"src": 0, "payload": 1, "vec": 2},
+		Cols: []*ColDef{
+			{Name: "src", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "vec", Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}},
+		},
+	}
+	for i := 0; i < depth; i++ {
+		pos := int32(len(tableDef.Cols))
+		refPos := pos - 1
+		if i == 0 {
+			refPos = 0
+		}
+		ref := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: refPos}}}
+		name := fmt.Sprintf("g%d", i)
+		tableDef.Name2ColIndex[name] = pos
+		tableDef.Cols = append(tableDef.Cols, &ColDef{
+			Name: name, Typ: planpb.Type{Id: int32(types.T_int32)},
+			GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_F{
+				F: &planpb.Function{Args: []*planpb.Expr{ref, ref}},
+			}}},
+		})
+	}
+	return tableDef
+}
+
+func TestIrregularIndexAffectedBySharedGeneratedDependencies(t *testing.T) {
+	tableDef := repeatedGeneratedDependencies(4)
+	for _, idx := range []*IndexDef{
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3"}},
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3", "g2"}},
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g2", "g3"}},
+	} {
+		for _, col := range []string{"src", "g0", "payload"} {
+			got, err := irregularIndexAffectedByUpdatedColumnNames(tableDef, idx, map[string]struct{}{col: {}})
+			require.NoError(t, err)
+			require.Equal(t, col != "payload", got)
+		}
+	}
+	// An ON UPDATE dependency is another seed, even when the assignment itself
+	// is unrelated. It must remain visible through shared generated branches.
+	tableDef.Cols[0].OnUpdate = &planpb.OnUpdate{}
+	got, err := irregularIndexAffectedByUpdatedColumnNames(tableDef,
+		&IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3"}},
+		map[string]struct{}{"payload": {}})
+	require.NoError(t, err)
+	require.True(t, got)
+}
+
+func BenchmarkIrregularIndexAffectedByGeneratedDependencies(b *testing.B) {
+	for _, depth := range []int{8, 16, 24} {
+		b.Run(fmt.Sprintf("depth%d", depth), func(b *testing.B) {
+			tableDef := repeatedGeneratedDependencies(depth)
+			idx := &IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{fmt.Sprintf("g%d", depth-1)}}
+			updateCols := map[string]struct{}{"payload": {}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				affected, err := irregularIndexAffectedByUpdatedColumnNames(tableDef, idx, updateCols)
+				if err != nil || affected {
+					b.Fatalf("unrelated update affected generated index: %v, %v", affected, err)
+				}
+			}
+		})
+	}
+}
+
+type updateIndexBuildTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+	statsByID  map[uint64]*statspb.StatsInfo
+}
+
+func (ctx *updateIndexBuildTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func (ctx *updateIndexBuildTestContext) Stats(obj *planpb.ObjectRef, _ *Snapshot) (*statspb.StatsInfo, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return ctx.statsByID[uint64(obj.Obj)], nil
+}
+
+type updateIndexBuildTestOptimizer struct {
+	ctx *updateIndexBuildTestContext
+}
+
+func (optimizer *updateIndexBuildTestOptimizer) CurrentContext() CompilerContext {
+	return optimizer.ctx
+}
+
+func (optimizer *updateIndexBuildTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return queryPlan.GetQuery(), nil
+}
+
+func findUpdateSecondaryIndexLookupJoin(t *testing.T, query *planpb.Query) *planpb.Node {
+	t.Helper()
+	visited := make(map[int32]struct{}, len(query.Nodes))
+	var visit func(int32) *planpb.Node
+	visit = func(nodeID int32) *planpb.Node {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			t.Fatalf("reachable plan references invalid node %d", nodeID)
+		}
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		visited[nodeID] = struct{}{}
+
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INNER && len(node.Children) == 2 {
+			for _, childID := range node.Children {
+				child := query.Nodes[childID]
+				if child.NodeType == planpb.Node_TABLE_SCAN && child.TableDef != nil &&
+					catalog.IsSecondaryIndexTable(child.TableDef.Name) {
+					return node
+				}
+			}
+		}
+		for _, childID := range node.Children {
+			if found := visit(childID); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+
+	for _, rootID := range query.Steps {
+		if found := visit(rootID); found != nil {
+			return found
+		}
+	}
+	t.Fatal("missing reachable UPDATE secondary-index lookup join")
+	return nil
+}
+
+func TestUpdateIndexLookupBuildSideUsesScanWidthBehindProject(t *testing.T) {
+	newOptimizer := func() Optimizer {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+		indexTableName := catalog.SecondaryIndexTableNamePrefix + "update_build_side"
+		mainTable := mock.ctxt.tables["index_hint_t"]
+		rowIDCol := mainTable.Cols[len(mainTable.Cols)-1]
+		rowIDCol.ColId = 5
+		mainTable.Cols = append(mainTable.Cols[:len(mainTable.Cols)-1],
+			&planpb.ColDef{
+				ColId: 3, Name: "k", OriginName: "k",
+				Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 512},
+				Default: &planpb.Default{NullAbility: true},
+			},
+			&planpb.ColDef{
+				ColId: 4, Name: "payload", OriginName: "payload",
+				Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 2_000},
+				Default: &planpb.Default{NullAbility: true},
+			},
+			rowIDCol,
+		)
+		mainTable.Name2ColIndex["k"] = 3
+		mainTable.Name2ColIndex["payload"] = 4
+		mainTable.Indexes = []*planpb.IndexDef{{
+			IndexName:      "idx_k",
+			Parts:          []string{"k", catalog.CreateAlias("id")},
+			IndexTableName: indexTableName,
+			TableExist:     true,
+		}}
+		addIndexHintIndexTableForTest(mock, indexTableName, 25367)
+
+		const (
+			tableRows = uint64(20_000_000)
+			indexRows = uint64(30_000_000)
+		)
+		mainStats := NewStatsInfo()
+		mainStats.TableCnt = float64(tableRows)
+		mainStats.BlockNumber = 2_500
+		mainStats.SizeMap = map[string]uint64{
+			"id": tableRows * 4, "a": tableRows * 4, "b": tableRows * 4,
+			"k": tableRows * 256, "payload": tableRows * 2_000,
+		}
+		indexStats := NewStatsInfo()
+		// UPDATE leaves old objects and tombstones in independently collected
+		// table statistics. Model that transient drift: the logical full target
+		// and its regular index still have one current row per base row.
+		indexStats.TableCnt = float64(indexRows)
+		indexStats.BlockNumber = 2_500
+		indexStats.SizeMap = map[string]uint64{
+			catalog.IndexTableIndexColName:   indexRows * 280,
+			catalog.IndexTablePrimaryColName: indexRows * 16,
+		}
+		statsCache := NewStatsCache()
+		statsCache.Set(mainTable.TblId, mainStats)
+		statsCache.Set(25367, indexStats)
+		return &updateIndexBuildTestOptimizer{ctx: &updateIndexBuildTestContext{
+			MockCompilerContext: &mock.ctxt,
+			statsCache:          statsCache,
+			statsByID: map[uint64]*statspb.StatsInfo{
+				mainTable.TblId: mainStats,
+				25367:           indexStats,
+			},
+		}}
+	}
+
+	for _, test := range []struct {
+		name           string
+		sql            string
+		wantIndexBuild bool
+	}{
+		{name: "expression assignment", sql: "UPDATE index_hint_t SET k = concat(k, 'x')", wantIndexBuild: true},
+		{name: "constant assignment", sql: "UPDATE index_hint_t SET k = 'fixed'", wantIndexBuild: true},
+		{name: "conditional assignment", sql: "UPDATE index_hint_t SET k = if(id > 0, k, 'fallback')", wantIndexBuild: true},
+		{name: "multiple assignments", sql: "UPDATE index_hint_t SET k = concat(k, 'x'), payload = substring(payload, 1, 1000)", wantIndexBuild: true},
+		{name: "constant true predicate", sql: "UPDATE index_hint_t SET k = concat(k, 'x') WHERE true", wantIndexBuild: true},
+		{name: "selective predicate", sql: "UPDATE index_hint_t SET k = concat(k, 'x') WHERE id > 0"},
+		{name: "ordered limit", sql: "UPDATE index_hint_t SET k = concat(k, 'x') ORDER BY id LIMIT 10"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newOptimizer(), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			join := findUpdateSecondaryIndexLookupJoin(t, query)
+			build := query.Nodes[join.Children[1]]
+			buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
+				catalog.IsSecondaryIndexTable(build.TableDef.Name)
+			require.Equal(t, test.wantIndexBuild, buildsIndex)
+			if !test.wantIndexBuild {
+				return
+			}
+			require.Greater(t, build.Stats.Rowsize, float64(100))
+			targetProject := query.Nodes[join.Children[0]]
+			require.Equal(t, planpb.Node_PROJECT, targetProject.NodeType)
+			require.Equal(t, float64(100), targetProject.Stats.Rowsize)
+			require.Len(t, targetProject.Children, 1)
+			targetScan := query.Nodes[targetProject.Children[0]]
+			for targetScan.NodeType == planpb.Node_PROJECT {
+				require.Len(t, targetScan.Children, 1)
+				targetScan = query.Nodes[targetScan.Children[0]]
+			}
+			require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
+			require.Greater(t, targetScan.Stats.Rowsize, build.Stats.Rowsize)
+		})
+	}
+}
+
+func TestUpdateIndexLookupBuildSidePreservesNarrowTarget(t *testing.T) {
+	newOptimizer := func() Optimizer {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+		mainTable := mock.ctxt.tables["index_hint_t"]
+		mainTable.Indexes = mainTable.Indexes[:1]
+		indexTableName := catalog.SecondaryIndexTableNamePrefix + "narrow_build_side"
+		mainTable.Indexes[0].IndexTableName = indexTableName
+		addIndexHintIndexTableForTest(mock, indexTableName, 25367)
+		mock.ctxt.tables[indexTableName].Name2ColIndex[catalog.Row_ID] = 2
+
+		const tableRows = uint64(20_000_000)
+		mainStats := NewStatsInfo()
+		mainStats.TableCnt = float64(tableRows)
+		mainStats.BlockNumber = 2_500
+		mainStats.SizeMap = map[string]uint64{
+			"id": tableRows * 4, "a": tableRows * 4, "b": tableRows * 4,
+		}
+		indexStats := NewStatsInfo()
+		indexStats.TableCnt = float64(tableRows)
+		indexStats.BlockNumber = 2_500
+		indexStats.SizeMap = map[string]uint64{
+			catalog.IndexTableIndexColName:   tableRows * 32,
+			catalog.IndexTablePrimaryColName: tableRows * 4,
+		}
+		statsCache := NewStatsCache()
+		statsCache.Set(mainTable.TblId, mainStats)
+		statsCache.Set(25367, indexStats)
+		return &updateIndexBuildTestOptimizer{ctx: &updateIndexBuildTestContext{
+			MockCompilerContext: &mock.ctxt,
+			statsCache:          statsCache,
+			statsByID: map[uint64]*statspb.StatsInfo{
+				mainTable.TblId: mainStats,
+				25367:           indexStats,
+			},
+		}}
+	}
+
+	logicPlan, err := runOneStmt(newOptimizer(), t, "UPDATE index_hint_t SET a = a + 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	join := findUpdateSecondaryIndexLookupJoin(t, query)
+
+	probe := query.Nodes[join.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, probe.NodeType)
+	require.NotNil(t, probe.TableDef)
+	require.True(t, catalog.IsSecondaryIndexTable(probe.TableDef.Name))
+	require.Less(t, probe.Stats.Rowsize, float64(100))
+
+	build := query.Nodes[join.Children[1]]
+	require.Equal(t, planpb.Node_PROJECT, build.NodeType)
+	require.Equal(t, float64(100), build.Stats.Rowsize)
+	require.Len(t, build.Children, 1)
+	targetScan := query.Nodes[build.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
+	require.Less(t, targetScan.Stats.Rowsize, probe.Stats.Rowsize)
+}
+
+func TestSequentialUpdateProjectionLimit(t *testing.T) {
+	require.True(t, withinSequentialUpdateProjectionLimit(3, 3))
+	require.True(t, withinSequentialUpdateProjectionLimit(4096, 31))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 32))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 4096))
+}
+
 func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	newTableDef := func(indexes ...*IndexDef) *TableDef {
 		return &TableDef{
@@ -81,12 +507,12 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		tableDef   *TableDef
-		updateCols map[string]tree.Expr
-		wantInline int
-		wantLegacy bool
-		wantReject bool
+		name            string
+		tableDef        *TableDef
+		updateCols      map[string]tree.Expr
+		wantInline      int
+		wantUnsupported bool
+		wantReject      bool
 	}{
 		{
 			name:       "synchronous ivfflat indexed part",
@@ -143,7 +569,7 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous primary key rejected",
+			name:       "synchronous fulltext primary key remains rejected",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
 			wantReject: true,
@@ -154,16 +580,30 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			updateCols: map[string]tree.Expr{"id": nil},
 		},
 		{
-			name:       "unmigrated master stays legacy",
+			name:       "synchronous master uses modern maintenance",
 			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"body": nil},
-			wantLegacy: true,
+			wantInline: 1,
+		},
+		{
+			name:       "synchronous master primary key uses old-key maintenance",
+			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
+			updateCols: map[string]tree.Expr{"id": nil},
+			wantInline: 1,
+		},
+		{
+			name:            "unknown affected algorithm is rejected",
+			tableDef:        newTableDef(newIndex("unknown", "UNKNOWN", "", "body")),
+			updateCols:      map[string]tree.Expr{"body": nil},
+			wantUnsupported: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inline, legacy, err := classifyIrregularIndexesForUpdate(context.Background(), tt.tableDef, tt.updateCols)
+			inline, unsupported, err := classifyIrregularIndexesForUpdate(
+				context.Background(), tt.tableDef, tt.updateCols,
+			)
 			if tt.wantReject {
 				require.Error(t, err)
 				var routeErr *updatePlannerRouteError
@@ -173,10 +613,36 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.wantLegacy, legacy)
+			require.Equal(t, tt.wantUnsupported, unsupported)
 			require.Len(t, inline, tt.wantInline)
 		})
 	}
+}
+
+func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	irregular := &IndexDef{IndexName: "ft", IndexTableName: "ft_table"}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"y": nil},
+		},
+	}
+
+	regularNeedsUpdate := [][]bool{{false}, {true}}
+	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, regularNeedsUpdate)
+	require.Equal(t, []bool{true}, regularNeedsUpdate[0])
+	require.Equal(t, []bool{false}, regularNeedsUpdate[1])
+
+	irregularIndexes := [][]*IndexDef{{irregular}, {irregular}}
+	coalesceRepeatedPhysicalTargetIrregularIndexes(dmlCtx, irregularIndexes)
+	require.Equal(t, []*IndexDef{irregular}, irregularIndexes[0])
+	require.Empty(t, irregularIndexes[1])
 }
 
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {

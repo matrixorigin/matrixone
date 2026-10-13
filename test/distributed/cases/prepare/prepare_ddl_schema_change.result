@@ -48,9 +48,9 @@ execute create_index_stmt;
 duplicate key name 'idx_created'
 show index from prepared_t;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
-prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-prepared_t  ¦  1  ¦  idx_created  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v
+prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
+prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+prepared_t  ¦  1  ¦  idx_created  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
 deallocate prepare create_index_stmt;
 prepare drop_index_stmt from 'drop index idx_created on prepared_t';
 execute drop_index_stmt;
@@ -58,8 +58,8 @@ execute drop_index_stmt;
 internal error: not found index: idx_created
 show index from prepared_t;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
-prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
+prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
 deallocate prepare drop_index_stmt;
 create table truncate_t (id int primary key, v int);
 insert into truncate_t values (1, 10), (2, 20);
@@ -103,8 +103,7 @@ where table_schema = 'prepare_ddl_schema_change' and table_name = 'renamed_t2'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
 b  𝄀
-c  𝄀
-__mo_fake_pk_col
+c
 deallocate prepare rename_stmt;
 create table like_src (a int);
 prepare like_stmt from 'create table like_dst like like_src';
@@ -116,8 +115,7 @@ where table_schema = 'prepare_ddl_schema_change' and table_name = 'like_dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
 a  𝄀
-b  𝄀
-__mo_fake_pk_col
+b
 deallocate prepare like_stmt;
 create table clone_src (a int);
 insert into clone_src values (1);
@@ -244,13 +242,13 @@ foreign key (pid) references expanded_parent(id)
 );
 prepare expanded_like_stmt from 'create table expanded_like like expanded_src';
 alter table expanded_parent drop primary key;
+Cannot drop index 'PRIMARY': needed in a foreign key constraint
 execute expanded_like_stmt;
-internal error: failed to add the foreign key constraint
 select count(*)
 from information_schema.referential_constraints
 where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'expanded_like';
 ➤ count(*)[-5,64,0]  𝄀
-0
+1
 deallocate prepare expanded_like_stmt;
 set foreign_key_checks = 1;
 prepare missing_database_stmt from 'drop table if exists prepared_future_db.t';
@@ -340,7 +338,7 @@ where table_schema = 'prepare_ddl_schema_change'
 and table_name = 'prepared_target_view'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  𝄀
-b  ¦  BIGINT
+b  ¦  bigint
 deallocate prepare prepared_view_dependency_stmt;
 create table stale_view_base (a int);
 create view stale_view_dependency as select * from stale_view_base;
@@ -405,7 +403,7 @@ where table_schema = 'prepare_ddl_schema_change'
 and table_name = 'prepared_external_view'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  𝄀
-b  ¦  BIGINT
+b  ¦  bigint
 deallocate prepare prepared_external_dependency_stmt;
 create database clone_prepare_db1;
 create database clone_prepare_db2;
@@ -420,8 +418,7 @@ from information_schema.columns
 where table_schema = 'clone_prepare_db1' and table_name = 'dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
-a  𝄀
-__mo_fake_pk_col
+a
 select count(*)
 from information_schema.tables
 where table_schema = 'clone_prepare_db2' and table_name = 'dst';
@@ -435,8 +432,7 @@ from information_schema.columns
 where table_schema = 'clone_prepare_db1' and table_name = 'dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
-a  𝄀
-__mo_fake_pk_col
+a
 select count(*)
 from information_schema.tables
 where table_schema = 'prepare_ddl_schema_change' and table_name = 'dst';
@@ -471,7 +467,7 @@ create database prepared_rename_other_db;
 create table prepared_rename_source (a int);
 prepare prepared_rename_stmt from
 'rename table prepared_rename_source
-to prepared_rename_other_db.prepared_rename_target';
+to prepare_ddl_schema_change.prepared_rename_target';
 create table prepare_ddl_schema_change.prepared_rename_target (a int);
 execute prepared_rename_stmt;
 table prepared_rename_target already exists
@@ -481,13 +477,25 @@ drop table prepared_rename_target;
 create table prepared_alter_rename_source (a int);
 prepare prepared_alter_rename_stmt from
 'alter table prepared_alter_rename_source
-rename to prepared_rename_other_db.prepared_alter_rename_target';
+rename to prepare_ddl_schema_change.prepared_alter_rename_target';
 create table prepare_ddl_schema_change.prepared_alter_rename_target (a int);
 execute prepared_alter_rename_stmt;
 table prepared_alter_rename_target already exists
 deallocate prepare prepared_alter_rename_stmt;
 drop table prepared_alter_rename_source;
 drop table prepared_alter_rename_target;
+create table prepared_cross_db_rename_source (a int);
+prepare prepared_cross_db_rename_stmt from
+'rename table prepared_cross_db_rename_source
+to prepared_rename_other_db.prepared_cross_db_rename_target';
+not supported: cross-database table rename from database 'prepare_ddl_schema_change' to 'prepared_rename_other_db'
+drop table prepared_cross_db_rename_source;
+create table prepared_cross_db_alter_source (a int);
+prepare prepared_cross_db_alter_stmt from
+'alter table prepared_cross_db_alter_source
+rename to prepared_rename_other_db.prepared_cross_db_alter_target';
+not supported: cross-database table rename from database 'prepare_ddl_schema_change' to 'prepared_rename_other_db'
+drop table prepared_cross_db_alter_source;
 drop database prepared_rename_other_db;
 prepare prepared_nested_proc_drop from
 'drop table if exists prepared_nested_proc_table';

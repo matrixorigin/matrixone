@@ -29,10 +29,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestServerPreHandlerCancellationOwnership(t *testing.T) {
+	for _, name := range []string{"session failure", "invalid stream", "internal ping", "delegated"} {
+		t.Run(name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("/tmp", "pre-handler-")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+			owner, err := NewRPCServer("cancel-owner", "unix://"+dir+"/s.sock", newTestCodec(), WithServerDisableAutoCancelContext())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, owner.Close()) })
+			s := owner.(*server)
+			handlerCalls, cancelCalls := 0, 0
+			s.RegisterRequestHandler(func(ctx context.Context, _ RPCMessage, _ uint64, _ ClientSession) error {
+				handlerCalls++
+				require.NoError(t, ctx.Err())
+				return nil
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			request := RPCMessage{Ctx: ctx, Message: newTestMessage(1), Cancel: func() { cancelCalls++; cancel() }}
+			switch name {
+			case "session failure":
+				s.stopper.Stop()
+			case "invalid stream":
+				request.stream = true
+				request.streamSequence = 2
+			case "internal ping":
+				request.internal = true
+				request.Message = &flagOnlyMessage{flag: flagPing, id: 1}
+			}
+			err = s.onMessage(newTestIOSession(nil, nil), request, 0)
+			if name == "session failure" || name == "invalid stream" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if name == "delegated" {
+				require.Equal(t, 1, handlerCalls)
+				require.Zero(t, cancelCalls)
+				require.NoError(t, ctx.Err())
+			} else {
+				require.Zero(t, handlerCalls)
+				require.Equal(t, 1, cancelCalls)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			}
+		})
+	}
+}
 
 func TestCreateServerWithOptions(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
@@ -40,6 +89,126 @@ func TestCreateServerWithOptions(t *testing.T) {
 		assert.Equal(t, 200, rs.options.bufferSize)
 	}, WithServerBatchSendSize(100),
 		WithServerSessionBufferSize(200))
+}
+
+type connectionJoiningApplication struct {
+	stopAndWaitCalled chan struct{}
+	releaseHandlers   chan struct{}
+}
+
+func (a *connectionJoiningApplication) Start() error {
+	return nil
+}
+
+func (a *connectionJoiningApplication) Stop() error {
+	return nil
+}
+
+func (a *connectionJoiningApplication) StopAndWait() error {
+	close(a.stopAndWaitCalled)
+	<-a.releaseHandlers
+	return nil
+}
+
+func (a *connectionJoiningApplication) GetSession(uint64) (goetty.IOSession, error) {
+	return nil, nil
+}
+
+func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
+	application := &connectionJoiningApplication{
+		stopAndWaitCalled: make(chan struct{}),
+		releaseHandlers:   make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseConnection := func() {
+		releaseOnce.Do(func() {
+			close(application.releaseHandlers)
+		})
+	}
+	t.Cleanup(releaseConnection)
+	s := &server{
+		logger:      logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		application: application,
+		stopper:     stopper.NewStopper("test-server-close-connections"),
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case <-application.stopAndWaitCalled:
+	case <-time.After(time.Second):
+		t.Fatal("application StopAndWait was not called")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("server Close returned before the accepted connection closed: %v", err)
+	default:
+	}
+
+	releaseConnection()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server Close did not return after the accepted connection closed")
+	}
+}
+
+type recordingSessionAware struct {
+	created chan struct{}
+	closed  chan struct{}
+}
+
+func (a *recordingSessionAware) Created(goetty.IOSession) {
+	select {
+	case a.created <- struct{}{}:
+	default:
+	}
+}
+
+func (a *recordingSessionAware) Closed(goetty.IOSession) {
+	select {
+	case a.closed <- struct{}{}:
+	default:
+	}
+}
+
+func TestServerPreservesCallerSessionAware(t *testing.T) {
+	aware := &recordingSessionAware{
+		created: make(chan struct{}, 1),
+		closed:  make(chan struct{}, 1),
+	}
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		client := newTestClient(t)
+		t.Cleanup(func() {
+			require.NoError(t, client.Close())
+		})
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(ctx, request.Message)
+		})
+
+		future, err := client.Send(ctx, testAddr, newTestMessage(1))
+		require.NoError(t, err)
+		defer future.Close()
+		_, err = future.Get()
+		require.NoError(t, err)
+		select {
+		case <-aware.created:
+		case <-ctx.Done():
+			t.Fatal("caller IOSessionAware did not receive Created")
+		}
+
+		require.NoError(t, rs.Close())
+		select {
+		case <-aware.closed:
+		case <-ctx.Done():
+			t.Fatal("caller IOSessionAware did not receive Closed")
+		}
+	}, WithServerGoettyOptions(goetty.WithSessionAware(aware)))
 }
 
 func TestHandleServer(t *testing.T) {
@@ -162,7 +331,12 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 		func(Message) { released++ },
 	)
 	cs.c = make(chan *Future, 1)
-	cs.c <- newFuture(nil)
+	queued := newFuture(nil)
+	enqueueClientSessionFutureForTest(cs, queued)
+	defer func() {
+		<-cs.c
+		cs.changeQueueDepth(-1)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
@@ -178,6 +352,154 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 		require.Equal(t, 1, released)
 	case <-time.After(time.Second):
 		t.Fatal("write blocked after context deadline")
+	}
+}
+
+func TestClientSessionBoundedWriteExpiresBehindBlockedAsyncWrite(t *testing.T) {
+	cs := newClientSession(
+		newServerMetrics(t.Name()),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	cs.c = make(chan *Future, 1)
+	queued := newFuture(nil)
+	enqueueClientSessionFutureForTest(cs, queued)
+
+	asyncDone := make(chan error, 1)
+	boundedDone := make(chan error, 1)
+	boundedStarted := false
+	boundedReturned := false
+	go func() {
+		asyncDone <- cs.AsyncWrite(newTestMessage(1))
+	}()
+	defer func() {
+		first := <-cs.c
+		cs.changeQueueDepth(-1)
+		first.Close()
+		select {
+		case <-asyncDone:
+		case <-time.After(time.Second):
+			t.Error("unbounded writer did not finish after queue capacity was released")
+			return
+		}
+		if boundedStarted && !boundedReturned {
+			select {
+			case <-boundedDone:
+			case <-time.After(time.Second):
+				t.Error("bounded writer remained blocked during test cleanup")
+				return
+			}
+		}
+		cs.cleanSend()
+	}()
+	require.Eventually(t, func() bool {
+		if cs.mu.TryLock() {
+			cs.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond,
+		"unbounded writer did not reach the full queue")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	boundedStarted = true
+	go func() {
+		boundedDone <- cs.Write(ctx, newTestMessage(2))
+	}()
+	cancel()
+
+	select {
+	case err := <-boundedDone:
+		boundedReturned = true
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("bounded Write did not return after its context was canceled")
+	}
+}
+
+func TestServerSessionMetricFollowsMapOwnership(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	s := &server{metrics: m, sessions: &sync.Map{}}
+	first := &clientSession{}
+	replacement := &clientSession{}
+
+	actual, loaded := s.loadOrStoreClientSession(1, first)
+	require.False(t, loaded)
+	require.Same(t, first, actual)
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sessionSizeGauge))
+
+	actual, loaded = s.loadOrStoreClientSession(1, replacement)
+	require.True(t, loaded)
+	require.Same(t, first, actual)
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sessionSizeGauge))
+	require.False(t, s.deleteClientSession(1, replacement),
+		"a stale generation must not delete or decrement the live session")
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sessionSizeGauge))
+
+	require.True(t, s.deleteClientSession(1, first))
+	require.False(t, s.deleteClientSession(1, first),
+		"repeated cleanup must not decrement twice")
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sessionSizeGauge))
+
+	actual, loaded = s.loadOrStoreClientSession(1, replacement)
+	require.False(t, loaded)
+	require.Same(t, replacement, actual)
+	require.False(t, s.deleteClientSession(1, first),
+		"cleanup from an old generation must not remove its replacement")
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sessionSizeGauge))
+	require.True(t, s.deleteClientSession(1, replacement))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sessionSizeGauge))
+}
+
+func TestServerSessionMetricConcurrentOwnership(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	s := &server{metrics: m, sessions: &sync.Map{}}
+	const competitors = 32
+
+	for generation := range 64 {
+		id := uint64(generation + 1)
+		start := make(chan struct{})
+		actuals := make(chan *clientSession, competitors)
+		var createWG sync.WaitGroup
+		for range competitors {
+			createWG.Add(1)
+			go func() {
+				defer createWG.Done()
+				candidate := &clientSession{}
+				<-start
+				actual, _ := s.loadOrStoreClientSession(id, candidate)
+				actuals <- actual
+			}()
+		}
+		close(start)
+		createWG.Wait()
+		close(actuals)
+
+		var owner *clientSession
+		for actual := range actuals {
+			if owner == nil {
+				owner = actual
+			}
+			require.Same(t, owner, actual)
+		}
+		require.Equal(t, float64(1), testutil.ToFloat64(m.sessionSizeGauge))
+
+		var deleted atomic.Int32
+		var deleteWG sync.WaitGroup
+		for range competitors {
+			deleteWG.Add(1)
+			go func() {
+				defer deleteWG.Done()
+				if s.deleteClientSession(id, owner) {
+					deleted.Add(1)
+				}
+			}()
+		}
+		deleteWG.Wait()
+		require.Equal(t, int32(1), deleted.Load())
+		require.Equal(t, float64(0), testutil.ToFloat64(m.sessionSizeGauge))
 	}
 }
 
@@ -198,11 +520,188 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 		Message: newTestMessage(1),
 		oneWay:  true,
 	})
-	cs.c <- f
+	enqueueClientSessionFutureForTest(cs, f)
 
 	cs.cleanSend()
 	require.Equal(t, 1, released)
 	require.Equal(t, 1, futureReleased)
+}
+
+func TestServerQueueMetricAggregatesAcrossSessionsAndCloseDrain(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	newSession := func() *clientSession {
+		return newClientSession(
+			m,
+			nil,
+			newTestCodec(),
+			func() *Future { return newFuture(nil) },
+			nil,
+		)
+	}
+	cs1 := newSession()
+	cs2 := newSession()
+
+	require.NoError(t, cs1.AsyncWrite(newTestMessage(1)))
+	require.NoError(t, cs1.AsyncWrite(newTestMessage(2)))
+	require.NoError(t, cs2.AsyncWrite(newTestMessage(3)))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+
+	cs1.cleanSend()
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	cs2.cleanSend()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+}
+
+func TestServerQueueMetricDoesNotDeadlockFullQueue(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	cs := newClientSession(
+		m,
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	cs.c = make(chan *Future, 1)
+	initial := newFuture(nil)
+	enqueueClientSessionFutureForTest(cs, initial)
+
+	firstSent := make(chan struct{})
+	producerDone := make(chan error, 1)
+	go func() {
+		if err := cs.AsyncWrite(newTestMessage(1)); err != nil {
+			producerDone <- err
+			return
+		}
+		close(firstSent)
+		producerDone <- cs.AsyncWrite(newTestMessage(2))
+	}()
+
+	initialReceived := make(chan struct{})
+	allowAccounting := make(chan struct{})
+	var allowAccountingOnce sync.Once
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		f := <-cs.c
+		close(initialReceived)
+		<-allowAccounting
+		cs.changeQueueDepth(-1)
+		f.Close()
+		for range 2 {
+			f = <-cs.c
+			cs.changeQueueDepth(-1)
+			f.Close()
+		}
+	}()
+
+	producerReturned := false
+	consumerReturned := false
+	defer func() {
+		allowAccountingOnce.Do(func() { close(allowAccounting) })
+		if !producerReturned {
+			select {
+			case <-producerDone:
+			case <-time.After(time.Second):
+				t.Error("producer remained blocked during test cleanup")
+			}
+		}
+		if !consumerReturned {
+			select {
+			case <-consumerDone:
+			case <-time.After(time.Second):
+				t.Error("consumer remained blocked during test cleanup")
+			}
+		}
+	}()
+
+	select {
+	case <-initialReceived:
+	case <-time.After(time.Second):
+		t.Fatal("consumer did not receive the initial Future")
+	}
+	select {
+	case <-firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("producer did not send the first Future")
+	}
+	require.Eventually(t, func() bool {
+		if cs.mu.TryLock() {
+			cs.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond,
+		"second producer did not reach the full queue")
+	allowAccountingOnce.Do(func() { close(allowAccounting) })
+
+	select {
+	case err := <-producerDone:
+		producerReturned = true
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("producer and consumer deadlocked through queue metric accounting")
+	}
+	select {
+	case <-consumerDone:
+		consumerReturned = true
+	case <-time.After(time.Second):
+		t.Fatal("consumer did not drain the queue")
+	}
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+}
+
+func TestServerQueueMetricConcurrentProducersAndConsumer(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	cs := newClientSession(
+		m,
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	cs.c = make(chan *Future, 32)
+	const producers = 8
+	const perProducer = 128
+	const total = producers * perProducer
+
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		for range total {
+			f := <-cs.c
+			cs.changeQueueDepth(-1)
+			f.Close()
+		}
+	}()
+
+	errorsC := make(chan error, total)
+	var producersWG sync.WaitGroup
+	for producer := range producers {
+		producersWG.Add(1)
+		go func(producer int) {
+			defer producersWG.Done()
+			for offset := range perProducer {
+				errorsC <- cs.AsyncWrite(
+					newTestMessage(uint64(producer*perProducer + offset + 1)))
+			}
+		}(producer)
+	}
+	producersWG.Wait()
+	close(errorsC)
+	for err := range errorsC {
+		require.NoError(t, err)
+	}
+	select {
+	case <-consumerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server queue consumer did not drain all admitted Futures")
+	}
+
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	cs.queueMetricMu.Lock()
+	require.Zero(t, cs.queueMetricMu.depth)
+	require.Zero(t, cs.queueMetricMu.waiters)
+	cs.queueMetricMu.Unlock()
 }
 
 func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
@@ -232,7 +731,7 @@ func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 			Message: newTestMessage(1),
 			oneWay:  true,
 		})
-		cs.c <- f
+		enqueueClientSessionFutureForTest(cs, f)
 
 		require.NoError(t, s.startWriteLoop(cs))
 		require.Eventually(t, func() bool {
@@ -285,9 +784,9 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 	f1 := newSyncFuture(1)
 	f2 := newSyncFuture(2)
 	f3 := newSyncFuture(3)
-	cs.c <- f1
-	cs.c <- f2
-	cs.c <- f3
+	enqueueClientSessionFutureForTest(cs, f1)
+	enqueueClientSessionFutureForTest(cs, f2)
+	enqueueClientSessionFutureForTest(cs, f3)
 
 	require.NoError(t, s.startWriteLoop(cs))
 	for _, f := range []*Future{f1, f2, f3} {
@@ -349,8 +848,8 @@ func TestStartWriteLoopFlushFailureOnlyCompletesWrittenFutures(t *testing.T) {
 		f.Close()
 		return f
 	}
-	cs.c <- newResponse(1)
-	cs.c <- newResponse(2)
+	enqueueClientSessionFutureForTest(cs, newResponse(1))
+	enqueueClientSessionFutureForTest(cs, newResponse(2))
 
 	require.NoError(t, s.startWriteLoop(cs))
 	for range 2 {
@@ -398,8 +897,8 @@ func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
 		t.Cleanup(f.Close)
 		return f
 	}
-	cs.c <- newResponse(1, 3*time.Second)
-	cs.c <- newResponse(2, time.Second)
+	enqueueClientSessionFutureForTest(cs, newResponse(1, 3*time.Second))
+	enqueueClientSessionFutureForTest(cs, newResponse(2, time.Second))
 
 	require.NoError(t, s.startWriteLoop(cs))
 	select {
@@ -468,6 +967,13 @@ func newTestIOSession(writeErr, flushErr error) *testIOSession {
 		writeErrAt = 1
 	}
 	return newTestIOSessionWithWriteErrorAt(writeErrAt, writeErr, flushErr)
+}
+
+// enqueueClientSessionFutureForTest mirrors production admission followed by
+// accounting; a racing receiver waits for this accounting before decrementing.
+func enqueueClientSessionFutureForTest(cs *clientSession, f *Future) {
+	cs.c <- f
+	cs.changeQueueDepth(1)
 }
 
 func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error) *testIOSession {
@@ -676,7 +1182,7 @@ func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) 
 		Message: newTestMessage(10),
 		oneWay:  true,
 	})
-	cs.c <- queued
+	enqueueClientSessionFutureForTest(cs, queued)
 
 	senderDone := make(chan error, 1)
 	go func() {
@@ -714,6 +1220,7 @@ func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) 
 	}
 
 	if f, ok := <-cs.c; ok && f != nil {
+		cs.changeQueueDepth(-1)
 		f.Close()
 	}
 
@@ -745,7 +1252,7 @@ func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) 
 
 func TestFinishStreamPoisonsSessionWithPendingCache(t *testing.T) {
 	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
-	cs.receivedStreamSequences[11] = 2
+	cs.receivedStreamSequences[11] = receivedStreamState{sequence: 2}
 	require.True(t, cs.sentStreams.start(11))
 	_, stream, open := cs.sentStreams.next(11)
 	require.True(t, open)
@@ -1329,7 +1836,8 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
 	// Add auto-create by default for tests
-	defaultOptions := []ClientOption{WithClientEnableAutoCreateBackend()}
+	defaultOptions := make([]ClientOption, 0, 1+len(options))
+	defaultOptions = append(defaultOptions, WithClientEnableAutoCreateBackend())
 	defaultOptions = append(defaultOptions, options...)
 	c, err := NewClient(
 		"",

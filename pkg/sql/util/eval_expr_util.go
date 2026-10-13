@@ -76,11 +76,17 @@ func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
 
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 16, 64)
 }
 
 func BinaryToInt(b string) (uint64, error) {
 	s := b[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 2, 64)
 }
 
@@ -126,13 +132,178 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
+	if typ.Oid.IsArrayRelate() {
+		value, err := arrayUserVariableValueToBytes(typ, val)
+		if err != nil {
+			return nil, err
+		}
+		if selection == nil {
+			return vector.NewConstBytes(typ, value, 1, proc.Mp())
+		}
+		return vector.NewConstBytesWithAllocation(typ, value, 1, proc.Mp(), selection)
+	}
+	if vec, handled, err := genInternalFixedUserVariableVector(proc, typ, val, selection); handled {
+		return vec, err
+	}
 	strVal := getVal(val)
+	// JSON values are stored in the vector's binary JSON representation rather
+	// than as their display string.  Route them through the typed setter just
+	// like fixed-width values; otherwise DecodeJson sees the raw text as an
+	// invalid encoded value when a typed user variable is read back.
+	if !typ.IsVarlen() || typ.Oid == types.T_json {
+		var vec *vector.Vector
+		var err error
+		if selection == nil {
+			vec = vector.NewVec(typ)
+		} else {
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err = vec.PreExtend(1, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(1)
+		if err = SetBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.ToConst()
+		return vec, nil
+	}
 	if selection == nil {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
 	return vector.NewConstBytesWithAllocation(
 		typ, []byte(strVal), 1, proc.Mp(), selection,
 	)
+}
+
+func genInternalFixedUserVariableVector(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, bool, error) {
+	switch typ.Oid {
+	case types.T_Rowid:
+		switch v := val.(type) {
+		case types.Rowid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.RowidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Rowid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_Blockid:
+		switch v := val.(type) {
+		case types.Blockid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.BlockidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Blockid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_TS:
+		switch v := val.(type) {
+		case types.TS:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.TxnTsSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.TS](v), selection)
+				return vec, true, err
+			}
+		}
+	default:
+		return nil, false, nil
+	}
+	return nil, true, moerr.NewInvalidArgNoCtx(typ.Oid.String()+" user variable value", fmt.Sprintf("%T", val))
+}
+
+func newConstInternalFixedVector[T types.FixedSizeT](
+	proc *process.Process,
+	typ types.Type,
+	val T,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	var vec *vector.Vector
+	var err error
+	if selection == nil {
+		vec = vector.NewVec(typ)
+	} else {
+		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = vec.PreExtend(1, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.SetLength(1)
+	if err = vector.SetFixedAtNoTypeCheck(vec, 0, val); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.ToConst()
+	return vec, nil
+}
+
+func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
+	switch typ.Oid {
+	case types.T_array_float32:
+		return arrayUserVariableTypedValueToBytes[float32](typ, val)
+	case types.T_array_float64:
+		return arrayUserVariableTypedValueToBytes[float64](typ, val)
+	case types.T_array_bf16:
+		return arrayUserVariableTypedValueToBytes[types.BF16](typ, val)
+	case types.T_array_float16:
+		return arrayUserVariableTypedValueToBytes[types.Float16](typ, val)
+	case types.T_array_int8:
+		return arrayUserVariableTypedValueToBytes[int8](typ, val)
+	case types.T_array_uint8:
+		return arrayUserVariableTypedValueToBytes[uint8](typ, val)
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported array type %s", typ.Oid.String())
+	}
+}
+
+func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, val any) ([]byte, error) {
+	var value []byte
+	switch v := val.(type) {
+	case []T:
+		value = types.ArrayToBytes[T](v)
+	case []byte:
+		value = v
+	case string:
+		var err error
+		value, err = types.StringToArrayToBytes[T](v)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
+	}
+	if typ.Width > 0 {
+		size := typ.GetArrayElementSize()
+		if size <= 0 || len(value)%size != 0 {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(value))
+		}
+		if len(value)/size > types.MaxArrayDimension {
+			return nil, moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+		}
+		if got := len(value) / size; typ.Width != types.MaxArrayDimension && got != int(typ.Width) {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), got)
+		}
+	}
+	return value, nil
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {
@@ -248,6 +419,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
@@ -258,6 +435,30 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_array_float64:
 		v, err := types.StringToArrayToBytes[float64](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_bf16:
+		v, err := types.StringToArrayToBytes[types.BF16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_float16:
+		v, err := types.StringToArrayToBytes[types.Float16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_int8:
+		v, err := types.StringToArrayToBytes[int8](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_uint8:
+		v, err := types.StringToArrayToBytes[uint8](val)
 		if err != nil {
 			return err
 		}
@@ -281,7 +482,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_timestamp:
-		v, err := types.ParseTimestamp(time.Local, val, vec.GetType().Scale)
+		v, err := types.ParseTimestamp(sessionTimeZone(proc), val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
@@ -298,9 +499,28 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "enum", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, types.Enum(v))
+	case types.T_year:
+		v, err := strconv.ParseInt(val, 10, 16)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, "year", "value '%v'", val)
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, types.MoYear(v))
+	case types.T_uuid:
+		v, err := types.ParseUuid(val)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	default:
-		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
+		return moerr.NewInternalErrorf(ctx, "unsupported type %v", vec.GetType().Oid)
 	}
+}
+
+func sessionTimeZone(proc *process.Process) *time.Location {
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		return proc.GetSessionInfo().TimeZone
+	}
+	return time.Local
 }
 
 func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, isnull bool, res types.Timestamp, err error) {
@@ -568,14 +788,14 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_decimal:
 		canInsert = false
@@ -630,85 +850,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
-			// Assuming that input s is of type "[1,2,3]"
-
-			switch typ.Oid {
-			case types.T_array_float32:
-				_v, err := types.StringToArray[float32](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float32](_v)
-
-			case types.T_array_float64:
-				_v, err := types.StringToArray[float64](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float64](_v)
-
-			case types.T_array_bf16:
-				_v, err := types.StringToArray[types.BF16](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[types.BF16](_v)
-
-			case types.T_array_float16:
-				_v, err := types.StringToArray[types.Float16](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[types.Float16](_v)
-
-			case types.T_array_int8:
-				_v, err := types.StringToArray[int8](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[int8](_v)
-
-			case types.T_array_uint8:
-				_v, err := types.StringToArray[uint8](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[uint8](_v)
-			default:
-				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
-
+			// 与参数绑定共用六类型解析及固定/动态维度校验。
+			var err error
+			v, err = arrayUserVariableValueToBytes(*typ, s)
+			if err != nil {
+				return nil, err
 			}
-
 		} else {
 			v = []byte(s)
 		}

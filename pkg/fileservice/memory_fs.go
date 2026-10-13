@@ -131,7 +131,7 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	m.Lock()
 	defer m.Unlock()
 
-	path, err := ParsePathAtService(vector.FilePath, m.name)
+	path, err := parseFilePathAtService(vector.FilePath, m.name)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, m.name)
+	path, err := parseFilePathAtService(vector.FilePath, m.name)
 	if err != nil {
 		return err
 	}
@@ -194,6 +194,10 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return ctx.Err()
 	default:
 	}
+	path, err := parseFilePathAtService(vector.FilePath, m.name)
+	if err != nil {
+		return err
+	}
 
 	for _, cache := range m.caches {
 		if err := cache.Read(ctx, vector); err != nil {
@@ -205,11 +209,6 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 			err = cache.Update(ctx, vector, m.asyncUpdate)
 		}()
-	}
-
-	path, err := ParsePathAtService(vector.FilePath, m.name)
-	if err != nil {
-		return err
 	}
 
 	if len(vector.Entries) == 0 {
@@ -281,7 +280,11 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (m *MemoryFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err = parseFilePathAtService(vector.FilePath, m.name)
+	return err
 }
 
 func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
@@ -291,7 +294,7 @@ func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, er
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, m.name)
+	path, err := parseFilePathAtService(filePath, m.name)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +319,11 @@ func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, er
 }
 
 func (m *MemoryFS) PrefetchFile(ctx context.Context, filePath string) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(filePath, m.name)
+	return err
 }
 
 func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
@@ -338,7 +345,7 @@ func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
 
 func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
 
-	path, err := ParsePathAtService(filePath, m.name)
+	path, err := parseFilePathAtService(filePath, m.name)
 	if err != nil {
 		return err
 	}
@@ -358,7 +365,7 @@ func (m *MemoryFS) NewReader(ctx context.Context, filePath string) (io.ReadClose
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, m.name)
+	path, err := parseFilePathAtService(filePath, m.name)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +390,7 @@ func (m *MemoryFS) NewWriter(ctx context.Context, filePath string) (io.WriteClos
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, m.name)
+	path, err := parseFilePathAtService(filePath, m.name)
 	if err != nil {
 		return nil, err
 	}

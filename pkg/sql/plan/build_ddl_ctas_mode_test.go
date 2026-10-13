@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -58,6 +59,97 @@ func findFullTextMatch(t *testing.T, stmt tree.SelectStatement) *tree.FullTextMa
 	}
 }
 
+func findCTASGroupBy(t *testing.T, stmt tree.SelectStatement) *tree.GroupByClause {
+	t.Helper()
+	clause, ok := stmt.(*tree.SelectClause)
+	require.True(t, ok, "expected *tree.SelectClause, got %T", stmt)
+	if clause.GroupBy != nil {
+		return clause.GroupBy
+	}
+	require.NotEmpty(t, clause.From.Tables)
+	te := clause.From.Tables[0]
+	for {
+		switch v := te.(type) {
+		case *tree.JoinTableExpr:
+			te = v.Left
+		case *tree.AliasedTableExpr:
+			te = v.Expr
+		case *tree.ParenTableExpr:
+			te = v.Expr
+		case *tree.Select:
+			return findCTASGroupBy(t, v.Select)
+		case *tree.Subquery:
+			sel, ok := v.Select.(*tree.Select)
+			require.True(t, ok, "expected *tree.Select subquery, got %T", v.Select)
+			return findCTASGroupBy(t, sel.Select)
+		default:
+			t.Fatalf("unexpected table expr %T while searching for GROUP BY", te)
+			return nil
+		}
+	}
+}
+
+func TestCTASGroupingExtensionsSurviveInternalReparse(t *testing.T) {
+	tests := []struct {
+		name             string
+		sql              string
+		wantClause       string
+		wantCube         bool
+		wantGroupingSets bool
+		wantSetWidths    []int
+	}{
+		{
+			name: "cube",
+			sql: "create table ctas_cube as " +
+				"select coalesce(N_NATIONKEY, -1) as g, coalesce(N_REGIONKEY, -1) as h, count(*) as c " +
+				"from NATION group by cube(N_NATIONKEY, N_REGIONKEY)",
+			wantClause:    "group by cube(",
+			wantCube:      true,
+			wantSetWidths: []int{2},
+		},
+		{
+			name: "grouping sets",
+			sql: "create table ctas_grouping_sets as " +
+				"select coalesce(N_NATIONKEY, -1) as g, coalesce(N_REGIONKEY, -1) as h, count(*) as c " +
+				"from NATION group by grouping sets ((N_NATIONKEY, N_REGIONKEY), (N_NATIONKEY), ())",
+			wantClause:       "group by grouping sets ((",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{2, 1, 0},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := mock.CurrentContext()
+			stmt, err := mysql.ParseOne(ctx.GetContext(), test.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			logicPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			generated := createTable.GetCreateAsSelectSql()
+			require.Contains(t, generated, test.wantClause)
+
+			insertStmt, err := mysql.ParseOne(context.Background(), generated, 1)
+			require.NoError(t, err, generated)
+			t.Cleanup(insertStmt.Free)
+			insert, ok := insertStmt.(*tree.Insert)
+			require.True(t, ok, "generated CTAS SQL must be an INSERT, got %T", insertStmt)
+
+			groupBy := findCTASGroupBy(t, insert.Rows.Select)
+			require.Equal(t, test.wantCube, groupBy.Cube)
+			require.Equal(t, test.wantGroupingSets, groupBy.GroupingSets)
+			require.Len(t, groupBy.GroupByExprsList, len(test.wantSetWidths))
+			for i, width := range test.wantSetWidths {
+				require.Len(t, groupBy.GroupByExprsList[i], width)
+			}
+		})
+	}
+}
+
 // TestCTASFullTextPatternSurvivesInternalReparse: the CTAS follow-up
 // INSERT ... SELECT is executed by the internal SQL executor, which parses in
 // DEFAULT sql_mode regardless of the session's mode (parsers.Parse in
@@ -74,7 +166,7 @@ func TestCTASFullTextPatternSurvivesInternalReparse(t *testing.T) {
 	// the session-mode parse understood it).
 	buildWithMode := func(t *testing.T, mode string) (generated string, want string) {
 		t.Helper()
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.SetSqlModeOverride(mode)
 		ctx := mock.CurrentContext()
 		stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), sql, 1, mode)
@@ -117,4 +209,24 @@ func TestCTASFullTextPatternSurvivesInternalReparse(t *testing.T) {
 		require.Equal(t, "a\nb", want)
 		require.Equal(t, want, executorPattern(t, generated))
 	})
+}
+
+func TestCTASConflictModifiersGenerateDML(t *testing.T) {
+	for _, tc := range []struct {
+		name, modifier, prefix string
+	}{
+		{"ignore", "IGNORE", "insert ignore into"},
+		{"replace", "REPLACE", "replace into"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := mock.CurrentContext()
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "CREATE TABLE t "+tc.modifier+" AS SELECT 1", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			logicPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.True(t, strings.HasPrefix(logicPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), tc.prefix))
+		})
+	}
 }

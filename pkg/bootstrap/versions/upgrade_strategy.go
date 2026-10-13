@@ -15,7 +15,10 @@
 package versions
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -135,17 +138,21 @@ type UpgradeEntry struct {
 	// return true if the system is already in the final state and does not need to be upgraded,
 	// otherwise return false
 	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
-	PreSql    string
-	PostSql   string
+	// RequiredProtocolVersion delays an upgrade entry until every service in the
+	// deployment reports the protocol understood by the persisted metadata it
+	// installs. The check is performed only when the entry still needs work, so
+	// an already-completed upgrade remains idempotent during a rolling restart.
+	RequiredProtocolVersion int64
+	AllowMoColumnsUpdate    bool
+	PreSql                  string
+	PostSql                 string
 }
 
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
-	userId := uint32(sysRootID)
-	roleId := uint32(sysAdminRoleID)
-	if accountId != catalog.System_Account {
-		userId = accountAdminUserID
-		roleId = accountAdminRoleID
+	statementOption := UpgradeStatementOption(accountId)
+	if u.AllowMoColumnsUpdate {
+		statementOption = statementOption.WithMoColumnsUpdate()
 	}
 
 	exist, err := u.CheckFunc(txn, accountId)
@@ -156,36 +163,125 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 	if exist {
 		return nil
-	} else {
-		// 1. First, judge whether there is prefix sql
-		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
-			if err != nil {
-				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
-				return err
-			}
-			res.Close()
+	}
+	if u.RequiredProtocolVersion > 0 {
+		if txn == nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade %s requires protocol version %d, transaction is unavailable",
+				u.TableName, u.RequiredProtocolVersion)
 		}
+		if err := checkCommonProtocolVersion(txn, u.RequiredProtocolVersion); err != nil {
+			return err
+		}
+	}
 
-		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+	// 1. First, judge whether there is prefix sql
+	if u.PreSql != "" {
+		res, err := txn.Exec(u.PreSql, statementOption)
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
+	}
 
-		// 2. Third, after the upgrade is completed, judge whether there is post-sql
-		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
-			if err != nil {
-				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
-				return err
-			}
-			res.Close()
+	// 2. Second, Execute upgrade sql
+	res, err := txn.Exec(u.UpgSql, statementOption)
+	if err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+		return err
+	}
+	res.Close()
+
+	// 2. Third, after the upgrade is completed, judge whether there is post-sql
+	if u.PostSql != "" {
+		res, err = txn.Exec(u.PostSql, statementOption)
+		if err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			return err
+		}
+		res.Close()
+	}
+	return nil
+}
+
+// checkCommonProtocolVersion asks every CN for its rollout value. A local
+// runtime can already be at the new version while a same-version, lower-offset
+// CN is still serving traffic, so checking only the upgrader would publish an
+// information_schema view that the older CN cannot plan.
+func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error {
+	res, err := txn.Exec(
+		"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		executor.StatementOption{},
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+
+	var encoded string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) == 0 || cols[0].IsNull(0) {
+			return false
+		}
+		encoded = cols[0].GetStringAt(0)
+		return false
+	})
+	return CheckProtocolVersionResponse(encoded, required)
+}
+
+// CheckProtocolVersionResponse validates every serving CN's protocol before a
+// persistent definition requiring that protocol is published.
+func CheckProtocolVersionResponse(encoded string, required int64) error {
+	if encoded == "" {
+		return moerr.NewNotSupportedNoCtxf(
+			"upgrade requires all CNs to support protocol version %d: no protocol response", required)
+	}
+
+	var envelope struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &envelope); err != nil {
+		return moerr.NewNotSupportedNoCtxf(
+			"upgrade requires all CNs to support protocol version %d: invalid protocol response", required)
+	}
+	for _, nodeVersion := range strings.Split(envelope.Result, ",") {
+		nodeVersion = strings.TrimSpace(nodeVersion)
+		separator := strings.LastIndexByte(nodeVersion, ':')
+		if separator < 0 {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade requires all CNs to support protocol version %d: invalid node version %q", required, nodeVersion)
+		}
+		version, parseErr := strconv.ParseInt(strings.TrimSpace(nodeVersion[separator+1:]), 10, 64)
+		if parseErr != nil || version < required {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade requires all CNs to support protocol version %d: node %q is at version %d", required, nodeVersion[:separator], version)
 		}
 	}
 	return nil
+}
+
+// CheckCommonProtocolVersion verifies the protocol generation used by a
+// tenant-upgrade snapshot. Callers must perform this check before enumerating
+// tenant IDs so old writers cannot create rows outside the snapshot ranges.
+func CheckCommonProtocolVersion(txn executor.TxnExecutor, required int64) error {
+	return checkCommonProtocolVersion(txn, required)
+}
+
+// UpgradeStatementOption executes upgrade SQL as the administrator of the
+// target account. Dynamic migrations must use the same identity as static
+// UpgradeEntries when they issue tenant DDL.
+func UpgradeStatementOption(accountID uint32) executor.StatementOption {
+	userID := uint32(sysRootID)
+	roleID := uint32(sysAdminRoleID)
+	if accountID != catalog.System_Account {
+		userID = accountAdminUserID
+		roleID = accountAdminRoleID
+	}
+	return executor.StatementOption{}.
+		WithAccountID(accountID).
+		WithUserID(userID).
+		WithRoleID(roleID)
 }
 
 func (u *UpgradeEntry) String() string {
@@ -230,7 +326,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
        mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
             AND attname != '__mo_rowid'
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 
@@ -245,7 +341,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
        mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
             AND attname != '__mo_rowid' AND account_id = 0
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 	}
@@ -322,11 +418,11 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
 	}
 
 	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 
@@ -353,11 +449,11 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 	}
 
 	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 

@@ -27,19 +27,7 @@ func (c *DashboardCreator) initRPCDashboard() error {
 		return err
 	}
 
-	build, err := dashboard.New(
-		"RPC Metrics",
-		c.withRowOptions(
-			c.initRPCKeyMetricsRow(),
-			c.initRPCRequestMetricsRow(),
-			c.initRPCConnectionMetricsRow(),
-			c.initRPCBackendHealthRow(),
-			c.initRPCTimeoutErrorRow(),
-			c.initRPCCircuitBreakerRow(),
-			c.initRPCNetworkMetricsRow(),
-			c.initRPCPerformanceMetricsRow(),
-			c.initRPCGCRow(),
-		)...)
+	build, err := dashboard.New("RPC Metrics", c.withRowOptions(c.rpcDashboardRows()...)...)
 	if err != nil {
 		return err
 	}
@@ -47,208 +35,295 @@ func (c *DashboardCreator) initRPCDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initRPCTimeoutErrorRow() dashboard.Option {
-	return dashboard.Row(
-		"RPC Timeout & Backend Errors",
-		c.withGraph(
-			"MORPC Backend Errors",
-			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_error_total", "")+`[$interval])) by (name, phase, error_type)`,
-			"{{ name }} {{ phase }} {{ error_type }}",
-			axis.Unit("errors/s"),
-			axis.Min(0)),
-		c.withGraph(
-			"Lockservice Remote RPC Errors",
-			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_lockservice_remote_rpc_error_total", "")+`[$interval])) by (method, error_type)`,
-			"{{ method }} {{ error_type }}",
-			axis.Unit("errors/s"),
-			axis.Min(0)),
-	)
+// rpcDashboardRows is intentionally organized by troubleshooting question,
+// rather than by metric type. Except for the request-health overview, keep each
+// signal in one primary location so an operator can move from user impact to
+// the responsible subsystem without comparing subtly different semantics.
+func (c *DashboardCreator) rpcDashboardRows() []dashboard.Option {
+	return []dashboard.Option{
+		c.initRPCKeyRequestHealthRow(),
+		c.initRPCRequestLifecycleRow(),
+		c.initRPCBackpressureRow(),
+		c.initRPCTransportErrorsRow(),
+		c.initRPCTrafficRow(),
+		c.initRPCClientPoolRow(),
+		c.initRPCConnectionRecoveryRow(),
+		c.initRPCBackendAvailabilityRow(),
+		c.initRPCCircuitBreakerRow(),
+		c.initRPCServerStreamRow(),
+		c.initRPCGCRow(),
+	}
 }
 
-// initRPCKeyMetricsRow shows the most critical metrics at a glance (Four Golden Signals)
-func (c *DashboardCreator) initRPCKeyMetricsRow() dashboard.Option {
+func (c *DashboardCreator) initRPCKeyRequestHealthRow() dashboard.Option {
 	return dashboard.Row(
-		"Key Metrics (Four Golden Signals)",
+		"Request Health",
 		c.withGraph(
-			"Active Clients by Name",
+			"Client Request Start Rate",
 			2,
-			`sum(`+c.getMetricWithFilter("mo_rpc_client_active", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0)),
-
-		c.withGraph(
-			"Request Rate (QPS)",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_message_total", `type="send"`)+`[$interval])) by (name)`,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_started_total", "")+`[$interval])) by (name)`,
 			"{{ name }}",
 			axis.Unit("req/s"),
 			axis.Min(0)),
-
 		c.withGraph(
-			"P95 Request Duration",
+			"Client Request Completion Rate",
 			2,
-			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_done_duration_seconds_bucket", "")+`[$interval])) by (le, name))`,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_completed_total", "")+`[$interval])) by (name)`,
+			"{{ name }}",
+			axis.Unit("req/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"P95 Unary Duration (Backend Admission to Terminal)",
+			3,
+			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_duration_seconds_bucket", "")+`[$interval])) by (le, name))`,
 			"{{ name }}",
 			axis.Unit("s"),
 			axis.Min(0)),
-
 		c.withGraph(
-			"Connection Error Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (name) / sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="total"`)+`[$interval])) by (name)`,
+			"Non-Success Request Ratio",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_completed_total", `outcome!="success"`)+`[$interval])) by (name) / clamp_min(sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_completed_total", "")+`[$interval])) by (name), 0.000000001)`,
 			"{{ name }}",
-			axis.Unit("percent"),
+			axis.Unit("percentunit"),
 			axis.Min(0),
 			axis.Max(1)),
-
 		c.withGraph(
-			"Active Connections",
+			"Active Backend Futures (Includes Internal)",
 			2,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_pool_size", "")+`) by (name)`,
+			`sum(`+c.getMetricWithFilter("mo_rpc_backend_active_requests", "")+`) by (name)`,
 			"{{ name }}",
 			axis.Min(0)),
-
-		c.withGraph(
-			"Connection Health",
-			2,
-			`(1 - sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (name) / sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="total"`)+`[$interval])) by (name)) * 100`,
-			"{{ name }}",
-			axis.Unit("percent"),
-			axis.Min(0),
-			axis.Max(100)),
 	)
 }
 
-// initRPCRequestMetricsRow shows request-level metrics (RED Method: Rate, Errors, Duration)
-func (c *DashboardCreator) initRPCRequestMetricsRow() dashboard.Option {
+func (c *DashboardCreator) initRPCRequestLifecycleRow() dashboard.Option {
 	return dashboard.Row(
-		"Request Metrics (RED Method)",
-		c.withGraph(
-			"Request Rate by Name",
+		"Request Lifecycle (RED)",
+		c.withMultiGraph(
+			"Started vs Completed",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_message_total", `type="send"`)+`[$interval])) by (name)`,
-			"{{ name }}",
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_client_request_started_total", "") + `[$interval])) by (name)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_client_request_completed_total", "") + `[$interval])) by (name)`,
+			},
+			[]string{"{{ name }} started", "{{ name }} completed"},
 			axis.Unit("req/s"),
 			axis.Min(0)),
-
+		c.withGraph(
+			"Terminal Outcomes",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_request_completed_total", "")+`[$interval])) by (name, outcome)`,
+			"{{ name }} {{ outcome }}",
+			axis.Unit("req/s"),
+			axis.Min(0)),
 		c.getHistogramWithExtraBy(
-			"Request Duration (P50/P80/P90/P99)",
-			c.getMetricWithFilter(`mo_rpc_backend_done_duration_seconds_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			8,
+			"Unary Duration, Admission to Terminal (P50/P80/P90/P99)",
+			c.getMetricWithFilter("mo_rpc_client_request_duration_seconds_bucket", ""),
+			[]float64{0.50, 0.80, 0.90, 0.99},
+			4,
 			"name",
 			axis.Unit("s"),
 			axis.Min(0)),
 	)
 }
 
-// initRPCConnectionMetricsRow shows connection lifecycle metrics
-func (c *DashboardCreator) initRPCConnectionMetricsRow() dashboard.Option {
+func (c *DashboardCreator) initRPCBackpressureRow() dashboard.Option {
 	return dashboard.Row(
-		"Connection Metrics",
+		"Backpressure & Write Path",
 		c.withGraph(
-			"Connection Pool Size",
+			"Queued Outbound Messages",
+			3,
+			`sum(`+c.getMetricWithFilter("mo_rpc_sending_queue_size", "")+`) by (name, side)`,
+			"{{ name }} {{ side }}",
+			axis.Min(0)),
+		c.getHistogramWithExtraBy(
+			"Queue Wait Duration",
+			c.getMetricWithFilter("mo_rpc_write_latency_duration_seconds_bucket", ""),
+			[]float64{0.50, 0.90, 0.99},
+			3,
+			"name, side",
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.getHistogramWithExtraBy(
+			"Batch Encode & Socket Flush Duration",
+			c.getMetricWithFilter("mo_rpc_write_duration_seconds_bucket", ""),
+			[]float64{0.50, 0.90, 0.99},
+			3,
+			"name, side",
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Busy Client Backend Count",
+			3,
+			`sum(`+c.getMetricWithFilter("mo_rpc_backend_busy", "")+`) by (name)`,
+			"{{ name }}",
+			axis.Min(0)),
+		c.withGraph(
+			"Most Recent Sending Batch Size",
+			3,
+			`sum(`+c.getMetricWithFilter("mo_rpc_sending_batch_size", "")+`) by (name, side)`,
+			"{{ name }} {{ side }}",
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initRPCTransportErrorsRow() dashboard.Option {
+	return dashboard.Row(
+		"Transport Errors & Response Dispatch",
+		c.withGraph(
+			"MORPC Backend Errors",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_error_total", "")+`[$interval])) by (name, phase, error_type)`,
+			"{{ name }} {{ phase }} {{ error_type }}",
+			axis.Unit("errors/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Lockservice Remote RPC Errors",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_lockservice_remote_rpc_error_total", "")+`[$interval])) by (method, error_type)`,
+			"{{ method }} {{ error_type }}",
+			axis.Unit("errors/s"),
+			axis.Min(0)),
+		c.getHistogramWithExtraBy(
+			"Response Dispatch Overhead (Not RTT)",
+			c.getMetricWithFilter("mo_rpc_backend_done_duration_seconds_bucket", ""),
+			[]float64{0.50, 0.90, 0.99},
+			4,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initRPCTrafficRow() dashboard.Option {
+	return dashboard.Row(
+		"Transport Traffic (Messages, Not Requests)",
+		c.withMultiGraph(
+			"Message Send vs Receive Rate",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_message_total", `type="send"`) + `[$interval])) by (name)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_message_total", `type="receive"`) + `[$interval])) by (name)`,
+			},
+			[]string{"{{ name }} send", "{{ name }} receive"},
+			axis.Unit("msg/s"),
+			axis.Min(0)),
+		c.withMultiGraph(
+			"Network Throughput",
+			6,
+			[]string{
+				`sum(irate(` + c.getMetricWithFilter("mo_rpc_network_bytes_total", `type="input"`) + `[$interval])) by (` + c.by + `)`,
+				`sum(irate(` + c.getMetricWithFilter("mo_rpc_network_bytes_total", `type="output"`) + `[$interval])) by (` + c.by + `)`,
+			},
+			[]string{"{{ " + c.by + " }} input", "{{ " + c.by + " }} output"},
+			axis.Unit("Bps"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initRPCClientPoolRow() dashboard.Option {
+	return dashboard.Row(
+		"Clients & Backend Pool",
+		c.withGraph(
+			"Active RPC Clients",
+			3,
+			`sum(`+c.getMetricWithFilter("mo_rpc_client_active", "")+`) by (name)`,
+			"{{ name }}",
+			axis.Min(0)),
+		c.withGraph(
+			"Client Creation Rate",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_create_total", "")+`[$interval])) by (name)`,
+			"{{ name }}",
+			axis.Unit("clients/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Backend Pool Size",
 			3,
 			`sum(`+c.getMetricWithFilter("mo_rpc_backend_pool_size", "")+`) by (name)`,
 			"{{ name }}",
 			axis.Min(0)),
-
-		c.withGraph(
-			"Connection Create Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_create_total", "")+`[$interval])) by (name)`,
-			"{{ name }}",
+		c.withMultiGraph(
+			"Backend Create vs Close Rate",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_create_total", "") + `[$interval])) by (name)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_close_total", "") + `[$interval])) by (name)`,
+			},
+			[]string{"{{ name }} create", "{{ name }} close"},
 			axis.Unit("conn/s"),
 			axis.Min(0)),
-
-		c.withGraph(
-			"Connection Close Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_close_total", "")+`[$interval])) by (name)`,
-			"{{ name }}",
-			axis.Unit("conn/s"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Connection Net Growth",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_create_total", "")+`[$interval])) by (name) - sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_close_total", "")+`[$interval])) by (name)`,
-			"{{ name }}",
-			axis.Unit("conn/s")),
-
-		c.withGraph(
-			"Connection Error Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (name)`,
-			"{{ name }}",
-			axis.Unit("errors/s"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Active Requests per Backend",
-			2,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_active_requests", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0)),
-
-		c.withGraph(
-			"Backend Busy Status",
-			2,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_busy", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0),
-			axis.Max(1)),
 	)
 }
 
-// initRPCBackendHealthRow shows backend health and failure metrics
-func (c *DashboardCreator) initRPCBackendHealthRow() dashboard.Option {
+func (c *DashboardCreator) initRPCConnectionRecoveryRow() dashboard.Option {
 	return dashboard.Row(
-		"Backend Health & Failures",
+		"Connection Recovery",
+		c.withGraph(
+			"Connect Attempt & Failure Rate",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", "")+`[$interval])) by (name, type)`,
+			"{{ name }} {{ type }}",
+			axis.Unit("ops/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Connect Failure Ratio",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (name) / clamp_min(sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="total"`)+`[$interval])) by (name), 0.000000001)`,
+			"{{ name }}",
+			axis.Unit("percentunit"),
+			axis.Min(0),
+			axis.Max(1)),
+		c.getHistogramWithExtraBy(
+			"Connection Recovery Duration (Includes Retry/Backoff)",
+			c.getMetricWithFilter("mo_rpc_backend_connect_duration_seconds_bucket", ""),
+			[]float64{0.50, 0.90, 0.99},
+			3,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Backend Net Growth",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_create_total", "")+`[$interval])) by (name) - sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_close_total", "")+`[$interval])) by (name)`,
+			"{{ name }}",
+			axis.Unit("conn/s")),
+	)
+}
+
+func (c *DashboardCreator) initRPCBackendAvailabilityRow() dashboard.Option {
+	return dashboard.Row(
+		"Backend Acquisition & Availability",
 		c.withMultiGraph(
-			"Auto-Create Timeout Impact vs Events",
-			4,
+			"Auto-Create Timeout Impact vs Root Events",
+			6,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_total", "") + `[$interval])) by (name)`,
 				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_event_total", "") + `[$interval])) by (name)`,
 			},
-			[]string{"{{ name }} - requests", "{{ name }} - create events"},
+			[]string{"{{ name }} affected requests", "{{ name }} create states"},
 			axis.Unit("timeouts/s"),
 			axis.Min(0)),
-
 		c.withGraph(
 			"Backend Unavailable Rate",
-			4,
+			6,
 			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_unavailable_total", "")+`[$interval])) by (name)`,
 			"{{ name }}",
 			axis.Unit("errors/s"),
 			axis.Min(0)),
-
-		c.withMultiGraph(
-			"Backend Creation vs Failures",
-			4,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_create_total", "") + `[$interval])) by (name)`,
-				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`) + `[$interval])) by (name)`,
-			},
-			[]string{"{{ name }} - create", "{{ name }} - failed"}),
 	)
 }
 
-// initRPCCircuitBreakerRow shows circuit breaker metrics
 func (c *DashboardCreator) initRPCCircuitBreakerRow() dashboard.Option {
 	return dashboard.Row(
 		"Circuit Breaker",
 		c.withGraph(
-			"Circuit Breaker State",
+			"Circuit Breaker State (0 Closed, 1 Half-Open, 2 Open)",
 			4,
-			`sum(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_state", "")+`) by (name, backend)`,
+			`max(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_state", "")+`) by (name, backend)`,
 			"{{ name }}/{{ backend }}",
 			axis.Min(0),
 			axis.Max(2)),
-
 		c.withGraph(
 			"Circuit Breaker Trip Rate",
 			4,
@@ -256,9 +331,8 @@ func (c *DashboardCreator) initRPCCircuitBreakerRow() dashboard.Option {
 			"{{ name }}/{{ backend }}",
 			axis.Unit("trips/s"),
 			axis.Min(0)),
-
 		c.withGraph(
-			"Open Circuit Breakers Count",
+			"Open Circuit Breaker Count",
 			4,
 			`count(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_state", "")+` == 2) by (name)`,
 			"{{ name }}",
@@ -266,128 +340,65 @@ func (c *DashboardCreator) initRPCCircuitBreakerRow() dashboard.Option {
 	)
 }
 
-// initRPCNetworkMetricsRow shows network-level metrics
-func (c *DashboardCreator) initRPCNetworkMetricsRow() dashboard.Option {
+func (c *DashboardCreator) initRPCServerStreamRow() dashboard.Option {
 	return dashboard.Row(
-		"Network Metrics",
+		"Server Sessions & Streams",
 		c.withGraph(
-			"Network Input Throughput",
+			"Server Session Count",
 			4,
-			`sum(irate(`+c.getMetricWithFilter("mo_rpc_network_bytes_total", `type="input"`)+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Network Output Throughput",
-			4,
-			`sum(irate(`+c.getMetricWithFilter("mo_rpc_network_bytes_total", `type="output"`)+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Message Send Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_message_total", `type="send"`)+`[$interval])) by (name)`,
+			`sum(`+c.getMetricWithFilter("mo_rpc_server_session_size", "")+`) by (name)`,
 			"{{ name }}",
-			axis.Unit("msg/s"),
 			axis.Min(0)),
-
 		c.withGraph(
-			"Message Receive Rate",
-			2,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_message_total", `type="receive"`)+`[$interval])) by (name)`,
-			"{{ name }}",
-			axis.Unit("msg/s"),
+			"Server Stream State Entries",
+			8,
+			`sum(`+c.getMetricWithFilter("mo_rpc_server_stream_state_size", "")+`) by (name, type)`,
+			"{{ name }} {{ type }}",
 			axis.Min(0)),
 	)
 }
 
-// initRPCPerformanceMetricsRow shows performance-related metrics
-func (c *DashboardCreator) initRPCPerformanceMetricsRow() dashboard.Option {
-	return dashboard.Row(
-		"Performance Metrics",
-		c.getHistogramWithExtraBy(
-			"Request Duration (P50/P80/P90/P99)",
-			c.getMetricWithFilter(`mo_rpc_backend_done_duration_seconds_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
-			"name",
-			axis.Unit("s"),
-			axis.Min(0)),
-
-		c.getHistogramWithExtraBy(
-			"Connection Duration",
-			c.getMetricWithFilter(`mo_rpc_backend_connect_duration_seconds_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			3,
-			"name",
-			axis.Unit("s"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Sending Queue Size",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_sending_queue_size", ``)+`) by (name, side)`,
-			"{{ name }}({{ side }})",
-			axis.Min(0)),
-
-		c.withGraph(
-			"Write Queue Length",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_write_queue_length", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0)),
-
-		c.withGraph(
-			"Active Requests",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_active_requests", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0)),
-
-		c.withGraph(
-			"Backend Busy",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_busy", "")+`) by (name)`,
-			"{{ name }}",
-			axis.Min(0),
-			axis.Max(1)),
-	)
-}
-
-// initRPCGCRow shows GC Manager internal metrics (for debugging, can be collapsed)
 func (c *DashboardCreator) initRPCGCRow() dashboard.Option {
 	return dashboard.Row(
 		"GC Manager (Internal)",
 		c.withGraph(
 			"GC Channel Drop Rate",
-			4,
+			2,
 			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_channel_drop_total", "")+`[$interval])) by (type)`,
 			"{{ type }}",
 			axis.Unit("drops/s"),
 			axis.Min(0)),
-
 		c.withGraph(
 			"GC Channel Queue Length",
-			4,
+			2,
 			`sum(`+c.getMetricWithFilter("mo_rpc_gc_channel_queue_length", "")+`) by (type)`,
 			"{{ type }}",
 			axis.Min(0)),
-
 		c.withGraph(
 			"Registered Clients",
 			2,
 			`sum(`+c.getMetricWithFilter("mo_rpc_gc_registered_clients_total", "")+`)`,
-			"Registered Clients",
+			"registered clients",
 			axis.Min(0)),
-
 		c.withGraph(
 			"Idle Backends Cleaned Rate",
 			2,
 			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_idle_backends_cleaned_total", "")+`[$interval]))`,
-			"Idle Backends Cleaned",
+			"idle cleaned",
+			axis.Unit("ops/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Inactive Cleanup Process Rate",
+			2,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_inactive_processed_total", "")+`[$interval]))`,
+			"inactive processed",
+			axis.Unit("ops/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Backend Create Process Rate",
+			2,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_create_processed_total", "")+`[$interval]))`,
+			"create processed",
 			axis.Unit("ops/s"),
 			axis.Min(0)),
 	)

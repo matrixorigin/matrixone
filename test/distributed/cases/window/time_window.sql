@@ -1,6 +1,18 @@
 drop database if exists time_window;
 create database time_window;
 use time_window;
+set @time_window_saved_time_zone = @@time_zone;
+set time_zone = '+00:00';
+
+-- Time Window ignores rows whose time key is NULL and keeps valid buckets.
+drop table if exists time_window_null_ts;
+create table time_window_null_ts (event_ts timestamp(6), device varchar(20), value double);
+insert into time_window_null_ts values
+  ('2026-01-01 00:01:00', 'd1', 10),
+  ('2026-01-01 00:02:00', 'd1', 20),
+  (null, 'd1', 999);
+select _wstart, _wend, count(*) as n from time_window_null_ts interval(event_ts, 1, minute) order by _wstart;
+drop table time_window_null_ts;
 
 -- abnormal test: the time column is not primary key column
 drop table if exists time_window01;
@@ -282,4 +294,116 @@ drop table if exists tt1;
 create table tt1(ts timestamp primary key, a int);
 select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 
+-- fractional seconds must be floored into the containing half-open time window
+drop table if exists tw_interval_fraction_ts;
+create table tw_interval_fraction_ts (
+  id int primary key,
+  event_ts timestamp(6) not null,
+  value int not null
+);
+insert into tw_interval_fraction_ts values
+  (1, '2024-02-29 23:59:59.499999', 1),
+  (2, '2024-02-29 23:59:59.500000', 2),
+  (3, '2024-02-29 23:59:59.999999', 3);
+select count(*) as raw_count from tw_interval_fraction_ts where event_ts >= '2024-02-29 00:00:00.000000' and event_ts < '2024-03-01 00:00:00.000000';
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_ts where event_ts >= '2024-02-29 00:00:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, day)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_ts where event_ts >= '2024-02-29 23:00:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, hour)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_ts where event_ts >= '2024-02-29 23:59:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, minute)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_ts where event_ts >= '2024-02-29 23:59:59.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, second)) q;
+drop table tw_interval_fraction_ts;
+
+drop table if exists tw_interval_fraction_dt;
+create table tw_interval_fraction_dt (
+  id int primary key,
+  event_ts datetime(6) not null,
+  value int not null
+);
+insert into tw_interval_fraction_dt values
+  (1, '2024-02-29 23:59:59.499999', 1),
+  (2, '2024-02-29 23:59:59.500000', 2),
+  (3, '2024-02-29 23:59:59.999999', 3);
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_dt where event_ts >= '2024-02-29 00:00:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, day)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_dt where event_ts >= '2024-02-29 23:00:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, hour)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_dt where event_ts >= '2024-02-29 23:59:00.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, minute)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_dt where event_ts >= '2024-02-29 23:59:59.000000' and event_ts < '2024-03-01 00:00:00.000000' interval(event_ts, 1, second)) q;
+drop table tw_interval_fraction_dt;
+
+drop table if exists tw_interval_fraction_before_epoch;
+create table tw_interval_fraction_before_epoch (
+  id int primary key,
+  event_ts datetime(6) not null,
+  value int not null
+);
+insert into tw_interval_fraction_before_epoch values
+  (1, '1969-12-31 23:59:59.499999', 1),
+  (2, '1969-12-31 23:59:59.500000', 2),
+  (3, '1969-12-31 23:59:59.999999', 3);
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_before_epoch where event_ts >= '1969-12-31 00:00:00.000000' and event_ts < '1970-01-01 00:00:00.000000' interval(event_ts, 1, day)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_before_epoch where event_ts >= '1969-12-31 23:59:59.000000' and event_ts < '1970-01-01 00:00:00.000000' interval(event_ts, 1, second)) q;
+drop table tw_interval_fraction_before_epoch;
+
+drop table if exists tw_interval_fraction_telemetry;
+create table tw_interval_fraction_telemetry (
+  id int primary key,
+  device_id varchar(32) not null,
+  metric varchar(32) not null,
+  event_ts timestamp(6) not null,
+  value int not null
+);
+insert into tw_interval_fraction_telemetry values
+  (1, 'device-001', 'cpu_usage', '2024-03-01 08:00:00.000000', 1),
+  (2, 'device-001', 'cpu_usage', '2024-03-01 08:30:00.000000', 2),
+  (3, 'device-001', 'cpu_usage', '2024-03-01 08:59:59.500000', 3),
+  (4, 'device-001', 'cpu_usage', '2024-03-01 08:59:59.999999', 4),
+  (5, 'device-001', 'cpu_usage', '2024-03-01 08:15:00.000000', 5),
+  (6, 'device-002', 'cpu_usage', '2024-03-01 08:59:59.999999', 6);
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select device_id, _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_telemetry where device_id = 'device-001' and metric = 'cpu_usage' and event_ts >= '2024-03-01 08:00:00.000000' and event_ts < '2024-03-01 09:00:00.000000' group by device_id interval(event_ts, 1, hour)) q;
+select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select device_id, _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_telemetry where metric = 'cpu_usage' and event_ts >= '2024-03-01 08:00:00.000000' and event_ts < '2024-03-01 09:00:00.000000' group by device_id interval(event_ts, 1, hour)) q;
+drop table tw_interval_fraction_telemetry;
+
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
+drop table if exists tw_interval_timestamp_domain;
+create table tw_interval_timestamp_domain (
+  id int primary key,
+  event_ts timestamp(6) not null
+);
+insert into tw_interval_timestamp_domain values
+  (1, '9999-12-31 23:59:59.999999'),
+  (2, '1970-01-01 00:00:01.000000');
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour);
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day);
+select count(*) as null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day)) q where _wstart is null;
+select count(*) as null_end_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour) sliding(1, hour)) q where _wend is null;
+select count(*) as gapfill_null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day) fill(linear)) q where _wstart is null;
+drop table tw_interval_timestamp_domain;
+set time_zone = @old_time_zone;
+
+-- unsupported calendar units should return a normal SQL error, not enter the compile panic path
+drop table if exists tw_interval_bad_unit;
+create table tw_interval_bad_unit(ts timestamp(6), v int);
+-- zero interval/sliding should return a normal SQL error before pipeline execution
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 0, minute);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 5, minute) sliding(0, minute);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, year);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, quarter);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, month);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, week);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, year);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
+drop table tw_interval_bad_unit;
+
+set time_zone = @time_window_saved_time_zone;
 drop database time_window;

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -271,10 +272,11 @@ var upg_information_schema_events = versions.UpgradeEntry{
 }
 
 var upg_information_schema_tables = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "TABLES",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaTablesDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "TABLES",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaTablesDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
 		if err != nil {
@@ -328,17 +330,18 @@ var upg_information_schema_referenctial_constraints = versions.UpgradeEntry{
 }
 
 var upg_information_schema_columns = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "COLUMNS",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "COLUMNS",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaColumnsV46UpgradeDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+		if exists && viewDef == sysview.InformationSchemaColumnsV46UpgradeDDL {
 			return true, nil
 		}
 		return false, nil

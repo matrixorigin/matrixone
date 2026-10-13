@@ -94,6 +94,25 @@ func TestLeakCheckCloseClearsTrackedTransactions(t *testing.T) {
 	require.Empty(t, lc.actives)
 }
 
+func TestLeakCheckSnapshotsActiveTxnOptions(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	lc := newLeakCheck(0, func([]ActiveTxn) {})
+	defer lc.close()
+
+	op := &txnOperator{}
+	op.opts.options.SessionInfo = "test-session"
+	token, err := op.TryEnterRunSqlWithTokenAndSQL(nil, "select 1")
+	require.NoError(t, err)
+	defer op.ExitRunSqlWithToken(token)
+
+	lc.txnOpened(op, []byte("txn-id"), txn.TxnOptions{})
+	values := lc.doCheck()
+	require.Len(t, values, 1)
+	require.True(t, values[0].Options.InRunSql)
+	require.Contains(t, values[0].Options.Counter, "runSql: enter:1, exit:0")
+	require.Equal(t, "test-session", values[0].Options.SessionInfo)
+}
+
 func BenchmarkLeakCheckerTxnClosed(b *testing.B) {
 	// Create a leak checker instance
 	lc := newLeakCheck(10*time.Second, func([]ActiveTxn) {})

@@ -89,10 +89,14 @@ func TestIssue26120SnapshotBranchKeepsHistoricalParentIdentity(t *testing.T) {
 
 func relationIDAtSnapshot(t *testing.T, ctx context.Context, db *sql.DB, databaseName, tableName, snapshotName string) uint64 {
 	t.Helper()
+	var snapshotTS int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		"select ts from mo_catalog.mo_snapshots where sname = ?", snapshotName).Scan(&snapshotTS))
+
 	var id uint64
 	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(
-		"select rel_id from mo_catalog.mo_tables {snapshot='%s'} where account_id = 0 and reldatabase = '%s' and relname = '%s'",
-		snapshotName, databaseName, tableName)).Scan(&id))
+		"select rel_id from mo_catalog.mo_tables {MO_TS = %d} where account_id = 0 and reldatabase = '%s' and relname = '%s'",
+		snapshotTS, databaseName, tableName)).Scan(&id))
 	return id
 }
 

@@ -59,11 +59,58 @@ func splitFiltersByVectorIndexCoverage(
 	return pushdownFilters, remainingFilters
 }
 
-func vectorIndexColumnNameFromColRef(col *plan.ColRef, scanNode *plan.Node, scanTag int32) (string, bool) {
-	if col == nil || scanNode == nil || scanNode.TableDef == nil {
-		return "", false
+func hasVectorIndexIncludedColumnFilter(
+	filters []*plan.Expr,
+	scanNode *plan.Node,
+	includeColumns []string,
+) bool {
+	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(includeColumns) == 0 {
+		return false
 	}
-	return vectorIndexColumnNameFromTableDef(col, scanNode.TableDef, scanTag)
+	included := make(map[string]struct{}, len(includeColumns))
+	for _, name := range includeColumns {
+		included[name] = struct{}{}
+	}
+	for _, expr := range filters {
+		if vectorIndexExprRefsIncludedColumn(expr, scanNode.BindingTags[0], scanNode.TableDef, included) {
+			return true
+		}
+	}
+	return false
+}
+
+func vectorIndexExprRefsIncludedColumn(
+	expr *plan.Expr,
+	scanTag int32,
+	tableDef *plan.TableDef,
+	included map[string]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		name, ok := vectorIndexColumnNameFromTableDef(impl.Col, tableDef, scanTag)
+		if !ok {
+			return false
+		}
+		_, ok = included[name]
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if vectorIndexExprRefsIncludedColumn(arg, scanTag, tableDef, included) {
+				return true
+			}
+		}
+		return false
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			if vectorIndexExprRefsIncludedColumn(sub, scanTag, tableDef, included) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func vectorIndexColumnNameFromTableDef(col *plan.ColRef, tableDef *plan.TableDef, scanTag int32) (string, bool) {
@@ -102,7 +149,8 @@ func vectorIndexExprRefsOnlyCoveredColumns(expr *plan.Expr, scanTag, partPos int
 			}
 		}
 		return true
-	case *plan.Expr_Lit:
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
 		return true
 	case *plan.Expr_List:
 		for _, sub := range impl.List.List {
@@ -110,8 +158,6 @@ func vectorIndexExprRefsOnlyCoveredColumns(expr *plan.Expr, scanTag, partPos int
 				return false
 			}
 		}
-		return true
-	case *plan.Expr_T:
 		return true
 	default:
 		return false

@@ -111,29 +111,78 @@ func prefixSuccessor(prefix []byte) []byte {
 	return nil
 }
 
-// prefixTerms collects every term with the given prefix into an ascending slice
-// (the `word*` expansion, materialized). Empty prefix returns all terms.
-func (d *termDict) prefixTerms(prefix string) ([]string, error) {
-	it, ok, err := d.prefixIter(prefix)
+// forEachPrefixPosting visits a prefix's postings in dictionary order. On a
+// loaded segment the iterator already carries the posting-directory offset:
+// resolving the same key with FST.Get again needlessly walks the FST a second
+// time. The callback must not retain the transient posting or its mmap views
+// beyond the segment's lifetime.
+func (s *Segment) forEachPrefixPosting(prefix string, fn func(string, *termPostings)) error {
+	if s.dict == nil {
+		for _, term := range s.PrefixRange(prefix) {
+			if pl, ok := s.lookup(term); ok {
+				fn(term, pl)
+			}
+		}
+		return nil
+	}
+	it, ok, err := s.dict.prefixIter(prefix)
 	if err != nil || !ok {
-		return nil, err
+		return err
 	}
 	defer func() { _ = it.Close() }()
-	var out []string
 	for {
-		term, _ := it.Current()
-		out = append(out, string(term))
+		term, off := it.Current()
+		if off < uint64(len(s.ranking)) {
+			if pl, valid := s.decodeTermEntry(int(off)); valid {
+				fn(string(term), pl)
+			}
+		}
 		if err := it.Next(); err == vellum.ErrIteratorDone {
-			break
+			return nil
 		} else if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return out, nil
+}
+
+// forEachTermInRange streams every term in the inclusive [lo,hi] range through fn
+// WITHOUT materializing the range as a []string the way rangeTerms does. For a
+// high-cardinality key an inequality's range IS most of that key's vocabulary,
+// so the materializing form is only safe when the caller already bounds it.
+func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) (bool, error)) error {
+	if lo > hi {
+		return nil
+	}
+	// vellum's upper bound is exclusive; one 0x00 past hi makes it inclusive,
+	// since no term sorts between hi and hi+"\x00".
+	end := append([]byte(hi), 0x00)
+	it, err := d.fst.Iterator([]byte(lo), end)
+	if err == vellum.ErrIteratorDone {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for {
+		term, _ := it.Current()
+		goOn, err := fn(string(term))
+		if err != nil {
+			return err
+		}
+		if !goOn {
+			return nil
+		}
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
 }
 
 // forEachTerm streams every term (ascending) through fn WITHOUT materializing the whole
-// vocabulary as a []string the way prefixTerms("") does — so a large high-cardinality
+// vocabulary as a []string — so a large high-cardinality
 // index's MERGE reconstruction (forEachPosting) doesn't spike O(vocabulary) of strings.
 func (d *termDict) forEachTerm(fn func(term string) error) error {
 	it, ok, err := d.prefixIter("")

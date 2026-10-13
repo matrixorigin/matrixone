@@ -109,16 +109,17 @@ func WithServerMessageCacheScanHookForTesting(hook func()) ServerOption {
 }
 
 type server struct {
-	name        string
-	metrics     *serverMetrics
-	address     string
-	logger      *zap.Logger
-	codec       Codec
-	application goetty.NetApplication
-	stopper     *stopper.Stopper
-	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
-	sessions    *sync.Map // session-id => *clientSession
-	options     struct {
+	name               string
+	metrics            *serverMetrics
+	address            string
+	logger             *zap.Logger
+	codec              Codec
+	application        goetty.NetApplication
+	stopper            *stopper.Stopper
+	handler            func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
+	sessions           *sync.Map // session-id => *clientSession
+	sessionOwnershipMu sync.Mutex
+	options            struct {
 		goettyOptions            []goetty.Option
 		bufferSize               int
 		batchSendSize            int
@@ -192,12 +193,11 @@ func (s *server) Start() error {
 
 func (s *server) Close() error {
 	s.stopper.Stop()
-	err := s.application.Stop()
+	err := s.application.StopAndWait()
 	if err != nil {
 		s.logger.Error("stop rpc server failed",
 			zap.Error(err))
 	}
-
 	return err
 }
 
@@ -226,12 +226,21 @@ func (s *server) adjust() {
 
 func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
 	s.metrics.receiveCounter.Inc()
+	request := value.(RPCMessage)
+	// Until delegation, this callback owns every decoded context, including
+	// internal messages and failures to acquire/validate a session. Async
+	// handlers take cancellation ownership only when actually called.
+	cancelHere := true
+	defer func() {
+		if cancelHere && request.Cancel != nil {
+			request.Cancel()
+		}
+	}()
 
 	cs, err := s.getSession(rs)
 	if err != nil {
 		return err
 	}
-	request := value.(RPCMessage)
 	s.metrics.inputBytesCounter.Add(float64(request.Message.ProtoSize()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
@@ -240,13 +249,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.Message.DebugString()))
 	}
 
-	// Can't be sure that the Context is properly consumed if disableAutoCancelContext is set to
-	// true. So we use the pessimistic wait for the context to time out automatically be canceled
-	// behavior here, which may cause some resources to be released more slowly.
-	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
-	if !s.options.disableAutoCancelContext && request.Cancel != nil {
-		defer request.Cancel()
-	}
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
 
@@ -295,6 +297,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		}
 	}
 
+	cancelHere = !s.options.disableAutoCancelContext
 	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
@@ -319,10 +322,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		responses := make([]*Future, 0, s.options.batchSendSize)
 		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() bool {
-			defer func() {
-				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
-			}()
-
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
@@ -346,6 +345,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					}
@@ -359,6 +359,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					default:
@@ -392,15 +393,16 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				}
 				failUnwritten := func(values []*Future, err error) {
 					for _, f := range values {
+						oneWay := f.oneWay
 						cs.releaseMessage(f.send)
 						f.messageSent(err)
-						if f.oneWay {
+						if oneWay {
 							f.Close()
 						}
 					}
 				}
 				for idx, f := range responses {
-					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.createAt).Seconds())
 					if f.oneWay {
 						needClose = append(needClose, f)
 					}
@@ -445,7 +447,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 					if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 						s.logger.Error("write response failed",
-							zap.Uint64("request-id", f.send.Message.GetID()),
+							zap.Uint64("request-id", f.getSendMessageID()),
 							zap.Error(err))
 						if err == goetty.ErrIllegalState {
 							cs.releaseMessage(f.send)
@@ -502,8 +504,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 }
 
 func (s *server) closeClientSession(cs *clientSession) {
-	s.sessions.Delete(cs.conn.ID())
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
+	s.deleteClientSession(cs.conn.ID(), cs)
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -517,19 +518,47 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 
 	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture, s.options.releaseMessageFunc)
 	cs.messageCacheScanHook = s.options.messageCacheScanHook
-	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
+	v, loaded := s.loadOrStoreClientSession(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
-		return v.(*clientSession), nil
+		return v, nil
 	}
 
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
 		return nil, err
 	}
 	return cs, nil
+}
+
+// loadOrStoreClientSession couples the session's map ownership with its gauge
+// ownership. Only the generation that wins LoadOrStore contributes +1.
+func (s *server) loadOrStoreClientSession(
+	id uint64,
+	cs *clientSession,
+) (*clientSession, bool) {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	v, loaded := s.sessions.LoadOrStore(id, cs)
+	if !loaded && s.metrics != nil {
+		s.metrics.sessionSizeGauge.Inc()
+	}
+	return v.(*clientSession), loaded
+}
+
+// deleteClientSession retires only the matching generation. This prevents a
+// repeated or stale close from removing a replacement or decrementing twice.
+func (s *server) deleteClientSession(id uint64, cs *clientSession) bool {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	if !s.sessions.CompareAndDelete(id, cs) {
+		return false
+	}
+	if s.metrics != nil {
+		s.metrics.sessionSizeGauge.Dec()
+	}
+	return true
 }
 
 func (s *server) releaseFuture(f *Future) {
@@ -560,15 +589,6 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 			})
 		}
 	}
-}
-
-func (s *server) getSessionCount() int {
-	n := 0
-	s.sessions.Range(func(key, value any) bool {
-		n++
-		return true
-	})
-	return n
 }
 
 // sentStreamState owns the complete lifecycle of server-side stream response
@@ -636,6 +656,11 @@ func (s *sentStreamState) contains(id uint64) bool {
 	return ok
 }
 
+type receivedStreamState struct {
+	sequence  uint32
+	finishing bool
+}
+
 type clientSession struct {
 	metrics       *serverMetrics
 	codec         Codec
@@ -646,7 +671,7 @@ type clientSession struct {
 	// map from a handler goroutine, so streamStateMu is the synchronization
 	// boundary for validation and terminal retirement.
 	streamStateMu           sync.Mutex
-	receivedStreamSequences map[uint64]uint32
+	receivedStreamSequences map[uint64]receivedStreamState
 	sentStreams             sentStreamState
 	cancel                  context.CancelFunc
 	ctx                     context.Context
@@ -655,7 +680,13 @@ type clientSession struct {
 	messageCacheScanHook    func()
 	closedC                 chan struct{}
 	disconnectedC           chan struct{}
-	mu                      struct {
+	queueMetricMu           struct {
+		sync.Mutex
+		accounted sync.Cond
+		depth     int
+		waiters   int
+	}
+	mu struct {
 		sync.RWMutex
 		closed bool
 		caches map[uint64]cacheWithContext
@@ -675,13 +706,14 @@ func newClientSession(
 		disconnectedC:           make(chan struct{}, 1),
 		codec:                   codec,
 		c:                       make(chan *Future, 1024),
-		receivedStreamSequences: make(map[uint64]uint32),
+		receivedStreamSequences: make(map[uint64]receivedStreamState),
 		conn:                    conn,
 		ctx:                     ctx,
 		cancel:                  cancel,
 		newFutureFunc:           newFutureFunc,
 		releaseMessageFunc:      releaseMessageFunc,
 	}
+	cs.queueMetricMu.accounted.L = &cs.queueMetricMu.Mutex
 	cs.mu.caches = make(map[uint64]cacheWithContext)
 	return cs
 }
@@ -743,9 +775,11 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			cs.changeQueueDepth(-1)
+			oneWay := f.oneWay
 			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
-			if f.oneWay {
+			if oneWay {
 				f.Close()
 			}
 		default:
@@ -810,16 +844,38 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 	select {
 	case cs.c <- f:
+		cs.changeQueueDepth(1)
 	case <-msg.Ctx.Done():
+		oneWay := f.oneWay
 		cs.releaseMessage(msg)
 		f.Close()
-		if !f.oneWay {
+		if !oneWay {
 			f.unRef()
 		}
 		return nil, msg.Ctx.Err()
 	}
-	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+func (cs *clientSession) changeQueueDepth(delta int) {
+	cs.queueMetricMu.Lock()
+	defer cs.queueMetricMu.Unlock()
+	for cs.queueMetricMu.depth+delta < 0 {
+		// A receive can win scheduling immediately after its matching send.
+		// Wait only for that sender's post-admission accounting; the sender does
+		// not depend on this receiver and Cond.Wait releases the mutex.
+		cs.queueMetricMu.waiters++
+		cs.queueMetricMu.accounted.Wait()
+		cs.queueMetricMu.waiters--
+	}
+	depth := cs.queueMetricMu.depth + delta
+	cs.queueMetricMu.depth = depth
+	if cs.metrics != nil {
+		cs.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	}
+	if delta > 0 && cs.queueMetricMu.waiters > 0 {
+		cs.queueMetricMu.accounted.Signal()
+	}
 }
 
 // assignStreamSequence runs in the single server write loop after a response
@@ -888,8 +944,15 @@ func (cs *clientSession) validateStreamRequest(
 	sequence uint32) bool {
 	cs.streamStateMu.Lock()
 	defer cs.streamStateMu.Unlock()
-	expectSequence := cs.receivedStreamSequences[id] + 1
-	if sequence != expectSequence {
+	cs.mu.RLock()
+	closed := cs.mu.closed
+	cs.mu.RUnlock()
+	if closed {
+		return false
+	}
+	state := cs.receivedStreamSequences[id]
+	expectSequence := state.sequence + 1
+	if state.finishing || sequence != expectSequence {
 		return false
 	}
 	if sequence == 1 {
@@ -901,37 +964,44 @@ func (cs *clientSession) validateStreamRequest(
 			cs.metrics.sentStreamStateGauge.Inc()
 		}
 	}
-	cs.receivedStreamSequences[id] = sequence
+	cs.receivedStreamSequences[id] = receivedStreamState{sequence: sequence}
 	return true
 }
 
 func (cs *clientSession) lastReceivedStreamSequence(id uint64) uint32 {
 	cs.streamStateMu.Lock()
 	defer cs.streamStateMu.Unlock()
-	return cs.receivedStreamSequences[id]
+	return cs.receivedStreamSequences[id].sequence
 }
 
 // FinishStream synchronously flushes the final response before removing both
-// receive and send sequence entries. Holding streamStateMu prevents the IO loop
-// from validating a later request against half-retired state.
+// receive and send sequence entries. A terminal claim excludes later requests
+// without holding streamStateMu across a send that Close may need to complete.
 func (cs *clientSession) FinishStream(
 	ctx context.Context,
 	token StreamTerminalToken,
 	response Message,
 ) error {
 	cs.streamStateMu.Lock()
-	valid := token.owner == cs &&
-		cs.receivedStreamSequences[token.streamID] == token.sequence &&
+	state, exists := cs.receivedStreamSequences[token.streamID]
+	valid := exists && !state.finishing && token.owner == cs &&
+		state.sequence == token.sequence &&
 		response != nil && response.GetID() == token.streamID
 	if !valid {
 		cs.streamStateMu.Unlock()
+		if response != nil {
+			cs.releaseMessage(RPCMessage{Message: response})
+		}
 		_ = cs.Close()
 		return moerr.NewStreamClosedNoCtx()
 	}
+	state.finishing = true
+	cs.receivedStreamSequences[token.streamID] = state
+	cs.streamStateMu.Unlock()
 
 	cache, err := cs.GetCache(token.streamID)
 	if err != nil || cache != nil {
-		cs.streamStateMu.Unlock()
+		cs.releaseMessage(RPCMessage{Message: response})
 		_ = cs.Close()
 		if err != nil {
 			return err
@@ -940,19 +1010,23 @@ func (cs *clientSession) FinishStream(
 	}
 
 	err = cs.Write(ctx, response)
-	if err == nil {
-		delete(cs.receivedStreamSequences, token.streamID)
-		cs.sentStreams.finish(token.streamID)
-		if cs.metrics != nil {
-			cs.metrics.receivedStreamStateGauge.Dec()
-			cs.metrics.sentStreamStateGauge.Dec()
-		}
-	}
-	cs.streamStateMu.Unlock()
 	if err != nil {
 		_ = cs.Close()
+		return err
 	}
-	return err
+	cs.streamStateMu.Lock()
+	defer cs.streamStateMu.Unlock()
+	current, exists := cs.receivedStreamSequences[token.streamID]
+	if !exists || current != state {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	delete(cs.receivedStreamSequences, token.streamID)
+	cs.sentStreams.finish(token.streamID)
+	if cs.metrics != nil {
+		cs.metrics.receivedStreamStateGauge.Dec()
+		cs.metrics.sentStreamStateGauge.Dec()
+	}
+	return nil
 }
 
 func (cs *clientSession) CreateCache(

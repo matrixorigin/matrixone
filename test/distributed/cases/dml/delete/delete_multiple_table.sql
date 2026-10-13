@@ -168,6 +168,36 @@ select count(*) from tj_c;
 drop table tj_c;
 drop table tj_d;
 
+-- Regression for #28309: a target with an irregular index takes the legacy
+-- DML planner. JOIN predicates must still define the delete set when WHERE is
+-- absent. Disabling truncate also proves that index maintenance does not use
+-- an independent delete-all shortcut.
+create table tj_ft (
+    id int primary key,
+    body text,
+    fulltext ft_body(body)
+);
+create table tj_ft_src (id int);
+insert into tj_ft values
+    (1, 'join survivor alpha'),
+    (2, 'join match beta'),
+    (3, 'join survivor gamma');
+
+set delete_opt_to_truncate = 0;
+delete d from tj_ft d join tj_ft_src s on d.id = s.id;
+select id from tj_ft order by id;
+select id from tj_ft where match(body) against('alpha') order by id;
+
+set delete_opt_to_truncate = 1;
+insert into tj_ft_src values (2), (2);
+delete d from tj_ft d join tj_ft_src s on d.id = s.id;
+select id from tj_ft order by id;
+select id from tj_ft where match(body) against('beta') order by id;
+select id from tj_ft where match(body) against('gamma') order by id;
+
+drop table tj_ft;
+drop table tj_ft_src;
+
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -210,4 +240,3 @@ select count(*) from tj_part_c;
 
 drop table tj_part_c;
 drop table tj_part_d;
-

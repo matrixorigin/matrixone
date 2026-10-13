@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -281,6 +282,9 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		types.T_varchar.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
 
 	outName := tree.NewTableName(
 		tree.Identifier("diff_out"),
@@ -325,7 +329,7 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.NotContains(t, sql, "{mo_ts=")
 	})
 
-	t.Run("projected columns retain request order", func(t *testing.T) {
+	t.Run("projected primary key precedes requested columns", func(t *testing.T) {
 		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
 			OutputOpt: &tree.DiffOutputOpt{As: *outName},
 			Columns: tree.IdentifierList{
@@ -333,8 +337,8 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 			},
 		}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1, 0}, output.projectedIdxes)
-		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+		require.Equal(t, []int{0, 1}, output.projectedIdxes)
+		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "id", "name"}, output.columnNames)
 	})
 
 	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
@@ -541,9 +545,10 @@ func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varbinary.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{0, '\'', '\\', 0xff}, false, ses.proc.Mp()))
+	bat.Vecs[1].SetIsBinaryString(true)
 	bat.SetRowCount(1)
 	defer bat.Clean(ses.proc.Mp())
 
@@ -558,6 +563,7 @@ func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
 	require.Equal(t, 1, got.batch.RowCount())
 	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](got.batch.Vecs[0])[0])
 	require.Equal(t, []byte{0, '\'', '\\', 0xff}, got.batch.Vecs[1].GetBytesAt(0))
+	require.True(t, got.batch.Vecs[1].GetBinaryStringMetadataAt(0))
 
 	_, ok, err = spool.next()
 	require.NoError(t, err)
@@ -590,6 +596,9 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 	tblStuff.def.colNames = []string{"id", "name"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
 
 	target := tree.NewTableName(tree.Identifier("t2"), tree.ObjectNamePrefix{}, nil)
 	base := tree.NewTableName(tree.Identifier("t1"), tree.ObjectNamePrefix{}, nil)
@@ -663,7 +672,7 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "y", col.Name())
 		require.Equal(t, defines.MYSQL_TYPE_YEAR, col.ColumnType())
-		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
+		require.Equal(t, uint32(4), col.Length())
 	})
 
 	t.Run("default output preserves binary charset metadata", func(t *testing.T) {
@@ -688,8 +697,8 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		mrs := ses.GetMysqlResultSet()
 		for idx, expectedType := range []defines.MysqlType{
 			defines.MYSQL_TYPE_BIT,
-			defines.MYSQL_TYPE_VARCHAR,
-			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_VAR_STRING,
 			defines.MYSQL_TYPE_VAR_STRING,
 		} {
 			col, err := mrs.GetColumn(ctx, uint64(idx+2))
@@ -697,9 +706,15 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 			require.Equal(t, expectedType, col.ColumnType())
 			expectedCharset := uint16(charsetBinary)
 			if idx == 3 {
-				expectedCharset = charsetVarchar
+				expectedCharset = uint16(Utf8mb4CollationID)
 			}
-			require.Equal(t, expectedCharset, col.(*MysqlColumn).Charset())
+			mysqlCol := col.(*MysqlColumn)
+			require.Equal(t, expectedCharset, mysqlCol.Charset())
+			if idx == 1 || idx == 2 {
+				require.NotZero(t, mysqlCol.Flag()&uint16(defines.BINARY_FLAG))
+			} else {
+				require.Zero(t, mysqlCol.Flag()&uint16(defines.BINARY_FLAG))
+			}
 		}
 	})
 
@@ -796,11 +811,14 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
 
 		mrs := ses.GetMysqlResultSet()
-		// 2 meta columns (diff header + flag) + 1 projected column
-		require.Equal(t, uint64(3), mrs.GetColumnCount())
+		// 2 meta columns (diff header + flag) + the PK and requested column
+		require.Equal(t, uint64(4), mrs.GetColumnCount())
 		col2, err := mrs.GetColumn(ctx, 2)
 		require.NoError(t, err)
-		require.Equal(t, "name", col2.Name())
+		require.Equal(t, "id", col2.Name())
+		col3, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "name", col3.Name())
 	})
 
 	t.Run("columns projection with limit", func(t *testing.T) {
@@ -952,6 +970,66 @@ func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
 	}
 }
 
+func TestDataBranchOutputColumnsIncludeCompositePrimaryKey(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"org_id", "event_id", "val", "note"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+	tblStuff.def.pkKind = compositeKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0, 1}
+	t.Cleanup(func() {
+		tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	})
+
+	stmt := &tree.DataBranchDiff{
+		Columns: tree.IdentifierList{tree.Identifier("val")},
+	}
+	require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+	require.Equal(t, uint64(5), ses.GetMysqlResultSet().GetColumnCount())
+	for idx, name := range []string{"diff target against base", "flag", "org_id", "event_id", "val"} {
+		col, err := ses.GetMysqlResultSet().GetColumn(ctx, uint64(idx))
+		require.NoError(t, err)
+		require.Equal(t, name, col.Name())
+	}
+
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(19), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("upd"), false, ses.proc.Mp()))
+	bat.SetRowCount(1)
+
+	retCh := make(chan batchWithKind, 1)
+	retCh <- batchWithKind{name: "target", kind: diffUpdate, batch: bat}
+	close(retCh)
+	require.NoError(t, satisfyDiffOutputOpt(
+		ctx,
+		cancel,
+		func() {},
+		ses,
+		nil,
+		stmt,
+		branchMetaInfo{},
+		tblStuff,
+		retCh,
+	))
+
+	row, err := ses.GetMysqlResultSet().GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, []any{"target", diffUpdate, int64(1), int64(1), int64(19)}, row)
+}
+
 func BenchmarkDataBranchOutputLimitWideRows(b *testing.B) {
 	const (
 		rowCount    = 64
@@ -1023,6 +1101,8 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdxes = []int{0}
 
 	t.Run("nil columns returns nil", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(nil, tblStuff)
@@ -1033,7 +1113,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	t.Run("single column", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("name")}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1}, got)
+		require.Equal(t, []int{0, 1}, got)
 	})
 
 	t.Run("multiple columns preserve order", func(t *testing.T) {
@@ -1041,7 +1121,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 			tree.Identifier("age"), tree.Identifier("id"),
 		}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{2, 0}, got)
+		require.Equal(t, []int{0, 2}, got)
 	})
 
 	t.Run("duplicate columns deduplicated", func(t *testing.T) {
@@ -1055,7 +1135,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	t.Run("case insensitive", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("NAME")}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1}, got)
+		require.Equal(t, []int{0, 1}, got)
 	})
 
 	t.Run("unknown column returns error", func(t *testing.T) {
@@ -1063,6 +1143,54 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Contains(t, err.Error(), "xxx")
+	})
+
+	t.Run("composite primary key columns precede requested columns", func(t *testing.T) {
+		compositeTblStuff := tableStuff{}
+		compositeTblStuff.def.colNames = []string{"region", "dept", "emp_id", "salary"}
+		compositeTblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+		compositeTblStuff.def.pkKind = compositeKind
+		compositeTblStuff.def.pkColIdxes = []int{0, 1, 2}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("salary")}, compositeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{0, 1, 2, 3}, got)
+
+		got, err = resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("salary"), tree.Identifier("dept")}, compositeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{0, 1, 2, 3}, got)
+	})
+
+	t.Run("composite primary key follows definition order", func(t *testing.T) {
+		orderedTblStuff := tableStuff{}
+		orderedTblStuff.def.colNames = []string{"value", "event_id", "org_id"}
+		orderedTblStuff.def.visibleIdxes = []int{0, 1, 2}
+		orderedTblStuff.def.pkKind = compositeKind
+		orderedTblStuff.def.pkColIdxes = []int{2, 1}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("value")}, orderedTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{2, 1, 0}, got)
+	})
+
+	t.Run("fake primary key is not added to projection", func(t *testing.T) {
+		fakeTblStuff := tableStuff{}
+		fakeTblStuff.def.colNames = []string{"a", "b", "c"}
+		fakeTblStuff.def.visibleIdxes = []int{0, 1, 2}
+		fakeTblStuff.def.pkKind = fakeKind
+		fakeTblStuff.def.pkColIdxes = []int{0, 1, 2}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("c")}, fakeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{2}, got)
 	})
 }
 
@@ -1402,7 +1530,7 @@ func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {
 	require.Equal(t, "select 1;\ninsert into t values (1);\n", out.String())
 }
 
-func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
+func TestDataBranchOutputDirectUpdateSQL(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -1430,7 +1558,7 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 		"updated",
 	}
 	var buf bytes.Buffer
-	statements, err := exactFloatKeyUpdateSQL(
+	statements, err := dataBranchDirectUpdateSQL(
 		context.Background(), nil, tblStuff, row, &buf, true,
 	)
 	require.NoError(t, err)
@@ -1443,7 +1571,7 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 		statements,
 	)
 
-	statements, err = exactFloatKeyUpdateSQL(
+	statements, err = dataBranchDirectUpdateSQL(
 		context.Background(), nil, tblStuff, row, &buf, false,
 	)
 	require.NoError(t, err)
@@ -1453,6 +1581,18 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 			"serial(`f64`) = serial(bit_cast(unhex('0000000000000080') as double)) and " +
 			"`tag` = 7 limit 1",
 	}, statements)
+
+	tblStuff.def.baseColNames = []string{"id", "note"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	statements, err = dataBranchDirectUpdateSQL(
+		context.Background(), nil, tblStuff, []any{int64(2), "updated"}, &buf, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"update `db1`.`t1` set `note` = 'updated' where `id` = 2 limit 1",
+	}, statements)
 }
 
 func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
@@ -1461,6 +1601,7 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 		baseTable:        "base_t",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -1479,8 +1620,10 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 	got := out.String()
 	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_del_x`;\n")
 	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_ins_x`;\n")
+	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_upd_x`;\n")
 	require.Contains(t, got, "create table `db1`.`__mo_diff_del_x` as select `id` as `branch_apply_key_0` from `db1`.`base_t` where 1=0;\n")
 	require.Contains(t, got, "create table `db1`.`__mo_diff_ins_x` as select `id`,`name` from `db1`.`base_t` where 1=0;\n")
+	require.Contains(t, got, "create table `db1`.`__mo_diff_upd_x` as select `id`,`name`,`id` as `branch_apply_key_0` from `db1`.`base_t` where 1=0;\n")
 }
 
 func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
@@ -1508,6 +1651,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id", "name"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
@@ -1614,6 +1758,97 @@ func TestDataBranchOutputFlushSqlValuesUsesExactFloatKeyMatch(t *testing.T) {
 	require.Contains(t, got, "delete from `db1`.`__mo_diff_del_x`;\n")
 }
 
+func TestDataBranchOutputFlushStagedUpdateValues(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:            "db1",
+		baseTable:         "t1",
+		updateTable:       "__mo_diff_upd_x",
+		deleteKeyNames:    []string{"org_id", "event_id"},
+		deleteStageNames:  []string{"branch_apply_key_0", "branch_apply_key_1"},
+		deleteKeyTypes:    []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		writableNames:     []string{"org_id", "event_id", "qty", "note"},
+		stagedUpdateNames: []string{"qty", "note"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushStagedUpdateValues(
+		context.Background(), nil, nil, []byte("(1,2,30,'changed',1,2),(2,1,40,null,2,1)"), batchInfo,
+		func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	got := out.String()
+	require.Contains(t, got, "insert into `db1`.`__mo_diff_upd_x` values (1,2,30,'changed',1,2),(2,1,40,null,2,1);\n")
+	require.Contains(t, got,
+		"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on "+
+			"branch_apply_base.`org_id` = branch_apply_stage.`branch_apply_key_0` AND "+
+			"branch_apply_base.`event_id` = branch_apply_stage.`branch_apply_key_1` set "+
+			"branch_apply_base.`qty` = branch_apply_stage.`qty`,branch_apply_base.`note` = branch_apply_stage.`note`;\n")
+	require.Contains(t, got, "delete from `db1`.`__mo_diff_upd_x`;\n")
+}
+
+func TestDataBranchOutputStagedUpdateGeneratedPrimaryKey(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:            "db1",
+		baseTable:         "t1",
+		updateTable:       "__mo_diff_upd_x",
+		deleteKeyNames:    []string{"generated_key"},
+		deleteStageNames:  []string{"branch_apply_key_0"},
+		deleteKeyTypes:    []types.Type{types.T_int64.ToType()},
+		writableNames:     []string{"input", "payload"},
+		stagedUpdateNames: []string{"input", "payload"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushStagedUpdateValues(
+		context.Background(), nil, nil, []byte("(1,'changed',2)"), batchInfo,
+		func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	require.Equal(t,
+		"insert into `db1`.`__mo_diff_upd_x` values (1,'changed',2);\n"+
+			"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`generated_key` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`input` = branch_apply_stage.`input`,branch_apply_base.`payload` = branch_apply_stage.`payload`;\n"+
+			"delete from `db1`.`__mo_diff_upd_x`;\n",
+		out.String(),
+	)
+}
+
+func TestDataBranchOutputFlushStagedSpecialUpdateValues(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:             "db1",
+		baseTable:          "t1",
+		updateTable:        "__mo_diff_upd_x",
+		deleteKeyNames:     []string{"id"},
+		deleteStageNames:   []string{"branch_apply_key_0"},
+		deleteKeyTypes:     []types.Type{types.T_int64.ToType()},
+		writableNames:      []string{"id", "payload", "status"},
+		stagedUpdateNames:  []string{"payload"},
+		specialUpdateNames: []string{"status"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushStagedUpdateValues(
+		context.Background(), nil, nil, []byte("(1,'one','ready',1),(2,'two','new',2)"), batchInfo,
+		func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	got := out.String()
+	require.Contains(t, got,
+		"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on "+
+			"branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`payload` = branch_apply_stage.`payload`;\n")
+	require.Contains(t, got,
+		"insert into `db1`.`t1` (`id`,`payload`,`status`) select `id`,`payload`,`status` from `db1`.`__mo_diff_upd_x` on duplicate key update `status` = values(`status`);\n")
+	require.Equal(t, 1, strings.Count(got, "on duplicate key update `status` = values(`status`)"))
+}
+
 func TestDataBranchOutputStagedDeleteRejectsIncompleteKeyLayout(t *testing.T) {
 	_, err := (&applyBatchInfo{
 		deleteKeyNames:   []string{"id"},
@@ -1629,6 +1864,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -1785,6 +2021,8 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.True(t, info.insertRowsIndividually)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
+	require.True(t, strings.HasPrefix(info.updateTable, "__mo_diff_upd_"))
+	require.Equal(t, []int{0, 1, 2, 0, 2}, info.updateValueIdxes)
 
 	fakeTblStuff := newFakePKBranchTableStuff(ctrl)
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
@@ -1862,6 +2100,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -1942,6 +2181,48 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		require.Contains(t, out.String(), "insert into `db1`.`__mo_diff_del_x` values (1);")
 		require.Contains(t, out.String(), "insert into `db1`.`__mo_diff_ins_x` values (1,'a');")
 	})
+}
+
+func TestDataBranchOutputBatchesMixedSchemaSpecialUpdates(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:             "db1",
+		baseTable:          "base",
+		updateTable:        "__mo_diff_upd_x",
+		deleteKeyNames:     []string{"id"},
+		deleteStageNames:   []string{"branch_apply_key_0"},
+		deleteKeyTypes:     []types.Type{types.T_int64.ToType()},
+		writableNames:      []string{"id", "payload", "status"},
+		stagedUpdateNames:  []string{"payload"},
+		specialUpdateNames: []string{"status"},
+	}
+	deleteCnt, insertCnt := 0, 0
+	deleteBuf, insertBuf := &bytes.Buffer{}, &bytes.Buffer{}
+	var out bytes.Buffer
+	appender := sqlValuesAppender{
+		ctx:         context.Background(),
+		batchInfo:   batchInfo,
+		deleteCnt:   &deleteCnt,
+		deleteBuf:   deleteBuf,
+		insertCnt:   &insertCnt,
+		insertBuf:   insertBuf,
+		updateState: &dataBranchUpdateBuffer{},
+		writeFile: func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	}
+
+	require.True(t, dataBranchStagesUpdate(appender, true, false, false))
+	for i := 0; i < maxSqlBatchCnt+1; i++ {
+		require.NoError(t, appender.appendRow(diffUpdate, []byte(fmt.Sprintf("(%d,'payload-%d','ready',%d)", i, i, i))))
+	}
+	require.NoError(t, appender.flushAll())
+
+	got := out.String()
+	// The count is bounded by stage batches, not the number of updated rows.
+	require.Equal(t, 2, strings.Count(got, "insert into `db1`.`__mo_diff_upd_x` values"))
+	require.Equal(t, 2, strings.Count(got, "on duplicate key update `status` = values(`status`)"))
+	require.Less(t, strings.Count(got, "on duplicate key update `status` = values(`status`)"), maxSqlBatchCnt+1)
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
@@ -2223,7 +2504,7 @@ func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
 		tree.IdentifierList{tree.Identifier("generated_value")}, tblStuff,
 	)
 	require.NoError(t, err)
-	require.Equal(t, []int{2}, projected)
+	require.Equal(t, []int{0, 2}, projected)
 
 	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
 	require.NotNil(t, info)
@@ -2298,6 +2579,126 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		))
 		require.Equal(t, 2, deleteCnt)
 		require.Equal(t, "3,4", deleteBuf.String())
+	})
+
+	t.Run("stages ordinary primary-key updates", func(t *testing.T) {
+		directUpdate, err := dataBranchDirectUpdateBatch(
+			tblStuff, batchWithKind{kind: diffInsert, fromUpdate: true}, &applyBatchInfo{},
+		)
+		require.NoError(t, err)
+		require.True(t, directUpdate)
+
+		fakePKTable := tblStuff
+		fakePKTable.def.pkKind = fakeKind
+		directUpdate, err = dataBranchDirectUpdateBatch(
+			fakePKTable, batchWithKind{kind: diffInsert, fromUpdate: true}, &applyBatchInfo{},
+		)
+		require.NoError(t, err)
+		require.False(t, directUpdate)
+
+		directUpdateTable := tblStuff
+		directUpdateTable.def.baseColNames = []string{"id", "name", "hidden"}
+		batchInfo := &applyBatchInfo{
+			dbName:            "db1",
+			baseTable:         "base",
+			updateTable:       "__mo_diff_upd_x",
+			deleteKeyNames:    []string{"id"},
+			deleteStageNames:  []string{"branch_apply_key_0"},
+			deleteKeyTypes:    []types.Type{types.T_int64.ToType()},
+			writableNames:     []string{"id", "name"},
+			stagedUpdateNames: []string{"name"},
+			updateValueIdxes:  []int{0, 1, 0},
+		}
+		deleteCnt, insertCnt := 0, 0
+		deleteBuf, insertBuf := &bytes.Buffer{}, &bytes.Buffer{}
+		var out bytes.Buffer
+		appender := sqlValuesAppender{
+			ctx:         context.Background(),
+			tblStuff:    directUpdateTable,
+			batchInfo:   batchInfo,
+			deleteCnt:   &deleteCnt,
+			deleteBuf:   deleteBuf,
+			insertCnt:   &insertCnt,
+			insertBuf:   insertBuf,
+			updateState: &dataBranchUpdateBuffer{},
+			writeFile: func(b []byte) error {
+				_, err := out.Write(b)
+				return err
+			},
+		}
+
+		deleteBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{{int64(2), "before"}})
+		defer deleteBat.Clean(ses.proc.Mp())
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(), ses, directUpdateTable,
+			batchWithKind{kind: diffDelete, fromUpdate: true, batch: deleteBat},
+			&bytes.Buffer{}, appender,
+		))
+		require.Empty(t, out.String())
+
+		insertBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{{int64(2), "after"}})
+		defer insertBat.Clean(ses.proc.Mp())
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(), ses, directUpdateTable,
+			batchWithKind{kind: diffInsert, fromUpdate: true, batch: insertBat},
+			&bytes.Buffer{}, appender,
+		))
+		require.Empty(t, out.String())
+		require.NoError(t, appender.flushAll())
+		require.Equal(t,
+			"insert into `db1`.`__mo_diff_upd_x` values (2,'after',2);\n"+
+				"update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`name` = branch_apply_stage.`name`;\n"+
+				"delete from `db1`.`__mo_diff_upd_x`;\n",
+			out.String(),
+		)
+	})
+
+	t.Run("partitions planner-incompatible value types from staged assignments", func(t *testing.T) {
+		newSpecialTable := func(typ types.Type, enumValues string) (tableStuff, *plan.TableDef) {
+			var tbl tableStuff
+			tbl.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), typ}
+			tbl.def.writableIdxes = []int{0, 1, 2}
+			tbl.def.pkColIdxes = []int{0}
+			tbl.def.baseColNames = []string{"id", "payload", "value"}
+			return tbl, &plan.TableDef{Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+				{Name: "value", Typ: plan.Type{Id: int32(typ.Oid), Enumvalues: enumValues}},
+			}}
+		}
+
+		setTable, setDef := newSpecialTable(types.T_uint64.ToType(), "a,b,c")
+		staged, special := dataBranchStagedUpdateColumnNames(setTable, setDef, setTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Equal(t, []string{"value"}, special)
+
+		emptyEnumTable, emptyEnumDef := newSpecialTable(types.T_enum.ToType(), "")
+		staged, special = dataBranchStagedUpdateColumnNames(emptyEnumTable, emptyEnumDef, emptyEnumTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Equal(t, []string{"value"}, special)
+		geometryTable, geometryDef := newSpecialTable(types.T_geometry32.ToType(), "")
+		staged, special = dataBranchStagedUpdateColumnNames(geometryTable, geometryDef, geometryTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Equal(t, []string{"value"}, special)
+
+		ordinaryTable, ordinaryDef := newSpecialTable(types.T_varchar.ToType(), "")
+		staged, special = dataBranchStagedUpdateColumnNames(ordinaryTable, ordinaryDef, ordinaryTable.def.writableIdxes)
+		require.Equal(t, []string{"payload", "value"}, staged)
+		require.Empty(t, special)
+
+		indexedEnumTable, indexedEnumDef := newSpecialTable(types.T_uint64.ToType(), "a,b,c")
+		indexedEnumDef.Indexes = []*plan.IndexDef{{
+			IndexName: "uk_value",
+			Parts:     []string{"value"},
+			Unique:    true,
+		}}
+		indexedEnumTable.def.indexedSpecialUpdateIdxes = dataBranchIndexedSpecialUpdateColIdxes(
+			indexedEnumTable, indexedEnumDef, indexedEnumTable.def.writableIdxes,
+		)
+		require.Equal(t, []int{2}, indexedEnumTable.def.indexedSpecialUpdateIdxes)
+		staged, special = dataBranchStagedUpdateColumnNames(indexedEnumTable, indexedEnumDef, indexedEnumTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Empty(t, special)
 	})
 
 	t.Run("returns shape mismatch error", func(t *testing.T) {
@@ -2554,4 +2955,90 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
+	for _, pick := range []bool{false, true} {
+		for _, failure := range []string{"", "init", "producer", "apply", "cancel"} {
+			t.Run(fmt.Sprintf("pick=%v/%s", pick, failure), func(t *testing.T) {
+				ses := newValidateSession(t)
+				ctrl := gomock.NewController(t)
+				tblStuff := newTestBranchTableStuff(ctrl)
+				tblStuff.def.baseColNames = append([]string(nil), tblStuff.def.colNames...)
+				defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				injected := errors.New("injected " + failure)
+				var events []string
+				creates, applies := 0, 0
+				produced := false
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					events = append(events, sql)
+					if strings.HasPrefix(sql, "create table") {
+						require.False(t, produced, "stage refresh/drain precedes producer SQL")
+						creates++
+						if failure == "init" {
+							return injected
+						}
+					}
+					if strings.HasPrefix(sql, "insert into") {
+						applies++
+						if failure == "apply" {
+							return injected
+						}
+					}
+					return nil
+				}).AnyTimes()
+				bh.EXPECT().GetExecResultSet().Return(nil).AnyTimes()
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				produce := func(emit emitFunc) error {
+					produced = true
+					require.Equal(t, 3, creates)
+					for _, fromUpdate := range []bool{false, true} {
+						bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+						for _, vec := range bat.Vecs[1:] {
+							require.NoError(t, vector.AppendBytes(vec, []byte("row"), false, ses.proc.Mp()))
+						}
+						bat.SetRowCount(1)
+						if _, err := emitBatch(emit, batchWithKind{kind: diffInsert, fromUpdate: fromUpdate, side: diffSideTarget, name: "target", batch: bat}, false, tblStuff.retPool); err != nil {
+							return err
+						}
+						if failure == "producer" {
+							return injected
+						}
+						if failure == "cancel" {
+							cancel()
+						}
+					}
+					// Starting an update flushes inserts inline, before the next probe.
+					require.Positive(t, applies)
+					return nil
+				}
+				var err error
+				if pick {
+					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff, produce)
+				} else {
+					err = mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+				}
+				switch failure {
+				case "":
+					require.NoError(t, err)
+				case "cancel":
+					require.ErrorIs(t, err, context.Canceled)
+				default:
+					require.ErrorIs(t, err, injected)
+				}
+				if failure == "init" {
+					require.False(t, produced)
+				} else {
+					require.True(t, strings.HasPrefix(events[len(events)-1], "drop table if exists"), "cleanup runs after production returns")
+				}
+				if failure == "producer" || failure == "cancel" {
+					require.Zero(t, applies, "failed production must not flush buffered rows")
+				}
+			})
+		}
+	}
 }

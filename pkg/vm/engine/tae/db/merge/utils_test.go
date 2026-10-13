@@ -15,48 +15,12 @@
 package merge
 
 import (
-	"context"
 	"math"
-	"os"
-	"path"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func Test_CleanUpUselessFiles(t *testing.T) {
-	tDir := os.TempDir()
-	dir := path.Join(tDir, "/local")
-	assert.NoError(t, os.RemoveAll(dir))
-	defer func() {
-		_ = os.RemoveAll(dir)
-	}()
-
-	c := fileservice.Config{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-		Cache:   fileservice.DisabledCacheConfig,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	defer fs.Close(ctx)
-
-	ent := &api.MergeCommitEntry{
-		BookingLoc: []string{"abc"},
-	}
-
-	CleanUpUselessFiles(ent, fs)
-}
 
 func TestRemoveOversize(t *testing.T) {
 	o1 := newSortedTestObjectEntry(t, 0, 0, 1)

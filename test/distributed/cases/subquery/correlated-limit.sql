@@ -1,0 +1,217 @@
+-- @case
+-- @desc: correlated LIMIT is evaluated once per correlation key, issue #26816
+-- @label:bvt
+drop database if exists correlated_limit;
+create database correlated_limit;
+use correlated_limit;
+
+create table parent_t (
+    id int primary key,
+    corr_key int,
+    top_amount int
+);
+create table child_t (
+    id int primary key,
+    parent_id int,
+    amount int
+);
+insert into parent_t values
+    (1, 1, null),
+    (2, 2, null),
+    (3, 3, null),
+    (4, 4, null),
+    (5, null, null);
+insert into child_t values
+    (1, 1, 10),
+    (2, 1, 20),
+    (3, 2, 30),
+    (4, 2, 40),
+    (5, 2, 40),
+    (6, 3, null),
+    (7, 3, 50),
+    (8, 3, 60),
+    (9, null, 70);
+
+-- Ordered scalar pagination must select independently within every key.
+select p.id,
+       (select c.amount
+          from child_t c
+         where c.parent_id = p.corr_key
+         order by c.amount desc, c.id desc
+         limit 1) as top_amount,
+       (select c.id
+          from child_t c
+         where c.parent_id = p.corr_key
+         order by c.amount desc, c.id desc
+         limit 1) as top_child_id
+  from parent_t p
+ order by p.id;
+
+-- Plain LIMIT still has to retain one row for every non-empty key.
+select p.id,
+       (select 1
+          from child_t c
+         where c.parent_id = p.corr_key
+         limit 1) as has_child
+  from parent_t p
+ order by p.id;
+
+-- OFFSET and LIMIT define a per-key row-number interval.
+select p.id,
+       (select c.id
+          from child_t c
+         where c.parent_id = p.corr_key
+         order by c.amount desc, c.id desc
+         limit 1 offset 1) as second_child_id
+  from parent_t p
+ order by p.id;
+
+-- NULL-safe equality includes the NULL correlation partition.
+select p.id,
+       (select c.amount
+          from child_t c
+         where c.parent_id <=> p.corr_key
+         order by c.amount desc, c.id desc
+         limit 1) as top_amount
+  from parent_t p
+ order by p.id;
+
+select p.id
+  from parent_t p
+ where exists (
+       select 1 from child_t c where c.parent_id = p.corr_key limit 1)
+ order by p.id;
+
+select p.id
+  from parent_t p
+ where not exists (
+       select 1 from child_t c where c.parent_id = p.corr_key limit 1)
+ order by p.id;
+
+-- LIMIT 0 is empty for every key and does not need a partitioned rewrite.
+select p.id,
+       coalesce((select c.amount
+                   from child_t c
+                  where c.parent_id = p.corr_key
+                  limit 0), -1) as limited_zero
+  from parent_t p
+ order by p.id;
+
+-- DML must consume the same per-key scalar result.
+update parent_t p
+   set p.top_amount = (select c.amount
+                         from child_t c
+                        where c.parent_id = p.corr_key
+                        order by c.amount desc, c.id desc
+                        limit 1)
+ where p.id <= 4;
+select id, top_amount from parent_t where id <= 4 order by id;
+
+start transaction;
+update parent_t p
+   set p.top_amount = (select c.amount
+                         from child_t c
+                        where c.parent_id = p.corr_key
+                        order by c.amount desc, c.id desc
+                        limit 1 offset 1)
+ where p.id <= 4;
+rollback;
+select id, top_amount from parent_t where id <= 4 order by id;
+
+create table delete_exists_t (id int primary key);
+insert into delete_exists_t values (1), (2), (3), (4);
+delete from delete_exists_t d
+ where exists (
+       select 1 from child_t c where c.parent_id = d.id limit 1);
+select id from delete_exists_t order by id;
+
+create table delete_not_exists_t (id int primary key);
+insert into delete_not_exists_t values (1), (2), (3), (4);
+delete from delete_not_exists_t d
+ where not exists (
+       select 1 from child_t c where c.parent_id = d.id limit 1);
+select id from delete_not_exists_t order by id;
+
+-- Aggregate and explicit-window equivalents are result controls.
+select p.id,
+       (select max(c.amount) from child_t c where c.parent_id = p.corr_key) as max_amount
+  from parent_t p
+ where p.id <= 4
+ order by p.id;
+
+select p.id, r.amount as window_amount
+  from parent_t p
+  left join (
+       select parent_id, amount,
+              row_number() over (partition by parent_id order by amount desc, id desc) as rn
+         from child_t) r
+    on r.parent_id = p.corr_key and r.rn = 1
+ where p.id <= 4
+ order by p.id;
+
+-- Issue #29897: typed constant CASE branches must retain outer ownership.
+
+CREATE TABLE `django_content_type` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `app_label` varchar(100) NOT NULL,
+  `model` varchar(100) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `django_content_type_app_label_model_76bd3d3b_uniq` (`app_label`,`model`)
+);
+
+CREATE TABLE `auth_permission` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `content_type_id` int NOT NULL,
+  `codename` varchar(100) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `auth_permission_content_type_id_codename_01ab375a_uniq` (`content_type_id`,`codename`),
+  KEY `auth_permission_content_type_id_2f476e4b` (`content_type_id`),
+  CONSTRAINT `auth_permission_content_type_id_2f476e4b_fk_django_co` FOREIGN KEY (`content_type_id`) REFERENCES `django_content_type` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+CREATE TABLE wagtailcore_grouppagepermission (
+ id INT PRIMARY KEY, permission_type VARCHAR(20) DEFAULT NULL,
+ group_id INT NOT NULL, page_id INT NOT NULL, permission_id INT DEFAULT NULL,
+ CONSTRAINT permission_fk FOREIGN KEY(permission_id) REFERENCES auth_permission(id)
+);
+
+INSERT INTO django_content_type VALUES (10001,'wagtailcore','page');
+
+INSERT INTO auth_permission (id,name,content_type_id,codename) VALUES (101,'change page',10001,'change_page'),(102,'add page',10001,'add_page'),(103,'publish page',10001,'publish_page');
+
+INSERT INTO wagtailcore_grouppagepermission VALUES (1,'edit',1,1,NULL),(2,'add',1,1,NULL),(3,'publish',1,1,NULL);
+
+UPDATE `wagtailcore_grouppagepermission` SET `permission_id` = (SELECT U0.`id` AS `pk` FROM `auth_permission` U0 INNER JOIN `django_content_type` U1 ON (U0.`content_type_id` = U1.`id`) WHERE (U0.`codename` = (CONCAT_WS('', CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END, '_page')) AND U0.`content_type_id` = 10001) ORDER BY U1.`app_label` ASC, U1.`model` ASC, U0.`codename` ASC LIMIT 1), `permission_type` = CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END WHERE (`wagtailcore_grouppagepermission`.`permission_id` IS NULL OR `wagtailcore_grouppagepermission`.`permission_type` = 'edit');
+select id, permission_type, permission_id from wagtailcore_grouppagepermission order by id;
+-- Repeat the migration to verify idempotence.
+UPDATE `wagtailcore_grouppagepermission` SET `permission_id` = (SELECT U0.`id` AS `pk` FROM `auth_permission` U0 INNER JOIN `django_content_type` U1 ON (U0.`content_type_id` = U1.`id`) WHERE (U0.`codename` = (CONCAT_WS('', CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END, '_page')) AND U0.`content_type_id` = 10001) ORDER BY U1.`app_label` ASC, U1.`model` ASC, U0.`codename` ASC LIMIT 1), `permission_type` = CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END WHERE (`wagtailcore_grouppagepermission`.`permission_id` IS NULL OR `wagtailcore_grouppagepermission`.`permission_type` = 'edit');
+select id, permission_type, permission_id from wagtailcore_grouppagepermission order by id;
+insert into wagtailcore_grouppagepermission values (4, null, 1, 1, null), (5, 'missing', 1, 1, null);
+UPDATE `wagtailcore_grouppagepermission` SET `permission_id` = (SELECT U0.`id` AS `pk` FROM `auth_permission` U0 INNER JOIN `django_content_type` U1 ON (U0.`content_type_id` = U1.`id`) WHERE (U0.`codename` = (CONCAT_WS('', CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END, '_page')) AND U0.`content_type_id` = 10001) ORDER BY U1.`app_label` ASC, U1.`model` ASC, U0.`codename` ASC LIMIT 1), `permission_type` = CASE WHEN (`wagtailcore_grouppagepermission`.`permission_type` = 'edit') THEN 'change' ELSE `wagtailcore_grouppagepermission`.`permission_type` END WHERE (`wagtailcore_grouppagepermission`.`permission_id` IS NULL OR `wagtailcore_grouppagepermission`.`permission_type` = 'edit');
+select id, permission_type, permission_id from wagtailcore_grouppagepermission order by id;
+
+-- Genuine mixed operands must be evaluated with both inputs, as residuals.
+create table mixed_left (id int primary key, k int, label varchar(20));
+create table mixed_right (id int primary key, k int, label varchar(20), target varchar(20));
+insert into mixed_left values (1,1,'edit'),(2,1,'add'),(3,2,null),(4,9,'none');
+insert into mixed_right values (11,1,'change','change'),(12,1,'publish','add'),(13,2,'unused','x');
+select l.id, r.id from mixed_left l left join mixed_right r
+ on l.k = r.k and case when l.label = 'edit' then r.label else l.label end = r.target
+ order by l.id, r.id;
+select l.id, r.id from mixed_left l left join mixed_right r
+ on case when l.label = 'edit' then r.label else l.label end = r.target
+ order by l.id, r.id;
+-- A residual evaluation error must leave the session usable.
+select l.id, r.id from mixed_left l join mixed_right r
+ on l.k = r.k and assert(case when l.label = 'edit' then r.label else l.label end = r.target, 'qa residual failure');
+select 1;
+select l.id, (select max(r.id) from mixed_right r
+ where r.target = concat_ws('', case when l.label = 'edit' then 'change' else l.label end)) as matched
+ from mixed_left l order by l.id;
+delete from mixed_right;
+select l.id, r.id from mixed_left l left join mixed_right r
+ on l.k = r.k and case when l.label = 'edit' then r.label else l.label end = r.target
+ order by l.id, r.id;
+
+drop database correlated_limit;

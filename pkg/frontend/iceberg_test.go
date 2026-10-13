@@ -34,6 +34,76 @@ func TestIcebergCatalogSecretRefValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "secret://")
 }
 
+func TestIcebergCatalogURIValidation(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "https://catalog.example/rest"))
+	err := validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+	require.Contains(t, err.Error(), "must use https unless plain HTTP is explicitly enabled")
+
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "true")
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest"))
+}
+
+func TestValidateAlterIcebergCatalogURI(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+
+	tests := []struct {
+		name        string
+		catalogType string
+		uri         string
+		opts        map[string]string
+		wantErr     bool
+	}{
+		{
+			name:        "REST URI change rejects plain HTTP",
+			catalogType: "rest",
+			uri:         "https://catalog.example/rest",
+			opts:        map[string]string{"uri": "http://catalog.example/rest"},
+			wantErr:     true,
+		},
+		{
+			name:        "non-REST URI change uses current type",
+			catalogType: "iceberg-go",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"uri": "http://catalog2.example/rest"},
+		},
+		{
+			name:        "type-only change validates current URI",
+			catalogType: "iceberg-go",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"type": "rest"},
+			wantErr:     true,
+		},
+		{
+			name:        "type and URI changes use final non-REST configuration",
+			catalogType: "rest",
+			uri:         "https://catalog.example/rest",
+			opts:        map[string]string{"type": "iceberg-go", "uri": "http://catalog.example/rest"},
+		},
+		{
+			name:        "unrelated change does not revalidate legacy URI",
+			catalogType: "rest",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"warehouse": "s3://warehouse"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAlterIcebergCatalogURI(ctx, tt.catalogType, tt.uri, tt.opts)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestIcebergParameterUnitForUninitializedService(t *testing.T) {
 	require.Nil(t, icebergParameterUnitForService("iceberg-uninitialized-service"))
 }
@@ -137,6 +207,43 @@ func TestIcebergCatalogDropAllowsIdReuseOnlyWhenNoScopedMetadataRemains(t *testi
 	require.NoError(t, err)
 	require.Empty(t, deps)
 	require.Equal(t, len(icebergCatalogDependencySpecs), queried)
+}
+
+func TestIcebergCatalogDropLocksCatalogBeforeDependencyCheck(t *testing.T) {
+	ctx := context.Background()
+	bh := &backgroundExecTest{}
+	bh.init()
+	backgroundStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundStub.Reset()
+
+	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "ksa") + " for update"
+	selectedSQL := make([]string, 0, len(icebergCatalogDependencySpecs)+1)
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(_ context.Context, _ BackgroundExec, sql string) ([]ExecResult, error) {
+		selectedSQL = append(selectedSQL, sql)
+		if sql == catalogSQL {
+			return []ExecResult{icebergCallResult([]interface{}{uint32(0), uint64(7), "ksa", "rest", "https://catalog.example/rest"})}, nil
+		}
+		return []ExecResult{icebergCallResult([]interface{}{uint64(0)})}, nil
+	})
+	defer execStub.Reset()
+
+	ses := &Session{}
+	ses.service = "iceberg-drop-lock-test"
+	ses.SetAccountId(0)
+	if err := handleDropIcebergCatalog(ctx, ses, &tree.DropIcebergCatalog{Name: "ksa"}); err != nil {
+		t.Fatalf("drop Iceberg catalog: %v", err)
+	}
+	if len(selectedSQL) != len(icebergCatalogDependencySpecs)+1 || selectedSQL[0] != catalogSQL {
+		t.Fatalf("catalog row was not locked before dependency checks: %v", selectedSQL)
+	}
+	wantSQL := []string{
+		"begin;",
+		"delete from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = 7",
+		"commit;",
+	}
+	if strings.Join(bh.executedSQLs, "\n") != strings.Join(wantSQL, "\n") {
+		t.Fatalf("unexpected drop transaction SQL:\n%s", strings.Join(bh.executedSQLs, "\n"))
+	}
 }
 
 func TestIcebergStatementsHavePrivilegeDefinitions(t *testing.T) {

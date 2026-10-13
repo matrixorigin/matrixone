@@ -24,9 +24,12 @@ import (
 	moconfig "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.CreateIcebergCatalog) error {
@@ -60,6 +63,9 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s already exists", catalogName)
 	}
+	if err := validateIcebergCatalogURI(ctx, catalogType, uri); err != nil {
+		return err
+	}
 	authMode := firstIcebergOption(opts, "auth_mode")
 	if authMode == "" {
 		authMode = firstIcebergOption(opts, "auth")
@@ -92,7 +98,7 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 	}))
 }
 
-func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.AlterIcebergCatalog) error {
+func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.AlterIcebergCatalog) (err error) {
 	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "ALTER ICEBERG CATALOG"); err != nil {
 		return err
 	}
@@ -132,10 +138,21 @@ func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Alt
 	accountID := ses.GetAccountId()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
-	if catalogID, err := queryIcebergCatalogID(ctx, bh, accountID, string(stmt.Name)); err != nil {
+	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
-	} else if catalogID == 0 {
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	catalogID, catalogType, catalogURI, err := queryIcebergCatalogStateForUpdate(ctx, bh, accountID, string(stmt.Name))
+	if err != nil {
+		return err
+	}
+	if catalogID == 0 {
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist", string(stmt.Name))
+	}
+	if err := validateAlterIcebergCatalogURI(ctx, catalogType, catalogURI, opts); err != nil {
+		return err
 	}
 	return bh.Exec(ctx, fmt.Sprintf(
 		"update mo_catalog.%s set %s where account_id = %d and name = %s",
@@ -160,7 +177,11 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		err = finishTxn(ctx, bh, err)
 	}()
 	catalogName := string(stmt.Name)
-	catalogID, err := queryIcebergCatalogID(ctx, bh, accountID, catalogName)
+	// These points are inert unless explicitly enabled. They make the
+	// CREATE-versus-DROP lifecycle regression observable without changing the
+	// production wait graph or consulting process environment state.
+	fault.TriggerFaultWithContext(ctx, icebergDropCatalogBeforeLifecycleLockFault)
+	catalogID, _, _, err := queryIcebergCatalogStateForUpdate(ctx, bh, accountID, catalogName)
 	if err != nil {
 		return err
 	}
@@ -170,6 +191,7 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist", catalogName)
 	}
+	fault.TriggerFaultWithContext(ctx, icebergDropCatalogAfterLifecycleLockFault)
 	dependencies, err := icebergCatalogBlockingDependencies(ctx, bh, accountID, catalogID)
 	if err != nil {
 		return err
@@ -184,6 +206,11 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		catalogID,
 	))
 }
+
+const (
+	icebergDropCatalogBeforeLifecycleLockFault = "iceberg-drop-catalog-before-lifecycle-lock"
+	icebergDropCatalogAfterLifecycleLockFault  = "iceberg-drop-catalog-after-lifecycle-lock"
+)
 
 func handleShowIcebergCatalogs(ctx context.Context, ses *Session, stmt *tree.ShowIcebergCatalogs) error {
 	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
@@ -357,6 +384,36 @@ func validateIcebergSecretRef(ctx context.Context, value string) error {
 	return moerr.NewInvalidInput(ctx, "Iceberg token_secret must be a secret:// reference; inline secrets are not allowed")
 }
 
+func validateIcebergCatalogURI(ctx context.Context, catalogType, uri string) error {
+	switch strings.ToLower(strings.TrimSpace(catalogType)) {
+	case "", "rest", icebergcatalog.AdapterNativeREST:
+	default:
+		return nil
+	}
+	if err := icebergcatalog.ValidateRESTCatalogURI(uri, compile.IcebergAllowPlainHTTPFromEnv()); err != nil {
+		return icebergapi.ToMOErr(ctx, err)
+	}
+	return nil
+}
+
+func validateAlterIcebergCatalogURI(ctx context.Context, catalogType, uri string, opts map[string]string) error {
+	effectiveType := catalogType
+	effectiveURI := uri
+	validate := false
+	if value, ok := opts["type"]; ok {
+		effectiveType = value
+		validate = true
+	}
+	if value, ok := opts["uri"]; ok {
+		effectiveURI = value
+		validate = true
+	}
+	if !validate {
+		return nil
+	}
+	return validateIcebergCatalogURI(ctx, effectiveType, effectiveURI)
+}
+
 func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uint32, catalogName string) (uint64, error) {
 	sql := sqliceberg.GetCatalogByNameSQL(accountID, catalogName)
 	results, err := ExeSqlInBgSes(ctx, bh, sql)
@@ -367,6 +424,30 @@ func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uin
 		return 0, nil
 	}
 	return results[0].GetUint64(ctx, 0, 1)
+}
+
+func queryIcebergCatalogStateForUpdate(ctx context.Context, bh BackgroundExec, accountID uint32, catalogName string) (uint64, string, string, error) {
+	sql := sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName)
+	results, err := ExeSqlInBgSes(ctx, bh, sql)
+	if err != nil {
+		return 0, "", "", err
+	}
+	if !execResultArrayHasData(results) {
+		return 0, "", "", nil
+	}
+	catalogID, err := results[0].GetUint64(ctx, 0, 1)
+	if err != nil {
+		return 0, "", "", err
+	}
+	catalogType, err := results[0].GetString(ctx, 0, 3)
+	if err != nil {
+		return 0, "", "", err
+	}
+	uri, err := results[0].GetString(ctx, 0, 4)
+	if err != nil {
+		return 0, "", "", err
+	}
+	return catalogID, catalogType, uri, nil
 }
 
 type icebergCatalogDependencySpec struct {

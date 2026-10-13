@@ -60,7 +60,6 @@ insert into t1 values(3, "[1,1,1]", "cccc", 111.213);
 select count(*) from t1;
 
 select * from t1 into outfile '$resources/into_outfile/load_data/temp1.csv';
--- 不支持truncate
 truncate table t1;
 load data infile '$resources/into_outfile/load_data/temp1.csv' into table t1 ignore 1 lines;
 select count(*) from t1;

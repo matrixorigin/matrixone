@@ -85,6 +85,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 			proc,
 			[]*plan.Expr{loopJoin.NonEqCond},
 			loopJoin.allocationAccount,
+			loopJoin.OwnsConstantFilterDiagnostics,
 		)
 		if err != nil {
 			return err
@@ -326,7 +327,7 @@ func (loopJoin *LoopJoin) resetResultBat() error {
 				} else {
 					ctr.resBat.Clean(nil)
 					ctr.resBat = nil
-					return process.ErrHashBuildBudgetInvalid
+					return process.ErrExecutionResourceInvalid
 				}
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(leftType)
 
@@ -357,7 +358,7 @@ func (ctr *container) initRightMatchedBitmap(
 		len(bats),
 		proc.Mp(),
 		ap.allocationAccount,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteBatchOffsets,
 	)
 	if err != nil {
@@ -376,7 +377,7 @@ func (ctr *container) initRightMatchedBitmap(
 		int64(total),
 		proc.Mp(),
 		ap.allocationAccount,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteMatched,
 	)
 	if err != nil {

@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"math"
 	"math/big"
+	"math/rand"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -43,6 +45,42 @@ func TestPercentileNumericVals_Basic(t *testing.T) {
 	require.InDelta(t, 9.91, percentileNumericVals(vals, 0.99), 1e-10)
 	// p=1.0 returns last element
 	require.Equal(t, float64(10), percentileNumericVals(vals, 1.0))
+}
+
+func TestOrderedCompareUsesSQLFloatOrder(t *testing.T) {
+	float32NaN := float32(math.Float32frombits(0x7fc00001))
+	float64NaN := math.Float64frombits(0x7ff8000000000001)
+
+	require.Greater(t, orderedCompare(float32NaN, float32(1)), 0)
+	require.Greater(t, orderedCompare(float64NaN, float64(1)), 0)
+	require.Equal(t, 0, orderedCompare(float64NaN, float64NaN))
+	require.Equal(t, 0, orderedCompare(float32(0), float32(math.Copysign(0, -1))))
+	require.Equal(t, 0, orderedCompare(float64(0), math.Copysign(0, -1)))
+	require.Equal(t, []byte("0.25"), EncodeApproxPercentileConfig([]byte("0.25"), false))
+	require.Equal(t, []byte("DESC:0.25"), EncodeApproxPercentileConfig([]byte("0.25"), true))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[int64], false)(0, 1))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[float32], true)(1, 0))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[int64], true)(1, 0))
+}
+
+func TestQuantileNaNStateHelpersCoverLevelsAndEmptyState(t *testing.T) {
+	empty := &quantileSketch[float64]{compare: orderedCompare[float64]}
+	require.False(t, quantileStateHasNaN(empty))
+	normalizeDecodedQuantileState(empty)
+
+	withNaNLevel := &quantileSketch[float64]{
+		levels:   [][]float64{{math.NaN()}},
+		levelCnt: 1,
+	}
+	require.True(t, quantileStateHasNaN(withNaNLevel))
+}
+
+func TestLegacyApproxPercentileCompareTreatsTwoFloat64NaNsAsEqual(t *testing.T) {
+	compare := legacyApproxPercentileCompare(orderedCompare[float64])
+	nan := math.NaN()
+	require.Equal(t, 0, compare(nan, nan))
+	require.Equal(t, -1, compare(nan, 1))
+	require.Equal(t, 1, compare(1, nan))
 }
 
 func TestPercentileNumericVals_EvenN(t *testing.T) {
@@ -177,6 +215,202 @@ func TestInterpolateFloat64(t *testing.T) {
 			require.True(t, math.IsInf(interpolateFloat64(test.lo, test.hi, test.frac), wantInf))
 		})
 	}
+}
+
+func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
+	if util.RaceDetectorEnabled {
+		t.Skip("allocation counts include race-detector instrumentation")
+	}
+	p := new(big.Rat)
+	_, ok := p.SetString("0.12345678901234567890123456789012345678")
+	require.True(t, ok)
+	var scratch percentileArithmeticScratch
+	loDecimal, err := types.ParseDecimal128(
+		"-9999999999999999999999999999999999999", 37, 0)
+	require.NoError(t, err)
+	hiDecimal, err := types.ParseDecimal128(
+		"9999999999999999999999999999999999999", 37, 0)
+	require.NoError(t, err)
+
+	// Warm the fixed scratch to its maximum operand sizes before measuring the
+	// steady-state group loop.
+	for range 4 {
+		_, _, fraction := scratch.ranks(math.MaxUint64, p)
+		_ = interpolateNumericWithScratch(
+			&scratch, int64(math.MinInt64), int64(math.MaxInt64), fraction)
+		_, err = scratch.interpolateDecimal(
+			loDecimal, hiDecimal, fraction, 1)
+		require.NoError(t, err)
+	}
+
+	measure := func(groups int) float64 {
+		return testing.AllocsPerRun(100, func() {
+			for group := range groups {
+				count := uint64(group%1024 + 2)
+				_, _, fraction := scratch.ranks(count, p)
+				_ = interpolateNumericWithScratch(
+					&scratch, int64(math.MinInt64), int64(math.MaxInt64), fraction)
+				_, arithmeticErr := scratch.interpolateDecimal(
+					loDecimal, hiDecimal, fraction, 1)
+				if arithmeticErr != nil {
+					panic(arithmeticErr)
+				}
+			}
+		})
+	}
+	oneGroup := measure(1)
+	manyGroups := measure(AggBatchSize)
+
+	// Each group runs a fixed THREE big.Int divisions: the rank QuoRem, the
+	// numeric-interpolation QuoRem (via rationalToFloat64), and the decimal
+	// QuoRem. The scratch reuses every big.Int it owns, so on go1.26 and earlier
+	// big.Int.QuoRem allocated nothing and the per-group floor was 0. Go 1.27's
+	// math/big no longer recycles the temporaries QuoRem allocates internally, so
+	// each division now costs a fixed number of allocations no caller-side reuse
+	// can remove. Measure that per-division floor at runtime so the bound tracks
+	// the toolchain, then assert the finalization allocates nothing per group
+	// BEYOND its three divisions -- a stray new(big.Int) or a fourth division in
+	// the group loop still fails.
+	const divisionsPerGroup = 3
+	floor := quoRemAllocFloor()
+	allowed := oneGroup + float64(AggBatchSize-1)*divisionsPerGroup*floor
+	require.LessOrEqualf(t, manyGroups, allowed+1,
+		"percentile finalization arithmetic must not allocate per group beyond its %d big.Int divisions (measured floor %.0f allocs/division)",
+		divisionsPerGroup, floor)
+}
+
+// quoRemAllocFloor reports how many heap allocations a single big.Int.QuoRem
+// performs on the running toolchain, with the quotient and remainder
+// preallocated and reused exactly as percentileArithmeticScratch does. It is 0
+// on go1.26 and earlier and 2 on go1.27 (which stopped recycling QuoRem's
+// internal division temporaries); measuring it keeps the per-group allocation
+// bound above toolchain-agnostic rather than assuming a zero floor.
+func quoRemAllocFloor() float64 {
+	numerator := new(big.Int).Lsh(big.NewInt(1), 256)
+	numerator.Add(numerator, big.NewInt(1))
+	denominator := new(big.Int).Lsh(big.NewInt(1), 128)
+	denominator.Add(denominator, big.NewInt(3))
+	var quotient, remainder big.Int
+	for range 4 {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	}
+	return testing.AllocsPerRun(100, func() {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	})
+}
+
+func TestPercentileArithmeticScratchExactRanks(t *testing.T) {
+	tests := []struct {
+		name  string
+		count uint64
+		p     *big.Rat
+		lo    uint64
+		hi    uint64
+		frac  *big.Rat
+	}{
+		{name: "minimum", count: 800, p: big.NewRat(0, 1), lo: 0, hi: 0, frac: big.NewRat(0, 1)},
+		{name: "exact interior", count: 3, p: big.NewRat(1, 2), lo: 1, hi: 1, frac: big.NewRat(0, 1)},
+		{name: "interpolated interior", count: 4, p: big.NewRat(1, 2), lo: 1, hi: 2, frac: big.NewRat(1, 2)},
+		{name: "maximum", count: 800, p: big.NewRat(1, 1), lo: 799, hi: 799, frac: big.NewRat(0, 1)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var scratch percentileArithmeticScratch
+			lo, hi, fraction := scratch.ranks(test.count, test.p)
+			require.Equal(t, test.lo, lo)
+			require.Equal(t, test.hi, hi)
+			require.Zero(t, new(big.Rat).SetFrac(
+				fraction.numerator, fraction.denominator).Cmp(test.frac))
+		})
+	}
+}
+
+func TestRationalToFloat64MatchesBigRat(t *testing.T) {
+	tests := []struct {
+		name        string
+		numerator   string
+		denominator string
+	}{
+		{
+			name:        "known integer interpolation double-rounding case",
+			numerator:   "85350208989652838370",
+			denominator: "10",
+		},
+		{
+			name:        "known positive one-ulp case",
+			numerator:   "69300763989800657980",
+			denominator: "10",
+		},
+		{
+			name:        "known retained-significand case",
+			numerator:   "1097667843359950403",
+			denominator: "1119748502510018494",
+		},
+		{
+			name:        "negative",
+			numerator:   "-12345678901234567890123456789012345678",
+			denominator: "99999999999999999999999999999999999999",
+		},
+		{
+			name:        "38-digit fraction",
+			numerator:   "12345678901234567890123456789012345678",
+			denominator: "100000000000000000000000000000000000000",
+		},
+	}
+
+	check := func(t *testing.T, numerator, denominator *big.Int) {
+		t.Helper()
+		want, exact := new(big.Rat).SetFrac(
+			new(big.Int).Set(numerator),
+			new(big.Int).Set(denominator),
+		).Float64()
+		var quotient, scaledDenominator, remainder big.Int
+		got := rationalToFloat64(
+			numerator, denominator,
+			&quotient, &scaledDenominator, &remainder)
+		require.Equal(t, want, got)
+		_ = exact
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			numerator, ok := new(big.Int).SetString(test.numerator, 10)
+			require.True(t, ok)
+			denominator, ok := new(big.Int).SetString(test.denominator, 10)
+			require.True(t, ok)
+			check(t, numerator, denominator)
+		})
+	}
+
+	// Deterministic differential coverage spans the exact SQL integer domain
+	// and percentile denominators without introducing a probabilistic test.
+	random := rand.New(rand.NewSource(25866))
+	for range 10_000 {
+		lo := int64(random.Uint64())
+		hi := int64(random.Uint64())
+		numerator := new(big.Int).SetInt64(lo)
+		difference := new(big.Int).Sub(
+			new(big.Int).SetInt64(hi), new(big.Int).SetInt64(lo))
+		fraction := random.Uint64()
+		denominator := random.Uint64() | 1
+		if fraction > denominator {
+			fraction %= denominator + 1
+		}
+		numerator.Mul(numerator, new(big.Int).SetUint64(denominator))
+		numerator.Add(numerator,
+			difference.Mul(difference, new(big.Int).SetUint64(fraction)))
+		check(t, numerator, new(big.Int).SetUint64(denominator))
+	}
+
+	// The exact reviewer counterexample is expressed as interpolation to make
+	// accidental changes to the numerator construction visible.
+	lo := new(big.Int).SetUint64(6502130858936245017)
+	hi := new(big.Int).SetUint64(8641858559155348922)
+	numerator := new(big.Int).Mul(lo, big.NewInt(10))
+	numerator.Add(numerator,
+		new(big.Int).Mul(new(big.Int).Sub(hi, lo), big.NewInt(2)))
+	check(t, numerator, big.NewInt(10))
 }
 
 func TestPercentileDecimal64Vals(t *testing.T) {
@@ -546,6 +780,43 @@ func TestApproxPercentileExec_DifferentPercentiles(t *testing.T) {
 	}
 }
 
+func TestApproxPercentileExec_ExactMinimumAfterCompactionAndMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer left.Free()
+	defer right.Free()
+	for _, exec := range []AggFuncExec{left, right} {
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation([]byte("0"), 0))
+	}
+
+	leftValues := make([]int64, 400)
+	rightValues := make([]int64, 800)
+	for i := range leftValues {
+		leftValues[i] = int64(1200 - i)
+	}
+	for i := range rightValues {
+		rightValues[i] = int64(800 - i)
+	}
+	leftVec := buildFixedVec(t, mp, types.T_int64.ToType(), leftValues)
+	rightVec := buildFixedVec(t, mp, types.T_int64.ToType(), rightValues)
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+
+	ret, err := left.Flush()
+	require.NoError(t, err)
+	defer ret[0].Free(mp)
+	require.Equal(t, 1.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+}
+
 func TestApproxPercentileExec_Float64ExtremeInterpolation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	exec, err := makeApproxPercentile(mp, 1, false, types.T_float64.ToType())
@@ -702,6 +973,266 @@ func TestApproxPercentileExec_SetExtraInformation_Invalid(t *testing.T) {
 	}
 
 	exec.Free()
+}
+
+func TestApproxPercentileExec_DescKeepsNaNsLast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0"), true), 0))
+
+	vec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{-1, 0, 1, math.NaN()})
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	ret, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(1), vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0))
+	ret, err = exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(-0.5), vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+}
+
+func TestApproxPercentileExec_RejectsDirectionChangeAfterFill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	vec := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1})
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+	require.ErrorContains(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0), "direction cannot change")
+}
+
+func TestApproxPercentileExec_RejectsDirectionChangeAfterEmptySketch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	vec := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{0})
+	vec.SetNull(0)
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+	require.NotNil(t, exec.(*approxPercentileNumericExec[int64]).state[0].mobs[0])
+	require.ErrorContains(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0), "direction cannot change")
+}
+
+func TestApproxPercentileExec_DescMergeAndIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	descConfig := EncodeApproxPercentileConfig([]byte("0.5"), true)
+	left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer left.Free()
+	defer right.Free()
+	for _, exec := range []AggFuncExec{left, right} {
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(descConfig, 0))
+	}
+
+	leftVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{-1, math.NaN()})
+	rightVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{0, 1})
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+
+	ret, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, -0.5, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	var intermediate bytes.Buffer
+	require.NoError(t, left.SaveIntermediateResult(1, [][]uint8{{1}}, &intermediate))
+	restored, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer restored.Free()
+	// The runtime config is installed before decoding so the state factory
+	// restores the sketch with the DESC comparator.
+	require.NoError(t, restored.SetExtraInformation(descConfig, 0))
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(intermediate.Bytes()), mp))
+	ret, err = restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, -0.5, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	destination, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	source, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer destination.Free()
+	defer source.Free()
+	for _, exec := range []AggFuncExec{destination, source} {
+		require.NoError(t, exec.GroupGrow(1))
+	}
+	require.NoError(t, destination.SetExtraInformation([]byte("0.5"), 0))
+	require.NoError(t, source.SetExtraInformation(EncodeApproxPercentileConfig([]byte("0.5"), true), 0))
+	destinationVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{2})
+	sourceVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{1})
+	defer destinationVec.Free(mp)
+	defer sourceVec.Free(mp)
+	require.NoError(t, destination.BulkFill(0, []*vector.Vector{destinationVec}))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{sourceVec}))
+	require.ErrorIs(t, destination.Merge(source, 0, 0), mpool.ErrAllocationAccountMismatch)
+	ret, err = destination.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+}
+
+func TestApproxPercentileExec_DecodesLegacyNaNState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	legacyCompare := func(left, right float64) int {
+		leftNaN, rightNaN := math.IsNaN(left), math.IsNaN(right)
+		if leftNaN || rightNaN {
+			switch {
+			case leftNaN && rightNaN:
+				return 0
+			case leftNaN:
+				return -1
+			default:
+				return 1
+			}
+		}
+		if left < right {
+			return -1
+		}
+		if left > right {
+			return 1
+		}
+		return 0
+	}
+
+	legacy := newQuantileSketch[float64](mp, legacyCompare, nil)
+	require.NoError(t, legacy.Add(1))
+	require.NoError(t, legacy.Add(math.NaN()))
+	encoded, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	legacy.Free()
+
+	current := newQuantileSketch[float64](mp, orderedCompare[float64], nil)
+	defer current.Free()
+	require.NoError(t, current.UnmarshalBinary(encoded))
+	require.Equal(t, 1.0, current.min)
+	require.True(t, math.IsNaN(current.max))
+	require.Equal(t, 1.0, current.levels[0][0])
+	require.True(t, math.IsNaN(current.levels[0][1]))
+	lo, hi, err := current.QuantileAtRanks(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, lo)
+	require.True(t, math.IsNaN(hi))
+}
+
+func TestApproxPercentileExec_LegacyNaNStateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	runLegacyNaNStateRoundTrip(t, mp, float32(math.NaN()))
+	runLegacyNaNStateRoundTrip(t, mp, math.NaN())
+}
+
+func runLegacyNaNStateRoundTrip[T interface{ float32 | float64 }](t *testing.T, mp *mpool.MPool, nan T) {
+	legacy := newQuantileSketch[T](
+		mp, legacyApproxPercentileCompare(orderedCompare[T]), nil)
+	for value := 1; value <= 400; value++ {
+		require.NoError(t, legacy.Add(T(value)))
+	}
+	require.NoError(t, legacy.Add(nan))
+	for value := 401; value <= 799; value++ {
+		require.NoError(t, legacy.Add(T(value)))
+	}
+	require.Greater(t, legacy.levelCnt, uint8(1), "the regression must include compacted levels")
+	for level := 0; level < int(legacy.levelCnt); level++ {
+		for _, value := range legacy.levels[level] {
+			require.False(t, quantileValueIsNaN(value),
+				"NaN must be retained only by serialized extrema in this case")
+		}
+	}
+	require.True(t, quantileValueIsNaN(legacy.min))
+	encoded, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	legacy.Free()
+
+	current := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer current.Free()
+	require.NoError(t, current.UnmarshalBinary(encoded))
+	require.Equal(t, uint64(800), current.count)
+	require.Equal(t, T(1), current.min)
+	require.True(t, quantileValueIsNaN(current.max))
+	lo, _, err := current.QuantileAtRanks(0, 0)
+	require.NoError(t, err)
+	require.Equal(t, T(1), lo)
+	_, hi, err := current.QuantileAtRanks(current.count-1, current.count-1)
+	require.NoError(t, err)
+	require.True(t, quantileValueIsNaN(hi))
+
+	extra := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer extra.Free()
+	require.NoError(t, extra.Add(T(800)))
+	require.NoError(t, extra.Add(nan))
+	require.NoError(t, current.Merge(extra))
+	require.Equal(t, uint64(802), current.count)
+	merged, err := current.MarshalBinary()
+	require.NoError(t, err)
+
+	restored := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer restored.Free()
+	require.NoError(t, restored.UnmarshalBinary(merged))
+	require.Equal(t, uint64(802), restored.count)
+	require.Equal(t, T(1), restored.min)
+	require.True(t, quantileValueIsNaN(restored.max))
+}
+
+func TestApproxPercentileExec_UsesLegacyRemoteState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float32.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	ConfigureApproxPercentileLegacyState(exec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+	values := buildFixedVec(t, mp, types.T_float32.ToType(), []float32{1, float32(math.NaN())})
+	defer values.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	impl := exec.(*approxPercentileNumericExec[float32])
+	sketch := impl.state[0].mobs[0].(*quantileSketch[float32])
+	require.True(t, math.IsNaN(float64(sketch.min)))
+	require.Equal(t, float32(1), sketch.max)
+
+	encoded, err := sketch.MarshalBinary()
+	require.NoError(t, err)
+	legacy := newQuantileSketch[float32](
+		mp, legacyApproxPercentileCompare(orderedCompare[float32]), nil)
+	defer legacy.Free()
+	require.NoError(t, legacy.UnmarshalBinary(encoded))
+	require.True(t, math.IsNaN(float64(legacy.min)))
+	require.Equal(t, float32(1), legacy.max)
 }
 
 func TestApproxPercentileExec_MultipleGroups(t *testing.T) {
@@ -1300,9 +1831,9 @@ func TestQuantileSketchMPoolLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	left := newQuantileSketch[int64](mp, orderedCompare[int64])
-	right := newQuantileSketch[int64](mp, orderedCompare[int64])
-	restored := newQuantileSketch[int64](mp, orderedCompare[int64])
+	left := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	right := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	restored := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
 	defer left.Free()
 	defer right.Free()
 	defer restored.Free()
@@ -1315,11 +1846,17 @@ func TestQuantileSketchMPoolLifecycle(t *testing.T) {
 
 	require.NoError(t, left.Merge(right))
 	beforeQuantile := mp.CurrNB()
-	_, _, _, err := left.Quantile(big.NewRat(1, 2))
+	var arithmetic percentileArithmeticScratch
+	loRank, hiRank, _ := arithmetic.ranks(left.count, big.NewRat(1, 2))
+	_, _, err := left.QuantileAtRanks(loRank, hiRank)
 	require.NoError(t, err)
 	require.Equal(t, beforeQuantile, mp.CurrNB(), "quantile scratch space must be released")
 	encoded, err := left.MarshalBinary()
 	require.NoError(t, err)
+	var streamed bytes.Buffer
+	require.Equal(t, len(encoded), left.MarshaledSize())
+	require.NoError(t, left.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
 	require.NoError(t, restored.UnmarshalBinary(encoded))
 	require.Equal(t, left.count, restored.count)
 	require.Equal(t, left.retained(), restored.retained())
@@ -1336,8 +1873,8 @@ func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	dst := newQuantileSketch[int64](mp, orderedCompare[int64])
-	src := newQuantileSketch[int64](mp, orderedCompare[int64])
+	dst := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	src := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
 	defer dst.Free()
 	defer src.Free()
 

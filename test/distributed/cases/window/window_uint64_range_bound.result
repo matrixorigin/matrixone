@@ -1,0 +1,135 @@
+drop database if exists window_uint64_range_27565;
+create database window_uint64_range_27565;
+use window_uint64_range_27565;
+create table t(id bigint unsigned primary key);
+insert into t select result from generate_series(0,20) g;
+select id,
+count(*) over (
+order by id range between current row and 10 following
+) as c,
+sum(id) over (
+order by id range between current row and 10 following
+) as s
+from t order by id;
+id    c    s
+0    11    55
+1    11    66
+2    11    77
+3    11    88
+4    11    99
+5    11    110
+6    11    121
+7    11    132
+8    11    143
+9    11    154
+10    11    165
+11    10    155
+12    9    144
+13    8    132
+14    7    119
+15    6    105
+16    5    90
+17    4    74
+18    3    57
+19    2    39
+20    1    20
+select id,
+count(*) over (
+order by id desc range between current row and 10 following
+) as c,
+sum(id) over (
+order by id desc range between current row and 10 following
+) as s
+from t order by id desc;
+id    c    s
+20    11    165
+19    11    154
+18    11    143
+17    11    132
+16    11    121
+15    11    110
+14    11    99
+13    11    88
+12    11    77
+11    11    66
+10    11    55
+9    10    45
+8    9    36
+7    8    28
+6    7    21
+5    6    15
+4    5    10
+3    4    6
+2    3    3
+1    2    1
+0    1    0
+select id,
+count(*) over (
+order by id range between current row and 0 following
+) as zero_c,
+count(*) over (
+order by id range between 10 preceding and 10 preceding
+) as preceding_c,
+sum(id) over (
+order by id range between 10 preceding and 10 preceding
+) as preceding_s
+from t order by id;
+id    zero_c    preceding_c    preceding_s
+0    1    0    null
+1    1    0    null
+2    1    0    null
+3    1    0    null
+4    1    0    null
+5    1    0    null
+6    1    0    null
+7    1    0    null
+8    1    0    null
+9    1    0    null
+10    1    1    0
+11    1    1    1
+12    1    1    2
+13    1    1    3
+14    1    1    4
+15    1    1    5
+16    1    1    6
+17    1    1    7
+18    1    1    8
+19    1    1    9
+20    1    1    10
+create table max_t(k bigint unsigned primary key, v int);
+insert into max_t values
+(18446744073709551613, 1),
+(18446744073709551614, 2),
+(18446744073709551615, 3);
+select k,
+count(*) over (
+order by k range between current row and 10 following
+) as c,
+sum(v) over (
+order by k range between current row and 10 following
+) as s
+from max_t order by k;
+k    c    s
+18446744073709551613    3    6
+18446744073709551614    2    5
+18446744073709551615    1    3
+create table nullable_t(id int primary key, k bigint unsigned, v int);
+insert into nullable_t values
+(1, null, 10),
+(2, null, 20),
+(3, 0, 30),
+(4, 1, 40);
+select id, if(k is null, 'NULL', cast(k as char)) as k_label,
+count(*) over (
+order by k range between current row and 10 following
+) as c,
+sum(v) over (
+order by k range between current row and 10 following
+) as s
+from nullable_t order by k is not null, k, id;
+id    k_label    c    s
+1    NULL    2    30
+2    NULL    2    30
+3    0    2    70
+4    1    1    40
+drop database window_uint64_range_27565;

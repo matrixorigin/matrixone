@@ -1,0 +1,139 @@
+drop database if exists affine_sum_family;
+create database affine_sum_family;
+use affine_sum_family;
+
+create table t(
+    g int,
+    s smallint,
+    u8 tinyint unsigned,
+    u16 smallint unsigned,
+    u32 int unsigned
+);
+insert into t values
+    (1, -32768, 0, 0, 0),
+    (1, -1, 1, 1, 1),
+    (1, 0, 254, 65534, 4294967294),
+    (1, 32767, 255, 65535, 4294967295),
+    (1, null, null, null, null),
+    (2, null, null, null, null);
+
+-- scalar activation, including NULL input
+select sum(u16 + 1) s1, sum(u16 + 2) s2,
+       sum(u16 + 3) s3, sum(u16 + 89) s89
+from t;
+
+-- grouped consumers and an all-NULL group
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2,
+       sum(u16 + 3) s3, sum(u16 + 89) s89
+from t group by g order by g;
+
+-- rollup expands one query block into multiple aggregate branches
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t group by g with rollup order by grouping(g), g;
+
+-- aggregate outputs consumed by window functions
+select g,
+       sum(sum(u16 + 1)) over (order by g rows unbounded preceding) w1,
+       sum(sum(u16 + 2)) over (order by g rows unbounded preceding) w2,
+       sum(sum(u16 + 3)) over (order by g rows unbounded preceding) w3
+from t group by g order by g;
+
+-- empty input and all-NULL input retain SUM's NULL result
+select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t where false;
+select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t where g = 2;
+
+-- commuted addition and an explicit exact cast
+select sum(1 + u16) s1, sum(2 + u16) s2,
+       sum(3 + u16) s3, sum(89 + u16) s89
+from t;
+
+-- signed/negative shifts and a compound exact-integer base
+select sum(cast(s as signed) - 1) sm1,
+       sum(cast(s as signed)) s0,
+       sum(cast(s as signed) + 1) sp1
+from t;
+select sum(u16 * 2 + 1) s1,
+       sum(u16 * 2 + 2) s2,
+       sum(u16 * 2 + 3) s3
+from t;
+select sum(u16 + 1) s1,
+       sum(u16 + 3) s3,
+       sum(u16 + 4) s4
+from t;
+select sum(cast(u16 as signed) + 1) s1,
+       sum(cast(u16 as signed) + 2) s2,
+       sum(cast(u16 as signed) + 3) s3
+from t;
+
+-- two independent families may compact in one query block
+select sum(u8 + 1) u8s1, sum(u16 + 1) u16s1,
+       sum(u8 + 2) u8s2, sum(u16 + 2) u16s2,
+       sum(u8 + 3) u8s3, sum(u16 + 3) u16s3
+from t;
+
+-- maximum statically safe DECIMAL(38,0) input domain for UINT32
+select sum(u32 + 5421010858132554873) s0,
+       sum(u32 + 5421010858132554874) s1,
+       sum(u32 + 5421010858132554875) s2
+from t;
+
+-- HAVING and ORDER BY are aggregate consumers too
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t
+group by g
+having sum(u16 + 3) > 0
+order by sum(u16 + 3);
+
+-- a deep-correlated scalar consumer must retain its NULL-on-empty proof after
+-- an omitted SUM is replaced by strict affine arithmetic
+select distinct outer_t.g,
+       (select max(middle_t.s)
+          from t middle_t
+         where (middle_t.s > 0) = (
+               select sum(inner_t.u16 + 3) =
+                      coalesce(sum(inner_t.u16 + 1), sum(inner_t.u16 + 2), 0)
+                 from t inner_t
+                where inner_t.g = outer_t.g
+         )) affine_result
+from t outer_t
+order by outer_t.g;
+
+-- dynamic constants are a semantic barrier
+set @a = 1;
+set @b = 2;
+set @c = 3;
+prepare affine_sum_stmt from
+    'select sum(u16 + ?) s1, sum(u16 + ?) s2, sum(u16 + ?) s3 from affine_sum_family.t';
+execute affine_sum_stmt using @a, @b, @c;
+set @a = 10;
+set @b = -2;
+set @c = 100;
+execute affine_sum_stmt using @a, @b, @c;
+deallocate prepare affine_sum_stmt;
+
+-- direct signed arithmetic is eligible without SQL-shape special casing
+select sum(s + 1) s1, sum(s + 2) s2, sum(s + 3) s3 from t;
+
+-- nearest non-eligible controls
+select sum(u16 + 1) s1, sum(u16 + 3) s3, sum(u16 + 5) s5 from t;
+select sum(distinct u16 + 1) s1,
+       sum(distinct u16 + 2) s2,
+       sum(distinct u16 + 3) s3
+from t;
+
+-- time-window and downstream FILL consumers
+create table tw(ts datetime, v smallint);
+insert into tw values
+    ('2026-01-01 00:00:00', 1),
+    ('2026-01-01 00:00:20', 2),
+    ('2026-01-01 00:01:00', null),
+    ('2026-01-01 00:02:00', 1),
+    ('2026-01-01 00:02:20', 2);
+select _wstart, sum(v + 1) s1, sum(v + 2) s2, sum(v + 3) s3
+from tw
+interval(ts, 1, minute) fill(linear)
+order by _wstart;
+
+drop database affine_sum_family;

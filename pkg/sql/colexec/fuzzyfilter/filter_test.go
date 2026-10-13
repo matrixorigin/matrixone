@@ -121,7 +121,7 @@ func newArgument(typ types.Type) *FuzzyFilter {
 }
 
 func newProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	return proc
 }
 
@@ -139,11 +139,10 @@ func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []type
 }
 
 func TestString(t *testing.T) {
-	for _, tc := range makeTestCases(t) {
-		buf := new(bytes.Buffer)
-		tc.arg.String(buf)
-		require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
-	}
+	var buf bytes.Buffer
+	arg := &FuzzyFilter{}
+	arg.String(&buf)
+	require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
 }
 
 func TestPrepare(t *testing.T) {
@@ -237,6 +236,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		decoded := vector.NewVec(types.T_any.ToType())
 		require.NoError(t, decoded.UnmarshalBinary(runtimeFilter.Data))
 		require.Equal(t, runtimeFilter.Card, int32(decoded.Length()))
+		require.True(t, decoded.GetSorted())
 		require.Equal(t, []int32{3, 7},
 			vector.MustFixedColWithTypeCheck[int32](decoded))
 
@@ -270,7 +270,7 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1
@@ -333,7 +333,7 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1
@@ -381,7 +381,7 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			typ := types.T_int32.ToType()
 			spec := newRuntimeFilterSpec(109, typ, typ)
 			arg, proc := newRuntimeFilterTest(t, spec, typ)
-			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -400,16 +400,16 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			} else {
 				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
-					int(remaining), account, 63, 255)
+					int(remaining), account, mpool.AllocationOwnerDML, 255)
 				require.NoError(t, err)
 			}
 
 			err = arg.handleRuntimeFilter(proc)
 			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
 			if test.closed {
-				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+				require.ErrorIs(t, err, process.ErrExecutionResourceClosed)
 				require.NotErrorIs(t, err,
-					process.ErrHashBuildBudgetAdmission)
+					process.ErrExecutionResourceAdmission)
 				require.False(t, arg.ctr.runtimeFilterDone)
 				require.Zero(t,
 					stats["FuzzyFilterRuntimeFilterBudgetFallbacks"])

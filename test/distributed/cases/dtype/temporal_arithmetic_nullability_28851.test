@@ -1,0 +1,37 @@
+-- Temporal arithmetic may synthesize NULL from NOT NULL source columns.
+drop database if exists temporal_arithmetic_nullability_28851;
+create database temporal_arithmetic_nullability_28851;
+use temporal_arithmetic_nullability_28851;
+create table src (id int not null, t time(6) not null, dt datetime(6) not null);
+insert into src values
+  (0, '12:00:00', '2024-01-02 03:04:05'),
+  (1, '838:59:59', '9999-12-31 23:59:59');
+
+create table materialized as
+select id, t as direct_t, dt as direct_dt,
+       addtime(t, '00:00:01') as added,
+       subtime(t, '-00:00:01') as subtracted,
+       timediff(t, '-00:00:01') as diff,
+       date_add(t, interval 1 second) as date_added,
+       date_sub(t, interval -1 second) as date_subtracted,
+       maketime(838 + id, 0, 0) as made,
+       timestampadd(second, 1, dt) as timestamp_added
+  from (select id, t, dt from src) as s;
+select column_name, is_nullable from information_schema.columns
+ where table_schema = 'temporal_arithmetic_nullability_28851'
+   and table_name = 'materialized' order by ordinal_position;
+select id, direct_t is null as direct_null, direct_dt is null as direct_dt_null,
+       added is null as add_null, subtracted is null as sub_null,
+       diff is null as diff_null, date_added is null as date_add_null,
+       date_subtracted is null as date_sub_null, made is null as make_null,
+       timestamp_added is null as timestamp_null
+  from materialized order by id;
+create view computed as
+  select id, addtime(t, '00:00:01') as added,
+         timestampadd(second, 1, dt) as timestamp_added from src;
+select column_name, is_nullable from information_schema.columns
+ where table_schema = 'temporal_arithmetic_nullability_28851'
+   and table_name = 'computed' order by ordinal_position;
+select id, added is null as add_null, timestamp_added is null as timestamp_null
+  from computed order by id;
+drop database temporal_arithmetic_nullability_28851;

@@ -115,6 +115,9 @@ func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (e
 }
 func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                    { return }
 func (store *NoopTxnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteObjectByCN(isTombstone bool, id *common.ID) (err error) {
+	return
+}
 func (store *NoopTxnStore) BatchDedup(
 	uint64, uint64, containers.Vector,
 ) (err error) {

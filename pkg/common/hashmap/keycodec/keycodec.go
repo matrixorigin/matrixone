@@ -17,23 +17,37 @@
 package keycodec
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
-// ValidVectors verifies the row-shape contract required by both resident hash
-// maps and spill partitioning. Hashing a short or nil key must never silently
-// leave a suffix at its previous seed value.
+// ValidVectors verifies that each vector covers the requested logical rows.
+// Scalar const vectors physically store one value and broadcast it across
+// those rows; ordinary short or nil vectors must never leave a hash suffix at
+// its seed.
 func ValidVectors(vecs []*vector.Vector, rows int) bool {
 	if rows < 0 || len(vecs) == 0 {
 		return false
 	}
 	for _, vec := range vecs {
-		if vec == nil || vec.Length() != rows {
+		if vec == nil {
+			return false
+		}
+		if vec.IsConst() {
+			if !vec.CoversLogicalRows(0, rows) {
+				return false
+			}
+			continue
+		}
+		if vec.Length() != rows {
 			return false
 		}
 	}
@@ -112,6 +126,12 @@ func ExactRuntimeFilterEncodingForPair(probeType, payloadType types.Type) ExactR
 	if probeType.Oid != payloadType.Oid {
 		return ExactRuntimeFilterUnsupported
 	}
+	// Raw runtime-filter payloads have no collation-key envelope. Native UCA
+	// text must use the ordinary comparison path until the runtime-filter wire
+	// contract carries the text identity and transformed key domain.
+	if types.IsUnicodeCollation(probeType.Charset) || types.IsUnicodeCollation(payloadType.Charset) {
+		return ExactRuntimeFilterUnsupported
+	}
 	switch probeType.Oid {
 	case types.T_float32:
 		if probeType.Scale <= 0 && payloadType.Scale <= 0 {
@@ -154,10 +174,18 @@ func (c Float32Codec) CanonicalBits(value float32) uint32 {
 	return CanonicalFloat32Bits(c.normalizer.Normalize(value))
 }
 
+const (
+	canonicalFloat32NaNBits = uint32(0x7fc00000)
+	canonicalFloat64NaNBits = uint64(0x7ff8000000000000)
+)
+
 // CanonicalFloat32Bits returns canonical bits for a FLOAT32 value after any
-// required scale normalization. SQL equality identifies signed zero, so both
-// zero representations use the single all-zero key.
+// required scale normalization. SQL equality identifies signed zero and all
+// NaN sign/payload encodings, so each equivalence class has one hash key.
 func CanonicalFloat32Bits(value float32) uint32 {
+	if math.IsNaN(float64(value)) {
+		return canonicalFloat32NaNBits
+	}
 	bits := math.Float32bits(value)
 	if bits<<1 == 0 {
 		return 0
@@ -172,8 +200,12 @@ func (c Float32Codec) CanonicalBytes(value float32) [4]byte {
 	return *(*[4]byte)(unsafe.Pointer(&bits))
 }
 
-// CanonicalFloat64Bits makes SQL-equal signed zero values use one hash key.
+// CanonicalFloat64Bits makes SQL-equal signed zero and NaN values use one hash
+// key while preserving finite values and infinities.
 func CanonicalFloat64Bits(value float64) uint64 {
+	if math.IsNaN(value) {
+		return canonicalFloat64NaNBits
+	}
 	bits := math.Float64bits(value)
 	if bits<<1 == 0 {
 		return 0
@@ -187,6 +219,353 @@ func CanonicalFloat64Bits(value float64) uint64 {
 func CanonicalFloat64Bytes(value float64) [8]byte {
 	bits := CanonicalFloat64Bits(value)
 	return *(*[8]byte)(unsafe.Pointer(&bits))
+}
+
+// CanonicalJSONSize returns the exact resident key size for one binary JSON
+// value. Arrays and objects are walked recursively because scalar JSON
+// equality also identifies numeric forms below the root.
+const canonicalJSONMalformedMarker byte = 0
+
+func CanonicalJSONSize(value []byte) int {
+	if len(value) == 0 {
+		return 0
+	}
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		return 1 + len(value)
+	}
+	return canonicalByteJSONSize(decoded)
+}
+
+// CanonicalCharValue returns the SQL PAD SPACE key for one CHAR value.
+// Trailing ASCII spaces are insignificant for CHAR comparison, while spaces
+// in the middle or at the beginning remain part of the value. The returned
+// slice aliases value.
+func CanonicalCharValue(value []byte) []byte {
+	for len(value) > 0 && value[len(value)-1] == ' ' {
+		value = value[:len(value)-1]
+	}
+	return value
+}
+
+// AppendCanonicalChar appends the SQL PAD SPACE key for one CHAR value.
+// Keeping this as a named codec avoids a closure on the partition-hash path.
+func AppendCanonicalChar(dst, value []byte) []byte {
+	return append(dst, CanonicalCharValue(value)...)
+}
+
+// CanonicalValueSize returns the exact number of bytes appended by
+// AppendCanonicalValue. Callers use it before reserving an accounted key
+// buffer; keeping the size calculation beside the codec prevents canonical
+// JSON/vector keys from being copied into a buffer sized for their raw form.
+func CanonicalValueSize(typ types.Type, value []byte) int {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return len(types.CollationKeyOrOriginal(typ.Charset, value))
+	}
+	switch typ.Oid {
+	case types.T_char:
+		return len(CanonicalCharValue(value))
+	case types.T_json:
+		return CanonicalJSONSize(value)
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_float32, types.T_float64:
+		return len(value)
+	default:
+		return len(value)
+	}
+}
+
+// AppendCanonicalValue appends the equality-key representation for one typed
+// scalar. It is deliberately key-only: callers that retain an aggregate
+// argument must still keep the original payload, because canonical encodings
+// are not necessarily valid values for result reconstruction.
+func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return append(dst, types.CollationKeyOrOriginal(typ.Charset, value)...)
+	}
+	switch typ.Oid {
+	case types.T_char:
+		return AppendCanonicalChar(dst, value)
+	case types.T_json:
+		return AppendCanonicalJSON(dst, value)
+	case types.T_array_float32:
+		return AppendCanonicalVecF32(dst, value)
+	case types.T_array_float64:
+		return AppendCanonicalVecF64(dst, value)
+	case types.T_array_bf16, types.T_array_float16:
+		return AppendCanonicalVecF16(dst, value)
+	case types.T_float32:
+		if len(value) == types.T_float32.TypeLen() {
+			decoded := types.DecodeFixed[float32](value)
+			encoded := NewFloat32Codec(typ.Scale).CanonicalBytes(decoded)
+			return append(dst, encoded[:]...)
+		}
+	case types.T_float64:
+		if len(value) == types.T_float64.TypeLen() {
+			decoded := types.DecodeFixed[float64](value)
+			encoded := CanonicalFloat64Bytes(decoded)
+			return append(dst, encoded[:]...)
+		}
+	}
+	return append(dst, value...)
+}
+
+// CanonicalValuesEqual compares two values in the same equivalence domain as
+// AppendCanonicalValue without materializing either canonical key. Callers
+// use this on duplicate candidates, where allocating two data-sized temporary
+// slices would bypass the aggregate allocation account.
+func CanonicalValuesEqual(typ types.Type, left, right []byte) bool {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return types.CompareStringValues(typ, left, right) == 0
+	}
+	switch typ.Oid {
+	case types.T_char:
+		return bytes.Equal(CanonicalCharValue(left), CanonicalCharValue(right))
+	case types.T_float32:
+		if len(left) == types.T_float32.TypeLen() &&
+			len(right) == types.T_float32.TypeLen() {
+			leftBits := NewFloat32Codec(typ.Scale).CanonicalBits(
+				types.DecodeFixed[float32](left))
+			rightBits := NewFloat32Codec(typ.Scale).CanonicalBits(
+				types.DecodeFixed[float32](right))
+			return leftBits == rightBits
+		}
+		return bytes.Equal(left, right)
+	case types.T_float64:
+		if len(left) == types.T_float64.TypeLen() &&
+			len(right) == types.T_float64.TypeLen() {
+			return CanonicalFloat64Bits(types.DecodeFixed[float64](left)) ==
+				CanonicalFloat64Bits(types.DecodeFixed[float64](right))
+		}
+		return bytes.Equal(left, right)
+	case types.T_json:
+		leftJSON := types.DecodeJson(left)
+		rightJSON := types.DecodeJson(right)
+		if !bytejson.IsValidByteJson(leftJSON) || !bytejson.IsValidByteJson(rightJSON) {
+			return bytes.Equal(left, right)
+		}
+		return bytejson.CompareByteJson(leftJSON, rightJSON) == 0
+	case types.T_array_float32:
+		return canonicalVecEqual(left, right, 4)
+	case types.T_array_float64:
+		return canonicalVecEqual(left, right, 8)
+	case types.T_array_bf16, types.T_array_float16:
+		return canonicalVecEqual(left, right, 2)
+	default:
+		return bytes.Equal(left, right)
+	}
+}
+
+func canonicalVecEqual(left, right []byte, elementSize int) bool {
+	if len(left) != len(right) || len(left)%elementSize != 0 {
+		return bytes.Equal(left, right)
+	}
+	for offset := 0; offset < len(left); offset += elementSize {
+		switch elementSize {
+		case 2:
+			leftBits := binary.LittleEndian.Uint16(left[offset:])
+			rightBits := binary.LittleEndian.Uint16(right[offset:])
+			if leftBits<<1 == 0 {
+				leftBits = 0
+			}
+			if rightBits<<1 == 0 {
+				rightBits = 0
+			}
+			if leftBits != rightBits {
+				return false
+			}
+		case 4:
+			leftBits := CanonicalFloat32Bits(
+				math.Float32frombits(binary.LittleEndian.Uint32(left[offset:])))
+			rightBits := CanonicalFloat32Bits(
+				math.Float32frombits(binary.LittleEndian.Uint32(right[offset:])))
+			if leftBits != rightBits {
+				return false
+			}
+		case 8:
+			leftBits := CanonicalFloat64Bits(
+				math.Float64frombits(binary.LittleEndian.Uint64(left[offset:])))
+			rightBits := CanonicalFloat64Bits(
+				math.Float64frombits(binary.LittleEndian.Uint64(right[offset:])))
+			if leftBits != rightBits {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func canonicalByteJSONSize(value bytejson.ByteJson) int {
+	if size, ok := bytejson.CanonicalNumberSize(value); ok {
+		return size
+	}
+	if size, ok := bytejson.CanonicalBinarySize(value); ok {
+		return size
+	}
+	switch value.Type {
+	case bytejson.TpCodeArray:
+		size := 1 + 4
+		for i := 0; i < value.GetElemCnt(); i++ {
+			size += 4 + canonicalByteJSONSize(value.GetArrayElem(i))
+		}
+		return size
+	case bytejson.TpCodeObject:
+		size := 1 + 4
+		for i := 0; i < value.GetElemCnt(); i++ {
+			size += 4 + len(value.GetObjectKey(i))
+			size += 4 + canonicalByteJSONSize(value.GetObjectVal(i))
+		}
+		return size
+	default:
+		return 1 + len(value.Data)
+	}
+}
+
+// AppendCanonicalJSON appends the resident/spill key bytes for one JSON value.
+// Binary JSON stores 1 as INT64 and 1.0 as FLOAT64 even though scalar JSON
+// equality identifies them. Numeric nodes therefore use a private key-only
+// domain, including inside arrays and objects; other scalar representations
+// remain byte-for-byte compatible with their storage form.
+func AppendCanonicalJSON(dst, value []byte) []byte {
+	if len(value) == 0 {
+		return dst
+	}
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		dst = append(dst, canonicalJSONMalformedMarker)
+		return append(dst, value...)
+	}
+	return appendCanonicalByteJSON(dst, decoded)
+}
+
+func canonicalByteJSONValid(value bytejson.ByteJson) bool {
+	switch value.Type {
+	case bytejson.TpCodeLiteral:
+		return len(value.Data) == 1 &&
+			(value.Data[0] == bytejson.LiteralNull ||
+				value.Data[0] == bytejson.LiteralTrue ||
+				value.Data[0] == bytejson.LiteralFalse)
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
+		_, ok := bytejson.CanonicalNumberSize(value)
+		return ok
+	case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime:
+		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
+		return ok
+	case bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
+		_, ok := bytejson.CanonicalBinarySize(value)
+		return ok
+	case bytejson.TpCodeArray, bytejson.TpCodeObject:
+		return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
+			return canonicalByteJSONValid(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
+		})
+	default:
+		return false
+	}
+}
+
+func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
+	if numeric, ok := bytejson.AppendCanonicalNumber(dst, value); ok {
+		return numeric
+	}
+	if binaryValue, ok := bytejson.AppendCanonicalBinary(dst, value); ok {
+		return binaryValue
+	}
+
+	switch value.Type {
+	case bytejson.TpCodeArray:
+		dst = append(dst, byte(value.Type))
+		dst = appendCanonicalUint32(dst, uint32(value.GetElemCnt()))
+		for i := 0; i < value.GetElemCnt(); i++ {
+			lengthOffset := len(dst)
+			dst = appendCanonicalUint32(dst, 0)
+			valueOffset := len(dst)
+			dst = appendCanonicalByteJSON(dst, value.GetArrayElem(i))
+			binary.LittleEndian.PutUint32(dst[lengthOffset:], uint32(len(dst)-valueOffset))
+		}
+		return dst
+	case bytejson.TpCodeObject:
+		dst = append(dst, byte(value.Type))
+		dst = appendCanonicalUint32(dst, uint32(value.GetElemCnt()))
+		for i := 0; i < value.GetElemCnt(); i++ {
+			key := value.GetObjectKey(i)
+			dst = appendCanonicalUint32(dst, uint32(len(key)))
+			dst = append(dst, key...)
+			lengthOffset := len(dst)
+			dst = appendCanonicalUint32(dst, 0)
+			valueOffset := len(dst)
+			dst = appendCanonicalByteJSON(dst, value.GetObjectVal(i))
+			binary.LittleEndian.PutUint32(dst[lengthOffset:], uint32(len(dst)-valueOffset))
+		}
+		return dst
+	default:
+		dst = append(dst, byte(value.Type))
+		return append(dst, value.Data...)
+	}
+}
+
+func appendCanonicalUint32(dst []byte, value uint32) []byte {
+	var encoded [4]byte
+	binary.LittleEndian.PutUint32(encoded[:], value)
+	return append(dst, encoded[:]...)
+}
+
+// AppendCanonicalVecF32 appends VECF32 key bytes with SQL-equal signed-zero
+// elements mapped to the single all-zero representation. The input vector is
+// never mutated and its byte length is preserved.
+func AppendCanonicalVecF32(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%4 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 4 {
+		bits := binary.LittleEndian.Uint32(canonical[offset:])
+		canonicalBits := CanonicalFloat32Bits(math.Float32frombits(bits))
+		if bits != canonicalBits {
+			binary.LittleEndian.PutUint32(canonical[offset:], canonicalBits)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF64 is the FLOAT64-array counterpart of
+// AppendCanonicalVecF32.
+func AppendCanonicalVecF64(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%8 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 8 {
+		bits := binary.LittleEndian.Uint64(canonical[offset:])
+		canonicalBits := CanonicalFloat64Bits(math.Float64frombits(bits))
+		if bits != canonicalBits {
+			binary.LittleEndian.PutUint64(canonical[offset:], canonicalBits)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF16 appends BF16/FLOAT16 array bytes with both signed-zero
+// representations mapped to zero. Both formats use the high bit as sign and
+// all remaining bits as exponent/mantissa.
+func AppendCanonicalVecF16(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%2 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 2 {
+		bits := binary.LittleEndian.Uint16(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint16(canonical[offset:], 0)
+		}
+	}
+	return dst
 }
 
 // HashCombine merges one column hash into the hash state for a composite key.
@@ -215,12 +594,34 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			computeGroupingXXHash(vec, hashValues)
 			continue
 		}
+		if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+			charset := vec.GetType().Charset
+			computeCanonicalVarlenaXXHash(vec, hashValues, func(dst, value []byte) []byte {
+				return append(dst, types.CollationKeyOrOriginal(charset, value)...)
+			})
+			continue
+		}
 		switch vec.GetType().Oid {
 		case types.T_float32:
 			computeFloat32XXHash(vec, hashValues)
 			continue
 		case types.T_float64:
 			computeFloat64XXHash(vec, hashValues)
+			continue
+		case types.T_json:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalJSON)
+			continue
+		case types.T_char:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalChar)
+			continue
+		case types.T_array_float32:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF32)
+			continue
+		case types.T_array_float64:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF64)
+			continue
+		case types.T_array_bf16, types.T_array_float16:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF16)
 			continue
 		}
 		if vec.IsConst() {
@@ -252,6 +653,37 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 				hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
 			}
 		}
+	}
+}
+
+func computeCanonicalVarlenaXXHash(
+	vec *vector.Vector,
+	hashValues []uint64,
+	appendCanonical func([]byte, []byte) []byte,
+) {
+	rowCount := len(hashValues)
+	var scratch []byte
+	if vec.IsConst() {
+		columnHash := uint64(0)
+		if !vec.IsConstNull() {
+			scratch = appendCanonical(scratch, vec.GetRawBytesAt(0))
+			columnHash = xxhash.Sum64(scratch)
+		}
+		for i := 0; i < rowCount; i++ {
+			hashValues[i] = HashCombine(hashValues[i], columnHash)
+		}
+		return
+	}
+
+	n := min(rowCount, vec.Length())
+	nulls := vec.GetNulls()
+	for i := 0; i < n; i++ {
+		if nulls.Contains(uint64(i)) {
+			hashValues[i] = HashCombine(hashValues[i], 0)
+			continue
+		}
+		scratch = appendCanonical(scratch[:0], vec.GetRawBytesAt(i))
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
 	}
 }
 
@@ -298,6 +730,7 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 	rowCount := len(hashValues)
 	grouping := vec.GetGrouping()
 	nulls := vec.GetNulls()
+	var scratch []byte
 	for i := 0; i < rowCount; i++ {
 		if grouping.Contains(uint64(i)) {
 			hashValues[i] = HashCombine(hashValues[i], groupingColumnHash)
@@ -307,25 +740,53 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 			hashValues[i] = HashCombine(hashValues[i], 0)
 			continue
 		}
-		row := i
-		if vec.IsConst() {
-			row = 0
-		}
-		switch vec.GetType().Oid {
-		case types.T_float32:
-			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		case types.T_float64:
-			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			value := CanonicalFloat64Bytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		}
-		hashValues[i] = HashCombine(
-			hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(row)),
-		)
+		canonical, reusable := CanonicalBytesAt(vec, i, scratch[:0])
+		scratch = reusable
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(canonical))
+	}
+}
+
+// CanonicalBytesAt returns the byte representation used by SQL grouping
+// equality. The caller owns null handling. canonical can alias vector storage;
+// reusable preserves scratch capacity for the next call even in that case.
+// Keeping this contract in keycodec prevents statistics, hash joins, and GROUP
+// BY from silently defining different equality domains.
+func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
+	if vec.IsConst() {
+		row = 0
+	}
+	if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+		key := types.CollationKeyOrOriginal(vec.GetType().Charset, vec.GetRawBytesAt(row))
+		return key, key
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		value := CanonicalFloat64Bytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_char:
+		scratch = AppendCanonicalChar(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_json:
+		scratch = AppendCanonicalJSON(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float32:
+		scratch = AppendCanonicalVecF32(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float64:
+		scratch = AppendCanonicalVecF64(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_bf16, types.T_array_float16:
+		scratch = AppendCanonicalVecF16(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	default:
+		return vec.GetRawBytesAt(row), scratch
 	}
 }
 

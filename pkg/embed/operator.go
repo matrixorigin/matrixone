@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -54,6 +53,10 @@ type operator struct {
 	state       state
 	testing     bool
 
+	// Test-owned bootstrap handlers allow a real CN restart to cross an
+	// interrupted upgrade target without rewriting persisted upgrade records.
+	testingCNOptions []cnservice.Option
+
 	reset struct {
 		svc        service
 		shutdownC  chan struct{}
@@ -78,6 +81,8 @@ type fileServiceCloser interface {
 const (
 	defaultHAKeeperRunningTimeout = 2 * time.Minute
 	testingHAKeeperRunningTimeout = 5 * time.Minute
+	defaultAnyShardReadyTimeout   = 30 * time.Second
+	testingAnyShardReadyTimeout   = 5 * time.Minute
 )
 
 func newService(
@@ -134,16 +139,22 @@ func (op *operator) Close() error {
 	if op.state == stopped &&
 		op.reset.svc == nil &&
 		op.reset.stopper == nil &&
-		op.reset.fs == nil {
+		op.reset.fs == nil &&
+		op.reset.rt == nil {
 		return nil
 	}
 
 	var err error
 	if op.reset.svc != nil {
 		err = op.reset.svc.Close()
-		if err == nil {
-			op.reset.svc = nil
+		if !closeComplete(op.reset.svc, err) {
+			// A service may return a drain timeout while accepted requests still
+			// use its storage and WAL dependencies.  Keep every cleanup owner
+			// reachable and let the caller retry or fail-stop; closing the
+			// stopper or file service here would destroy those dependencies.
+			return errors.Join(err, moerr.NewInvalidStateNoCtx("service cleanup is incomplete"))
 		}
+		op.reset.svc = nil
 	}
 	if op.reset.stopper != nil {
 		op.reset.stopper.Stop()
@@ -153,19 +164,35 @@ func (op *operator) Close() error {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
 	}
-	op.reset.shutdownC = nil
-	if err == nil {
-		op.state = stopped
+	if op.reset.rt != nil {
+		runtime.CompareAndDeleteServiceBasedRuntime(op.sid, op.reset.rt)
+		op.reset.rt = nil
 	}
+	op.reset.shutdownC = nil
+	op.state = stopped
 	return err
+}
+
+// Completion is an ownership contract, independent of diagnostics. Unknown
+// implementations retain the legacy nil-error contract and fail closed on error.
+func closeComplete(owner any, err error) bool {
+	if owner, ok := owner.(interface{ CloseComplete() bool }); ok {
+		return owner.CloseComplete()
+	}
+	return err == nil
 }
 
 func (op *operator) needsCleanup() bool {
 	op.RLock()
 	defer op.RUnlock()
+	return op.needsCleanupLocked()
+}
+
+func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
-		op.reset.fs != nil
+		op.reset.fs != nil ||
+		op.reset.rt != nil
 }
 
 func (op *operator) Start() error {
@@ -174,6 +201,41 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.needsCleanupLocked() {
+		return moerr.NewInvalidStateNoCtx("service cleanup is incomplete")
+	}
+	configuredType, err := op.cfg.getServiceType()
+	if err != nil {
+		return err
+	}
+	if configuredType != op.serviceType {
+		return moerr.NewBadConfigNoCtxf(
+			"service type cannot be changed after operator creation: %s to %s",
+			op.serviceType.String(),
+			configuredType.String(),
+		)
+	}
+	// WithPreStart and ServiceOperator.Adjust intentionally run after the
+	// configuration file is loaded. Revalidate the adjusted clock and
+	// authentication contract before creating any service-owned resources.
+	if err := op.cfg.validateClockConfiguration(); err != nil {
+		return err
+	}
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
+	}
+	if authErr != nil {
+		return authErr
+	}
+	if op.serviceType == metadata.ServiceType_CN {
+		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+			return err
+		}
 	}
 
 	if err := op.init(); err != nil {
@@ -259,6 +321,16 @@ func (op *operator) startTNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
 		return err
 	}
+	return op.startTNServiceAfterReadyLocked(fs)
+}
+
+// startTNServiceAfterReadyLocked is the construction handoff after the
+// HAKeeper readiness gate. Keeping the constructor path separate lets tests
+// exercise the production owner publication and rollback boundary without
+// manufacturing a second constructor flow.
+func (op *operator) startTNServiceAfterReadyLocked(
+	fs fileservice.FileService,
+) error {
 	op.cfg.initMetaCache()
 	c := op.cfg.getTNServiceConfig()
 	//notify the tn service it is in the standalone cluster
@@ -269,6 +341,7 @@ func (op *operator) startTNServiceLocked(
 		op.reset.rt,
 		fs,
 		op.reset.shutdownC,
+		func(owner tnservice.Service) { op.reset.svc = owner },
 		tnservice.WithConfigData(commonConfigKVMap),
 	)
 	if err != nil {
@@ -283,21 +356,33 @@ func (op *operator) startTNServiceLocked(
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
+	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+		return err
+	}
+	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
 	op.cfg.initMetaCache()
-	c := op.cfg.getCNServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	options := []cnservice.Option{
+		cnservice.WithLogger(op.reset.logger),
+		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+		cnservice.WithConfigData(commonConfigKVMap),
+	}
+	if op.testing {
+		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
+	}
 	s, err := cnservice.NewService(
 		&c,
 		context.Background(),
 		fs,
 		op.reset.gossipNode,
-		cnservice.WithLogger(op.reset.logger),
-		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
-		cnservice.WithConfigData(commonConfigKVMap),
-		cnservice.WithTxnTraceData(filepath.Join(op.cfg.DataDir, c.Txn.Trace.Dir)),
+		func(owner cnservice.Service) { op.reset.svc = owner },
+		options...,
 	)
 	if err != nil {
 		return err
@@ -306,6 +391,16 @@ func (op *operator) startCNServiceLocked(
 		return err
 	}
 	return nil
+}
+
+func (op *operator) verifySiriusBenchmarkNoGC() error {
+	// An individual embedded CN operator neither owns nor observes the TN that
+	// serves its snapshots. A sibling TN config is therefore not proof that GC
+	// is disabled on the actual TN, so embedded benchmark mode fails closed.
+	return cnservice.VerifySiriusBenchmarkNoGC(
+		&op.cfg.CN,
+		false,
+	)
 }
 
 func (op *operator) startConstructedServiceLocked(s service) error {
@@ -448,7 +543,13 @@ func (op *operator) waitHAKeeperRunningLocked(
 		moerr.CauseWaitHAKeeperRunningLocked,
 	)
 	defer cancel()
+	return op.waitHAKeeperRunning(ctx, client)
+}
 
+func (op *operator) waitHAKeeperRunning(
+	ctx context.Context,
+	client logservice.CNHAKeeperClient,
+) error {
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
@@ -459,7 +560,9 @@ func (op *operator) waitHAKeeperRunningLocked(
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			op.reset.logger.Info("hakeeper not ready, retry")
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, op.cfg.HAKeeperRunningRetryInterval.Duration); err != nil {
+				return err
+			}
 			continue
 		}
 		return err
@@ -474,9 +577,23 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReadyLocked)
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.anyShardReadyTimeout(),
+		moerr.CauseWaitAnyShardReadyLocked,
+	)
 	defer cancel()
+	return op.waitAnyShardReady(ctx, client)
+}
 
+func (op *operator) anyShardReadyTimeout() time.Duration {
+	if op.testing {
+		return testingAnyShardReadyTimeout
+	}
+	return defaultAnyShardReadyTimeout
+}
+
+func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNHAKeeperClient) error {
 	// wait shard ready
 	for {
 		if ok, err := func() (bool, error) {
@@ -509,14 +626,28 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 			op.reset.logger.Info("shard ready")
 			return nil
 		}
-		time.Sleep(time.Second)
+		if err := waitStartupRetry(ctx, op.cfg.TNShardReadyRetryInterval.Duration); err != nil {
+			return err
+		}
+	}
+}
+
+func waitStartupRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return moerr.AttachCause(ctx, ctx.Err())
+	case <-timer.C:
+		return nil
 	}
 }
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
-	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReadyLocked)
-		defer cancel()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
+	defer cancel()
+	return waitHAKeeperClient(ctx, func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
 		client, err := logservice.NewCNHAKeeperClient(
 			ctx,
 			op.sid,
@@ -531,20 +662,26 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 			return nil, err
 		}
 		return client, nil
-	}
+	})
+}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
-	defer cancel()
+// Each attempt shares the owner's deadline; a failed attempt never sleeps
+// beyond cancellation. A successful client is transferred to the caller.
+func waitHAKeeperClient(ctx context.Context, create func(context.Context) (logservice.CNHAKeeperClient, error)) (logservice.CNHAKeeperClient, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
 		default:
-			client, err := getClient()
+			attempt, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWaitHAKeeperReadyLocked)
+			client, err := create(attempt)
+			cancel()
 			if err == nil {
 				return client, nil
 			}
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, time.Second); err != nil {
+				return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+			}
 		}
 	}
 }

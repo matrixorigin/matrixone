@@ -18,13 +18,61 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math/rand/v2"
 	"testing"
 	"time"
 
 	"github.com/ti-mo/conntrack"
+	"github.com/ti-mo/netfilter"
 )
+
+type failingConntrackClient struct {
+	closed bool
+}
+
+func (c *failingConntrackClient) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (*failingConntrackClient) Listen(chan<- conntrack.Event, uint8, []netfilter.NetlinkGroup) (chan error, error) {
+	return nil, errors.New("listen failed")
+}
+
+func TestStartConnectionTrackingClosesOnListenFailure(t *testing.T) {
+	originalDial := dialConntrack
+	t.Cleanup(func() {
+		dialConntrack = originalDial
+	})
+
+	client := new(failingConntrackClient)
+	dialConntrack = func() (conntrackClient, error) {
+		return client, nil
+	}
+
+	if err := startConnectionTracking(); err == nil {
+		t.Fatal("expected Listen failure")
+	}
+	if !client.closed {
+		t.Fatal("expected conntrack client to be closed after Listen failure")
+	}
+}
+
+func TestDialConntrack(t *testing.T) {
+	client, err := dialConntrack()
+	if err != nil {
+		t.Logf("conntrack unavailable in test environment: %v", err)
+		return
+	}
+	if client == nil {
+		t.Fatal("dialConntrack returned a nil client without an error")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close conntrack client: %v", err)
+	}
+}
 
 func TestConntrack(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -40,7 +40,6 @@ select min(-99999999999999999.99999);
 select min(-999999999999999933193939.99999);
 select min(-9999999999999999999999999999999999.9999999999999);
 
--- @bvt:issue#3344
 create table t1(a bigint);
 select min(a) from t1;
 insert into t1 values(null),(null),(null),(null);
@@ -48,7 +47,6 @@ select min(a) from t1;
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select min(a) from t1;
 drop table t1;
--- @bvt:issue
 
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);

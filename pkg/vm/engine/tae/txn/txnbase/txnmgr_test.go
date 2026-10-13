@@ -21,10 +21,51 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/stretchr/testify/require"
 )
+
+type rollbackCleanupErrorStore struct {
+	NoopTxnStore
+	err error
+}
+
+func (store *rollbackCleanupErrorStore) Close() error {
+	return store.err
+}
+
+func TestAsyncRollbackCleanupPreservesPrimaryError(t *testing.T) {
+	cleanupErr := errors.New("injected rollback cleanup failure")
+	store := &rollbackCleanupErrorStore{err: cleanupErr}
+	txn := NewTxn(nil, store, []byte("rollback-cleanup"), types.BuildTS(1, 0), types.TS{})
+	primaryErr := moerr.NewTxnWWConflictNoCtx(0, "")
+	txn.SetError(primaryErr)
+	txn.Lock()
+	require.NoError(t, txn.ToRollbackingLocked(types.BuildTS(2, 0)))
+	txn.Unlock()
+	txn.Add(1)
+
+	applyErr := txn.ApplyRollback()
+	require.NoError(t, applyErr, "cleanup must remain secondary to the transaction error")
+	require.Same(t, primaryErr, txn.DoneApply(applyErr, true))
+	require.Same(t, primaryErr, txn.GetError())
+	require.True(t, moerr.IsMoErrCode(txn.GetError(), moerr.ErrTxnWWConflict))
+}
+
+func TestExplicitRollbackReturnsCleanupError(t *testing.T) {
+	cleanupErr := errors.New("injected explicit rollback cleanup failure")
+	txn := NewTxn(
+		nil,
+		&rollbackCleanupErrorStore{err: cleanupErr},
+		[]byte("explicit-rollback-cleanup"),
+		types.BuildTS(1, 0),
+		types.TS{},
+	)
+
+	require.ErrorIs(t, txn.ApplyRollback(), cleanupErr)
+}
 
 func TestTxnWaiterCancelAndReuse(t *testing.T) {
 	var waiter txnWaiter
@@ -288,6 +329,56 @@ func TestSingleTNCommitAndRollbackLifecycle(t *testing.T) {
 		require.Equal(t, txnif.TxnStateRollbacked, txn.GetTxnState(false))
 		waitTxnManagerEmpty(t, mgr)
 	})
+}
+
+func TestCommitCallbackTracksSuccessUntilDelivery(t *testing.T) {
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	t.Cleanup(mgr.Stop)
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- txn.CommitWithCallback(context.Background(), func() {
+			close(entered)
+			<-release
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("commit callback did not run")
+	}
+	require.Equal(t, txnif.TxnStateCommitted, txn.GetTxnState(false))
+	require.NotNil(t, mgr.GetTxn(txn.GetID()))
+	close(release)
+	require.NoError(t, <-committed)
+	waitTxnManagerEmpty(t, mgr)
+}
+
+func TestCommitCallbackSkippedOnFailedAttempt(t *testing.T) {
+	for _, cause := range []error{
+		moerr.NewInternalErrorNoCtx("freeze failed"),
+		moerr.NewTAENeedRetryNoCtx(),
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+			mgr.Start(context.Background())
+			t.Cleanup(mgr.Stop)
+			txn, err := mgr.StartTxn(nil)
+			require.NoError(t, err)
+			txn.SetFreezeFn(func(txnif.AsyncTxn) error { return cause })
+			called := false
+			require.Error(t, txn.CommitWithCallback(context.Background(), func() {
+				called = true
+			}))
+			require.False(t, called)
+			waitTxnManagerEmpty(t, mgr)
+		})
+	}
 }
 
 func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {

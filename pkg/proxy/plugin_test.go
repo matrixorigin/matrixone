@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	"github.com/stretchr/testify/require"
@@ -394,6 +395,57 @@ func TestPluginRouter_SelectCooldownFallsBackToDelegatedRoute(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn1", cn.uuid)
+}
+
+func TestPluginRouter_SelectPendingAdmissionFallsBackToReadyCN(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{value: logservicepb.ClusterDetails{
+		ViewMetadataAdmission: &logservicepb.ViewMetadataAdmission{
+			Enabled: true,
+			Epoch:   4,
+		},
+		CNStores: []logservicepb.CNStore{
+			{
+				UUID:                            "pending-cn",
+				SQLAddress:                      "8.8.8.8:6001",
+				WorkState:                       metadata.WorkState_Working,
+				ViewMetadataAdmissionGeneration: 20,
+			},
+			{
+				UUID:                            "ready-cn",
+				SQLAddress:                      "8.8.8.8:6002",
+				WorkState:                       metadata.WorkState_Working,
+				ViewMetadataAdmissionGeneration: 21,
+				ViewMetadataAdmissionReady:      true,
+			},
+		},
+	}}
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, rt.Logger(), mc)
+	base := newRouter(mc, re, newMockSQLWorker(), true).(*router)
+	p := &mockPlugin{mockRecommendCNFn: func(context.Context, clientInfo) (*plugin.Recommendation, error) {
+		return &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID:  "pending-cn",
+				SQLAddress: "8.8.8.8:6001",
+			},
+		}, nil
+	}}
+	pr := newPluginRouter("", base, p)
+
+	cn, err := pr.Route(context.Background(), "", clientInfo{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ready-cn", cn.uuid)
+	require.Equal(t, uint64(21), cn.admissionGeneration)
 }
 
 func TestRPCPlugin(t *testing.T) {

@@ -87,8 +87,8 @@ type IterationContext struct {
 	PrevSnapshotTS      types.TS
 	CurrentSnapshotName string
 	CurrentSnapshotTS   types.TS
-	// AObjectMap stores the mapping from upstream aobj to downstream object stats
-	// This map is used to track appendable object transformations during CCPR sync
+	// AObjectMap stores downstream identities for upstream objects whose names or
+	// row offsets change during CCPR sync.
 	AObjectMap         *AObjectMap
 	TableIDs           map[TableKey]uint64
 	IndexTableMappings map[string]string // Maps upstream_index_table_name to downstream_index_table_name

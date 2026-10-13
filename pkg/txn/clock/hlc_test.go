@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
@@ -61,6 +62,18 @@ func TestNewUnixNanoHLCClock(t *testing.T) {
 	c := NewUnixNanoHLCClock(ctx, 500*time.Millisecond)
 	result, _ := c.Now()
 	assert.True(t, v < result.PhysicalTime)
+}
+
+func TestClockOffsetBoundDoesNotDependOnActiveMonitoring(t *testing.T) {
+	s := stopper.NewStopper("clock-offset-contract")
+	t.Cleanup(func() { s.Stop() })
+
+	c := NewUnixNanoHLCClockWithStopperAndCheck(s, 500*time.Millisecond, false)
+	assert.Equal(t, 500*time.Millisecond, c.MaxOffset())
+	assert.False(t, c.checkClockOffset)
+
+	now, upperBound := c.Now()
+	assert.Equal(t, now.PhysicalTime+int64(500*time.Millisecond), upperBound.PhysicalTime)
 }
 
 func TestMaxClockForwardOffset(t *testing.T) {

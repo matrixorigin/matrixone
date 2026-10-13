@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	"fmt"
 	io "io"
 
@@ -65,6 +64,23 @@ func MakeAggFunctionExpression(
 
 func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
+}
+
+// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
+// the first argument's original values without a semantic type conversion.
+// Source conversion provenance may cross these materialization boundaries.
+func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
+	switch ag.aggID {
+	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
+		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		return true
+	case WinIdOfLag, WinIdOfLead:
+		// With no explicit default, LAG/LEAD return the first argument or NULL.
+		// A default expression can introduce a different source category.
+		return len(ag.argExpressions) < 3
+	default:
+		return false
+	}
 }
 
 func (ag *AggFuncExecExpression) IsDistinct() bool {
@@ -167,14 +183,195 @@ type AggFuncExec interface {
 	Flush() ([]*vector.Vector, error)
 
 	// Serialize intermediate result to bytes.
-	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
-	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
+	SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error
+	SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error
 	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error
 
 	Size() int64
 
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
+}
+
+// sourcePreservingMerger is implemented only by aggregate executors whose
+// Merge method leaves the source group unchanged. Merge normally permits
+// ownership transfer because distributed aggregation consumes partial states;
+// window execution needs the stronger contract when it snapshots a running
+// aggregate into multiple result groups.
+type sourcePreservingMerger interface {
+	sourcePreservingMerge()
+}
+
+// MergePreservesSource reports whether repeated merges can safely snapshot
+// exec without consuming or otherwise mutating its source group.
+func MergePreservesSource(exec AggFuncExec) bool {
+	_, ok := exec.(sourcePreservingMerger)
+	return ok
+}
+
+// windowSlidingAggregator is implemented by aggregates that can remove the
+// oldest row from a one-group running state. It is intentionally narrower
+// than AggFuncExec: only aggregates with an exact inverse for the supported
+// argument type may opt in.
+type windowSlidingAggregator interface {
+	windowSlidingSupported() bool
+	addWindowRow(row int, vectors []*vector.Vector) error
+	removeWindowRow(row int, vectors []*vector.Vector) error
+}
+
+// SupportsWindowSliding reports whether exec can maintain a bounded window by
+// adding the entering row and removing the leaving row. Callers must use a
+// one-group executor and advance the frame monotonically.
+func SupportsWindowSliding(exec AggFuncExec) bool {
+	sliding, ok := exec.(windowSlidingAggregator)
+	return ok && sliding.windowSlidingSupported()
+}
+
+// AddWindowRow adds one row to a one-group sliding aggregate.
+func AddWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.addWindowRow(row, vectors)
+}
+
+// RemoveWindowRow removes one row from a one-group sliding aggregate.
+func RemoveWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.removeWindowRow(row, vectors)
+}
+
+// GroupAggFuncExec is the complete contract required by Group. Keeping this
+// separate from AggFuncExec lets window executors retain the common aggregate
+// API without making Group rediscover its stronger allocation, preflight,
+// spill, and prepared-parameter contracts at every call site.
+//
+// Once SetAllocationAccount succeeds, all fallible physical growth must be
+// covered by PreflightBatchFill/PreflightBatchMerge and the spill codec must be
+// usable without an unaccounted data-sized staging allocation.
+type GroupAggFuncExec interface {
+	AggFuncExec
+	AllocationAccountOwner
+	BatchCapacityPreflight
+	SpillStateCodec
+	PrepareParamKindStateAccessor
+
+	AdditionalMemorySize() int64
+	GetNumGroups() int
+	SetPrepareParamKind(vector.PrepareParamKind)
+}
+
+// RequiresCanonicalDistinctKeyWire reports whether an aggregate's saved
+// DISTINCT argument state uses the canonical opaque-key wire grammar. Group
+// uses this to keep the marker-bearing format away from pre-compatible peers.
+func RequiresCanonicalDistinctKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresCanonicalDistinctKeyWire() bool
+	}); ok {
+		return configurable.requiresCanonicalDistinctKeyWire()
+	}
+	return false
+}
+
+// RequiresModernDistinctFloatKeyWire reports whether an aggregate was built
+// with the modern FLOAT DISTINCT membership policy. A producer must not send
+// that state to a pre-v79 peer after a capability downgrade: the legacy peer
+// compares fixed-width float bytes and the modern state may already have
+// collapsed distinct NaN payloads.
+func RequiresModernDistinctFloatKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresModernDistinctFloatKeyWire() bool
+	}); ok {
+		return configurable.requiresModernDistinctFloatKeyWire()
+	}
+	return false
+}
+
+// AllocationAccountOwner is implemented by aggregate executors whose complete
+// retained state can participate in an operator's physical allocation
+// account.  It is deliberately separate from AggFuncExec: callers that do not
+// install a statement account keep the existing aggregate API, while an
+// accountable operator must reject an executor that does not implement this
+// closed lifecycle contract.
+type AllocationAccountOwner interface {
+	SetAllocationAccount(*AllocationAccount) error
+	ClearAllocationAccount(*AllocationAccount) error
+}
+
+// BatchCapacityPreflight reserves every fallible physical allocation a bounded
+// Group hash work unit can require after its non-mutating group preview is
+// known, without changing aggregate values. Group can therefore spill its
+// resident prefix and retry the same unpublished input unit on capacity
+// pressure.
+type BatchCapacityPreflight interface {
+	PreflightBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
+	PreflightBatchMerge(next AggFuncExec, offset int, groups []uint64) error
+}
+
+// SpillStateCodec is the bounded-memory, execution-local aggregate codec.
+// It is separate from the stable intermediate-result codec because spill must
+// stream selected physical rows without first allocating a selection Vector.
+// MakeGroupAgg admits only executors that implement this closed spill contract.
+type SpillStateCodec interface {
+	SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error
+	UnmarshalSpillFromReader(reader io.Reader, mp *mpool.MPool) error
+}
+
+// ExactCountDistinctSpillState exposes the narrow ownership transfer required
+// by Group's bounded exact COUNT(DISTINCT ...) spill path. BeginArgumentDrain
+// validates and freezes the drain view without allocating a replacement for
+// every aggregate chunk. Commit installs bounded empty replacements one chunk
+// at a time after the caller has written the private spill wave; Abort keeps
+// the resident state authoritative.
+//
+// Argument payloads use the aggregate's existing canonical key grammar without
+// the chunk-local group prefix. InsertDistinctArgument accepts only payloads
+// produced by a compatible drain or spill decoder.
+type ExactCountDistinctSpillState interface {
+	GroupAggFuncExec
+	SupportsExactCountDistinctSpill() bool
+	HasDistinctArguments() (bool, error)
+	DistinctArgumentStats() (keys uint64, retainedBytes uint64, err error)
+	BeginArgumentDrain(replacement *AllocationAccount) (DistinctArgumentDrain, error)
+	RehomeDistinctArgumentState(allocation *AllocationAccount) error
+	InsertDistinctArgument(group int, payload []byte) error
+	InsertDistinctArgumentWithRepresentative(
+		group int,
+		payload []byte,
+		representative []byte,
+	) error
+	AddDistinctCountContribution(
+		group int,
+		count uint64,
+		allocation *AllocationAccount,
+	) error
+}
+
+// DistinctArgumentDrain is a single-use prepared ownership transfer. Payload
+// slices passed to ForEach point into the resident arena and are valid only for
+// the duration of the callback.
+type DistinctArgumentDrain interface {
+	ForEach(func(group int, payload []byte) error) error
+	ForEachWithRepresentative(
+		func(group int, payload, representative []byte) error,
+	) error
+	KeyCount() uint64
+	RetainedBytes() uint64
+	Commit() error
+	Abort()
+}
+
+// PrepareParamKindStateAccessor exposes the result vectors whose winner
+// provenance is carried by Group's spill/partial wire extension. Group owns
+// the codec and streams directly between these vectors and the wire; the
+// aggregate does not materialize a second row-sized metadata slice.
+type PrepareParamKindStateAccessor interface {
+	PrepareParamKindChunkCount() int
+	PrepareParamKindVectorForChunk(chunk int) *vector.Vector
 }
 
 // indicate who implements the AggFuncExec interface.
@@ -188,7 +385,178 @@ func MakeAgg(
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
+	return makeAgg(mg, aggID, isDistinct, false, false, false, false, param...)
+}
+
+// MakeGroupAgg constructs an aggregate that satisfies Group's complete static
+// execution contract. Window-function executors are deliberately rejected.
+func MakeGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, false, false, false, false, false, allocation, extraInformation, param...)
+}
+
+// MakeSingleGroupAgg constructs an aggregate for an execution path whose
+// cardinality is statically bounded to one group. Aggregates may use this
+// stronger contract to select representations that would not be safe for an
+// unbounded GROUP BY.
+func MakeSingleGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, false, false, false, false, true, allocation, extraInformation, param...)
+}
+
+// MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
+// during the MORPC v10 -> v11 rollout. It preserves the old bytewise text
+// MIN/MAX comparator without changing the argument or result type metadata.
+func MakeAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	return makeAgg(mg, aggID, isDistinct, true, false, false, false, param...)
+}
+
+// MakeGroupAggWithLegacyTextMinMax is the Group-specific counterpart of
+// MakeAggWithLegacyTextMinMax for mixed-version remote pipelines.
+func MakeGroupAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, true, false, false, false, false, allocation, extraInformation, param...)
+}
+
+// MakeSingleGroupAggWithLegacyTextMinMax combines the static single-group
+// contract with mixed-version text MIN/MAX compatibility.
+func MakeSingleGroupAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, true, false, false, false, true, allocation, extraInformation, param...)
+}
+
+// MakeGroupAggWithLegacyRemoteState selects aggregate implementations whose
+// partial-state layout is understood by pre-upgrade CNs. Most callers are
+// remotely decoded pipelines; coordinator-side MergeGroup also uses it when a
+// state change must be compatible in both wire directions.
+func MakeGroupAggWithLegacyRemoteState(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool, legacyVarianceState bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, false,
+		allocation, extraInformation, param...)
+}
+
+func MakeSingleGroupAggWithLegacyRemoteState(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool, legacyVarianceState bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, true,
+		allocation, extraInformation, param...)
+}
+
+type singleGroupAggregate interface {
+	setSingleGroupExecution() error
+}
+
+func makeGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	legacyVarianceState bool,
+	legacyDecimalSumState bool,
+	legacyDecimalSumResult bool,
+	singleGroup bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	exec, err := makeAgg(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, param...)
+	if err != nil {
+		return nil, err
+	}
+	groupExec, ok := exec.(GroupAggFuncExec)
+	if !ok {
+		exec.Free()
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"aggregate %d does not support group execution", aggID)
+	}
+	if singleGroup {
+		if configurable, ok := groupExec.(singleGroupAggregate); ok {
+			if err := configurable.setSingleGroupExecution(); err != nil {
+				groupExec.Free()
+				return nil, err
+			}
+		}
+	}
+	if extraInformation != nil {
+		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
+			groupExec.Free()
+			return nil, err
+		}
+	}
+	if allocation != nil {
+		if err := groupExec.SetAllocationAccount(allocation); err != nil {
+			groupExec.Free()
+			return nil, err
+		}
+	}
+	return groupExec, nil
+}
+
+func makeAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	legacyVarianceState bool,
+	legacyDecimalSumState bool,
+	legacyDecimalSumResult bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	// Compact spill vectors inherit their type from this execution contract;
+	// ordinary partial-state vectors also validate their own wire metadata.
+	for _, typ := range param {
+		if err := requireLegacyAggregateType(typ); err != nil {
+			return nil, err
+		}
+	}
+	exec, ok, err := makeSpecialAggExec(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +569,19 @@ func MakeAgg(
 
 func makeSpecialAggExec(
 	mp *mpool.MPool,
-	id int64, isDistinct bool, params ...types.Type,
+	id int64, isDistinct bool, legacyTextMinMax bool, legacyVariance bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
+	if isDistinct &&
+		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) {
+		return nil, true, moerr.NewNotSupportedNoCtx(
+			"distinct bit operations are not supported")
+	}
+	if len(params) == 1 &&
+		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) &&
+		IsBitwiseAggregateOperandTooWide(params[0]) {
+		return nil, true, moerr.NewInvalidBitwiseAggregateOperandsSizeNoCtx()
+	}
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
 	}
@@ -221,25 +600,26 @@ func makeSpecialAggExec(
 	case AggIdOfBitOr:
 		return makeBitOrExec(mp, id, isDistinct, params[0]), true, nil
 	case AggIdOfVarPop:
-		return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
+		return makeVarPopExec(mp, id, isDistinct, params[0], legacyVariance), true, nil
 	case AggIdOfStdDevPop:
-		return makeStdDevPopExec(mp, id, isDistinct, params[0]), true, nil
+		return makeStdDevPopExec(mp, id, isDistinct, params[0], legacyVariance), true, nil
 	case AggIdOfVarSample:
-		return makeVarSampleExec(mp, id, isDistinct, params[0]), true, nil
+		return makeVarSampleExec(mp, id, isDistinct, params[0], legacyVariance), true, nil
 	case AggIdOfStdDevSample:
-		return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
+		return makeStdDevSampleExec(mp, id, isDistinct, params[0], legacyVariance), true, nil
 	case AggIdOfAny:
 		return makeAnyValueExec(mp, id, params[0]), true, nil
 	case AggIdOfMin:
-		return makeMinMaxExec(mp, id, true, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, true, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMax:
-		return makeMinMaxExec(mp, id, false, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, false, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMaxBy:
 		return makeMaxByExec(mp, id, false, params), true, nil
 	case AggIdOfMaxByNonNull:
 		return makeMaxByExec(mp, id, true, params), true, nil
 	case AggIdOfSum:
-		return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
+		return makeSumAvgExecWithLegacyDecimalSumState(
+			mp, true, id, isDistinct, params[0], legacyDecimalSumState, legacyDecimalSumResult), true, nil
 	case AggIdOfAvg:
 		return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
 	case AggIdOfCountColumn:
@@ -259,6 +639,18 @@ func makeSpecialAggExec(
 		return makeHllMerge(mp, id, params[0]), true, nil
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfPercentileCont:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_cont requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileContinuous)
+		return exec, true, err
+	case AggIdOfPercentileDisc:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_disc requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
 		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
@@ -385,7 +777,7 @@ func makeWindowExec(
 		aggID:     aggID,
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
-		retType:   types.T_int64.ToType(),
+		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
 	return makeRankDenseRankRowNumber(mp, info), nil
@@ -462,6 +854,9 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 		}
 		expr := &plan.Expr{}
 		if err := proto.Unmarshal(bs, expr); err != nil {
+			return err
+		}
+		if err := expr.ValidateStringLiteralForms(); err != nil {
 			return err
 		}
 		ag.argExpressions = append(ag.argExpressions, expr)

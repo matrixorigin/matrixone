@@ -342,7 +342,7 @@ func whetherSavePasswordHistory(ses *Session) (bool, error) {
 }
 
 func generateSinglePasswordRecod(pwd string) ([]byte, error) {
-	records := make([]passwordHistoryRecord, 0)
+	records := make([]passwordHistoryRecord, 0, 1)
 	record := passwordHistoryRecord{
 		PasswordTimestamp: types.CurrentTimestamp().String2(time.UTC, 0),
 		Password:          pwd,
@@ -667,7 +667,8 @@ func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip str
 	if isIpInNodes(ip, nodes) {
 		return nil
 	}
-	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip)
+	return markAuthenticationRejected(
+		moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip))
 }
 
 func passwordIntervalExpired(timeStr string, interVal int64) bool {

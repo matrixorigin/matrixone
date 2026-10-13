@@ -158,9 +158,8 @@ func pickMergeDiffs(
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
-	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	produce func(emitFunc) error,
 ) (err error) {
 
 	var (
@@ -169,7 +168,6 @@ func pickMergeDiffs(
 
 		insertIntoVals = acquireBuffer(tblStuff.bufPool)
 		deleteFromVals = acquireBuffer(tblStuff.bufPool)
-		firstErr       error
 		tmpValsBuffer  = acquireBuffer(tblStuff.bufPool)
 	)
 
@@ -197,10 +195,9 @@ func pickMergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
-	var acceptedExactFloatKeys map[string]struct{}
-	if appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
-		stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
-		acceptedExactFloatKeys = make(map[string]struct{})
+	var acceptedDirectUpdateKeys map[string]struct{}
+	if tblStuff.def.pkKind != fakeKind && stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
+		acceptedDirectUpdateKeys = make(map[string]struct{})
 	}
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
@@ -211,42 +208,23 @@ func pickMergeDiffs(
 		}
 	}()
 
-	for wrapped := range retCh {
-		if firstErr != nil || ctx.Err() != nil {
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+	if err = produce(func(wrapped batchWithKind) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-
-		if err = appendPickedBatchRows(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedExactFloatKeys,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+		if err := appendPickedBatchRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys); err != nil {
+			return false, err
 		}
-
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		return false, nil
+	}); err != nil {
+		return err
 	}
-	if firstErr == nil && len(acceptedExactFloatKeys) != 0 {
-		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
+	if len(acceptedDirectUpdateKeys) != 0 {
+		return moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
-
-	if err = appender.flushAll(); err != nil {
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	if firstErr != nil {
-		return firstErr
-	}
-	return
+	return appender.flushAll()
 }
 
 // appendPickedBatchRows applies the user's conflict semantics to each row
@@ -275,7 +253,7 @@ func appendPickedBatchRows(
 	appender sqlValuesAppender,
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
-	acceptedExactFloatKeys map[string]struct{},
+	acceptedDirectUpdateKeys map[string]struct{},
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -288,7 +266,7 @@ func appendPickedBatchRows(
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
 	}
-	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
 	}
@@ -299,6 +277,7 @@ func appendPickedBatchRows(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		rowDirectUpdate := directUpdate
 
 		// Extract PK for conflict handling (FAIL error message, SKIP set).
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
@@ -323,14 +302,14 @@ func appendPickedBatchRows(
 					skipSet[pkKey] = struct{}{}
 					continue // do not apply the DELETE
 				case tree.CONFLICT_ACCEPT:
-					if acceptedExactFloatKeys != nil {
-						// The matching source row is applied by an exact-key upsert.
-						// Deferring the resolution avoids a staged delete that could
-						// run after the upsert and remove the accepted row.
-						acceptedExactFloatKeys[pkKey] = struct{}{}
+					if acceptedDirectUpdateKeys != nil && wrapped.hasReplacement {
+						// The matching source row is applied by a direct key update.
+						// Deferring the resolution avoids deleting a referenced row.
+						acceptedDirectUpdateKeys[pkKey] = struct{}{}
 						continue
 					}
-					// Fall through for non-float keys: DELETE + INSERT is safe.
+					// A source DELETE has no replacement row, so preserve the
+					// destination deletion.
 				}
 			}
 		}
@@ -341,25 +320,32 @@ func appendPickedBatchRows(
 				continue
 			}
 		}
-		if acceptedExactFloatKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
-			if _, accepted := acceptedExactFloatKeys[pkKey]; accepted {
-				exactFloatKeyUpdate = true
-				delete(acceptedExactFloatKeys, pkKey)
+		if acceptedDirectUpdateKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
+			if _, accepted := acceptedDirectUpdateKeys[pkKey]; accepted {
+				rowDirectUpdate = true
+				delete(acceptedDirectUpdateKeys, pkKey)
 			}
 		}
-		if exactFloatKeyUpdate && wrapped.kind == diffDelete {
+		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
+		}
+		stageUpdate := dataBranchStagesUpdate(
+			appender, rowDirectUpdate, wrapped.requiresNativeUpdate, wrapped.restoreMissing,
+		)
+		extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
+		if stageUpdate {
+			extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
 		}
 
 		if err = extractDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, extraColIdxes, row,
 			"data branch pick batch shape mismatch",
 		); err != nil {
 			return
 		}
-		if err = appendOrExecuteDataBranchApplyRow(
+		if err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			exactFloatKeyUpdate, wrapped.restoreMissing,
+			rowDirectUpdate, stageUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
@@ -399,6 +385,8 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(rowIdx))
 	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
@@ -432,6 +420,18 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx)
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, rowIdx)
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, rowIdx)
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx)
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx)
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx)
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx)
 	default:
 		return vec.GetBytesAt(rowIdx)
 	}
@@ -531,7 +531,8 @@ func materializeValuesUnified(
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		if appendErr := appendExprToVec(vec, expr, pkType, ses.GetTimeZone(), mp); appendErr != nil {
+		if appendErr := appendExprToVecWithPrepareParams(
+			vec, expr, pkType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 			vec.Free(mp)
 			return nil, appendErr
 		}
@@ -601,7 +602,8 @@ func materializeCompositeValuesUnified(
 		}
 		for i, elem := range tup.Exprs {
 			colType := tblStuff.def.colTypes[pkColIdxes[i]]
-			if appendErr := appendExprToVec(compVecs[i], elem, colType, ses.GetTimeZone(), mp); appendErr != nil {
+			if appendErr := appendExprToVecWithPrepareParams(
+				compVecs[i], elem, colType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 				return nil, appendErr
 			}
 		}
@@ -618,6 +620,12 @@ func materializeCompositeValuesUnified(
 		return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", encErr)
 	}
 	defer encodedVec.Free(mp)
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	// serial() is an opaque-binary expression, while an upgraded table may
+	// still expose the legacy zero identity on its persisted composite-key
+	// column. Match the table's physical key type before initializing/probing
+	// the hashmap; the encoded bytes themselves are identical.
+	*encodedVec.GetType() = pkType
 
 	// Sort the encoded vector (lexicographic order preserves composite key ordering).
 	encodedVec.InplaceSort()
@@ -628,7 +636,6 @@ func materializeCompositeValuesUnified(
 	}
 
 	// Build ZoneMap segments.
-	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	if canBuildSegments {
 		pkFilter = buildPKFilterFromVec(encodedVec, pkType, tblStuff.def.pkSeqnum)
 		if pkFilter != nil {
@@ -924,6 +931,7 @@ func materializeSubqueryUnified(
 						sqlRet.Close()
 						return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", err)
 					}
+					*pkVec.GetType() = pkType
 					ownedPK = true
 				} else {
 					pkVec, ownedPK, err = coercePickKeyVectorToType(ses, bat.Vecs[0], pkType, mp)
@@ -1284,6 +1292,19 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	return appendExprToVecWithPrepareParams(vec, expr, pkType, tz, mp, nil)
+}
+
+// appendExprToVecWithPrepareParams appends a literal or prepared parameter
+// value to a typed vector.
+func appendExprToVecWithPrepareParams(
+	vec *vector.Vector,
+	expr tree.Expr,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+	prepareParams *vector.Vector,
+) error {
 	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
@@ -1311,6 +1332,18 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
 		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, tz, mp)
+	case *tree.ParamExpr:
+		if prepareParams == nil {
+			return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter has no execution value")
+		}
+		paramIndex := e.Offset - 1
+		if paramIndex < 0 || paramIndex >= prepareParams.Length() {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d is out of range", e.Offset)
+		}
+		if prepareParams.IsNull(uint64(paramIndex)) {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d must not be NULL", e.Offset)
+		}
+		return appendStrValToVec(vec, prepareParams.GetStringAt(paramIndex), pkType, tz, mp)
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)

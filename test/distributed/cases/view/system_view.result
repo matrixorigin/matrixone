@@ -1,7 +1,4 @@
 begin;
-select sleep(5);
-sleep(5)
-0
 select count(*) > 0 from mo_sessions() t;
 count(*) > 0
 1

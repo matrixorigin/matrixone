@@ -58,6 +58,7 @@ type mergeObjectsEntry struct {
 	pageIds              []*common.ID
 	isTombstone          bool
 	delTbls              map[objectio.ObjectId]map[uint16]struct{}
+	transferredDels      transferredDeleteSet
 	collectTs            types.TS
 	transCntBeforeCommit int
 }
@@ -101,7 +102,9 @@ func NewMergeObjectsEntry(
 
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
+		entry.transferredDels = make(transferredDeleteSet)
 		entry.collectTs = rt.Now()
+		objectio.WaitInjected(objectio.FJ_DataMergeAfterCollectTS)
 		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}
@@ -227,6 +230,7 @@ func (entry *mergeObjectsEntry) RollbackTransferState() {
 	}
 	entry.pageIds = nil
 	entry.delTbls = nil
+	entry.transferredDels = nil
 }
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
@@ -257,12 +261,12 @@ func (entry *mergeObjectsEntry) ApplyCommit(_ string) (err error) {
 }
 
 func (entry *mergeObjectsEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	droppedObjs := make([]*common.ID, 0)
+	droppedObjs := make([]*common.ID, 0, len(entry.droppedObjs))
 	for _, blk := range entry.droppedObjs {
 		id := blk.AsCommonID()
 		droppedObjs = append(droppedObjs, id)
 	}
-	createdObjs := make([]*common.ID, 0)
+	createdObjs := make([]*common.ID, 0, len(entry.createdObjs))
 	for _, blk := range entry.createdObjs {
 		id := blk.AsCommonID()
 		createdObjs = append(createdObjs, id)
@@ -309,7 +313,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	deletesPK := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 
 	count := len(rowid)
-	transCnt += count
+	pendingDels := make(transferredDeleteSet)
 	var rowIDVec, pkVec containers.Vector
 	defer func() {
 		if rowIDVec != nil {
@@ -320,6 +324,9 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		}
 	}()
 	for i := 0; i < count; i++ {
+		if entry.transferredDels.contains(rowid[i]) || pendingDels.contains(rowid[i]) {
+			continue
+		}
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
 		blkOffset := blkOffsetBase + blkOffsetInObj
@@ -357,10 +364,13 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*targetObj.GetID(), destpos.BlkIdx, destpos.RowIdx)
 		rowIDVec.Append(rowID, false)
 		pkVec.Append(deletesPK.Get(i), false)
+		pendingDels.add(rowid[i])
+		transCnt++
 	}
 	if rowIDVec != nil {
 		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
 		if err == nil {
+			entry.transferredDels.merge(pendingDels)
 			if _, sarg, injected := fault.TriggerFault(objectio.FJ_TransferErrorAfterTransfer); injected {
 				err = moerr.NewInternalErrorNoCtx(sarg)
 			}

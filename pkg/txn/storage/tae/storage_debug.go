@@ -113,9 +113,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpSnapshotRead):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleSnapshotRead)
 		if err != nil {
-			return types.Encode(&cmd_util.SnapshotReadResp{
-				Succeed: false,
-			})
+			return nil, err
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpInterceptCommit):

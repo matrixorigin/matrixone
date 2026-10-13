@@ -45,20 +45,22 @@ func TestQueueEnqueue(t *testing.T) {
 
 	t.Run("context canceled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func(ctx context.Context) {
-			q := newDataQueue(10, nil)
-			for i := 0; i < 20; i++ {
-				w := newWrappedData(nil, 0, nil)
-				q.enqueue(ctx, w)
-			}
-			wg.Done()
-		}(ctx)
-		time.Sleep(time.Millisecond * 200)
+		q := newDataQueue(10, nil).(*dataQueue)
+		for i := 0; i < cap(q.queue); i++ {
+			q.enqueue(context.Background(), newWrappedData(nil, 0, nil))
+		}
+
+		done := make(chan struct{})
+		go func() {
+			q.enqueue(ctx, newWrappedData(nil, 0, nil))
+			close(done)
+		}()
 		cancel()
-		wg.Wait()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("enqueue did not observe cancellation")
+		}
 	})
 
 	t.Run("ignore", func(t *testing.T) {

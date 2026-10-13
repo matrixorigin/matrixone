@@ -275,6 +275,11 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 	}
 	//check whether visible and dropped.
 	visible, dropped := entry.GetVisibility(txn)
+	if !visible {
+		entry.RLock()
+		visible = entry.sessionTemporarySchemaLocked(txn) != nil
+		entry.RUnlock()
+	}
 	if !visible || dropped {
 		return nil, moerr.GetOkExpectedEOB()
 	}

@@ -32,7 +32,7 @@ func expressionRecoveryBytes(
 	duplicate bool,
 ) (uint64, error) {
 	if rows < 0 || len(exprs) == 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	var total, replacement uint64
 	for _, expr := range exprs {
@@ -60,7 +60,7 @@ func expressionVectorPeak(
 	duplicate bool,
 ) (uint64, error) {
 	if expr == nil || rows < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	total, root, err := expressionTreePeakWithSelection(
 		proc, expr, uint64(rows), false)
@@ -80,14 +80,14 @@ func expressionTreePeakWithSelection(
 	mayReceivePartialSelection bool,
 ) (total uint64, output uint64, err error) {
 	if expr == nil {
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrExecutionResourceInvalid
 	}
 	switch node := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return 0, 0, nil
 	case *plan.Expr_F:
 		if node.F == nil {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, process.ErrExecutionResourceInvalid
 		}
 		fid := int32(-1)
 		if node.F.Func != nil {
@@ -111,7 +111,7 @@ func expressionTreePeakWithSelection(
 		}
 	case *plan.Expr_P:
 		if node.P == nil || proc == nil || proc.GetPrepareParams() == nil {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, process.ErrExecutionResourceInvalid
 		}
 		paramPeak, paramErr := expressionParamPeak(proc, node.P.Pos)
 		if paramErr != nil {
@@ -127,7 +127,7 @@ func expressionTreePeakWithSelection(
 		*plan.Expr_Fold, *plan.Expr_T:
 		// Leaf executors may materialize their declared output below.
 	default:
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrExecutionResourceInvalid
 	}
 
 	output, err = expressionResultPeak(expr, rows)
@@ -206,7 +206,7 @@ func expressionFunctionPrivatePeak(expr *plan.Expr) (uint64, error) {
 	}
 	capacity, ok := types.PackerCapacityUpperBound(payload, maxAppend)
 	if !ok {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return capacity, nil
 }
@@ -218,11 +218,11 @@ func serialExpressionPackerBounds(fn *plan.Function) (
 	err error,
 ) {
 	if fn == nil {
-		return 0, 0, false, process.ErrHashBuildBudgetInvalid
+		return 0, 0, false, process.ErrExecutionResourceInvalid
 	}
 	for _, arg := range fn.Args {
 		if arg == nil {
-			return 0, 0, false, process.ErrHashBuildBudgetInvalid
+			return 0, 0, false, process.ErrExecutionResourceInvalid
 		}
 		component, ok := function.SerialEncodedTypeSizeBound(types.New(
 			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
@@ -269,7 +269,7 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 	}
 	header, ok := mpool.GrowCapacity(0, int64(types.VarlenaSize))
 	if !ok || header < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	peak := uint64(header)
 	if len(value) <= types.VarlenaInlineSize {
@@ -277,7 +277,7 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 	}
 	area, ok := mpool.GrowCapacity(0, int64(len(value)))
 	if !ok || area < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return recoveryCheckedAdd(peak, uint64(area))
 }
@@ -317,7 +317,7 @@ func expressionAllocationCapacityUpperBound(required uint64) (uint64, error) {
 		return 0, nil
 	}
 	if mpool.CapLimit <= 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	limit := uint64(mpool.CapLimit)
 	if required >= limit {
@@ -325,7 +325,7 @@ func expressionAllocationCapacityUpperBound(required uint64) (uint64, error) {
 	}
 	capacity, ok := mpool.GrowCapacity(int64(required-1), int64(required))
 	if !ok || capacity < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return uint64(capacity), nil
 }

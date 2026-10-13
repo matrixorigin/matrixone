@@ -1,0 +1,51 @@
+create database if not exists ivf_wrapped;
+use ivf_wrapped;
+set experimental_ivf_index=1;
+create table t (id int primary key, v vecf32(4));
+create index idx using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
+insert into t values
+(1,'[0.10,0.20,0.30,0.40]'),
+(2,'[0.20,0.30,0.40,0.50]'),
+(3,'[0.90,0.80,0.70,0.60]'),
+(4,'[0.50,0.50,0.50,0.50]'),
+(5,'[0.11,0.21,0.31,0.41]');
+select id from t order by l2_distance(v,'[0.15,0.25,0.35,0.45]') limit 3;
+➤ id[4,32,0]  𝄀
+5  𝄀
+1  𝄀
+2
+select id, cast(l2_distance(v,'[0.15,0.25,0.35,0.45]') as decimal(10,3)) as d
+from t order by l2_distance(v,'[0.15,0.25,0.35,0.45]') limit 3;
+➤ id[4,32,0]  ¦  d[3,10,3]  𝄀
+5  ¦  0.080  𝄀
+1  ¦  0.100  𝄀
+2  ¦  0.100
+select id, round(l2_distance(v,'[0.15,0.25,0.35,0.45]'),3) as d
+from t order by l2_distance(v,'[0.15,0.25,0.35,0.45]') limit 3;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+5  ¦  0.08  𝄀
+1  ¦  0.1  𝄀
+2  ¦  0.1
+select id, round(l2_distance(v,'[0.15,0.25,0.35,0.45]')+1,3) as d
+from t order by l2_distance(v,'[0.15,0.25,0.35,0.45]') limit 3;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+5  ¦  1.08  𝄀
+1  ¦  1.1  𝄀
+2  ¦  1.1
+select id, round(l2_distance(v,'[0.15,0.25,0.35,0.45]'),3) as d from t order by d limit 3;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+5  ¦  0.08  𝄀
+1  ¦  0.1  𝄀
+2  ¦  0.1
+select id from t order by cast(l2_distance(v,'[0.15,0.25,0.35,0.45]') as decimal(10,3)) limit 3;
+➤ id[4,32,0]  𝄀
+5  𝄀
+1  𝄀
+2
+select id, round(l2_distance(v,'[0.90,0.80,0.70,0.60]'),4) as d_to_b
+from t order by l2_distance(v,'[0.15,0.25,0.35,0.45]') limit 3;
+➤ id[4,32,0]  ¦  d_to_b[8,53,31]  𝄀
+5  ¦  1.0772  𝄀
+1  ¦  1.0954  𝄀
+2  ¦  0.9165
+drop database ivf_wrapped;

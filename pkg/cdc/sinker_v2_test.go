@@ -17,9 +17,12 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -79,6 +82,133 @@ func TestMysqlSinker2_ErrorHandling(t *testing.T) {
 		sinker.SetError(nil)
 		assert.Nil(t, sinker.Error())
 	})
+
+	t.Run("PreserveOwnerFenceClassification", func(t *testing.T) {
+		sinker := &mysqlSinker2{}
+		fence := NewOwnerFence(func(ctx context.Context) error {
+			return moerr.NewInvalidTask(ctx, "old-owner", 1)
+		})
+		sinker.SetError(fence.Check(context.Background()))
+		require.True(t, IsOwnerFenceLostError(sinker.Error()))
+	})
+
+	t.Run("PreserveTargetLockRetryClassification", func(t *testing.T) {
+		sinker := &mysqlSinker2{}
+		sinker.SetError(newRetryableTargetLockError(errors.New("target unavailable")))
+		require.True(t, IsRetryableTargetLockError(sinker.Error()))
+	})
+
+	t.Run("PreserveConnectionRetryClassification", func(t *testing.T) {
+		sinker := &mysqlSinker2{}
+		sinker.SetError(newRetryableConnectionError(errors.New("target unavailable")))
+		require.True(t, IsRetryableConnectionError(sinker.Error()))
+	})
+}
+
+func TestWatermarkValidationUsesGenerationBeforeTimestamp(t *testing.T) {
+	highOld := types.BuildTS(1000, 0)
+	lowNew := types.BuildTS(100, 0)
+	require.False(t, isWatermarkAheadOfOutput(highOld, 11, lowNew, 12),
+		"retired generation timestamp must not reject a new full snapshot")
+	require.True(t, isWatermarkAheadOfOutput(lowNew, 12, highOld, 11),
+		"an obsolete pipeline must reject progress from a newer generation")
+	require.True(t, isWatermarkAheadOfOutput(highOld, 12, lowNew, 12),
+		"timestamp order remains monotonic within one generation")
+}
+
+func TestMysqlSinker2_TargetOwnershipCleanupSerializesWithCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cleanup func(*mysqlSinker2) error
+	}{
+		{"release", func(s *mysqlSinker2) error { return s.releaseTargetOwnership() }},
+		{"reset", func(s *mysqlSinker2) error { s.Reset(); return nil }},
+		{"close", func(s *mysqlSinker2) error { s.Close(); return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			mock.ExpectQuery("SELECT GET_LOCK").
+				WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+				WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+			mock.ExpectQuery("SELECT RELEASE_LOCK").
+				WithArgs(sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+			mock.ExpectClose()
+
+			entered, finishFence := make(chan struct{}), make(chan struct{})
+			var finishOnce sync.Once
+			releaseFence := func() { finishOnce.Do(func() { close(finishFence) }) }
+			fence := NewOwnerFence(func(ctx context.Context) error {
+				return moerr.NewInvalidTask(ctx, "old-owner", 1)
+			})
+			executor := &Executor{
+				conn:               db,
+				targetLockIdentity: "account/task/db/table",
+				targetOwnerFence: func(ctx context.Context) error {
+					close(entered)
+					select {
+					case <-finishFence:
+						return fence.Check(ctx)
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				},
+			}
+			sinker := NewMysqlSinker2(executor, 0, "task", &DbTableInfo{}, nil, nil, nil)
+			defer func() {
+				releaseFence()
+				sinker.Close()
+			}()
+			commandDone := make(chan struct{})
+			go func() {
+				sinker.processCommand(ctx, NewBeginCommand())
+				close(commandDone)
+			}()
+			select {
+			case <-entered:
+			case <-commandDone:
+				t.Fatal("BEGIN did not reach the target ownership fence")
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// The fence runs after the pinned target session is published. That
+			// session must remain exclusively owned until BEGIN has unwound.
+			if sinker.executorMu.TryLock() {
+				sinker.executorMu.Unlock()
+				t.Fatal("command does not own the executor during the target fence")
+			}
+			cleanupStarted := make(chan struct{})
+			cleanupDone := make(chan error, 1)
+			go func() {
+				close(cleanupStarted)
+				cleanupDone <- tc.cleanup(sinker)
+			}()
+			<-cleanupStarted
+			releaseFence()
+			select {
+			case <-commandDone:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case err = <-cleanupDone:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if tc.name != "reset" {
+				require.True(t, IsOwnerFenceLostError(sinker.Error()))
+			}
+			require.Nil(t, executor.targetLockConn)
+			require.False(t, executor.HasActiveTx())
+			sinker.Close()
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {
@@ -307,7 +437,10 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 	t.Run("InvalidBatchCommand_CleansUp", func(t *testing.T) {
 		mp, err := mpool.NewMPool("invalid-command-cleanup", 0, mpool.NoFixed)
 		require.NoError(t, err)
-		defer mpool.DeleteMPool(mp)
+		defer func() {
+			require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+			mpool.DeleteMPool(mp)
+		}()
 
 		cmd := NewInsertBatchCommand(
 			&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
@@ -499,6 +632,10 @@ func TestMysqlSinker2_SendAfterClose_NoPanic(t *testing.T) {
 }
 
 func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
+	synctest.Test(t, testMysqlSinker2CloseWhileSend)
+}
+
+func testMysqlSinker2CloseWhileSend(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -535,7 +672,7 @@ func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
 		sinker.SendDummy()
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	synctest.Wait()
 
 	done := make(chan struct{})
 	go func() {
@@ -552,10 +689,115 @@ func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMysqlSinker2_ConsumerExitUnblocksAndRejectsCommands(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal func(context.CancelFunc, *ActiveRoutine)
+	}{
+		{
+			name: "context cancellation",
+			signal: func(cancel context.CancelFunc, _ *ActiveRoutine) {
+				cancel()
+			},
+		},
+		{
+			name: "pause",
+			signal: func(_ context.CancelFunc, ar *ActiveRoutine) {
+				ar.ClosePause()
+			},
+		},
+		{
+			name: "cancel",
+			signal: func(_ context.CancelFunc, ar *ActiveRoutine) {
+				ar.CloseCancel()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, _, err := sqlmock.New()
+			require.NoError(t, err)
+
+			tableDef := &plan.TableDef{
+				Name: "test",
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				},
+				Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+				Name2ColIndex: map[string]int32{"id": 0},
+			}
+			builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+			require.NoError(t, err)
+
+			ar := NewCdcActiveRoutine()
+			sinker := NewMysqlSinker2(
+				&Executor{conn: db}, 1, "task-1",
+				&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+				nil, builder, ar,
+			)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			go sinker.Run(ctx, ar)
+
+			test.signal(cancel, ar)
+			select {
+			case <-sinker.consumerDone:
+			case <-time.After(time.Second):
+				t.Fatal("sinker consumer did not stop after lifecycle signal")
+			}
+			require.Error(t, sinker.Error(), "consumer exit must reject later commands")
+			sinker.ClearError() // Rollback clears the triggering error before sending.
+			require.NoError(t, sinker.Error())
+
+			var permitReleases atomic.Int32
+			batchCommand := NewInsertBatchCommand(
+				&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
+				nil,
+				types.BuildTS(1, 0),
+				types.BuildTS(2, 0),
+			)
+			batchCommand.InsertBatch.SetRowCount(1)
+			batchCommand.snapshotPermit = &snapshotPermit{
+				release: func(bool) { permitReleases.Add(1) },
+			}
+			commands := []*Command{
+				NewBeginCommand(),
+				batchCommand,
+				NewCommitCommand(),
+				NewDummyCommand(),
+			}
+			for _, cmd := range commands {
+				sent := make(chan struct{})
+				go func(cmd *Command) {
+					sinker.sendCommand(cmd)
+					close(sent)
+				}(cmd)
+				select {
+				case <-sent:
+				case <-time.After(time.Second):
+					t.Fatalf("command %s remained blocked after consumer exit", cmd.String())
+				}
+				require.Error(t, sinker.Error(),
+					"a command dropped after consumer exit must republish the terminal error")
+			}
+			require.Nil(t, batchCommand.InsertBatch)
+			require.Nil(t, batchCommand.snapshotPermit)
+			require.Equal(t, int32(1), permitReleases.Load())
+
+			sinker.Close()
+			require.NoError(t, db.Close())
+		})
+	}
+}
+
 func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	t.Run("SuccessfulInsert", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -593,11 +835,12 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		// Create batch
 		bat := batch.NewWithSize(2)
+		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
 		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp))
 		bat.SetRowCount(1)
 
 		fromTs := types.BuildTS(100, 0)
@@ -650,11 +893,12 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		// Create batch
 		bat := batch.NewWithSize(2)
+		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
 		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
-		vector.AppendFixed(bat.Vecs[0], int32(2), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(2), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp))
 		bat.SetRowCount(1)
 
 		fromTs := types.BuildTS(100, 0)
@@ -668,6 +912,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 		err = sinker.handleInsertBatch(ctx, cmd)
 
 		assert.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
@@ -712,40 +957,45 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 	})
 
 	t.Run("SendCommandWhileCloseCh_CleansBatch", func(t *testing.T) {
-		sinker := NewMysqlSinker2(
-			executor, 1, "task-2",
-			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
-			nil, builder, NewCdcActiveRoutine(),
-		)
+		synctest.Test(t, func(t *testing.T) {
+			sinker := NewMysqlSinker2(
+				executor, 1, "task-2",
+				&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+				nil, builder, NewCdcActiveRoutine(),
+			)
 
-		// Create a batch command
-		insertBatch := NewAtomicBatch(nil)
-		deleteBatch := NewAtomicBatch(nil)
-		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
+			// Create a batch command
+			insertBatch := NewAtomicBatch(nil)
+			deleteBatch := NewAtomicBatch(nil)
+			cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
 
-		// cmdCh is unbuffered — sendCommand will block on it.
-		// Close sinker in another goroutine to unblock via closeCh.
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sinker.sendCommand(cmd)
-		}()
+			// cmdCh is unbuffered — sendCommand will block on it.
+			// Close sinker in another goroutine to unblock via closeCh.
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sinker.sendCommand(cmd)
+			}()
 
-		time.Sleep(10 * time.Millisecond)
-		sinker.Close()
-		wg.Wait()
+			synctest.Wait()
+			sinker.Close()
+			wg.Wait()
 
-		// Batch should be cleaned via closeCh path
-		assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
-		assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+			// Batch should be cleaned via closeCh path
+			assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
+			assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+		})
 	})
 }
 
 func TestMysqlSinker2_SinkEarlyReturnCleansData(t *testing.T) {
 	mp, err := mpool.NewMPool("test_sink_cleanup", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -929,7 +1179,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -952,10 +1202,10 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			SourceTblName: "src_table",
 			SinkDbName:    "sink_db",
 			SinkTblName:   "sink_table",
-			IdChanged:     false,
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -975,61 +1225,55 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		sinker.Close()
 	})
 
-	t.Run("SuccessPath_WithIdChanged", func(t *testing.T) {
+	t.Run("SuccessPath_QuotesRawIdentifiersAndPreservesUniqueIndex", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
 
-		// Mock all SQL executions including DROP TABLE
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-
-		sinkUri := UriInfo{
-			SinkTyp:  CDCSinkType_MySQL,
-			User:     "test_user",
-			Password: "test_pass",
-			Ip:       "127.0.0.1",
-			Port:     3306,
+		for range 3 {
+			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 		}
 
-		dbTblInfo := &DbTableInfo{
-			SourceDbName:  "src_db",
-			SourceTblName: "src_table",
-			SinkDbName:    "sink_db",
-			SinkTblName:   "sink_table",
-			IdChanged:     true,
+		quotedDef := &plan.TableDef{
+			Name:   "bmsql_source", // Enables the existing bounded SQL recorder seam.
+			DbName: "source_db",
+			Cols: []*plan.ColDef{
+				{Name: "id`pk", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: false}},
+				{Name: "name`col", Typ: plan.Type{Id: int32(types.T_varchar)}, Default: &plan.Default{NullAbility: true}},
+			},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id`pk"}},
+			Name2ColIndex: map[string]int32{"id`pk": 0, "name`col": 1},
+			Indexes: []*plan.IndexDef{{
+				IndexName: "uk`name",
+				Parts:     []string{"name`col"},
+				Unique:    true,
+			}},
 		}
-
-		sinker, err := CreateMysqlSinker2(
-			sinkUri,
-			1,
-			"task-1",
-			dbTblInfo,
-			nil,
-			tableDef,
-			0,
-			1*time.Second,
-			NewCdcActiveRoutine(),
-			1024*1024,
-			CDCDefaultSendSqlTimeout,
+		info := &DbTableInfo{SinkDbName: "sink`db", SinkTblName: "sink`table"}
+		sink, err := CreateMysqlSinker2(
+			context.Background(),
+			UriInfo{SinkTyp: CDCSinkType_MySQL, User: "u", Password: "p", Ip: "127.0.0.1", Port: 3306},
+			1, "task-1", info, nil, quotedDef, 0, time.Second, NewCdcActiveRoutine(), 1024*1024, CDCDefaultSendSqlTimeout,
 		)
-
-		assert.NoError(t, err)
-		assert.NotNil(t, sinker)
-		assert.False(t, dbTblInfo.IdChanged, "IdChanged should be reset")
-		assert.NoError(t, mock.ExpectationsWereMet())
-		sinker.Close()
+		require.NoError(t, err)
+		sinker := sink.(*mysqlSinker2)
+		defer sinker.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+		require.Len(t, sinker.executor.debugTxnRecorder.txnSQL, 3)
+		require.Equal(t, "CREATE DATABASE IF NOT EXISTS `sink``db`", sinker.executor.debugTxnRecorder.txnSQL[0])
+		require.Equal(t, "USE `sink``db`", sinker.executor.debugTxnRecorder.txnSQL[1])
+		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[2], "CREATE TABLE IF NOT EXISTS `sink``db`.`sink``table`")
+		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[2], "UNIQUE KEY `uk``name` (`name``col`)")
+		require.Equal(t, "REPLACE INTO `sink``db`.`sink``table` (`id``pk`,`name``col`) VALUES ", string(sinker.builder.insertStem))
 	})
 
 	t.Run("NewExecutorFails", func(t *testing.T) {
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return nil, moerr.NewInternalErrorNoCtx("connection failed")
 		})
 		defer stub.Reset()
@@ -1048,6 +1292,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1071,7 +1316,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1092,6 +1337,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1116,7 +1362,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1138,6 +1384,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1157,60 +1404,12 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("DropTableFails", func(t *testing.T) {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		defer db.Close()
-
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
-			return db, nil
-		})
-		defer stub.Reset()
-
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("drop table failed"))
-
-		sinkUri := UriInfo{
-			SinkTyp:  CDCSinkType_MySQL,
-			User:     "test_user",
-			Password: "test_pass",
-			Ip:       "127.0.0.1",
-			Port:     3306,
-		}
-
-		dbTblInfo := &DbTableInfo{
-			SinkDbName:  "sink_db",
-			SinkTblName: "sink_table",
-			IdChanged:   true,
-		}
-
-		sinker, err := CreateMysqlSinker2(
-			sinkUri,
-			1,
-			"task-1",
-			dbTblInfo,
-			nil,
-			tableDef,
-			0,
-			1*time.Second,
-			NewCdcActiveRoutine(),
-			1024*1024,
-			CDCDefaultSendSqlTimeout,
-		)
-
-		assert.Error(t, err)
-		assert.Nil(t, sinker)
-		assert.Contains(t, err.Error(), "drop table failed")
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
 	t.Run("CreateTableFails", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1233,6 +1432,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1257,7 +1457,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1290,6 +1490,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1306,6 +1507,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "cluster table is not supported")
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ExternalTableNotSupported", func(t *testing.T) {
@@ -1313,7 +1515,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1346,6 +1548,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1362,6 +1565,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "external table is not supported")
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ConcurrentCreation", func(t *testing.T) {
@@ -1376,7 +1580,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 
-			stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 				return db, nil
 			})
 			defer stub.Reset()
@@ -1402,6 +1606,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			}
 
 			sinker, err := CreateMysqlSinker2(
+				context.Background(),
 				sinkUri,
 				uint64(i),
 				fmt.Sprintf("task-%d", i),
@@ -1436,12 +1641,11 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
 
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -1459,6 +1663,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			context.Background(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1472,10 +1677,8 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			CDCDefaultSendSqlTimeout,
 		)
 
-		// Should handle nil tableDef gracefully
-		if err == nil {
-			assert.NotNil(t, sinker)
-			sinker.Close()
-		}
+		require.Error(t, err)
+		require.Nil(t, sinker)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }

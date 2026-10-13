@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,8 +52,8 @@ func (f *failLegacyReloadFS) Read(
 	ctx context.Context,
 	ioVector *fileservice.IOVector,
 ) error {
-	// The first legacy read loads rowid while commitTS is synthesized. The
-	// compatibility reload then has two physical entries: rowid + commitTS.
+	// The first legacy read loads rowid while commitTS and abort are synthesized.
+	// The compatibility reload then has two physical entries: rowid + commitTS.
 	if len(ioVector.Entries) == 2 && f.failed.CompareAndSwap(false, true) {
 		f.firstLeaseReleasedOnFail.Store(f.outstanding.Load() == 0)
 		return fmt.Errorf("injected legacy commit-ts reload failure")
@@ -87,56 +88,197 @@ type releaseTrackingData struct {
 	outstanding *atomic.Int32
 }
 
-func TestValidateTombstoneCommitTSColumn(t *testing.T) {
+func TestLoadColumnsDataIntoAndTopNRejectsInvalidContract(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	destination := vector.NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	top := &objectio.IndexReaderTopOp{}
+	selector := func() ([]int64, error) { return []int64{}, nil }
+
+	call := func(
+		columns []uint16,
+		typs []types.Type,
+		destinations []*vector.Vector,
+		topColumn uint16,
+		deferredColumns []uint16,
+		deferredTypes []types.Type,
+		deferredDestinations []*vector.Vector,
+		selectTopRows func() ([]int64, error),
+		orderByLimit *objectio.IndexReaderTopOp,
+		pool *mpool.MPool,
+	) error {
+		_, _, _, err := LoadColumnsDataIntoAndTopN(
+			ctx, columns, typs, nil, objectio.Location{}, destinations, nil,
+			topColumn, types.T_array_float32.ToType(), deferredColumns, deferredTypes,
+			deferredDestinations, selectTopRows, orderByLimit, pool, fileservice.Policy(0),
+		)
+		return err
+	}
+
+	t.Run("mismatched filter metadata", func(t *testing.T) {
+		err := call([]uint16{0}, nil, []*vector.Vector{destination}, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "filter column count")
+	})
+	t.Run("mismatched deferred metadata", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{2}, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "deferred object column count")
+	})
+	t.Run("empty filter columns", func(t *testing.T) {
+		err := call(nil, nil, nil, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "no object filter columns")
+	})
+	t.Run("nil selector and topn", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, nil, top, mp)
+		require.ErrorContains(t, err, "nil fused object topn input")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, selector, nil, mp)
+		require.ErrorContains(t, err, "nil fused object topn input")
+	})
+	t.Run("nil mpool", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, selector, top, nil)
+		require.ErrorContains(t, err, "nil mpool")
+	})
+	t.Run("invalid column ownership", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{nil}, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "nil destination")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 0, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "also a filter column")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{2}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{nil}, selector, top, mp)
+		require.ErrorContains(t, err, "nil destination for deferred")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{1}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, selector, top, mp)
+		require.ErrorContains(t, err, "also a deferred column")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, selector, top, mp)
+		require.ErrorContains(t, err, "also a filter column")
+	})
+}
+
+func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	valid := vector.NewVec(types.T_TS.ToType())
-	for i := int64(1); i <= 3; i++ {
-		require.NoError(t, vector.AppendFixed(valid, types.BuildTS(i, 0), false, mp))
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	for _, row := range []struct {
+		key     string
+		commit  types.TS
+		aborted bool
+	}{
+		{key: "live", commit: types.BuildTS(5, 0)},
+		{key: "aborted", commit: types.BuildTS(6, 0), aborted: true},
+		{key: "future", commit: types.BuildTS(20, 0)},
+	} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(row.key), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.commit, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], row.aborted, false, mp))
 	}
-	column, err := ValidateTombstoneCommitTSColumn(3, valid)
+	input.SetRowCount(3)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
 	require.NoError(t, err)
-	require.Equal(t, types.BuildTS(1, 0), column.At(0))
-	require.Equal(t, types.BuildTS(3, 0), column.At(2))
-	valid.Free(mp)
-
-	missing := vector.NewConstNull(types.T_TS.ToType(), 3, mp)
-	_, err = ValidateTombstoneCommitTSColumn(3, missing)
-	require.ErrorContains(t, err, "unavailable")
-	missing.Free(mp)
-
-	partial := vector.NewVec(types.T_TS.ToType())
-	require.NoError(t, vector.AppendFixed(partial, types.BuildTS(1, 0), false, mp))
-	_, err = ValidateTombstoneCommitTSColumn(3, partial)
-	require.ErrorContains(t, err, "1 rows, expected 3")
-	partial.Free(mp)
-
-	shortBacking := vector.NewVec(types.T_TS.ToType())
-	require.NoError(t, vector.AppendFixed(shortBacking, types.BuildTS(1, 0), false, mp))
-	shortBacking.SetLength(3)
-	_, err = ValidateTombstoneCommitTSColumn(3, shortBacking)
-	require.ErrorContains(t, err, "backing bytes")
-	shortBacking.Free(mp)
-
-	nullCommitTS := vector.NewVec(types.T_TS.ToType())
-	require.NoError(t, vector.AppendFixed(nullCommitTS, types.BuildTS(1, 0), true, mp))
-	_, err = ValidateTombstoneCommitTSColumn(1, nullCommitTS)
-	require.ErrorContains(t, err, "contains null rows")
-	nullCommitTS.Free(mp)
-
-	wrongType := vector.NewVec(types.T_int64.ToType())
-	_, err = ValidateTombstoneCommitTSColumn(0, wrongType)
-	require.ErrorContains(t, err, "expected TS")
-	wrongType.Free(mp)
-
-	constant, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(1, 0), 3, mp)
+	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
-	column, err = ValidateTombstoneCommitTSColumn(3, constant)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	snapshot := types.BuildTS(10, 0)
+
+	destination := vector.NewVec(types.T_varchar.ToType())
+	defer destination.Free(mp)
+	deleteMask, _, err := LoadColumnsDataInto(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		fs,
+		location,
+		[]*vector.Vector{destination},
+		nil,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
 	require.NoError(t, err)
-	require.Equal(t, types.BuildTS(1, 0), column.At(0))
-	require.Equal(t, types.BuildTS(1, 0), column.At(2))
-	constant.Free(mp)
+	defer deleteMask.Release()
+	require.True(t, deleteMask.Contains(1), "aborted row must be hidden from full scans")
+	require.True(t, deleteMask.Contains(2), "future row must be hidden from full scans")
+	require.False(t, deleteMask.Contains(0))
+
+	search := objectio.NewReadFilterSearch(
+		types.T_varchar,
+		[][]byte{[]byte("live"), []byte("aborted"), []byte("future")},
+	)
+	sels, _, err := LoadColumnDataBySearch(
+		ctx,
+		0,
+		types.T_varchar.ToType(),
+		fs,
+		location,
+		search,
+		false,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, sels, "cached search must return only live visible rows")
+}
+
+func TestReadDeletesSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	defer input.Clean(mp)
+	blockID := types.Blockid{}
+	for offset := uint32(1); offset <= 2; offset++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], types.BuildTS(1, 0), false, mp))
+	}
+	input.SetRowCount(2)
+
+	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	location := objectio.BuildLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
+	)
+	cacheVectors := containers.NewVectors(3)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, 2, cacheVectors[0].Length())
+	require.Equal(t, 2, cacheVectors[1].Length())
+	require.Equal(t, 2, cacheVectors[2].Length())
+	require.True(t, cacheVectors[2].IsConstNull())
+	abortColumn, err := ValidateTombstoneAbortColumn(2, &cacheVectors[2])
+	require.NoError(t, err)
+	require.False(t, abortColumn.IsPresent())
 }
 
 func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
@@ -168,8 +310,8 @@ func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
 	}
 	input.SetRowCount(2)
 
-	// The old Backup path used the generic writer. It persisted commitTS as
-	// dense user seqnum 2 instead of hidden SEQNUM_COMMITTS.
+	// v4.1 Backup used the generic writer. It persisted the three columns as
+	// dense user seqnums [0, 1, 2], even though the trailing TS is commitTS.
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := NewBlockWriter(fs, name.String())
 	require.NoError(t, err)
@@ -193,7 +335,7 @@ func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
 	trackingFS := &releaseTrackingFS{FileService: fs}
 
 	t.Run("timestamp primary key remains distinct", func(t *testing.T) {
-		cacheVectors := containers.NewVectors(3)
+		cacheVectors := containers.NewVectors(4)
 		pkType := types.T_TS.ToType()
 		_, release, err := ReadDeletes(ctx, location, trackingFS, false, cacheVectors, &pkType)
 		require.NoError(t, err)
@@ -226,7 +368,7 @@ func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
 		failingFS := &failLegacyReloadFS{
 			releaseTrackingFS: &releaseTrackingFS{FileService: fs},
 		}
-		cacheVectors := containers.NewVectors(2)
+		cacheVectors := containers.NewVectors(3)
 		_, release, err := ReadDeletes(ctx, location, failingFS, false, cacheVectors, nil)
 		require.ErrorContains(t, err, "injected legacy commit-ts reload failure")
 		require.Nil(t, release)
@@ -274,7 +416,7 @@ func TestReadDeletesBroadcastsPersistedConstantCommitTS(t *testing.T) {
 	location := objectio.BuildLocation(
 		name, blocks[0].GetExtent(), uint32(input.RowCount()), blocks[0].GetID(),
 	)
-	cacheVectors := containers.NewVectors(2)
+	cacheVectors := containers.NewVectors(3)
 	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
 	require.NoError(t, err)
 	require.True(t, cacheVectors[1].IsConst())
@@ -331,18 +473,15 @@ func TestTimestampPrimaryKeyWithoutCommitTSIsRejected(t *testing.T) {
 	)
 	snapshot := types.BuildTS(10, 0)
 	row := types.NewRowid(&blockID, 1)
-	trackingFS := &releaseTrackingFS{FileService: fs}
 
 	t.Run("non-CN point lookup", func(t *testing.T) {
-		_, err := IsRowDeletedByLocation(ctx, &snapshot, &row, location, trackingFS, false)
+		_, err := IsRowDeletedByLocation(ctx, &snapshot, &row, location, fs, false)
 		require.ErrorContains(t, err, "commit-ts column is unavailable")
-		require.Zero(t, trackingFS.outstanding.Load())
 	})
 
 	t.Run("non-CN block mask", func(t *testing.T) {
-		_, err := FillBlockDeleteMask(ctx, &snapshot, &blockID, location, trackingFS, false)
+		_, err := FillBlockDeleteMask(ctx, &snapshot, &blockID, location, fs, false)
 		require.ErrorContains(t, err, "commit-ts column is unavailable")
-		require.Zero(t, trackingFS.outstanding.Load())
 	})
 
 	t.Run("CN-created path", func(t *testing.T) {
@@ -352,21 +491,49 @@ func TestTimestampPrimaryKeyWithoutCommitTSIsRejected(t *testing.T) {
 	})
 }
 
-func TestEvalDeleteMaskRejectsMissingCommitTS(t *testing.T) {
+func TestReadDeletesRejectsMalformedAbortColumn(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	var blockID types.Blockid
-	rowIDs := vector.NewVec(types.T_Rowid.ToType())
-	require.NoError(t, vector.AppendFixed(rowIDs, types.NewRowid(&blockID, 1), false, mp))
-	defer rowIDs.Free(mp)
-	missingCommitTS := vector.NewConstNull(types.T_TS.ToType(), 1, mp)
-	defer missingCommitTS.Free(mp)
 
-	rows, err := EvalDeleteMaskFromDNCreatedTombstones(
-		rowIDs, missingCommitTS, objectio.BlockObject{}, &types.TS{}, &blockID,
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	blockID := types.Blockid{}
+	for offset := uint32(1); offset <= 3; offset++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
+	}
+	require.NoError(t, vector.AppendFixed(input.Vecs[2], false, false, mp))
+	input.SetRowCount(3)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
 	)
-	require.ErrorContains(t, err, "commit-ts column is unavailable")
-	require.False(t, rows.IsValid())
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	location := objectio.BuildLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
+	)
+	cacheVectors := containers.NewVectors(3)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
+	require.Error(t, err)
+	require.Nil(t, release)
 }
 
 func (d *releaseTrackingData) Slice(length int) fscache.Data {
@@ -621,4 +788,94 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	require.Len(t, vectors, 1)
 	require.Equal(t, types.BuildTS(42, 0), vectors[0].Get(0))
 	vectors[0].Close()
+}
+
+func TestObjectReadersRejectEmptyLocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	destination := vector.NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+
+	readers := []struct {
+		name string
+		read func(objectio.Location) error
+	}{
+		{
+			name: "cache vectors",
+			read: func(location objectio.Location) error {
+				_, _, _, err := LoadColumnsData(
+					context.Background(), nil, nil, nil, location, nil, nil, 0,
+				)
+				return err
+			},
+		},
+		{
+			name: "scoped vectors",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadColumnsDataInto(
+					context.Background(),
+					[]uint16{0},
+					[]types.Type{types.T_int64.ToType()},
+					nil,
+					location,
+					[]*vector.Vector{destination},
+					nil,
+					nil,
+					mp,
+					0,
+				)
+				return err
+			},
+		},
+		{
+			name: "TN vectors",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadColumns2(
+					context.Background(), nil, nil, nil, location, 0, false, nil,
+				)
+				return err
+			},
+		},
+		{
+			name: "whole block",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadOneBlock(
+					context.Background(), nil, location, objectio.SchemaData,
+				)
+				return err
+			},
+		},
+		{
+			name: "legacy object reader",
+			read: func(location objectio.Location) error {
+				_, err := NewObjectReader(nil, location)
+				return err
+			},
+		},
+	}
+
+	for _, test := range []struct {
+		name     string
+		location objectio.Location
+	}{
+		{name: "missing encoding"},
+		{
+			name: "truncated encoding",
+			location: append(
+				objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+			),
+		},
+		{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, reader := range readers {
+				t.Run(reader.name, func(t *testing.T) {
+					err := reader.read(test.location)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+				})
+			}
+		})
+	}
+	require.Zero(t, destination.Length())
+	require.Zero(t, mp.CurrNB())
 }

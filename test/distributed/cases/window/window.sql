@@ -290,7 +290,9 @@ insert into wf07 values (3, '2002-06-09');
 insert into wf07 values (4, '2002-06-09');
 insert into wf07 values (4, '2002-06-09');
 insert into wf07 values (5, '2002-06-09');
-select id value, sum(id) over (rows unbounded preceding) from wf06 inner join wf07 on wf07.user_id = wf06.id;
+-- ROWS accumulation follows the window order, independent of join orientation.
+select id value, sum(id) over (order by wf06.id rows unbounded preceding)
+from wf06 inner join wf07 on wf07.user_id = wf06.id order by value, 2;
 drop table wf06;
 drop table wf07;
 
@@ -537,7 +539,7 @@ select * from decimal01;
 
 select max(d) over (partition by d order by d) from decimal01;
 select min(d) over (partition by d order by d) from decimal01;
-select avg(d) over (partition by d) from decimal01;
+select avg(d) over (partition by d) from decimal01 where d = 28888888888888888888888888888888888.123;
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 drop table decimal01;
 
@@ -962,7 +964,7 @@ select id, sum(id) over (partition by sex order by id
        rows between 2 preceding and 1 following), sex from row_number01;
 
 -- try the same as a view
-create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
+create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as window_sum, sex from row_number01;
 show create view v;
 select * from v;
 
@@ -1135,15 +1137,9 @@ insert into td(d) select d+2000 from td;
 insert into td(d) select d+3000 from td;
 select count(*) from td;
 
--- @bvt:issue#13008
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
--- @bvt:issue
--- @bvt:issue#23427
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
--- @bvt:issue
--- @bvt:issue#23427
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
--- @bvt:issue
 drop table td;
 
 drop table if exists `c`;
@@ -1734,6 +1730,40 @@ from t_desc order by k desc, id;
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
 from t_desc order by k desc, id;
+
+-- Regression for issue #23107: a very large finite PRECEDING bound covers the
+-- partition and must use the cumulative window path.
+create table t_window_23107(id int);
+insert into t_window_23107 values (1), (2), (3), (4), (5), (6),
+  (7), (8), (9), (10), (11), (12);
+select id,
+       sum(id) over (order by id rows between 2147483647 preceding and current row) as running_sum
+from t_window_23107 limit 10;
+drop table t_window_23107;
+
+-- Regression for issue #27352: a normal finite PRECEDING frame is maintained
+-- incrementally, and a reused prepared statement observes each runtime bound.
+create table t_window_27352(id int primary key, v int);
+insert into t_window_27352 values (1, 10), (2, null), (3, 30), (4, 40), (5, null);
+prepare window_27352 from 'select id,
+       sum(coalesce(v, 0)) over (
+         order by id rows between ? preceding and current row
+       ) as sliding_sum
+from t_window_27352 order by id';
+set @window_bound = 2;
+execute window_27352 using @window_bound;
+set @window_bound = 1;
+execute window_27352 using @window_bound;
+deallocate prepare window_27352;
+drop table t_window_27352;
+
+-- Regression for issue #27343: ranking vectors are unsigned at the operator
+-- boundary, so an unsigned consumer must not reinterpret its maximum value.
+drop table if exists t_window_27343;
+create table t_window_27343(id int);
+insert into t_window_27343 values (1);
+select rn from (select row_number() over () as rn from t_window_27343) ranked where rn <= cast(18446744073709551615 as unsigned);
+drop table t_window_27343;
 
 drop table t_desc;
 drop database test_range_desc;

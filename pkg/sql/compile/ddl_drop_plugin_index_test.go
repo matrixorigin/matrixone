@@ -42,8 +42,10 @@ func (s *stubIndexSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.Ru
 func (s *stubIndexSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
 	return nil
 }
-func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error { return nil }
-func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
+func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error    { return nil }
+func (s *stubIndexSearch) Destroy()                          { s.destroyed = true }
+func (s *stubIndexSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (s *stubIndexSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 
 // seedCachedIndex puts an entry in the vector-index cache under key, as a
 // completed search would, and returns the stub so the test can see Destroy().
@@ -157,3 +159,6 @@ func TestDispatchPluginDropIndexesNoPluginIndexes(t *testing.T) {
 	require.True(t, cachedIndexPresent("__mo_untouched_centroids:0"))
 	require.False(t, kept.destroyed)
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (s *stubIndexSearch) BuildTS() int64 { return 0 }

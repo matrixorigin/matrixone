@@ -28,12 +28,14 @@ const (
 	LockService = "lock-service"
 	// InternalSQLExecutor attr name for internal sql executor
 	InternalSQLExecutor = "internal-sql-executor"
+	// CDCTableDetector belongs to the CN generation that owns its SQL executor.
+	CDCTableDetector = "cdc-table-detector"
+	// CDCWatermarkUpdater belongs to the CN generation that owns its execution dependencies.
+	CDCWatermarkUpdater = "cdc-watermark-updater"
 	// AutoIncrementService attr name for AutoIncrementService
 	AutoIncrementService = "auto-increment-service"
 	// StatusServer is the global server of status of cluster.
 	StatusServer = "status-server"
-	// TxnTraceService txn trance service
-	TxnTraceService = "txn-trace-service"
 	// ShardService shard service
 	ShardService = "shard-service"
 	// ProcessCodecService process codec service
@@ -53,6 +55,17 @@ const (
 
 	// MOProtocolVersion is the protocol version of the MO services
 	MOProtocolVersion = "protocol-version"
+	// PersistedExpressionProtocolFloor is the locally committed HAKeeper floor
+	// for reading/revalidating catalog-bound expression semantics. It is
+	// initialized to zero by a CN and raised monotonically when an authoritative
+	// admission snapshot is accepted.
+	PersistedExpressionProtocolFloor = "persisted-expression-protocol-floor"
+	// PersistedExpressionProtocolAuthoringFloor is raised only after the CN has
+	// received an enabled, admitted, catalog-fenced snapshot. Keeping this
+	// separate from PersistedExpressionProtocolFloor prevents phase-one
+	// preparation from authoring metadata that a not-yet-refreshed proxy could
+	// still route to an older CN.
+	PersistedExpressionProtocolAuthoringFloor = "persisted-expression-protocol-authoring-floor"
 
 	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
 	BackgroundCNSelector = "background-cn-selector"

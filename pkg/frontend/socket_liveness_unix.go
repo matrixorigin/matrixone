@@ -25,62 +25,115 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// connectionPeerClosed checks the socket read side without consuming protocol
-// bytes. For TLS, peeking at the underlying encrypted stream is sufficient:
-// only EOF/error is interpreted, never payload.
-func connectionPeerClosed(conn net.Conn) (bool, error) {
+// socketLivenessProbe caches the non-owning RawConn handle and callback state
+// for one frontend connection. RoutineManager serializes monitor passes, so a
+// probe is never used concurrently and the hot path needs no per-probe lock or
+// allocation.
+type socketLivenessProbe struct {
+	rawConn    syscall.RawConn
+	initErr    error
+	nilConn    bool
+	pollFDs    [1]unix.PollFd
+	peek       [1]byte
+	n          int
+	peerClosed bool
+	probeErr   error
+	control    func(uintptr)
+}
+
+func newSocketLivenessProbe(conn net.Conn) *socketLivenessProbe {
+	probe := &socketLivenessProbe{nilConn: conn == nil}
 	if conn == nil {
-		return true, nil
+		return probe
 	}
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		conn = tlsConn.NetConn()
 	}
 	syscallConn, ok := conn.(syscall.Conn)
 	if !ok {
-		return false, nil
+		return probe
 	}
-	rawConn, err := syscallConn.SyscallConn()
-	if err != nil {
-		return false, err
+	probe.rawConn, probe.initErr = syscallConn.SyscallConn()
+	if probe.initErr == nil {
+		probe.control = probe.probeFD
+	}
+	return probe
+}
+
+// connectionPeerClosed checks the socket read side without consuming protocol
+// bytes. For TLS, peeking at the underlying encrypted stream is sufficient:
+// only EOF/error is interpreted, never payload.
+func (probe *socketLivenessProbe) connectionPeerClosed() (bool, error) {
+	if probe == nil || probe.nilConn {
+		return true, nil
+	}
+	if probe.initErr != nil {
+		return false, probe.initErr
+	}
+	if probe.rawConn == nil {
+		return false, nil
 	}
 
-	var (
-		n          int
-		peerClosed bool
-		probeErr   error
-	)
-	if err = rawConn.Control(func(fd uintptr) {
-		pollFDs := []unix.PollFd{{
-			Fd:     int32(fd),
-			Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR | socketReadHangupPollEvent(),
-		}}
-		if _, probeErr = unix.Poll(pollFDs, 0); probeErr != nil {
-			return
-		}
-		if pollFDs[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL|socketReadHangupPollEvent()) != 0 {
-			peerClosed = true
-			return
-		}
-		var one [1]byte
-		n, _, probeErr = unix.Recvfrom(int(fd), one[:], unix.MSG_PEEK|unix.MSG_DONTWAIT)
-	}); err != nil {
+	probe.n = -1
+	probe.peerClosed = false
+	probe.probeErr = nil
+	probe.pollFDs[0].Revents = 0
+	if err := probe.rawConn.Control(probe.control); err != nil {
 		return false, err
 	}
-	if peerClosed {
+	if probe.peerClosed {
 		return true, nil
 	}
-	if probeErr == nil {
-		return n == 0, nil
+	if probe.probeErr == nil {
+		return probe.n == 0, nil
 	}
-	if errors.Is(probeErr, unix.EAGAIN) ||
-		errors.Is(probeErr, unix.EWOULDBLOCK) ||
-		errors.Is(probeErr, unix.EINTR) {
+	if errors.Is(probe.probeErr, unix.EAGAIN) ||
+		errors.Is(probe.probeErr, unix.EWOULDBLOCK) ||
+		errors.Is(probe.probeErr, unix.EINTR) {
 		return false, nil
 	}
-	if errors.Is(probeErr, unix.ECONNRESET) ||
-		errors.Is(probeErr, unix.ENOTCONN) ||
-		errors.Is(probeErr, unix.EBADF) {
+	if errors.Is(probe.probeErr, unix.ECONNRESET) ||
+		errors.Is(probe.probeErr, unix.ENOTCONN) ||
+		errors.Is(probe.probeErr, unix.EBADF) {
 		return true, nil
 	}
-	return false, probeErr
+	return false, probe.probeErr
+}
+
+func (probe *socketLivenessProbe) probeFD(fd uintptr) {
+	probe.pollFDs[0] = unix.PollFd{
+		Fd:     int32(fd),
+		Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR | socketReadHangupPollEvent(),
+	}
+	if _, probe.probeErr = unix.Poll(probe.pollFDs[:], 0); probe.probeErr != nil {
+		return
+	}
+	revents := probe.pollFDs[0].Revents
+	if revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL|socketReadHangupPollEvent()) != 0 {
+		probe.peerClosed = true
+		return
+	}
+	// A connected socket with no readable event is the overwhelmingly common
+	// case. Avoid a second syscall for every active request; recv is only needed
+	// to distinguish readable payload from EOF.
+	if revents&unix.POLLIN == 0 {
+		return
+	}
+	probe.n, _, probe.probeErr = unix.Recvfrom(
+		int(fd), probe.peek[:], unix.MSG_PEEK|unix.MSG_DONTWAIT,
+	)
+}
+
+func rawConnectionPeerClosed(conn net.Conn) (bool, error) {
+	return newSocketLivenessProbe(conn).connectionPeerClosed()
+}
+
+func connectionPeerClosed(conn *Conn) (bool, error) {
+	if conn == nil {
+		return true, nil
+	}
+	if conn.livenessProbe == nil {
+		return rawConnectionPeerClosed(conn.RawConn())
+	}
+	return conn.livenessProbe.connectionPeerClosed()
 }

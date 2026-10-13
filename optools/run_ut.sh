@@ -33,26 +33,117 @@ fi
 shopt -s expand_aliases
 source ./utilities.sh
 source ./ut_tools.bash
+source ./ut_process.bash
 go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
 
 LOG="$G_TS-$TEST_TYPE.log"
+UT_RUN_ID=${UT_RUN_ID:-"${G_TS}-${TEST_TYPE}"}
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
+UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"6"}
+UT_LINK_PARALLEL=${UT_LINK_PARALLEL:-"3"}
+UT_LINK_DIR=""
+LIGHT_TOOL_FLAGS=()
+UT_SHARD=${UT_SHARD:-"all"}
+# Compile embedded packages while the exclusive issues fixture is active, then
+# execute those exact binaries after issues releases the cluster admission
+# lock. This removes their compile/link work from the serial critical path
+# without admitting a second cluster process. A failed prebuild falls back to
+# the complete-scope go test before any prebuilt binary is executed.
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
+UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
+# Pool adoption requires matched full-wave resource evidence; stay opt-in.
+if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
+    UT_ISSUES_BATCH_PARALLEL="1"
+fi
+if [[ -z "${UT_EMBEDDED_PACKAGE_PARALLEL+x}" ]]; then
+    UT_EMBEDDED_PACKAGE_PARALLEL="1"
+fi
+# Nine race binaries currently occupy several GiB. Preserve enough workspace
+# headroom for Go's build cache, reports, and the running issues fixture.
+UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
+# Zero derives a package execution boundary from UT_TIMEOUT plus two minutes
+# for TestMain cleanup and output drain. Tests may set a short explicit value.
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS:-"0"}
+UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
+# Light/issues overlap is opt-in: the measured treatment regressed wall time
+# and did not meet the runner's memory-headroom gate.
+UT_OVERLAP_LIGHT=${UT_OVERLAP_LIGHT:-"0"}
+UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
+# A helper may own two independent child process groups. Its trap gives each
+# child a bounded TERM grace period, so the parent must retain the helper long
+# enough for both children to finish before escalating to KILL.
+UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
+# Keep the constrained runner's existing three-slot heavy-stage budget. The
+# engine race wave runs exclusively, then one slot is reserved for the plan
+# race wave while the resource-heavy packages use the remaining two slots.
+# This is a process/task budget, not a hard memory guarantee; stronger runners
+# may explicitly override it.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
+# Keep plan race processes bounded because each shard owns a race-instrumented
+# test process and its package resources. The default stays serial on the
+# constrained CI runner; stronger runners can opt into two independent shards.
+PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Two engine shards cut the measured engine/test race runtime roughly in half.
+# They run as an exclusive wave so resource-heavy package work cannot delay the
+# ISCP progress made by either shard.
+ENGINE_RACE_SHARDS=2
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
+UT_DIAGNOSTIC_DIR="${BUILD_WKSP}/ut-report"
+UT_STDERR="${UT_DIAGNOSTIC_DIR}/ut-stderr.log"
+UT_CHECKPOINT="${UT_DIAGNOSTIC_DIR}/ut-checkpoint.log"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
 UT_COUNT="$G_WKSP/$G_TS-UT-Count.out"
 CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
 UT_TEST_STATUS=0
+UT_SHARD_ROUTING_ERROR=0
+PLAN_RACE_TEST_BINARY=""
+PLAN_RACE_JOB_PID=""
+PLAN_RACE_REPORT=""
+CLUSTER_PREBUILD_JOB_PID=""
+CLUSTER_PREBUILD_REPORT=""
+CLUSTER_PREBUILD_DIR=""
+ENGINE_RACE_TEST_BINARY=""
+ENGINE_RACE_JOB_PID=""
+ENGINE_RACE_REPORT=""
+ENGINE_RACE_REPORT_READY=""
+PREBUILT_RACE_REPORT=""
+PREBUILT_RACE_TEST_BINARY=""
+LIGHT_RACE_JOB_PID=""
+LIGHT_RACE_REPORT=""
+CURRENT_UT_PID=""
+CURRENT_UT_COMMAND_STAGE=""
+CURRENT_UT_COMMAND_LABEL=""
+CURRENT_UT_STAGE="initializing"
+CURRENT_UT_LABEL="startup"
+UT_TERMINATING=0
+# Reaping a helper is not proof that its independently owned descendants drained.
+# These facts are monotonic for this runner invocation, separate from live PIDs.
+CURRENT_UT_DRAIN_FAILED=0
+LIGHT_RACE_DRAIN_FAILED=0
+ENGINE_RACE_DRAIN_FAILED=0
+PLAN_RACE_DRAIN_FAILED=0
+CLUSTER_PREBUILD_DRAIN_FAILED=0
+UT_HEARTBEAT_INTERVAL=${UT_HEARTBEAT_INTERVAL:-"60"}
+UT_HEARTBEAT_PID=""
+UT_HEARTBEAT_STATE="${G_WKSP}/${G_TS}-active-ut-state.json"
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
+# Static analysis owns vet in the separate SCA job. Running it again for every
+# UT package duplicates work and increases race-test compile CPU/memory.
+GO_TEST_VET_FLAGS="-vet=off"
+# Ordinary `go test` omits DWARF, but `go test -c` retains it by default.
+# Our temporary race binaries are executed, not debugged: give the compile-only
+# paths the same policy without stripping the Go symbol table or race support.
+GO_TEST_BINARY_FLAGS="-ldflags=-w"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -63,23 +154,366 @@ LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
 if [[ -n "${MO_CL_CUDA:-}" ]] ; then
     if [[ ${MO_CL_CUDA} == "1" ]] ; then
-         if [[ -z "${CONDA_PREFIX:-}" ]] ; then
-		 echo "CONDA_PREFIX environment variable not found"
-		 exit 1
-	 fi
-
-         CUDA_HOME=/usr/local/cuda
-         CGO_CFLAGS="${CGO_CFLAGS} -I${CUDA_HOME}/include -I${CONDA_PREFIX}/include"
-         CGO_LDFLAGS="${CGO_LDFLAGS} -L${CUDA_HOME}/lib64/stubs -lcuda -L${CUDA_HOME}/lib64 -lcudart -L${CONDA_PREFIX}/lib -lcuvs -lcuvs_c  -lstdc++"
-         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_HOME}/lib64:${CUDA_HOME}/extras/CUPTI/lib64:${CONDA_PREFIX}/lib"
+         . "${BUILD_WKSP}/cgo/mo-gpu-env" || exit 1
+         CGO_CFLAGS="${CGO_CFLAGS} ${MO_GPU_CFLAGS}"
+         CGO_LDFLAGS="${CGO_LDFLAGS} ${MO_GPU_LDFLAGS}"
+         LD_LIBRARY_PATH="${MO_GPU_RUNTIME_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 	 TAGS="${TAGS},gpu"
     fi
 fi
 
 if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
 if [[ -f $UT_REPORT ]]; then rm $UT_REPORT; fi
+if [[ -f $UT_STDERR ]]; then rm $UT_STDERR; fi
+if [[ -f $UT_CHECKPOINT ]]; then rm $UT_CHECKPOINT; fi
 if [[ -f $UT_FILTER ]]; then rm $UT_FILTER; fi
 if [[ -f $UT_COUNT ]]; then rm $UT_COUNT; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/top.txt" ]]; then rm "${UT_DIAGNOSTIC_DIR}/top.txt"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-report.json" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-report.json"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-checkpoint.log" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-checkpoint.log"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-stderr.log" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-stderr.log"; fi
+if ! mkdir -p "${BUILD_WKSP}/ut-report/failed/outputs"; then
+    echo "failed to create UT diagnostic directory: ${BUILD_WKSP}/ut-report/failed/outputs" >&2
+    exit 1
+fi
+: > "${UT_REPORT}"
+: > "${UT_STDERR}"
+: > "${UT_CHECKPOINT}"
+
+function checkpoint_ut_event(){
+    local event=$1
+    local stage=${2:-${CURRENT_UT_STAGE}}
+    local label=${3:-${CURRENT_UT_LABEL}}
+    local status=${4:-}
+    local detail=${5:-}
+    local timestamp
+
+    # Checkpoints are intentionally append-only.  A partially written final
+    # line is still more useful after a hard runner kill than a last-state file
+    # that was never flushed.
+    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    stage=${stage//$'\t'/ }
+    label=${label//$'\t'/ }
+    status=${status//$'\t'/ }
+    detail=${detail//$'\t'/ }
+    stage=${stage//$'\n'/ }
+    label=${label//$'\n'/ }
+    status=${status//$'\n'/ }
+    detail=${detail//$'\n'/ }
+    printf 'run_id=%s time=%s pid=%s event=%s stage=%s label=%s status=%s detail=%s\n' \
+        "${UT_RUN_ID}" "${timestamp}" "$$" "${event}" "${stage}" "${label}" "${status}" "${detail}" \
+        >> "${UT_CHECKPOINT}"
+}
+
+function mark_ut_stage(){
+    local stage=$1
+    local label=$2
+    local event=${3:-start}
+    local status=${4:-}
+    local detail=${5:-}
+    CURRENT_UT_STAGE=${stage}
+    CURRENT_UT_LABEL=${label}
+    checkpoint_ut_event "${event}" "${stage}" "${label}" "${status}" "${detail}"
+}
+
+function ut_drain_failed(){
+    (( CURRENT_UT_DRAIN_FAILED || LIGHT_RACE_DRAIN_FAILED ||
+        ENGINE_RACE_DRAIN_FAILED || PLAN_RACE_DRAIN_FAILED || CLUSTER_PREBUILD_DRAIN_FAILED ))
+}
+
+# Prebuilt execution has separately admitted test/watchdog groups. Their
+# helper's exit alone cannot acknowledge that those groups have drained.
+function current_ut_command_is_prebuilt_helper(){
+    [[ ( "${CURRENT_UT_COMMAND_STAGE}" == embedded &&
+        "${CURRENT_UT_COMMAND_LABEL}" == "prebuilt embedded-cluster race-test packages" ) ||
+        -n "${PREBUILT_RACE_REPORT}" ]]
+}
+
+# Completion belongs to the existing helper owner, independently of report shards.
+function prepare_ut_helper_completion(){
+    local path="${G_WKSP}/${G_TS}-owner-complete.$1"
+    if ! : > "${path}"; then
+        printf -v "$2" '%s' 1
+        return 125
+    fi
+}
+
+function publish_ut_helper_completion(){
+    [[ -n "${UT_HELPER_COMPLETION:-}" ]] || return 0
+    (( $1 != 125 )) || return 125
+    printf '%s\n' "$1" > "${UT_HELPER_COMPLETION}" || return 125
+}
+
+function invoke_ut_helper(){
+    local UT_HELPER_COMPLETION="${G_WKSP}/${G_TS}-owner-complete.$1"
+    local helper_status=0
+    shift
+    "$@" || helper_status=$?
+    publish_ut_helper_completion "${helper_status}" || return 125
+    return "${helper_status}"
+}
+
+function handle_ut_join_term(){
+    trap '' TERM
+    if (( $1 == 125 || $2 == 125 )); then
+        printf -v "$3" '%s' 1
+    fi
+    handle_ut_termination
+}
+
+# Publish the result before releasing PID ownership. TERM during an active wait
+# delegates immediately to bounded cancellation; it must not wait for that child
+# to finish naturally. The trap also carries a just-returned wait status that
+# Bash has not assigned yet, or an already captured status before PID release.
+function join_ut_owner(){
+    local pid_name=$1 failed_flag_name=$2 join_status=0 saved_join_term_trap requires_drain_ack=0
+    if [[ -n "${!pid_name}" ]]; then
+        case "${pid_name}" in
+            CURRENT_UT_PID)
+                if current_ut_command_is_prebuilt_helper; then requires_drain_ack=1; fi
+                ;;
+            ENGINE_RACE_JOB_PID|PLAN_RACE_JOB_PID|CLUSTER_PREBUILD_JOB_PID)
+                requires_drain_ack=1
+                ;;
+        esac
+        if (( UT_TERMINATING == 0 )); then
+            saved_join_term_trap=$(trap -p TERM)
+            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
+        fi
+        wait "${!pid_name}" || join_status=$?
+        if (( requires_drain_ack )); then
+            # Preparation and ordinary fallback children share this helper's
+            # group. Reaping its shell must not release those descendants.
+            wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
+            local completion_path="${G_WKSP}/${G_TS}-owner-complete.${pid_name}"
+            if [[ ! -f "${completion_path}" ]] ||
+                [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
+                join_status=125
+            fi
+        fi
+        if (( join_status == 125 )); then printf -v "${failed_flag_name}" '%s' 1; fi
+        printf -v "${pid_name}" '%s' ''
+        if (( UT_TERMINATING == 0 )); then restore_ut_term_trap "${saved_join_term_trap}"; fi
+    fi
+    if (( ${!failed_flag_name} != 0 )); then return 125; fi
+    return "${join_status}"
+}
+
+# The foreground PID remains owned until join, even while joining a helper.
+# Only this command writes UT_REPORT; reports merge after it has been reaped.
+function start_ut_command(){
+    ut_drain_failed && return 125
+    if (( $# < 3 )) || [[ -n "${CURRENT_UT_PID}" ]]; then
+        logger "ERR" "start_ut_command requires stage, label, command and no active writer"
+        return 2
+    fi
+    local stage=$1
+    local label=$2
+    shift 2
+    local saved_term_trap
+    local term_pending=0
+    CURRENT_UT_COMMAND_STAGE=${stage}
+    CURRENT_UT_COMMAND_LABEL=${label}
+    mark_ut_stage "${stage}" "${label}" start "" "${*}"
+    if current_ut_command_is_prebuilt_helper; then
+        prepare_ut_helper_completion CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED || return 125
+    fi
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    if current_ut_command_is_prebuilt_helper; then
+        invoke_ut_helper CURRENT_UT_PID "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
+    else
+        "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
+    fi
+    CURRENT_UT_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    checkpoint_ut_event "pid-start" "${stage}" "${label}" "" "child_pid=${CURRENT_UT_PID}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function finish_ut_command(){
+    local status=0
+    join_ut_owner CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED || status=$?
+    mark_ut_stage "${CURRENT_UT_COMMAND_STAGE}" "${CURRENT_UT_COMMAND_LABEL}" finish "${status}"
+    return "${status}"
+}
+
+function run_ut_command(){
+    start_ut_command "$@" || return $?
+    finish_ut_command
+}
+
+function prepare_light_link_gate(){
+    LIGHT_TOOL_FLAGS=()
+    if ! [[ "${UT_LINK_PARALLEL}" =~ ^(0|[1-9][0-9]?)$ ]] ||
+        (( UT_LINK_PARALLEL > 64 )); then
+        logger "ERR" "UT_LINK_PARALLEL must be an integer from 0 through 64"
+        return 1
+    fi
+    (( UT_LINK_PARALLEL == 0 )) && return 0
+    local go_flags
+    go_flags=$(go env GOFLAGS) || return 1
+    if [[ "$(uname -s)" != Linux ]] || ! command -v flock >/dev/null ||
+        [[ "${go_flags}" == *-toolexec* ]]; then
+        # Do not silently replace a caller's tool wrapper or admit six heavy
+        # links on platforms without kernel-backed slot admission.
+        (( light_stage_parallel <= 3 )) || light_stage_parallel=3
+        (( light_parallel <= 3 )) || light_parallel=3
+        logger "INF" "Link gate unavailable or external toolexec configured; cap light tasks at three"
+        return 0
+    fi
+    local saved_term_trap term_pending=0 create_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    UT_LINK_DIR=$(mktemp -d "${G_WKSP}/ut-link-slots.XXXXXX") || create_status=$?
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        cleanup_light_link_gate
+        handle_ut_termination
+    fi
+    (( create_status == 0 )) || return "${create_status}"
+    export UT_LINK_DIR UT_LINK_PARALLEL
+    export UT_LINK_LOG="${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+    : > "${UT_LINK_LOG}"
+    local slot
+    for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+        if ! : > "${UT_LINK_DIR}/slot-${slot}"; then
+            cleanup_light_link_gate
+            return 1
+        fi
+    done
+    # Go parses a quoted command string for -toolexec, not a shell command.
+    LIGHT_TOOL_FLAGS=(-toolexec "bash '${BUILD_WKSP}/optools/ut_link_gate.sh'")
+    checkpoint_ut_event "configured" "light-link" "Go link admission" "" \
+        "task_parallel=${light_stage_parallel} link_parallel=${UT_LINK_PARALLEL}"
+}
+
+function cleanup_light_link_gate(){
+    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    # Only after the light process group is drained: never unlink a live lease.
+    if [[ -n "${UT_LINK_DIR}" ]]; then
+        local slot
+        for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+            rm -f "${UT_LINK_DIR}/slot-${slot}"
+        done
+        rmdir "${UT_LINK_DIR}" || true
+        UT_LINK_DIR=""
+    fi
+    LIGHT_TOOL_FLAGS=()
+}
+
+function start_light_race(){
+    ut_drain_failed && return 125
+    if (( $# != 2 )); then
+        logger "ERR" "start_light_race requires package scope and parallelism"
+        return 2
+    fi
+    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
+        logger "ERR" "start_light_race cannot start while another light helper is active"
+        return 2
+    fi
+
+    local package_scope=$1
+    local package_parallel=$2
+    local saved_term_trap
+    local term_pending=0
+    LIGHT_RACE_REPORT="${G_WKSP}/${G_TS}-light-race-report.out"
+    : > "${LIGHT_RACE_REPORT}"
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    checkpoint_ut_event "start" "light" "light race-test packages" "" \
+        "parallel=${package_parallel} background=true"
+    set -m
+    env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json \
+        -tags "${TAGS}" -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" \
+        -race ${package_scope} > "${LIGHT_RACE_REPORT}" 2>> "${UT_STDERR}" &
+    LIGHT_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    checkpoint_ut_event "pid-start" "light" "light race-test packages" "" \
+        "child_pid=${LIGHT_RACE_JOB_PID} parallel=${package_parallel}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function consume_light_race_report(){
+    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    if [[ -z "${LIGHT_RACE_REPORT}" ]]; then
+        return 0
+    fi
+
+    # The helper is the sole writer until its PID is reaped.  Hold this same
+    # boundary while publishing its private JSON so a TERM cannot append a
+    # prefix and then cause a second append from the cancellation path.
+    local saved_term_trap
+    local term_pending=0
+    local append_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    append_ut_report "${LIGHT_RACE_REPORT}" "${UT_REPORT}"
+    append_status=$?
+    if (( append_status != 0 )); then
+        logger "ERR" "failed to consume light race report; preserving ${LIGHT_RACE_REPORT}"
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+            handle_ut_termination
+        fi
+        return "${append_status}"
+    fi
+    rm -f "${LIGHT_RACE_REPORT}" "${LIGHT_RACE_REPORT}".*
+    LIGHT_RACE_REPORT=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function finish_light_race(){
+    local status=0
+    local report_status=0
+    if [[ -z "${LIGHT_RACE_JOB_PID}" ]]; then
+        (( LIGHT_RACE_DRAIN_FAILED == 0 )) || return 125
+        return 0
+    fi
+    join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED || status=$?
+    if (( status == 125 )); then return 125; fi
+    checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
+    consume_light_race_report
+    report_status=$?
+    cleanup_light_link_gate
+    if (( report_status != 0 && status == 0 )); then
+        status=${report_status}
+    fi
+    return "${status}"
+}
+
+function start_plan_race(){
+    ut_drain_failed && return 125
+    local package=$1
+    local saved_term_trap
+    local term_pending=0
+    PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
+    PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
+    prepare_ut_helper_completion PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || return 125
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    invoke_ut_helper PLAN_RACE_JOB_PID run_plan_race_shards "${package}" &
+    PLAN_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
 
 
 function logger(){
@@ -87,6 +521,1023 @@ function logger(){
     local msg=$2
     local log=$LOG
     logger_base "$level" "$msg" "$log"
+}
+
+function report_active_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify active UT cases"
+        return 0
+    fi
+
+    logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
+    awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
+        LC_ALL=C sort |
+        sed 's/^/[active_ut_cases] /'
+}
+
+function report_slow_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify slow UT cases"
+        return 0
+    fi
+
+    local slow_report="${UT_DIAGNOSTIC_DIR}/top.txt"
+    local slow_output=""
+    if ! slow_output=$(python3 "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" "${UT_REPORT}" 2>&1); then
+        logger "ERR" "failed to summarize slow UT cases: ${slow_output}"
+        return 0
+    fi
+
+    mkdir -p "${UT_DIAGNOSTIC_DIR}"
+    printf '%s\n' "${slow_output}" > "${slow_report}"
+    logger "ERR" "Slow or completed UT cases from ${UT_REPORT}:"
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && logger "ERR" "${line}"
+    done <<< "${slow_output}"
+}
+
+function snapshot_ut_diagnostics(){
+    local destination="${UT_DIAGNOSTIC_DIR}"
+    mkdir -p "${destination}"
+    if [[ -f "${UT_REPORT}" && "${UT_REPORT}" != "${destination}/ut-report.json" ]]; then
+        if [[ ! -e "${destination}/ut-report.json" ]] &&
+            ! ln "${UT_REPORT}" "${destination}/ut-report.json" 2>/dev/null; then
+            cp "${UT_REPORT}" "${destination}/ut-report.json"
+        fi
+    fi
+    if [[ -f "${UT_CHECKPOINT}" && "${UT_CHECKPOINT}" != "${destination}/ut-checkpoint.log" ]]; then
+        if [[ ! -e "${destination}/ut-checkpoint.log" ]] &&
+            ! ln "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log" 2>/dev/null; then
+            cp "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log"
+        fi
+    fi
+    if [[ -f "${UT_STDERR}" && "${UT_STDERR}" != "${destination}/ut-stderr.log" ]]; then
+        if [[ ! -e "${destination}/ut-stderr.log" ]] &&
+            ! ln "${UT_STDERR}" "${destination}/ut-stderr.log" 2>/dev/null; then
+            cp "${UT_STDERR}" "${destination}/ut-stderr.log"
+        fi
+    fi
+    logger "ERR" "UT diagnostic snapshot: ${destination}"
+}
+
+function start_ut_heartbeat(){
+    local interval="${UT_HEARTBEAT_INTERVAL}"
+    if ! [[ "${interval}" =~ ^[1-9][0-9]*$ ]]; then
+        interval=60
+    fi
+    if [[ -n "${UT_HEARTBEAT_PID}" ]]; then
+        return 0
+    fi
+    rm -f "${UT_HEARTBEAT_STATE}"
+
+    local saved_term_trap
+    local heartbeat_term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    # Publish the helper owner before replaying TERM. A signal received after
+    # the async spawn but before `$!` is assigned must not observe an empty
+    # heartbeat PID and strand the new helper.
+    trap 'heartbeat_term_pending=1' TERM
+    (
+        local heartbeat_sleep_pid=""
+        local heartbeat_scan_pid=""
+        local heartbeat_stop_requested=0
+        local heartbeat_sleep_status=0
+        function request_heartbeat_stop(){
+            # A signal may arrive after the timer is spawned but before its
+            # PID is published. Record the request and let the main loop
+            # consume it after publication; never exit while ownership is
+            # still being transferred.
+            heartbeat_stop_requested=1
+            if [[ -n "${heartbeat_sleep_pid}" ]]; then
+                # The timer has no state or graceful-cleanup contract. Kill
+                # the exact child so it cannot retain the runner's pipes.
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
+            fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+            fi
+        }
+        function finish_heartbeat_stop(){
+            # Do not restore default handling: another TERM/INT must not
+            # interrupt the final wait and orphan the timer.
+            trap '' TERM INT
+            if [[ -n "${heartbeat_sleep_pid}" ]]; then
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
+                wait "${heartbeat_sleep_pid}" 2>/dev/null || true
+                heartbeat_sleep_pid=""
+            fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+                wait "${heartbeat_scan_pid}" 2>/dev/null || true
+                heartbeat_scan_pid=""
+            fi
+            rm -f "${UT_HEARTBEAT_STATE}" "${UT_HEARTBEAT_STATE}.out"
+            exit 0
+        }
+        trap request_heartbeat_stop TERM INT
+        while :; do
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
+            sleep "${interval}" &
+            heartbeat_sleep_pid=$!
+            # Consume a stop received in the spawn-to-registration window.
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
+            heartbeat_sleep_status=0
+            wait "${heartbeat_sleep_pid}" || heartbeat_sleep_status=$?
+            if (( heartbeat_stop_requested != 0 )); then
+                # A trapped signal can interrupt wait before Bash has reaped
+                # the child; the main loop remains the sole reaper.
+                finish_heartbeat_stop
+            fi
+            heartbeat_sleep_pid=""
+            if (( heartbeat_sleep_status != 0 )); then
+                exit 0
+            fi
+            [[ "${UT_TERMINATING}" == 0 ]] || exit 0
+
+            local latest stage label active_cases active_detail active_records process_count memory report
+            local -a heartbeat_reports
+            # A heartbeat can race a stage transition. Never read our own stale
+            # stage back as the source of truth on the next tick.
+            latest=$(awk '!/event=heartbeat / { latest=$0 } END { print latest }' "${UT_CHECKPOINT}" 2>/dev/null || true)
+            stage=$(sed -n 's/.* stage=\([^ ]*\).*/\1/p' <<< "${latest}")
+            label=$(sed -n 's/.* label=\(.*\) status=.*/\1/p' <<< "${latest}")
+            [[ -n "${stage}" ]] || stage="unknown"
+            [[ -n "${label}" ]] || label="unknown"
+            # The heartbeat is forked before run_tests assigns the helper
+            # report variables. Discover reports from the immutable run
+            # workspace instead of relying on those later parent-shell values.
+            heartbeat_reports=(
+                "${UT_REPORT}"
+                "${G_WKSP}/${G_TS}-light-race-report.out"
+                "${G_WKSP}/${G_TS}-engine-race-report.out"
+                "${G_WKSP}/${G_TS}-engine-race-report.out".*
+                "${G_WKSP}/${G_TS}-plan-race-report.out"
+                "${G_WKSP}/${G_TS}-plan-race-report.out".*
+                "${G_WKSP}/${G_TS}-issues-race-report.out"
+                "${G_WKSP}/${G_TS}-issues-race-report.out".*
+                "${G_WKSP}/${G_TS}-embedded-race-report.out"
+                "${G_WKSP}/${G_TS}-embedded-race-report.out".*
+            )
+            # Own the finite scan as a group. A large first scan or fallback
+            # must not outlive heartbeat cancellation or keep its pipes open.
+            set -m
+            (
+                trap - TERM INT
+                if ! python3 "${BUILD_WKSP}/optools/active_ut_incremental.py" \
+                    --state "${UT_HEARTBEAT_STATE}" "${heartbeat_reports[@]}" 2>/dev/null; then
+                    # The original full-scan reader remains the recovery path.
+                    for report in "${heartbeat_reports[@]}"; do
+                        if [[ -s "${report}" ]]; then
+                            awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true
+                        fi
+                    done
+                fi
+            ) > "${UT_HEARTBEAT_STATE}.out" &
+            heartbeat_scan_pid=$!
+            set +m
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            wait "${heartbeat_scan_pid}" || true
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            heartbeat_scan_pid=""
+            active_records=$(< "${UT_HEARTBEAT_STATE}.out")
+            active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
+            active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
+            local process_snapshot
+            process_snapshot=$(ps -eo pid=,ppid=,rss=,comm= 2>/dev/null || true)
+            process_count=$(awk 'NF { n++ } END { print n+0 }' <<< "${process_snapshot}")
+            memory=$(cgroup_memory_metrics)
+            # RSS is per process (shared pages may be counted more than once),
+            # whereas cgroup memory also includes file cache and kernel memory.
+            # Do not print command arguments, which may contain credentials.
+            local top_rss
+            top_rss=$(LC_ALL=C sort -k3,3nr <<< "${process_snapshot}" | awk 'NF && NR <= 8 { printf "pid=%s,ppid=%s,rss_kib=%s,comm=%s;", $1, $2, $3, $4 }' || true)
+            memory+=" processes.top_rss=${top_rss:-unavailable}"
+            logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
+            checkpoint_ut_event "heartbeat" "${stage}" "${label}" "" \
+                "active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown}"
+        done
+    ) &
+    UT_HEARTBEAT_PID=$!
+    restore_ut_term_trap "${saved_term_trap}"
+    checkpoint_ut_event "heartbeat-start" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "" \
+        "pid=${UT_HEARTBEAT_PID} interval=${interval}s"
+    if (( heartbeat_term_pending != 0 )); then
+        if [[ -z "${saved_term_trap}" ]]; then
+            # With Bash's default TERM disposition there is no caller cleanup
+            # handler to reap the newly published helper before re-signal.
+            stop_ut_heartbeat
+        fi
+        # Replay the original caller disposition after publication. The real
+        # runner's handler now observes UT_HEARTBEAT_PID and owns the cleanup.
+        kill -TERM "$$"
+    fi
+}
+
+function stop_ut_heartbeat(){
+    if [[ -z "${UT_HEARTBEAT_PID}" ]]; then
+        return 0
+    fi
+    kill -TERM "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    local ticks=0
+    while kill -0 "${UT_HEARTBEAT_PID}" 2>/dev/null && (( ticks < 20 )); do
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    if kill -0 "${UT_HEARTBEAT_PID}" 2>/dev/null; then
+        kill -KILL "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    fi
+    wait "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    UT_HEARTBEAT_PID=""
+}
+
+CGROUP_MEMORY_PATH=""
+CGROUP_MEMORY_LIMIT="unknown"
+CGROUP_MEMORY_HIERARCHY="unknown"
+CGROUP_MEMORY_HIERARCHY_COMPLETE=0
+CGROUP_MEMORY_EVENTS_HIERARCHICAL="unknown"
+
+function cgroup_memory_log_escape(){
+    local value=$1
+    value=${value//%/%25}
+    value=${value//|/%7C}
+    value=${value//;/%3B}
+    value=${value// /%20}
+    value=${value//$'\t'/%09}
+    value=${value//$'\n'/%0A}
+    printf '%s' "${value}"
+}
+
+function cgroup_v2_memory_events_hierarchical(){
+    local mountinfo_path=$1
+    local cgroup_mount=$2
+    if [[ ! -r "${mountinfo_path}" ]]; then
+        return 1
+    fi
+    awk -v mount="${cgroup_mount}" '
+        BEGIN {
+            hierarchical = 1
+        }
+        $5 == mount {
+            for (i = 1; i <= NF - 2; i++) {
+                if ($i == "-" && $(i + 1) == "cgroup2") {
+                    found = 1
+                    if ($0 ~ /(^|[ ,])memory_localevents([, ]|$)/) {
+                        hierarchical = 0
+                    }
+                }
+            }
+        }
+        END {
+            if (found && hierarchical != 0) {
+                exit 0
+            }
+            exit 1
+        }
+    ' "${mountinfo_path}"
+}
+
+function resolve_cgroup_memory_boundary(){
+    local leaf_path=$1
+    local cgroup_root=$2
+    local limit_file=$3
+    local mountinfo_path=${4:-"/proc/self/mountinfo"}
+    local current_path=${leaf_path}
+    local best_path=${leaf_path}
+    local best_limit=""
+    local best_value=0
+    local candidate_limit=""
+    local candidate_value=0
+    local hierarchy_complete=1
+    local hierarchy_metrics=""
+    local usage_file=""
+    local peak_file=""
+    local events_file=""
+    local current_value="unknown"
+    local peak_value="unknown"
+    local event_value="unknown"
+    local oom="unknown"
+    local oom_kill="unknown"
+    local failcnt="unknown"
+    local event_name=""
+    local event_count=""
+    local escaped_path=""
+    local boundary=""
+
+    CGROUP_MEMORY_PATH=${leaf_path}
+    CGROUP_MEMORY_LIMIT="unknown"
+    CGROUP_MEMORY_HIERARCHY="none"
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=0
+    CGROUP_MEMORY_EVENTS_HIERARCHICAL="not_applicable"
+    if [[ "${leaf_path}" != "${cgroup_root}" && "${leaf_path}" != "${cgroup_root}/"* ]]; then
+        return 0
+    fi
+
+    if [[ "${limit_file}" == "memory.max" ]]; then
+        CGROUP_MEMORY_EVENTS_HIERARCHICAL=0
+        if cgroup_v2_memory_events_hierarchical "${mountinfo_path}" "${cgroup_root}"; then
+            CGROUP_MEMORY_EVENTS_HIERARCHICAL=1
+        else
+            hierarchy_complete=0
+        fi
+    fi
+
+    # A child can inherit a hard limit from any visible ancestor, and a parent
+    # can be under more pressure than its child because of sibling usage. Keep
+    # every finite boundary's metrics for the A/B safety check; the tightest
+    # limit is only a concise summary. On ties prefer the ancestor.
+    while [[ "${current_path}" == "${cgroup_root}" || "${current_path}" == "${cgroup_root}/"* ]]; do
+        if [[ -r "${current_path}/${limit_file}" ]]; then
+            candidate_limit=$(< "${current_path}/${limit_file}")
+            if [[ "${candidate_limit}" =~ ^[0-9]+$ ]]; then
+                candidate_value=$((10#${candidate_limit}))
+                # The v1 controller represents an unlimited limit as a very
+                # large page-aligned integer rather than the literal "max".
+                if [[ "${limit_file}" == "memory.limit_in_bytes" ]] &&
+                    (( candidate_value >= 1152921504606846976 )); then
+                    candidate_limit=""
+                fi
+                if [[ -n "${candidate_limit}" ]]; then
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        usage_file="memory.current"
+                        peak_file="memory.peak"
+                        events_file="memory.events"
+                    else
+                        usage_file="memory.usage_in_bytes"
+                        peak_file="memory.max_usage_in_bytes"
+                        events_file="memory.failcnt"
+                    fi
+
+                    current_value="unknown"
+                    peak_value="unknown"
+                    event_value="unknown"
+                    if [[ -r "${current_path}/${usage_file}" ]]; then
+                        current_value=$(< "${current_path}/${usage_file}")
+                        if ! [[ "${current_value}" =~ ^[0-9]+$ ]]; then
+                            current_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+                    if [[ -r "${current_path}/${peak_file}" ]]; then
+                        peak_value=$(< "${current_path}/${peak_file}")
+                        if ! [[ "${peak_value}" =~ ^[0-9]+$ ]]; then
+                            peak_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        oom="unknown"
+                        oom_kill="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            while read -r event_name event_count; do
+                                case "${event_name}" in
+                                    oom) oom=${event_count} ;;
+                                    oom_kill) oom_kill=${event_count} ;;
+                                esac
+                            done < "${current_path}/${events_file}"
+                        fi
+                        if [[ "${oom}" =~ ^[0-9]+$ && "${oom_kill}" =~ ^[0-9]+$ ]]; then
+                            event_value="oom=${oom},oom_kill=${oom_kill}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    else
+                        failcnt="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            failcnt=$(< "${current_path}/${events_file}")
+                        fi
+                        if [[ "${failcnt}" =~ ^[0-9]+$ ]]; then
+                            event_value="failcnt=${failcnt}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    fi
+
+                    escaped_path=$(cgroup_memory_log_escape "${current_path}")
+                    boundary="${escaped_path}|${candidate_limit}|${current_value}|${peak_value}|${event_value}"
+                    if [[ -n "${hierarchy_metrics}" ]]; then
+                        hierarchy_metrics="${hierarchy_metrics};${boundary}"
+                    else
+                        hierarchy_metrics=${boundary}
+                    fi
+
+                    if [[ -z "${best_limit}" ]] || (( candidate_value <= best_value )); then
+                        best_path=${current_path}
+                        best_limit=${candidate_limit}
+                        best_value=${candidate_value}
+                    fi
+                fi
+            elif [[ "${limit_file}" == "memory.max" && "${candidate_limit}" == "max" ]] ||
+                [[ "${limit_file}" == "memory.limit_in_bytes" && "${candidate_limit}" == "-1" ]]; then
+                :
+            else
+                hierarchy_complete=0
+            fi
+        elif [[ "${current_path}" != "${cgroup_root}" || -e "${current_path}/${limit_file}" ]]; then
+            hierarchy_complete=0
+        fi
+
+        if [[ "${current_path}" == "${cgroup_root}" ]]; then
+            break
+        fi
+        current_path=${current_path%/*}
+        if [[ -z "${current_path}" ]]; then
+            break
+        fi
+    done
+
+    if [[ -n "${hierarchy_metrics}" ]]; then
+        CGROUP_MEMORY_HIERARCHY=${hierarchy_metrics}
+    fi
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=${hierarchy_complete}
+    if [[ "${hierarchy_complete}" == "1" && -n "${best_limit}" ]]; then
+        CGROUP_MEMORY_PATH=${best_path}
+        CGROUP_MEMORY_LIMIT=${best_limit}
+    fi
+}
+
+function cgroup_resource_breakdown(){
+    local path="$1"
+    # These counters overlap: file includes shmem, and kernel includes slab.
+    # Preserve names rather than presenting their sum as total memory.
+    local stat
+    # These are the visible values at this scope, not a claim that an ancestor
+    # or cpuset cannot impose a tighter effective CPU limit.
+    if [[ -r "${path}/cpu.max" ]]; then
+        printf ' cpu.visible_scope=%s' "$(cgroup_memory_log_escape "${path}")"
+        awk 'NF == 2 { printf " cpu.max.quota=%s cpu.max.period=%s", $1, $2 }' "${path}/cpu.max"
+    fi
+    if [[ -r "${path}/cpuset.cpus.effective" ]]; then
+        awk 'NF == 1 { printf " cpu.cpuset.effective=%s", $1 }' "${path}/cpuset.cpus.effective"
+    fi
+    for stat in memory.stat memory.events cpu.stat memory.pressure cpu.pressure io.pressure; do
+        if [[ -r "${path}/${stat}" ]]; then
+            awk -v prefix="${stat}" '
+                prefix == "memory.stat" && $1 !~ /^(anon|file|shmem|kernel|slab|file_dirty|file_writeback|pagetables)$/ { next }
+                /^(some|full) / {
+                    for (i=2; i<=NF; i++) if ($i ~ /^total=/) printf " %s.%s.%s", prefix, $1, $i
+                    next
+                }
+                NF == 2 { printf " %s.%s=%s", prefix, $1, $2 }
+            ' "${path}/${stat}" 2>/dev/null || true
+        fi
+    done
+}
+
+function cgroup_memory_metrics(){
+    local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
+    local cgroup_path=""
+    local memory_current="unknown"
+    local memory_peak="unknown"
+    if [[ ! -r /proc/self/cgroup ]]; then
+        return 0
+    fi
+
+    relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
+    if [[ -n "${relative_path}" ]]; then
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
+        if [[ -r "${cgroup_path}/memory.current" ]]; then
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            printf 'current=%s peak=%s memory.max=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.events_hierarchical=%s memory.boundaries=%s' \
+                "${memory_current}" "${memory_peak}" \
+                "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+                "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
+                "${CGROUP_MEMORY_HIERARCHY}"
+            cgroup_resource_breakdown "${CGROUP_MEMORY_PATH}"
+            return 0
+        fi
+    fi
+
+    relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
+    if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
+        fi
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.events_hierarchical=%s memory.boundaries=%s' \
+            "${memory_current}" "${memory_peak}" \
+            "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+            "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
+            "${CGROUP_MEMORY_HIERARCHY}"
+    fi
+}
+
+function report_cgroup_memory_usage(){
+    local label=$1
+    local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
+    local cgroup_path=""
+    local events=""
+    local memory_current="unknown"
+    local memory_peak="unknown"
+    local resources=""
+
+    if [[ ! -r /proc/self/cgroup ]]; then
+        return 0
+    fi
+
+    relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
+    if [[ -n "${relative_path}" ]]; then
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
+        if [[ -r "${cgroup_path}/memory.current" ]]; then
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.events" ]]; then
+                events=$(tr '\n' ' ' < "${CGROUP_MEMORY_PATH}/memory.events")
+            else
+                events="unknown"
+            fi
+            resources=$(cgroup_resource_breakdown "${CGROUP_MEMORY_PATH}" 2>/dev/null || true)
+            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.events_hierarchical=${CGROUP_MEMORY_EVENTS_HIERARCHICAL} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} events=${events} resources=${resources:-unknown}"
+            return 0
+        fi
+    fi
+
+    relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
+    if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
+        fi
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        local failcnt="unknown"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.failcnt" ]]; then
+            failcnt=$(< "${CGROUP_MEMORY_PATH}/memory.failcnt")
+        fi
+        resources=$(cgroup_resource_breakdown "${CGROUP_MEMORY_PATH}" 2>/dev/null || true)
+        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.events_hierarchical=${CGROUP_MEMORY_EVENTS_HIERARCHICAL} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} failcnt=${failcnt} resources=${resources:-unknown}"
+    fi
+}
+
+function consume_race_report(){
+    local report_variable=$1
+    (( CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    case "${report_variable}" in
+        ENGINE_RACE_REPORT) (( ENGINE_RACE_DRAIN_FAILED == 0 )) || return 125 ;;
+        PLAN_RACE_REPORT) (( PLAN_RACE_DRAIN_FAILED == 0 )) || return 125 ;;
+        PREBUILT_RACE_REPORT) (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 )) || return 125 ;;
+    esac
+    local report=${!report_variable}
+    local binary_variable=${2:-} binary=""
+    if [[ -n "${binary_variable}" ]]; then binary=${!binary_variable}; fi
+    [[ -n "${report}" ]] || return 0
+    local saved_term_trap term_pending=0 append_status=0 report_owned=0 source=""
+    if [[ -f "${report}" || -f "${report}.ready" ]]; then
+        report_owned=1
+    else
+        for source in "${report}".*; do
+            if [[ -f "${source}" ]]; then
+                report_owned=1
+                break
+            fi
+        done
+    fi
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    append_ut_report "${report}" "${UT_REPORT}" || append_status=$?
+    if (( append_status == 0 && report_owned != 0 )); then
+        # Clear ownership before replaying TERM, even if unlink is interrupted.
+        printf -v "${report_variable}" '%s' ''
+        rm -f "${report}" "${report}".* "${report}-expired".*
+        if [[ -n "${binary_variable}" ]]; then
+            printf -v "${binary_variable}" '%s' ''
+            [[ -z "${binary}" ]] || rm -f "${binary}" "${binary}-metadata" "${binary}-inventory"
+        fi
+    elif (( append_status != 0 )); then
+        logger "ERR" "failed to consume race report; preserving ${report}"
+    else
+        # A status-125 discovery abort can retain the binary and its metadata
+        # before any execution report exists. An append no-op is not proof
+        # that those artifacts are safe to delete.
+        logger "ERR" "race report has no published source; preserving ${report} and ${binary}"
+    fi
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
+    return "${append_status}"
+}
+
+function consume_engine_race_report(){
+    consume_race_report ENGINE_RACE_REPORT ENGINE_RACE_TEST_BINARY || return $?
+    rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT_READY}"
+    ENGINE_RACE_TEST_BINARY=""
+    ENGINE_RACE_REPORT_READY=""
+}
+
+function consume_plan_race_report(){
+    consume_race_report PLAN_RACE_REPORT PLAN_RACE_TEST_BINARY
+}
+
+function start_engine_race(){
+    ut_drain_failed && return 125
+    if (( $# != 2 )) || [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
+        logger "ERR" "start_engine_race requires package, shard count and no active helper"
+        return 2
+    fi
+
+    local saved_term_trap
+    local term_pending=0
+    prepare_ut_helper_completion ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || return 125
+    saved_term_trap=$(trap -p TERM)
+    # The helper can publish its process only after Bash has assigned `$!`.
+    # Defer TERM across that handoff so cancellation always sees and terminates
+    # the exact engine process group before consuming its report.
+    trap 'term_pending=1' TERM
+    set -m
+    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards "$1" "$2" &
+    ENGINE_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function handle_ut_termination(){
+    # A second TERM must not replace the owner while it drains independent groups.
+    trap '' TERM
+    if (( UT_TERMINATING != 0 )); then
+        exit 143
+    fi
+    UT_TERMINATING=1
+    checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
+        "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
+
+    local pid
+    local termination_status=${1:-143} child_status=0
+    # Notify every group before waiting, so the concurrent plan/helper cleanup
+    # gets the same grace window as the foreground writer.
+    for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
+        [[ -n "${pid}" ]] && terminate_ut_process_group "${pid}" TERM
+    done
+    stop_ut_heartbeat
+
+    if [[ -n "${CURRENT_UT_PID}" ]]; then
+        logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
+        # Leave the outer timeout's kill-after budget for descendants that do
+        # not honour TERM; do not block the diagnostic path indefinitely.
+        local current_grace_ticks=20
+        # The prebuilt embedded helper owns an active test group and a
+        # watchdog group. Its handler gives the active group five seconds to
+        # stop before KILL, so the parent must not kill the helper on the same
+        # deadline and orphan that independently admitted group.
+        if current_ut_command_is_prebuilt_helper; then
+            current_grace_ticks=${UT_HELPER_TERM_GRACE_TICKS}
+        fi
+        if ! wait_for_ut_process_group "${CURRENT_UT_PID}" "${current_grace_ticks}"; then
+            # Do not wait unboundedly for a group that failed the drain check.
+            # Its report, binary, and (for prebuilt execution) compile
+            # directory remain owned by that live descendant for diagnostics.
+            CURRENT_UT_DRAIN_FAILED=1
+            termination_status=125
+            logger "ERR" "UT cancellation: preserving current command artifacts because child ${CURRENT_UT_PID} did not drain"
+        else
+            child_status=0
+            join_ut_owner CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED 2>/dev/null || child_status=$?
+            if (( child_status == 125 )); then
+                # The join publishes an ownership failure before releasing
+                # the PID, including helpers killed before acknowledging their
+                # independently admitted groups.
+                CURRENT_UT_DRAIN_FAILED=1
+                termination_status=125
+                logger "ERR" "UT cancellation: preserving current command artifacts because the command did not establish descendant drainage"
+            fi
+        fi
+    fi
+    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
+        if ! wait_for_ut_process_group "${LIGHT_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
+            LIGHT_RACE_DRAIN_FAILED=1
+            termination_status=125
+            logger "ERR" "UT cancellation: preserving light race artifacts because child ${LIGHT_RACE_JOB_PID} did not drain"
+        else
+            child_status=0
+            join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
+            if (( child_status == 125 )); then
+                LIGHT_RACE_DRAIN_FAILED=1
+                termination_status=125
+                logger "ERR" "UT cancellation: preserving light race artifacts because helper reported an undrained descendant"
+            fi
+        fi
+    fi
+    if (( LIGHT_RACE_DRAIN_FAILED == 0 )); then
+        consume_light_race_report
+        cleanup_light_link_gate
+    else
+        logger "ERR" "UT cancellation: preserving light race report and link leases while an owner is undrained"
+    fi
+    if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
+        if ! wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
+            ENGINE_RACE_DRAIN_FAILED=1
+            termination_status=125
+            logger "ERR" "UT cancellation: preserving engine race artifacts because child ${ENGINE_RACE_JOB_PID} did not drain"
+        else
+            child_status=0
+            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
+            if (( child_status == 125 )); then
+                ENGINE_RACE_DRAIN_FAILED=1
+                termination_status=125
+                logger "ERR" "UT cancellation: preserving engine race artifacts because helper reported an undrained descendant"
+            fi
+        fi
+    fi
+    if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
+        if ! wait_for_ut_process_group "${PLAN_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
+            PLAN_RACE_DRAIN_FAILED=1
+            termination_status=125
+            logger "ERR" "UT cancellation: preserving plan race artifacts because child ${PLAN_RACE_JOB_PID} did not drain"
+        else
+            child_status=0
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
+            if (( child_status == 125 )); then
+                PLAN_RACE_DRAIN_FAILED=1
+                termination_status=125
+                logger "ERR" "UT cancellation: preserving plan race artifacts because helper reported an undrained descendant"
+            fi
+        fi
+    fi
+    if (( PLAN_RACE_DRAIN_FAILED == 0 )); then
+        consume_plan_race_report
+    else
+        logger "ERR" "UT cancellation: preserving plan race report while an owner is undrained"
+    fi
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        if ! wait_for_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
+            CLUSTER_PREBUILD_DRAIN_FAILED=1
+            termination_status=125
+            logger "ERR" "UT cancellation: preserving embedded prebuild artifacts because child ${CLUSTER_PREBUILD_JOB_PID} did not drain"
+        else
+            child_status=0
+            join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED 2>/dev/null || child_status=$?
+            if (( child_status == 125 )); then
+                CLUSTER_PREBUILD_DRAIN_FAILED=1
+                termination_status=125
+                logger "ERR" "UT cancellation: preserving embedded prebuild artifacts because helper reported an undrained descendant"
+            fi
+        fi
+    fi
+    if (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+        cleanup_embedded_prebuild
+    elif [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+        logger "ERR" "UT cancellation: preserving embedded prebuild directory while an owner is undrained"
+    fi
+    if (( CURRENT_UT_DRAIN_FAILED == 0 && CLUSTER_PREBUILD_DRAIN_FAILED == 0 )); then
+        consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY
+    else
+        logger "ERR" "UT cancellation: preserving prebuilt race report and binary while an owner is undrained"
+    fi
+    if (( ENGINE_RACE_DRAIN_FAILED == 0 )); then
+        consume_engine_race_report
+    else
+        logger "ERR" "UT cancellation: preserving engine race report and binary while an owner is undrained"
+    fi
+    if (( ENGINE_RACE_DRAIN_FAILED == 0 )) && [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
+        rm -f "${ENGINE_RACE_TEST_BINARY}"
+        ENGINE_RACE_TEST_BINARY=""
+    fi
+    if (( PLAN_RACE_DRAIN_FAILED == 0 )) && [[ -n "${PLAN_RACE_TEST_BINARY}" ]]; then
+        rm -f "${PLAN_RACE_TEST_BINARY}"
+        PLAN_RACE_TEST_BINARY=""
+    fi
+    if ut_drain_failed; then termination_status=125; fi
+    logger "ERR" "UT runner terminating with status ${termination_status} at stage=${CURRENT_UT_STAGE} label=${CURRENT_UT_LABEL}; reporting work without terminal Go test events"
+    logger "ERR" "UT checkpoint: ${UT_CHECKPOINT}"
+    logger "ERR" "UT stderr: ${UT_STDERR}"
+    tail -n 40 "${UT_CHECKPOINT}" | sed 's/^/[ut_checkpoint] /' | tee -a "${LOG}"
+    if [[ -s "${UT_STDERR}" ]]; then
+        tail -n 40 "${UT_STDERR}" | sed 's/^/[ut_stderr] /' | tee -a "${LOG}"
+    fi
+    snapshot_ut_diagnostics
+    report_slow_ut_cases
+    report_active_ut_cases
+    exit "${termination_status}"
+}
+
+function run_engine_race_shards(){
+    local engine_package=$1
+    local engine_race_shards=$2
+    local test_list="${G_WKSP}/${G_TS}-engine-race-tests.out"
+    local build_log="${G_WKSP}/${G_TS}-engine-race-build.out"
+    local metadata_file="${G_WKSP}/${G_TS}-engine-race-package.out"
+    local engine_package_dir=""
+    local engine_package_import=""
+    local build_status=0
+    local list_status=0
+    local shard_status=0
+    local shard=0
+    local test_count=0
+    local metadata_status=0
+    local metadata_start_status=0
+    local build_start_status=0
+    local list_start_status=0
+    local previous_term_trap=""
+    local report_ready="${ENGINE_RACE_REPORT}.ready"
+    local -a child_pids=(0)
+    local -a shard_patterns
+    local -a shard_counts
+
+    # A TERM can arrive after a child has been forked but before `$!` is
+    # copied into child_pids.  Mask TERM across that tiny handoff, then let the
+    # normal helper trap terminate the now-registered process group.  This is
+    # deliberately local to the engine helper: each build/list/test child has
+    # the same ownership contract.
+    function start_engine_child(){
+        local slot=$1
+        shift
+        local saved_term_trap
+        local term_pending=0
+        local child_pid
+        saved_term_trap=$(trap -p TERM)
+        trap 'term_pending=1' TERM
+        set -m
+        "$@" &
+        child_pid=$!
+        child_pids[slot]=${child_pid}
+        set +m
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 )); then
+            drain_engine_shards || exit 125
+            return 143
+        fi
+        return 0
+    }
+
+    function run_engine_test_list(){
+        cd "${engine_package_dir}" || return 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            "${ENGINE_RACE_TEST_BINARY}" -test.short=true \
+            -test.list='^(Test|Fuzz|Example)'
+    }
+
+
+    if ! [[ "${engine_race_shards}" =~ ^[1-9][0-9]*$ ]] ||
+        (( engine_race_shards > ENGINE_RACE_SHARDS )); then
+        logger "ERR" "engine race shard count must be 1 or ${ENGINE_RACE_SHARDS}, got '${engine_race_shards}'"
+        return 2
+    fi
+
+    checkpoint_ut_event "start" "engine" "${engine_package}" "" "shards=${engine_race_shards}"
+    previous_term_trap=$(trap -p TERM)
+    function drain_engine_shards(){
+        trap '' TERM
+        terminate_ut_process_groups 20 "${child_pids[@]}" || return 125
+        wait 2>/dev/null || true
+        rm -f "${metadata_file}"
+    }
+    function cancel_engine_shards(){
+        drain_engine_shards || exit 125
+        publish_ut_helper_completion 143 || exit 125
+        exit 143
+    }
+    trap cancel_engine_shards TERM
+    start_engine_child 0 go list ${GO_MODULE_MODE} \
+        -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${engine_package}" \
+        > "${metadata_file}" 2>&1
+    metadata_start_status=$?
+    if (( metadata_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${metadata_start_status}" "phase=discover-start"
+        return "${metadata_start_status}"
+    fi
+    wait "${child_pids[0]}"
+    metadata_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
+    child_pids=(0)
+    if (( metadata_status != 0 )) ||
+        ! IFS=$'\t' read -r engine_package_dir engine_package_import < "${metadata_file}"; then
+        logger "ERR" "Failed to resolve package metadata for ${engine_package}"
+        tail -n 200 "${metadata_file}"
+        rm -f "${metadata_file}"
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${metadata_status}" "phase=discover"
+        if (( metadata_status != 0 )); then
+            return "${metadata_status}"
+        fi
+        return 2
+    fi
+    rm -f "${metadata_file}"
+
+    : > "${ENGINE_RACE_REPORT}"
+    rm -f "${report_ready}" "${ENGINE_RACE_REPORT}".*
+    start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
+        -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
+    build_start_status=$?
+    if (( build_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${build_start_status}" "phase=build-start"
+        return "${build_start_status}"
+    fi
+    wait "${child_pids[0]}"
+    build_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
+    child_pids=(0)
+    if (( build_status != 0 )); then
+        logger "ERR" "Failed to build race test binary for ${engine_package}"
+        tail -n 200 "${build_log}"
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${build_status}" "phase=build"
+        return "${build_status}"
+    fi
+
+    start_engine_child 0 run_engine_test_list > "${test_list}" 2>&1
+    list_start_status=$?
+    if (( list_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${list_start_status}" "phase=list-start"
+        return "${list_start_status}"
+    fi
+    wait "${child_pids[0]}"
+    list_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
+    child_pids=(0)
+    if (( list_status != 0 )); then
+        logger "ERR" "Failed to list tests for ${engine_package}"
+        tail -n 200 "${test_list}"
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${list_status}" "phase=list"
+        return "${list_status}"
+    fi
+
+    if ! partition_race_test_inventory "${test_list}" "${engine_race_shards}" roundrobin; then
+        logger "ERR" "Invalid or empty test inventory for ${engine_package}"
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        return 2
+    fi
+    local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
+    for (( shard = 0; shard < engine_race_shards; shard++ )); do
+        (( shard_counts[shard] > 0 )) || continue
+        race_packages+=("${engine_package_import}")
+        race_dirs+=("${engine_package_dir}")
+        race_binaries+=("${ENGINE_RACE_TEST_BINARY}")
+        race_patterns+=("${shard_patterns[shard]}")
+    done
+    logger "INF" "Run ${test_count} tests in ${engine_package} across ${engine_race_shards} fresh race-detector processes"
+    run_prebuilt_race_commands engine "${ENGINE_RACE_REPORT}" "${engine_race_shards}" "$((10#${UT_TIMEOUT} * 60 + 120))"
+    shard_status=$?
+    if (( shard_status == 125 )); then restore_ut_term_trap "${previous_term_trap}"; return 125; fi
+    # Publish exactly one complete representation. Failed copies retain the
+    # per-command reports for the parent's existing transactional consumer.
+    if ! append_ut_report "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}" ||
+        ! : > "${report_ready}"; then
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    restore_ut_term_trap "${previous_term_trap}"
+    checkpoint_ut_event "finish" "engine" "${engine_package}" "${shard_status}"
+    return "${shard_status}"
 }
 
 function run_vet(){
@@ -106,76 +1557,270 @@ function run_vet(){
 function run_plan_race_shards(){
     local plan_package=$1
     local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
+    local build_log="${G_WKSP}/${G_TS}-plan-race-build.out"
+    local metadata_file="${G_WKSP}/${G_TS}-plan-race-package.out"
+    local plan_test_binary="${G_WKSP}/${G_TS}-plan-race.test"
+    local plan_package_dir=""
+    local plan_package_import=""
+    local build_status=0
     local list_status=0
+    local metadata_status=0
     local shard_status=0
-    local test_name=""
+    local shard_exit_status=0
     local shard=0
     local test_count=0
+    local plan_child_pid=""
+    local previous_term_trap=""
+    local report_staging=""
+    local active_count=0
+    local next_shard=0
+    local pid=""
+    local scheduler_progress=0
+    local plan_term_grace_ticks=20
     local -a shard_patterns
     local -a shard_counts
+    local -a shard_pids=()
+    local -a shard_reports=()
 
     if ! [[ "${PLAN_RACE_SHARDS}" =~ ^[1-9][0-9]*$ ]] ||
         (( PLAN_RACE_SHARDS > 64 )); then
         logger "ERR" "PLAN_RACE_SHARDS must be an integer from 1 through 64, got '${PLAN_RACE_SHARDS}'"
         return 2
     fi
-
-    # Listing does not run tests, so the process exits before race-detector
-    # state can accumulate. Use -race here so race-tagged tests are included.
-    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-        CGO_CFLAGS="${CGO_CFLAGS}" \
-        CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} -short -race -tags "${TAGS}" \
-        -list '^(Test|Fuzz|Example)' "${plan_package}" > "${test_list}"
-    list_status=$?
-    if (( list_status != 0 )); then
-        logger "ERR" "Failed to list tests for ${plan_package}"
-        tail -n 200 "${test_list}"
-        return "${list_status}"
-    fi
-
-    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
-        shard_patterns[shard]='^('
-        shard_counts[shard]=0
-    done
-
-    while IFS= read -r test_name; do
-        case "${test_name}" in
-            Test*|Fuzz*|Example*) ;;
-            *) continue ;;
-        esac
-        shard=$(( test_count % PLAN_RACE_SHARDS ))
-        if (( shard_counts[shard] > 0 )); then
-            shard_patterns[shard]+='|'
-        fi
-        shard_patterns[shard]+="${test_name}"
-        shard_counts[shard]=$(( shard_counts[shard] + 1 ))
-        test_count=$(( test_count + 1 ))
-    done < "${test_list}"
-
-    if (( test_count == 0 )); then
-        logger "ERR" "No tests discovered for ${plan_package}"
+    if ! [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( PLAN_RACE_PARALLEL > 2 )); then
+        logger "ERR" "PLAN_RACE_PARALLEL must be 1 or 2, got '${PLAN_RACE_PARALLEL}'"
         return 2
     fi
 
-    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes"
+    # The plan phase may run concurrently with the heavy phase. Keep its
+    # process-group cleanup local to this helper so a cancelled parent cannot
+    # strand the test binary after the helper's shell exits.
+    previous_term_trap=$(trap -p TERM)
+    # Drain scalar and shard groups together under one common deadline before
+    # joining children or removing their artifacts.
+    function cancel_plan_shards(){
+        trap '' TERM
+        terminate_ut_process_groups "${plan_term_grace_ticks}" "${plan_child_pid}" \
+            ${shard_pids[@]+"${shard_pids[@]}"} || exit 125
+        wait 2>/dev/null || true
+        publish_ut_helper_completion 143 || exit 125
+        exit 143
+    }
+    trap cancel_plan_shards TERM
+    local plan_term_trap
+    local term_pending=0
+    plan_term_trap=$(trap -p TERM)
+    if [[ -z "${PLAN_RACE_REPORT}" ]]; then
+        PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
+    fi
+    rm -f "${PLAN_RACE_REPORT}" "${PLAN_RACE_REPORT}".*
+    checkpoint_ut_event "start" "plan" "${plan_package}" "" "shards=${PLAN_RACE_SHARDS}"
+    # Resolve both metadata fields through one cancellable child. Keeping the
+    # PID in plan_child_pid makes TERM ownership identical to build and shard
+    # execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
+    set -m
+    go list ${GO_MODULE_MODE} \
+        -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${plan_package}" \
+        > "${metadata_file}" 2>&1 &
+    plan_child_pid=$!
+    set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
+    wait "${plan_child_pid}"
+    metadata_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
+    plan_child_pid=""
+    if (( metadata_status != 0 )) ||
+        ! IFS=$'\t' read -r plan_package_dir plan_package_import < "${metadata_file}"; then
+        logger "ERR" "Failed to resolve package metadata for ${plan_package}"
+        tail -n 200 "${metadata_file}"
+        : > "${metadata_file}"
+        restore_ut_term_trap "${previous_term_trap}"
+        if (( metadata_status != 0 )); then
+            return "${metadata_status}"
+        fi
+        return 2
+    fi
+    : > "${metadata_file}"
+
+    # Compile and link the race-instrumented test binary once. Each shard still
+    # runs in a fresh process, preserving race-detector and package-global
+    # isolation without repeating the same link action for every shard.
+    PLAN_RACE_TEST_BINARY="${plan_test_binary}"
+    term_pending=0
+    trap 'term_pending=1' TERM
+    set -m
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
+        -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
+    plan_child_pid=$!
+    set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
+    wait "${plan_child_pid}"
+    build_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
+    plan_child_pid=""
+    if (( build_status != 0 )); then
+        logger "ERR" "Failed to build race test binary for ${plan_package}"
+        tail -n 200 "${build_log}"
+        checkpoint_ut_event "finish" "plan" "${plan_package}" "${build_status}" "phase=build"
+        restore_ut_term_trap "${previous_term_trap}"
+        return "${build_status}"
+    fi
+
+    # Test binaries normally execute with the package source directory as cwd.
+    # Preserve that contract for both discovery and shard execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
+    set -m
+    (
+        cd "${plan_package_dir}" || exit 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            "${plan_test_binary}" -test.short=true \
+            -test.list='^(Test|Fuzz|Example)'
+    ) > "${test_list}" 2>&1 &
+    plan_child_pid=$!
+    set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
+    wait "${plan_child_pid}"
+    list_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
+    plan_child_pid=""
+    if (( list_status != 0 )); then
+        logger "ERR" "Failed to list tests for ${plan_package}"
+        tail -n 200 "${test_list}"
+        checkpoint_ut_event "finish" "plan" "${plan_package}" "${list_status}" "phase=list"
+        restore_ut_term_trap "${previous_term_trap}"
+        return "${list_status}"
+    fi
+
+    if ! partition_race_test_inventory "${test_list}" "${PLAN_RACE_SHARDS}" roundrobin; then
+        logger "ERR" "Invalid or empty test inventory for ${plan_package}"
+        checkpoint_ut_event "finish" "plan" "${plan_package}" "2" "phase=discover"
+        restore_ut_term_trap "${previous_term_trap}"
+        return 2
+    fi
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with parallelism ${PLAN_RACE_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
             continue
         fi
-        shard_patterns[shard]+=')$'
-        logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-            CGO_CFLAGS="${CGO_CFLAGS}" \
-            CGO_LDFLAGS="${CGO_LDFLAGS}" \
-            go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" \
-            -p 1 -count=1 -timeout "${UT_TIMEOUT}m" -race \
-            -run "${shard_patterns[shard]}" "${plan_package}" >> "${UT_REPORT}"
-        if (( $? != 0 )); then
-            shard_status=1
-        fi
+        # append_ut_report recovers unmarked shard files through a lexical
+        # glob. Keep the suffix fixed-width so shard 10 follows shard 09.
+        shard_reports[shard]="${PLAN_RACE_REPORT}.$(printf '%02d' "${shard}")"
+        : > "${shard_reports[shard]}"
     done
 
+    # Run fresh test-binary processes with a hard two-process ceiling. Each
+    # process writes an independent report, so a failed shard cannot leave a
+    # partially interleaved JSON stream or hide another shard's status.
+    set -m
+    while (( next_shard < PLAN_RACE_SHARDS || active_count > 0 )); do
+        while (( next_shard < PLAN_RACE_SHARDS && active_count < PLAN_RACE_PARALLEL )); do
+            shard=${next_shard}
+            next_shard=$(( next_shard + 1 ))
+            if (( shard_counts[shard] == 0 )); then
+                continue
+            fi
+            logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
+            term_pending=0
+            trap 'term_pending=1' TERM
+            (
+                cd "${plan_package_dir}" || exit 2
+                LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                    go tool test2json -t -p "${plan_package_import}" \
+                    "${plan_test_binary}" -test.short=true -test.v=test2json \
+                    -test.paniconexit0=true -test.count=1 \
+                    -test.timeout="${UT_TIMEOUT}m" \
+                    -test.run="${shard_patterns[shard]}"
+            ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
+            shard_pids[shard]=$!
+            restore_ut_term_trap "${plan_term_trap}"
+            if (( term_pending != 0 )); then cancel_plan_shards; fi
+            active_count=$(( active_count + 1 ))
+            checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${shard_pids[shard]} tests=${shard_counts[shard]}"
+        done
+
+        if (( active_count == 0 )); then
+            continue
+        fi
+
+        # Bash 3.2 does not provide wait -n. Poll the owned children instead of
+        # waiting for the first active index, so a later fast shard releases a
+        # bounded slot without being held behind an earlier slow shard.
+        scheduler_progress=0
+        for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+            if [[ -z "${shard_pids[shard]:-}" ]]; then
+                continue
+            fi
+            pid=${shard_pids[shard]}
+            if kill -0 "${pid}" 2>/dev/null; then
+                continue
+            fi
+            wait "${pid}"
+            shard_exit_status=$?
+            wait_for_ut_process_group "${pid}" 20 || { trap '' TERM; exit 125; }
+            shard_pids[shard]=""
+            active_count=$(( active_count - 1 ))
+            scheduler_progress=1
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" finish "${shard_exit_status}"
+            if (( shard_exit_status != 0 )); then
+                logger "ERR" "${plan_package} race shard $(( shard + 1 )) failed with status ${shard_exit_status}"
+                shard_status=1
+            fi
+        done
+        if (( scheduler_progress == 0 )); then
+            sleep 0.05
+        fi
+    done
+    set +m
+
+    # Publish the complete ordered report only after every shard has been
+    # reaped. The ready marker makes the base report authoritative to
+    # append_ut_report; cancellation before the marker leaves shard reports
+    # available for diagnostics and safe recovery.
+    report_staging="${PLAN_RACE_REPORT}.tmp.$$"
+    rm -f "${report_staging}"
+    if ! : > "${report_staging}"; then
+        logger "ERR" "failed to create plan race report staging file"
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        if (( shard_counts[shard] == 0 )); then
+            continue
+        fi
+        if ! cat "${shard_reports[shard]}" >> "${report_staging}"; then
+            logger "ERR" "failed to assemble plan race shard ${shard} report"
+            rm -f "${report_staging}"
+            restore_ut_term_trap "${previous_term_trap}"
+            return 1
+        fi
+    done
+    if ! mv -f "${report_staging}" "${PLAN_RACE_REPORT}"; then
+        logger "ERR" "failed to publish plan race report"
+        rm -f "${report_staging}"
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    if ! : > "${PLAN_RACE_REPORT}.ready"; then
+        logger "ERR" "failed to publish plan race report readiness marker"
+        # Keep the complete base report and shard reports for append_ut_report
+        # to recover if marker publication is interrupted.
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+
+    restore_ut_term_trap "${previous_term_trap}"
+    checkpoint_ut_event "finish" "plan" "${plan_package}" "${shard_status}"
     return "${shard_status}"
 }
 
@@ -190,7 +1835,700 @@ function remove_packages_from_scope(){
     printf '%s\n' "${scope}"
 }
 
+# Build the exact binaries that the embedded stage can execute after the
+# exclusive issues fixture exits. Every artifact is indexed by the immutable
+# package order so package names containing path separators never become paths.
+function run_embedded_prebuild(){
+    local package_scope=$1
+    local package_parallel=$2
+    local report_base=$3
+    local package_index=0
+    local next_package=0
+    local package=""
+    local output_path=""
+    local package_report=""
+    local child_status=0
+    local wave_status=0
+    local active_count=0
+    local progress=0
+    local term_pending=0
+    local wave_term_trap=""
+    local -a child_pids=(0)
+    local -a packages=()
+    local previous_term_trap=""
+
+    if ! [[ "${package_parallel}" =~ ^[12]$ ]]; then
+        return 2
+    fi
+    while IFS= read -r package; do
+        [[ -n "${package}" ]] && packages+=("${package}")
+    done <<< "${package_scope}"
+    if (( ${#packages[@]} == 0 )); then
+        return 0
+    fi
+
+    previous_term_trap=$(trap -p TERM)
+    function cancel_embedded_wave(){
+        trap '' TERM
+        terminate_ut_process_groups 20 "${child_pids[@]}" || exit 125
+        wait 2>/dev/null || true
+        publish_ut_helper_completion 143 || exit 125
+        exit 143
+    }
+    trap cancel_embedded_wave TERM
+    wave_term_trap=$(trap -p TERM)
+    while (( next_package < ${#packages[@]} || active_count > 0 )); do
+        while (( next_package < ${#packages[@]} && active_count < package_parallel )); do
+            package_index=${next_package}
+            package=${packages[package_index]}
+            output_path="${report_base}.package.${package_index}.test"
+            package_report="${report_base}.build.${package_index}"
+            if ! : > "${package_report}"; then
+                trap '' TERM
+                if ! terminate_ut_process_groups 20 "${child_pids[@]}"; then
+                    exit 125
+                fi
+                wait 2>/dev/null || true
+                restore_ut_term_trap "${previous_term_trap}"
+                return 1
+            fi
+            checkpoint_ut_event "start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
+            # TERM must not observe a spawned but unregistered process group.
+            term_pending=0
+            trap 'term_pending=1' TERM
+            set -m
+            env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race \
+                -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
+                -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
+            child_pids[package_index]=$!
+            set +m
+            restore_ut_term_trap "${wave_term_trap}"
+            checkpoint_ut_event "pid-start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} child_pid=${child_pids[package_index]} parallel=${package_parallel} compile_only=true"
+            if (( term_pending != 0 )); then
+                cancel_embedded_wave
+            fi
+            active_count=$((active_count + 1))
+            next_package=$((next_package + 1))
+        done
+        # Match the plan scheduler's Bash-3.2-compatible completion mechanism:
+        # a later completed package releases its slot even if the first stalls.
+        progress=0
+        for (( package_index=0; package_index<next_package; package_index++ )); do
+            [[ "${child_pids[package_index]:-0}" != 0 ]] || continue
+            if kill -0 "${child_pids[package_index]}" 2>/dev/null; then continue; fi
+            child_status=0
+            wait "${child_pids[package_index]}" || child_status=$?
+            wait_for_ut_process_group "${child_pids[package_index]}" 20 || { trap '' TERM; exit 125; }
+            child_pids[package_index]=0
+            (( child_status == 0 )) || wave_status=1
+            active_count=$((active_count - 1))
+            checkpoint_ut_event "finish" "embedded-prebuild" "${packages[package_index]}" "${child_status}" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
+            progress=1
+        done
+        if (( active_count > 0 && progress == 0 )); then sleep 0.05; fi
+    done
+    restore_ut_term_trap "${previous_term_trap}"
+    return "${wave_status}"
+}
+
+function start_embedded_prebuild(){
+    ut_drain_failed && return 125
+    local package_scope=$1
+    local package_parallel=$2
+
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        logger "ERR" "embedded prebuild already has an active owner"
+        return 2
+    fi
+    if [[ -z "${package_scope}" ]]; then
+        return 0
+    fi
+    cleanup_embedded_prebuild || return 0
+    # Disk exhaustion must only disable this optional optimization.
+    local available_kb
+    available_kb=$(df -Pk "${G_WKSP}" | awk 'END {print $4}')
+    if ! [[ "${UT_PREBUILD_MIN_FREE_KB}" =~ ^[1-9][0-9]*$ ]]; then
+        logger "WRN" "invalid UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB}; use go test"
+        return 0
+    fi
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] ||
+        (( available_kb < UT_PREBUILD_MIN_FREE_KB )); then
+        logger "WRN" "embedded prebuild requires ${UT_PREBUILD_MIN_FREE_KB} KiB free (available ${available_kb:-unknown}); use go test"
+        return 0
+    fi
+    CLUSTER_PREBUILD_DIR=$(mktemp -d "${G_WKSP}/${G_TS}-embedded.XXXXXX") || return 0
+    CLUSTER_PREBUILD_REPORT="${CLUSTER_PREBUILD_DIR}/prebuild.out"
+    if ! : > "${CLUSTER_PREBUILD_REPORT}"; then cleanup_embedded_prebuild; return 0; fi
+    mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" start \
+        "" "parallel=${package_parallel} compile_only=true"
+    local saved_term_trap
+    local term_pending=0
+    prepare_ut_helper_completion CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || return 125
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    invoke_ut_helper CLUSTER_PREBUILD_JOB_PID run_embedded_prebuild "${package_scope}" "${package_parallel}" "${CLUSTER_PREBUILD_REPORT}" &
+    CLUSTER_PREBUILD_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then handle_ut_termination; fi
+    checkpoint_ut_event "pid-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
+        "child_pid=${CLUSTER_PREBUILD_JOB_PID} parallel=${package_parallel} compile_only=true"
+}
+
+function finish_embedded_prebuild(){
+    local prebuild_status=0
+    if [[ -z "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 )) || return 125
+        return 0
+    fi
+    checkpoint_ut_event "join-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
+        "child_pid=${CLUSTER_PREBUILD_JOB_PID} compile_only=true"
+    join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || prebuild_status=$?
+    checkpoint_ut_event "join-finish" "embedded-prebuild" "compile embedded-cluster packages" "${prebuild_status}" \
+        "compile_only=true"
+    mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" finish "${prebuild_status}"
+    return "${prebuild_status}"
+}
+
+function cleanup_embedded_prebuild(){
+    (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    # Call only after the build helper and all its child groups are reaped.
+    # Keep build diagnostics outside the disposable artifact directory.
+    local package_report
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    if [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+        for package_report in "${CLUSTER_PREBUILD_REPORT}".build.*; do
+            if [[ -f "${package_report}" ]] && ! cat "${package_report}" >> "${UT_STDERR}"; then
+                logger "ERR" "failed to preserve embedded build diagnostics; retained ${CLUSTER_PREBUILD_DIR}"
+                restore_ut_term_trap "${saved_term_trap}"
+                if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
+                return 1
+            fi
+        done
+        rm -f "${CLUSTER_PREBUILD_REPORT}" "${CLUSTER_PREBUILD_REPORT}".*
+    fi
+    if [[ -n "${CLUSTER_PREBUILD_DIR}" ]]; then rmdir "${CLUSTER_PREBUILD_DIR}"; fi
+    CLUSTER_PREBUILD_DIR=""
+    CLUSTER_PREBUILD_REPORT=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
+}
+
+# Abort work that was admitted alongside the exclusive issues stage. The
+# caller may discard artifacts only after every companion owner has been
+# reaped; otherwise a compiler or light test can outlive the runner and keep a
+# cluster port, report, or link lease alive.
+# Callers prepare race_packages, race_dirs, race_binaries, race_patterns and
+# race_deadlines in their local scope. A nonzero deadline is shared by all
+# batches of that package; zero retains the ordinary per-package timeout.
+function prebuilt_race_package_is_high_footprint(){
+    # Synthetic package names are used by the shell scheduler harnesses; they
+    # do not represent production embedded owners.
+    case "$1" in
+        github.com/matrixorigin/matrixone/pkg/embed|\
+        github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn)
+            return 0
+            ;;
+        github.com/matrixorigin/matrixone/pkg/tests/arrowload|\
+        github.com/matrixorigin/matrixone/pkg/tests/dml|\
+        github.com/matrixorigin/matrixone/pkg/tests/partition|\
+        github.com/matrixorigin/matrixone/pkg/tests/shard|\
+        github.com/matrixorigin/matrixone/pkg/tests/testutils|\
+        github.com/matrixorigin/matrixone/pkg/tests/upgrade|\
+        example/*)
+            return 1
+            ;;
+        *)
+            # A newly discovered embedded owner is conservatively treated as
+            # high footprint until its cgroup trace is classified. That keeps
+            # a package addition from silently reintroducing the known memory
+            # overlap; the only cost is a temporary loss of one pool slot.
+            return 0
+            ;;
+    esac
+}
+
+function run_prebuilt_race_commands(){
+    local stage=$1 report=$2 parallel=$3 hard_timeout_seconds=$4
+    local exclusive_high_footprint=${5:-0}
+    local index candidate scheduled=0 active=0 high_footprint_active=0 progress status=0 child_status now remaining deadline
+    local previous_term_trap execution_term_trap term_pending=0
+    local -a child_pids=() test_pids=() watchdog_pids=() started=()
+    local -a reports=() expired=()
+    if ! [[ "${exclusive_high_footprint}" =~ ^[01]$ ]]; then
+        logger "ERR" "exclusive high-footprint admission must be 0 or 1, got '${exclusive_high_footprint}'" >&2
+        return 2
+    fi
+    previous_term_trap=$(trap -p TERM)
+    function stop_prebuilt_race_commands(){
+        local expired_file
+        # Failed ownership is terminal: keep TERM ignored until the parent
+        # receives 125, rather than restoring a trap that can replace it.
+        trap '' TERM
+        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi
+        wait 2>/dev/null || true
+        # Watchdogs are now joined: a published failure remains authoritative
+        # after a later successful sweep or another error.
+        for expired_file in ${expired[@]+"${expired[@]}"}; do
+            if [[ -e "${expired_file}.drain" ]]; then exit 125; fi
+        done
+    }
+    function cancel_prebuilt_race_commands(){
+        stop_prebuilt_race_commands
+        # Parent consumes the joined per-command JSON through append_ut_report.
+        # No partial merge or success marker can hide interrupted commands.
+        publish_ut_helper_completion 143 || exit 125
+        exit 143
+    }
+    trap cancel_prebuilt_race_commands TERM
+    execution_term_trap=$(trap -p TERM)
+    rm -f "${report}" "${report}".*
+
+    while (( scheduled < ${#race_packages[@]} || active > 0 )); do
+        # The same admission owner enforces exclusion in both directions:
+        # high-footprint work starts alone and keeps the wave until drained.
+        while (( scheduled < ${#race_packages[@]} && active < parallel )); do
+            candidate=-1
+            for (( index=0; index<${#race_packages[@]}; index++ )); do
+                [[ "${started[index]:-0}" == 0 ]] || continue
+                if (( exclusive_high_footprint == 1 && high_footprint_active > 0 )); then
+                    continue
+                fi
+                if (( exclusive_high_footprint == 1 && active > 0 )) &&
+                    prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                    continue
+                fi
+                candidate=${index}
+                break
+            done
+            (( candidate >= 0 )) || break
+            index=${candidate}
+            started[index]=1
+            scheduled=$((scheduled + 1))
+            now=$(date +%s)
+            deadline=${race_deadlines[index]:-0}
+            if (( deadline == 0 )); then deadline=$((now + 10#${UT_TIMEOUT} * 60)); fi
+            remaining=$((deadline - now))
+            reports[index]="${report}.$(printf '%02d' "${index}")"
+            expired[index]="${report}-expired.${index}"
+            rm -f "${expired[index]}"
+            if (( remaining <= 0 )); then
+                logger "ERR" "${race_packages[index]} exhausted its shared test timeout" >&2
+                if ! : > "${reports[index]}"; then
+                    logger "ERR" "failed to create timeout report for ${race_packages[index]}" >&2
+                    status=125
+                    scheduled=${#race_packages[@]}
+                    break
+                fi
+                # The shared deadline can expire between two batches. Keep a
+                # package-level failure event in the authoritative JSON so
+                # report consumers see why the remaining roots were not run.
+                if ! printf '{"Action":"output","Package":"%s","Output":"UT runner shared test timeout exhausted before batch execution\\n"}\n{"Action":"fail","Package":"%s","Output":"UT runner shared test timeout exhausted before batch execution\\n"}\n' \
+                    "${race_packages[index]}" "${race_packages[index]}" >> "${reports[index]}"; then
+                    logger "ERR" "failed to write timeout report for ${race_packages[index]}" >&2
+                    status=125
+                    scheduled=${#race_packages[@]}
+                    break
+                fi
+                status=1
+                scheduled=${#race_packages[@]}
+                break
+            fi
+            if ! exec 7>"${reports[index]}"; then
+                stop_prebuilt_race_commands
+                restore_ut_term_trap "${previous_term_trap}"
+                return 1
+            fi
+            checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
+                "package_index=${index} prebuilt=true parallel=${parallel}"
+            term_pending=0
+            trap 'term_pending=1' TERM
+            set -m
+            (
+                cd "${race_dirs[index]}" || exit 2
+                env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                    go tool test2json -t -p "${race_packages[index]}" \
+                    "${race_binaries[index]}" -test.short=true -test.v=test2json \
+                    -test.paniconexit0=true -test.count=1 -test.timeout="${remaining}s" \
+                    -test.run="${race_patterns[index]}"
+            ) >&7 &
+            test_pids[index]=$!
+            child_pids[index*2]=${test_pids[index]}
+            exec 7>&-
+            set +m
+            restore_ut_term_trap "${execution_term_trap}"
+            if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
+
+            term_pending=0
+            trap 'term_pending=1' TERM
+            set -m
+            (
+                sleep "$((remaining + hard_timeout_seconds - 10#${UT_TIMEOUT} * 60))"
+                if ut_process_group_alive "${test_pids[index]}"; then
+                    : > "${expired[index]}"
+                    logger "ERR" "prebuilt ${stage} package ${race_packages[index]} exceeded its hard timeout" >&2
+                    terminate_ut_process_group "${test_pids[index]}" TERM
+                    if ! wait_for_ut_process_group "${test_pids[index]}" 20 >&2; then
+                        : > "${expired[index]}.drain"
+                    fi
+                fi
+            ) >&2 &
+            watchdog_pids[index]=$!
+            child_pids[index*2+1]=${watchdog_pids[index]}
+            set +m
+            restore_ut_term_trap "${execution_term_trap}"
+            if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
+            active=$((active + 1))
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                high_footprint_active=$((high_footprint_active + 1))
+            fi
+        done
+        progress=0
+        for (( index=0; index<${#race_packages[@]}; index++ )); do
+            [[ "${test_pids[index]:-0}" != 0 ]] || continue
+            if [[ -e "${expired[index]}.drain" ]]; then
+                stop_prebuilt_race_commands
+            fi
+            # Poll all owned groups, including the one-process path. A direct
+            # wait can block forever while a descendant retains the pipe; the
+            # watchdog must be able to enforce the shared deadline and report a
+            # failed drain instead.
+            if ut_process_group_alive "${test_pids[index]}"; then
+                continue
+            fi
+            child_status=0
+            wait "${test_pids[index]}" || child_status=$?
+            if ! wait_for_ut_process_group "${test_pids[index]}" 20 >&2; then
+                stop_prebuilt_race_commands
+                restore_ut_term_trap "${previous_term_trap}"
+                return 1
+            fi
+            child_pids[index*2]=0
+            terminate_ut_process_group "${watchdog_pids[index]}" TERM
+            if ! wait_for_ut_process_group "${watchdog_pids[index]}" 20 >&2; then
+                stop_prebuilt_race_commands
+                restore_ut_term_trap "${previous_term_trap}"
+                return 1
+            fi
+            wait "${watchdog_pids[index]}" 2>/dev/null || true
+            # The watchdog can publish after the early poll check. Join it
+            # before deciding whether this command completed normally.
+            if [[ -e "${expired[index]}.drain" ]]; then stop_prebuilt_race_commands; fi
+            child_pids[index*2+1]=0
+            if [[ -e "${expired[index]}" ]]; then
+                child_status=1
+                # A TERM-aware test can exit zero after the watchdog has
+                # expired it. Add a valid package-level fail event so report
+                # consumers cannot turn that timeout into a green result.
+                printf '{"Action":"output","Package":"%s","Output":"UT runner hard timeout\\n"}\n{"Action":"fail","Package":"%s","Output":"UT runner hard timeout\\n"}\n' \
+                    "${race_packages[index]}" "${race_packages[index]}" >> "${reports[index]}"
+            fi
+            rm -f "${expired[index]}"
+            if (( child_status != 0 )); then
+                status=1
+                logger "ERR" "prebuilt ${stage} package ${race_packages[index]} failed with status ${child_status}" >&2
+            fi
+            checkpoint_ut_event finish "${stage}" "${race_packages[index]}" "${child_status}" \
+                "package_index=${index} phase=execute prebuilt=true"
+            test_pids[index]=0
+            active=$((active - 1))
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                high_footprint_active=$((high_footprint_active - 1))
+            fi
+            progress=1
+        done
+        if (( active > 0 && progress == 0 )); then sleep 0.1; fi
+    done
+    restore_ut_term_trap "${previous_term_trap}"
+    return "${status}"
+}
+
+function run_prebuilt_embedded_tests(){
+    local package_scope=$1 report_base=$2 hard_timeout_seconds=$3
+    local package package_dir package_import package_index=0
+    local package_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
+    local high_footprint_package='github.com/matrixorigin/matrixone/pkg/embed'
+    local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
+    while IFS= read -r package; do
+        [[ -n "${package}" ]] || continue
+        if [[ ! -x "${report_base}.package.${package_index}.test" ]] ||
+            ! IFS=$'\t' read -r package_dir package_import < "${report_base}.package.${package_index}.meta" ||
+            [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+            logger "ERR" "invalid prebuilt embedded artifact for ${package}" >&2
+            return 1
+        fi
+        race_packages[package_index]=${package_import}
+        race_dirs[package_index]=${package_dir}
+        race_binaries[package_index]="${report_base}.package.${package_index}.test"
+        race_patterns[package_index]='.*'
+        package_index=$((package_index + 1))
+    done <<< "${package_scope}"
+    # Keep the high-footprint shared-cluster package out of the first pooled
+    # overlap. The package list is derived from go list, so move it to the
+    # front together with its exact command tuple. The displaced first owner
+    # takes its former slot; artifact filenames retain compilation order.
+    # Embedded deadlines remain unset: the dispatcher starts each package's
+    # timeout at admission, independently of its position in this wave.
+    for (( package_index = 0; package_index < ${#race_packages[@]}; package_index++ )); do
+        if [[ "${race_packages[package_index]}" == "${high_footprint_package}" ]]; then
+            if (( package_index != 0 )); then
+                package=${race_packages[0]}
+                race_packages[0]=${race_packages[package_index]}
+                race_packages[package_index]=${package}
+                package_dir=${race_dirs[0]}
+                race_dirs[0]=${race_dirs[package_index]}
+                race_dirs[package_index]=${package_dir}
+                package=${race_binaries[0]}
+                race_binaries[0]=${race_binaries[package_index]}
+                race_binaries[package_index]=${package}
+                package=${race_patterns[0]}
+                race_patterns[0]=${race_patterns[package_index]}
+                race_patterns[package_index]=${package}
+            fi
+            break
+        fi
+    done
+    if (( 10#${package_parallel} > 1 )); then
+        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel}" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${package_parallel}" \
+            run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
+                "${package_parallel}" "${hard_timeout_seconds}" 1
+    else
+        run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
+            1 "${hard_timeout_seconds}"
+    fi
+}
+
+function run_race_inventory_with_deadline(){
+    local directory=$1 binary=$2 inventory=$3 deadline=$4
+    local pid now status=0 term_pending=0
+    local previous_term_trap
+
+    # A discovery child is an owned process group.  Every abort path must
+    # either prove that group has drained before joining it, or return a
+    # retained diagnostic state; an unconditional wait here can hang forever
+    # when a descendant is stuck in an uninterruptible kernel wait.
+    function abort_race_inventory(){
+        local abort_status=$1
+        terminate_ut_process_group "${pid}" TERM
+        if ! wait_for_ut_process_group "${pid}" 20 >&2; then
+            trap '' TERM
+            logger "ERR" "race inventory process group ${pid} did not drain; retaining ${inventory}"
+            exit 125
+        fi
+        wait "${pid}" 2>/dev/null || true
+        restore_ut_term_trap "${previous_term_trap}"
+        if (( term_pending != 0 )); then abort_status=125; fi
+        return "${abort_status}"
+    }
+
+    previous_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    (
+        cd "${directory}" || exit 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" "${binary}" -test.short=true \
+            -test.list='^(Test|Fuzz|Example)'
+    ) > "${inventory}" 2>&1 &
+    pid=$!
+    set +m
+    if (( term_pending != 0 )); then
+        abort_race_inventory 125
+        return $?
+    fi
+    while ut_process_group_alive "${pid}"; do
+        if (( term_pending != 0 )); then
+            abort_race_inventory 125
+            return $?
+        fi
+        now=$(date +%s)
+        if (( now >= deadline )); then
+            abort_race_inventory 124
+            return $?
+        fi
+        sleep 0.1
+    done
+    wait "${pid}" || status=$?
+    restore_ut_term_trap "${previous_term_trap}"
+    if (( term_pending != 0 )); then status=125; fi
+    return "${status}"
+}
+
+function run_issues_race_batches(){
+    local package=$1 binary=$2 batches=$3
+    local metadata="${binary}-metadata" inventory="${binary}-inventory"
+    local directory import_path test_file deadline=0 status=0 index effective_go_flags
+    local remaining fallback_timeout
+    local -a shard_patterns=() shard_counts=()
+    local test_count=0
+    local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
+    # Preparation may use the complete ordinary command only before any
+    # selected test has executed. A runtime failure never reruns earlier roots.
+    effective_go_flags=$(go env GOFLAGS 2>/dev/null) || status=1
+    if [[ -n "${GOFLAGS:-}" || -n "${effective_go_flags:-}" ]]; then status=1; fi
+    if (( status == 0 )) &&
+        ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
+            -f '{{.Dir}}{{"\t"}}{{.ImportPath}}{{"\n"}}{{range .TestGoFiles}}{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{.}}{{"\n"}}{{end}}' \
+            "${package}" > "${metadata}" ||
+        ! IFS=$'\t' read -r directory import_path < "${metadata}"; then
+        status=1
+    else
+        # A new TestMain may own cross-root assertions or process-wide teardown.
+        # Require review before opting that lifetime contract into batching.
+        while IFS= read -r test_file; do
+            [[ -n "${test_file}" ]] || continue
+            if grep -Eq '(^|[^[:alnum:]_])TestMain([^[:alnum:]_]|$)' "${directory}/${test_file}"; then
+                status=1
+                break
+            fi
+        done < <(tail -n +2 "${metadata}")
+    fi
+    if (( status == 0 )); then
+        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} \
+            -short -race -tags "${TAGS}" -p 1 -c -o "${binary}" "${package}" >&2 || status=$?
+    fi
+    if (( status == 0 )); then
+        deadline=$(( $(date +%s) + 10#${UT_TIMEOUT} * 60 ))
+        run_race_inventory_with_deadline "${directory}" "${binary}" "${inventory}" "${deadline}" || status=$?
+    fi
+    local partition_layout=contiguous
+    if (( status == 0 && 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+        partition_layout=roundrobin
+    fi
+    if (( status == 0 )) && ! partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}"; then status=1; fi
+    if (( status == 124 || status == 125 )); then
+        logger "ERR" "issues batching discovery exhausted its shared timeout (status ${status}); refusing an unbounded fallback" >&2
+        if (( status == 124 )); then
+            rm -f "${metadata}" "${inventory}" "${binary}"
+        else
+            logger "ERR" "retaining issues discovery diagnostics: ${metadata} ${inventory} ${binary}" >&2
+        fi
+        return "${status}"
+    fi
+    rm -f "${metadata}" "${inventory}"
+    if (( status != 0 )); then
+        if (( deadline != 0 )); then
+            remaining=$((deadline - $(date +%s)))
+            if (( remaining <= 0 )); then
+                logger "ERR" "issues batching preparation exhausted its shared timeout; refusing a fresh fallback" >&2
+                rm -f "${binary}"
+                return 124
+            fi
+            fallback_timeout=${remaining}
+        else
+            fallback_timeout=$((10#${UT_TIMEOUT} * 60))
+        fi
+        logger "WRN" "issues batching preparation unavailable; run the ordinary command with ${fallback_timeout}s remaining" >&2
+        rm -f "${binary}"
+        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+            -p 1 -timeout "${fallback_timeout}s" -race "${package}"
+        return $?
+    fi
+    for (( index=0; index<batches; index++ )); do
+        (( shard_counts[index] > 0 )) || continue
+        race_packages+=("${import_path}")
+        race_dirs+=("${directory}")
+        race_binaries+=("${binary}")
+        race_patterns+=("${shard_patterns[index]}")
+        race_deadlines+=("${deadline}")
+    done
+    # The process pool is enabled only for this exact prebuilt batch wave.
+    # Ordinary packages keep the exclusive cluster admission contract.
+    if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL} and ${partition_layout} partition" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
+            run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
+                "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
+    else
+        run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    fi
+}
+
+function run_embedded_tests(){
+    ut_drain_failed && return 125
+    local package_scope=$1
+    local prebuild_status=1
+    local test_status=0
+    local report_base="${CLUSTER_PREBUILD_REPORT}"
+    local hard_timeout_seconds=0
+    local package_dir=""
+    local package_import=""
+
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        finish_embedded_prebuild
+        prebuild_status=$?
+        if (( prebuild_status == 125 )); then return 125; fi
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        local package=""
+        local package_index=0
+        if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]; then
+            logger "WRN" "invalid embedded timeout configuration; use the authoritative complete-scope go test"
+            prebuild_status=1
+        elif (( UT_EMBEDDED_HARD_TIMEOUT_SECONDS > 0 )); then
+            hard_timeout_seconds=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}
+        else
+            hard_timeout_seconds=$((10#${UT_TIMEOUT} * 60 + 120))
+        fi
+        while IFS= read -r package; do
+            (( prebuild_status == 0 )) || break
+            [[ -n "${package}" ]] || continue
+            if [[ ! -x "${report_base}.package.${package_index}.test" ]]; then
+                logger "WRN" "embedded prebuild did not publish a binary for ${package}"
+                prebuild_status=1
+                break
+            fi
+            if ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
+                -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${package}" \
+                > "${report_base}.package.${package_index}.meta" ||
+                ! IFS=$'\t' read -r package_dir package_import \
+                < "${report_base}.package.${package_index}.meta" ||
+                [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+                logger "WRN" "embedded prebuild metadata validation failed for ${package}; use go test"
+                prebuild_status=1
+                break
+            fi
+            package_index=$((package_index + 1))
+        done <<< "${package_scope}"
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        logger "INF" "Run embedded-cluster race-test packages from binaries compiled during the issues stage"
+        PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-embedded-race-report.out"
+        run_ut_command embedded "prebuilt embedded-cluster race-test packages" \
+            run_prebuilt_embedded_tests "${package_scope}" "${report_base}" "${hard_timeout_seconds}"
+        test_status=$?
+        if (( test_status == 125 )); then return 125; fi
+        consume_race_report PREBUILT_RACE_REPORT || test_status=1
+        cleanup_embedded_prebuild || return 1
+        return "${test_status}"
+    fi
+
+    if [[ -n "${report_base}" ]]; then
+        logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
+        cleanup_embedded_prebuild || return 1
+    fi
+    run_ut_command embedded "embedded-cluster race-test packages" \
+        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+        -p 1 -timeout "${UT_TIMEOUT}m" -race ${package_scope}
+}
+
 function run_tests(){
+    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
     cd $BUILD_WKSP
     horiz_rule
     echo "#  BUILD WORKSPACE: $BUILD_WKSP"
@@ -198,20 +2536,141 @@ function run_tests(){
     echo "#  UT REPORT:       $UT_REPORT"
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
+    echo "#  UT HARD TIMEOUT: $UT_HARD_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  LIGHT PARALLEL:  $UT_LIGHT_PARALLEL"
+    echo "#  LINK PARALLEL:   $UT_LINK_PARALLEL"
+    echo "#  UT SHARD:        $UT_SHARD"
+    echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
+    echo "#  EMBEDDED PACKAGE PARALLEL: $UT_EMBEDDED_PACKAGE_PARALLEL"
+    echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
+    echo "#  LIGHT OVERLAP:   $UT_OVERLAP_LIGHT (parallel $UT_OVERLAP_LIGHT_PARALLEL)"
+    echo "#  HELPER TERM GRACE: $UT_HELPER_TERM_GRACE_TICKS ticks"
     echo "#  CLUSTER ADMISSION: process lifecycle"
-    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL"
+    echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
+    echo "#  UT STDERR:       $UT_STDERR"
+    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL total package slots"
     horiz_rule
+    mark_ut_stage "routing" "validate shard and package partition" start
 
+    if ! list_ut_shard_stages "${UT_SHARD}" >/dev/null; then
+        logger "ERR" "UT_SHARD must be all, light, issues, embedded, or heavy-plan; got '${UT_SHARD}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! validate_complete_partition \
+        "UT stage" \
+        "$(list_ut_shard_stages all)" \
+        "$(list_ut_shard_stages light)" \
+        "$(list_ut_shard_stages issues)" \
+        "$(list_ut_shard_stages embedded)" \
+        "$(list_ut_shard_stages heavy-plan)"; then
+        logger "ERR" "Race-UT shard stages are not a complete disjoint partition"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${SKIP_TESTS}" == "race" && "${UT_SHARD}" != "all" ]]; then
+        logger "ERR" "split UT shards require race mode; got SKIP_TESTS=race with UT_SHARD=${UT_SHARD}"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_PREBUILD_EMBEDDED}" =~ ^[01]$ ]]; then
+        logger "ERR" "UT_PREBUILD_EMBEDDED must be 0 or 1, got '${UT_PREBUILD_EMBEDDED}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_PLAN}" =~ ^[01]$ ]]; then
+        logger "ERR" "UT_OVERLAP_PLAN must be 0 or 1, got '${UT_OVERLAP_PLAN}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_LIGHT}" =~ ^[01]$ ]]; then
+        logger "ERR" "UT_OVERLAP_LIGHT must be 0 or 1, got '${UT_OVERLAP_LIGHT}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_LIGHT_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( UT_OVERLAP_LIGHT_PARALLEL > 64 )); then
+        logger "ERR" "UT_OVERLAP_LIGHT_PARALLEL must be an integer from 1 through 64, got '${UT_OVERLAP_LIGHT_PARALLEL}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_HELPER_TERM_GRACE_TICKS}" =~ ^[0-9]+$ ]] ||
+        (( UT_HELPER_TERM_GRACE_TICKS < 41 || UT_HELPER_TERM_GRACE_TICKS > 240 )); then
+        logger "ERR" "UT_HELPER_TERM_GRACE_TICKS must be between 41 and 240, got '${UT_HELPER_TERM_GRACE_TICKS}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
+        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
+        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 ]] ||
+        [[ "${UT_ISSUES_BATCHES}" == 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 1 ]]; then
+        logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 1 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 2 ]]; then
+        logger "ERR" "UT_EMBEDDED_PACKAGE_PARALLEL must be 1..2, got '${UT_EMBEDDED_PACKAGE_PARALLEL}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    mark_ut_stage "routing" "validate shard and package partition" finish 0
+
+    mark_ut_stage "prepare" "clean go test cache" start
     logger "INF" "Clean go test cache"
-    go clean -testcache
+    local testcache_status=0
+    go clean -testcache || testcache_status=$?
+    mark_ut_stage "prepare" "clean go test cache" finish "${testcache_status}"
+    if (( testcache_status != 0 )); then
+        logger "ERR" "Failed to clean Go test cache"
+        UT_TEST_STATUS=1
+        return 0
+    fi
 
-    local test_scope=$(go list ${GO_MODULE_MODE} ./... | grep -v 'driver/aoe' | grep -v 'engine/aoe' | grep -v 'pkg/catalog')
+    local test_scope
+    mark_ut_stage "discovery" "resolve UT package scope" start
+    if ! test_scope=$(go list ${GO_MODULE_MODE} ./...); then
+        logger "ERR" "Failed to resolve the complete UT package scope"
+        UT_TEST_STATUS=1
+        mark_ut_stage "discovery" "resolve UT package scope" finish 1
+        return 0
+    fi
+    mark_ut_stage "discovery" "resolve UT package scope" finish 0
+    test_scope=$(printf '%s\n' "${test_scope}" | grep -v 'driver/aoe' | grep -v 'engine/aoe' | grep -v 'pkg/catalog')
+    if [[ -z "${test_scope}" ]]; then
+        logger "ERR" "The complete UT package scope is empty"
+        UT_TEST_STATUS=1
+        return 0
+    fi
     local leave_out=$(egrep -lr  --include="*.go" 'Code generated by protoc-gen-gogo. DO NOT EDIT.' ./pkg/* | sort -u | xargs basename -a)
     logger "INF" "Ingore code coverage $(echo ${leave_out[@]}|tr " " "|")"
     local cover_profile='profile.raw'
-    make cgo
-    make thirdparties
+    # Top-level cgo owns the complete thirdparty + CGo generation and stages
+    # runtime libraries. A second standalone thirdparties invocation only
+    # repeats the no-op scan and obscures that ownership contract.
+    mark_ut_stage "build" "native CGo prerequisites" start
+    prepare_ut_native
+    local cgo_status=$?
+    mark_ut_stage "build" "native CGo prerequisites" finish "${cgo_status}"
+    if (( cgo_status != 0 )); then
+        UT_TEST_STATUS=1
+        return 0
+    fi
 
     # Compile and link a CGo-transitive package through the same deterministic
     # CPU wrapper documented for local development. This catches drift between
@@ -220,27 +2679,72 @@ function run_tests(){
     # separate, explicit CUDA/cuVS link contract.
     if [[ "${MO_CL_CUDA:-0}" != "1" ]]; then
         logger "INF" "Smoke test the deterministic CGo test wrapper"
+        mark_ut_stage "build" "CGo wrapper smoke test" start
         if ! .agents/skills/mo-dev/scripts/mo-cgo-test \
             -count=1 -timeout=120s ./optools/testdata/mo_cgo_transitive; then
             logger "ERR" "Deterministic CGo test wrapper smoke failed"
-            exit 1
+            mark_ut_stage "build" "CGo wrapper smoke test" finish 1
+            UT_TEST_STATUS=1
+            return 0
         fi
+        mark_ut_stage "build" "CGo wrapper smoke test" finish 0
     fi
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT packages with parallelism ${UT_PARALLEL} and process-lifecycle cluster admission"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
+        run_ut_command "all" "all packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope
         UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
         local plan_package
+        local engine_package
+        local hnsw_package
+        local engine_test_scope
         local serial_test_scope
-        local heavy_test_scope
+        local cluster_test_scope
+        local resource_heavy_test_scope
         local light_test_scope
+        local package
+        local package_status=0
         local light_status=0
+        local hnsw_status=0
         local serial_status=0
-        local heavy_status=0
+        local cluster_status=0
+        local resource_heavy_status=0
+        local engine_status=0
         local plan_status=0
+        local report_status=0
+        local resource_heavy_parallel=1
+        local engine_race_parallel=1
+        local shard_engine=1
+        local light_started=0
+        local overlap_light=0
+        local light_stage_parallel=${UT_LIGHT_PARALLEL}
+        local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
+
+        if ! [[ "${UT_PARALLEL}" =~ ^[1-9][0-9]*$ ]]; then
+            logger "ERR" "UT_PARALLEL must be a positive integer, got '${UT_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if ! [[ "${UT_LIGHT_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+            (( UT_LIGHT_PARALLEL > 64 )); then
+            logger "ERR" "UT_LIGHT_PARALLEL must be an integer from 1 through 64, got '${UT_LIGHT_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if (( light_stage_parallel > UT_PARALLEL )); then
+            light_stage_parallel=${UT_PARALLEL}
+            logger "INF" "Cap light race parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
+        if (( light_parallel > UT_PARALLEL )); then
+            light_parallel=${UT_PARALLEL}
+            logger "INF" "Cap overlapping light package parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
+        if (( light_parallel > light_stage_parallel )); then
+            light_parallel=${light_stage_parallel}
+            logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
+        fi
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
             (( HEAVY_RACE_PARALLEL > 64 )); then
@@ -248,63 +2752,285 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
-
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
             return 0
         fi
+        if ! engine_package=$(go list ${GO_MODULE_MODE} ./pkg/vm/engine/test); then
+            logger "ERR" "Failed to resolve ./pkg/vm/engine/test"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if ! hnsw_package=$(go list ${GO_MODULE_MODE} ./pkg/vectorindex/hnsw); then
+            logger "ERR" "Failed to resolve ./pkg/vectorindex/hnsw"
+            UT_TEST_STATUS=1
+            return 0
+        fi
 
-        # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package intentionally keeps a
-        # shared embedded cluster alive for most of its test process.
+        # The main issues package keeps its shared base cluster alive for most
+        # of the test process, so it retains an exclusive runner. The isolated
+        # issues package has no shared base and safely belongs to the embedded
+        # group: runner-wide admission still serializes each complete cluster
+        # lifecycle. Former logservice/TAE members allocate independent ports
+        # with collision retry and belong in the normal parallel scope.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/logservice \
-            ./pkg/vm/engine/tae/logstore \
-            ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
             ./pkg/tests/issues); then
             logger "ERR" "Failed to resolve serial race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
 
-        if ! heavy_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/sql/plan/function \
-            ./pkg/tests/dml \
-            ./pkg/tests/shard \
-            ./pkg/tests/partition \
-            ./pkg/tests/txnexecutor); then
-            logger "ERR" "Failed to resolve heavy race-test packages"
+        # Derive cluster owners from each race test binary's complete dependency
+        # graph. This also catches packages that start a cluster through a test
+        # helper, without relying on an incomplete directory allowlist.
+        if ! cluster_test_scope=$(list_embedded_cluster_test_packages ${test_scope}); then
+            logger "ERR" "Failed to discover embedded-cluster race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
 
+        # Group precedence is exclusive > embedded cluster > resource heavy >
+        # light. Keep every package in exactly one group even when its test
+        # dependencies evolve.
+        cluster_test_scope=$(remove_packages_from_scope \
+            "${cluster_test_scope}" \
+            "${plan_package}" \
+            "${hnsw_package}" \
+            ${serial_test_scope})
+
+        # Dependency-based group precedence remains authoritative. If this
+        # package ever starts owning an embedded cluster, keep it in that
+        # serialized lifecycle group instead of running it a second time here.
+        if printf '%s\n%s\n' "${serial_test_scope}" "${cluster_test_scope}" |
+            grep -Fxq "${engine_package}"; then
+            shard_engine=0
+            engine_test_scope=""
+            logger "INF" "Keep ${engine_package} in its higher-precedence race-test group"
+        else
+            engine_test_scope="${engine_package}"
+        fi
+
+        if ! resource_heavy_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/backup \
+            ./pkg/fileservice \
+            ./pkg/sql/plan/function \
+            ./pkg/vm/engine/tae/db/test); then
+            logger "ERR" "Failed to resolve resource-heavy race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        resource_heavy_test_scope=$(remove_packages_from_scope \
+            "${resource_heavy_test_scope}" \
+            "${plan_package}" \
+            "${engine_package}" \
+            "${hnsw_package}" \
+            ${serial_test_scope} \
+            ${cluster_test_scope})
+
         light_test_scope=$(remove_packages_from_scope \
             "${test_scope}" \
             "${plan_package}" \
+            "${engine_package}" \
+            "${hnsw_package}" \
             ${serial_test_scope} \
-            ${heavy_test_scope})
+            ${cluster_test_scope} \
+            ${resource_heavy_test_scope})
 
-        if [[ -n "${light_test_scope}" ]]; then
-            logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
-            light_status=$?
-        else
-            : > "${UT_REPORT}"
+        if ! validate_complete_partition \
+            "UT package" \
+            "${test_scope}" \
+            "${light_test_scope}" \
+            "${hnsw_package}" \
+            "${serial_test_scope}" \
+            "${cluster_test_scope}" \
+            "${resource_heavy_test_scope}" \
+            "${engine_test_scope}" \
+            "${plan_package}"; then
+            logger "ERR" "Race-UT package groups are not a complete disjoint partition"
+            UT_TEST_STATUS=1
+            return 0
         fi
 
-        logger "INF" "Run exclusive race-test packages serially"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $serial_test_scope >> $UT_REPORT
-        serial_status=$?
+        if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
+            if ! prepare_light_link_gate; then
+                UT_TEST_STATUS=1
+                return 0
+            fi
+        fi
+        : > "${UT_REPORT}"
+        # HNSW owns native worker pools inside its test binary. It must finish
+        # before another race wave starts. When the bounded light/issues
+        # overlap is eligible, run HNSW first, then let the low-budget light
+        # helper overlap only the exclusive issues package.
+        if (( UT_OVERLAP_LIGHT == 1 && UT_PARALLEL > 1 )) &&
+            should_run_ut_stage light && should_run_ut_stage serial &&
+            [[ -n "${light_test_scope}" ]]; then
+            overlap_light=1
+            if should_run_ut_stage hnsw; then
+                logger "INF" "Run HNSW race-test package with exclusive runner CPU before light/issues overlap"
+                run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
+                hnsw_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            fi
+            logger "INF" "Start light race-test packages in background with parallelism ${light_parallel}; overlap only with exclusive issues"
+            if start_light_race "${light_test_scope}" "${light_parallel}"; then
+                light_started=1
+            else
+                # A launch failure must not silently remove the light group
+                # from the authoritative suite. Fall back to the original
+                # foreground command so the package scope still executes.
+                logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                light_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+                overlap_light=0
+            fi
+        else
+            if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
+                logger "INF" "Run light race-test packages with parallelism ${light_stage_parallel} (requested ${UT_LIGHT_PARALLEL}, global ${UT_PARALLEL})"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                light_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            fi
 
-        logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
-        heavy_status=$?
+            if should_run_ut_stage hnsw; then
+                logger "INF" "Run HNSW race-test package with exclusive runner CPU"
+                run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
+                hnsw_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            fi
+        fi
 
-        run_plan_race_shards "${plan_package}"
-        plan_status=$?
+        # Compile the next embedded wave while the exclusive issues package is
+        # exercising its already-started shared cluster. `go test -c` only
+        # compiles and links; it does not execute TestMain or any test, so this
+        # overlaps build/link work without creating another active cluster.
+        if (( UT_PREBUILD_EMBEDDED == 1 )) &&
+            (( overlap_light == 0 )) &&
+            should_run_ut_stage serial && should_run_ut_stage embedded &&
+            [[ -n "${cluster_test_scope}" ]]; then
+            # One compiler is the bounded companion to the running issues test
+            # process. More compiler groups increase memory/CPU pressure and
+            # make the overlap slower on the eight-core CI runner.
+            start_embedded_prebuild "${cluster_test_scope}" 1
+        fi
 
-        if (( light_status != 0 || serial_status != 0 || heavy_status != 0 || plan_status != 0 )); then
+        if should_run_ut_stage serial; then
+            logger "INF" "Run exclusive race-test packages serially"
+            for package in ${serial_test_scope}; do
+                logger "INF" "Run exclusive race-test package ${package}"
+                if (( UT_ISSUES_BATCHES == 4 )); then
+                    PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-issues-race-report.out"
+                    PREBUILT_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-issues-race.test"
+                    run_ut_command serial "batched exclusive race-test package ${package}" \
+                        run_issues_race_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}"
+                    package_status=$?
+                    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+                    consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || package_status=1
+                else
+                    run_ut_command "serial" "exclusive race-test package ${package}" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}"
+                    package_status=$?
+                    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+                fi
+                if (( package_status != 0 )); then
+                    serial_status=1
+                    logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
+                fi
+            done
+        fi
+
+        if (( light_started == 1 )); then
+            finish_light_race
+            light_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            report_cgroup_memory_usage "Light/issues overlap"
+        fi
+        cleanup_light_link_gate
+
+        # Cluster admission serializes service lifecycles, not whole test
+        # processes: a waiting race binary still retains memory, and linking or
+        # non-cluster work can contend with the admitted cluster. The prebuilt
+        # path uses its bounded process pool; the authoritative fallback stays
+        # as one complete command so HAKeeper and transactions do not compete
+        # on constrained runners.
+        if should_run_ut_stage embedded; then
+            logger "INF" "Run embedded-cluster race-test packages with bounded package parallelism ${UT_EMBEDDED_PACKAGE_PARALLEL}"
+            run_embedded_tests "${cluster_test_scope}"
+            cluster_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+        fi
+
+        if should_run_ut_stage heavy && (( shard_engine == 1 )); then
+            # engine/test is dominated by serial fixture lifecycles inside one
+            # process. Build it once and split every discovered top-level test
+            # across fresh race processes. Run the complete engine wave before
+            # any resource-heavy package starts: those package lifecycles can
+            # otherwise delay the engine's ISCP progress and make watermark
+            # assertions depend on which runner process gets CPU first.
+            engine_race_parallel=${ENGINE_RACE_SHARDS}
+            if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
+                engine_race_parallel=${HEAVY_RACE_PARALLEL}
+            fi
+            ENGINE_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-engine-race.test"
+            ENGINE_RACE_REPORT="${G_WKSP}/${G_TS}-engine-race-report.out"
+            ENGINE_RACE_REPORT_READY="${ENGINE_RACE_REPORT}.ready"
+
+            # Keep the helper in its own process group for cancellation, but
+            # wait for it before admitting the resource-heavy wave. A failed
+            # engine still releases the runner: all stages run and its status
+            # remains authoritative.
+            start_engine_race "${engine_package}" "${engine_race_parallel}"
+            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED
+            engine_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            consume_engine_race_report
+            report_status=$?
+            if (( report_status != 0 )); then
+                # A report transfer failure is a failed UT stage, even if all
+                # test processes themselves exited successfully. The source is
+                # intentionally retained for diagnostics.
+                engine_status=1
+            fi
+        fi
+
+        # The plan race wave is independent after the engine wave has completed.
+        # Reserve exactly its configured process count from the existing heavy
+        # budget, so plan+resource work never exceeds the prior three-slot cap.
+        # If the budget cannot admit both waves, keep the phases sequential.
+        if should_run_ut_stage heavy; then
+            resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
+            if (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
+                [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] &&
+                (( PLAN_RACE_PARALLEL <= 2 && HEAVY_RACE_PARALLEL > PLAN_RACE_PARALLEL )); then
+                resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - PLAN_RACE_PARALLEL ))
+                logger "INF" "Start plan race wave before resource-heavy tests; reserve ${PLAN_RACE_PARALLEL} of ${HEAVY_RACE_PARALLEL} heavy slots"
+                start_plan_race "${plan_package}"
+            fi
+
+            logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
+            start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
+            finish_ut_command
+            resource_heavy_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            report_cgroup_memory_usage "Resource-heavy UT"
+        fi
+
+        if should_run_ut_stage plan; then
+            if [[ -z "${PLAN_RACE_JOB_PID}" ]]; then start_plan_race "${plan_package}"; fi
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED
+            plan_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            consume_plan_race_report
+            report_status=$?
+            if (( report_status != 0 )); then
+                plan_status=1
+            fi
+            rm -f "${PLAN_RACE_TEST_BINARY}"
+            PLAN_RACE_TEST_BINARY=""
+        fi
+
+        if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
@@ -314,7 +3040,14 @@ function run_tests(){
     # a report-parser failure can never replace the authoritative test result.
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+        snapshot_ut_diagnostics
+        report_slow_ut_cases
+        report_active_ut_cases
     fi
+
+    # Take the acceptance snapshot only after plan/engine/heavy helpers and all
+    # report writers have been joined. The caller stops the heartbeat next.
+    report_cgroup_memory_usage "Final race UT"
 
     # The caller must continue into ut_summary even when go test failed.
     return 0
@@ -324,10 +3057,35 @@ function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
   local failed_output=""
+  local setup_summary=""
+  local setup_status=0
 
   # Keep the workflow's always-run report steps well-defined even when the
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
+
+  logger "INF" "UT checkpoint artifact: ${UT_CHECKPOINT}"
+  if [[ -s "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log" ]]; then
+    awk '{ for (i=1; i<=NF; i++) if ($i ~ /^wait_seconds=/) {
+        split($i, field, "="); count++; total+=field[2]; if (field[2]>max) max=field[2]
+    }} END { printf "[ut_link_admission] links=%d wait_seconds_sum=%d wait_seconds_max=%d (overlapping waits, not wall savings)\n", count, total, max }' \
+        "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+  fi
+  if [[ -s "${UT_CHECKPOINT}" ]]; then
+    tail -n 40 "${UT_CHECKPOINT}" | sed 's/^/[ut_checkpoint] /'
+  fi
+
+  if [[ -s "${UT_REPORT}" ]]; then
+    setup_summary=$(python3 "${BUILD_WKSP}/optools/summarize_ut_setup.py" "${UT_REPORT}" 2>&1)
+    setup_status=$?
+    if (( setup_status == 0 )); then
+      while IFS= read -r line; do
+        [[ -n "${line}" ]] && logger "INF" "${line}"
+      done <<< "${setup_summary}"
+    else
+      logger "WRN" "failed to summarize fixture setup timings: ${setup_summary}"
+    fi
+  fi
 
   if ! install_go_ut_analysis; then
     analysis_status=1
@@ -343,6 +3101,10 @@ function ut_summary(){
     grep -E '"Action":"build-(output|fail)"' "${UT_REPORT}" | tail -n 200 | cut -c 1-4096
     logger "ERR" "Last 50 raw report lines (each truncated to 4096 bytes):"
     tail -n 50 "${UT_REPORT}" | cut -c 1-4096
+    if [[ -s "${UT_STDERR}" ]]; then
+      logger "ERR" "Last 50 UT stderr lines:"
+      tail -n 50 "${UT_STDERR}" | cut -c 1-4096
+    fi
   fi
 
   failed_output=$(find "${report_path}/failed/outputs" -type f -print -quit)
@@ -369,10 +3131,14 @@ if [[ 'SCA' == $TEST_TYPE ]]; then
     horiz_rule
     run_vet
 elif [[ 'UT' == $TEST_TYPE ]]; then
+    trap handle_ut_termination TERM
     horiz_rule
     echo "# Running UT"
     horiz_rule
+    start_ut_heartbeat
     run_tests
+    if ut_drain_failed; then handle_ut_termination 125; fi
+    stop_ut_heartbeat
 
     horiz_rule
     echo "# Post testing"

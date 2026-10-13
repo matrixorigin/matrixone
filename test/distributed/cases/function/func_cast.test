@@ -168,7 +168,7 @@ select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
-select 10.0+cast('a' as decimal);
+select 10.0+cast('a' as decimal(38,0));
 select 10E+0+'a';
 
 # out-of-range cases
@@ -356,13 +356,27 @@ insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
 drop table t1;
 
+set time_zone="+00:00";
+create table ts_cast_time(id int primary key, event_ts timestamp(6));
+insert into ts_cast_time values
+    (1, '2024-02-29 12:34:56.123456'),
+    (2, null),
+    (3, cast(date_add(cast(concat(cast(current_date() as char), ' 03:04:05.654321') as datetime(6)), interval 1 day) as timestamp(6))),
+    (4, cast(concat(cast(current_date() as char), ' 20:04:05.654321') as timestamp(6)));
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+set time_zone="+08:00";
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+select cast(cast('2024-02-29 12:34:56.123456' as timestamp(6)) as time(6)) as literal_time;
+drop table ts_cast_time;
+set time_zone='SYSTEM';
+
 #
 # Test for bug #11283: field conversion from varchar, and text types to decimal
 #
 
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
-SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+SELECT CAST(v AS DECIMAL(38,0)), CAST(tt AS DECIMAL(38,0)), CAST(t AS DECIMAL(38,0)), CAST(mt AS DECIMAL(38,0)), CAST(lt AS DECIMAL(38,0)) from t1;
 DROP TABLE t1;
 
 #

@@ -2,6 +2,13 @@
 -- @bvt:issue#3156
 select oct(0b11111111);
 -- @bvt:issue
+SELECT oct(X'FF') AS oct_hex_literal;
+SELECT oct(X'0102') AS oct_multi_byte_hex_literal;
+DROP TABLE IF EXISTS oct_binary_columns;
+CREATE TABLE oct_binary_columns (v VARBINARY(10), b BINARY(3), l BLOB);
+INSERT INTO oct_binary_columns VALUES (X'FF', X'0102FF', X'3132'), (X'0102', X'0001FF', X'FF'), (X'', X'000000', X'');
+SELECT HEX(v), OCT(v), HEX(b), OCT(b), OCT(l) FROM oct_binary_columns;
+DROP TABLE oct_binary_columns;
 
 select oct(12);
 SELECT oct(1314);
@@ -21,9 +28,32 @@ select oct(-1);
 
 select oct(10e50);
 select oct(-10e50);
+SELECT OCT(1e308) AS positive_huge, OCT(-1e308) AS negative_huge, OCT(1e-15) AS fixed_tiny, OCT(1e-16) AS scientific_tiny;
+CREATE TABLE oct_decimal_exact (id INT, d DECIMAL(38,1));
+INSERT INTO oct_decimal_exact VALUES (1, 9007199254740993.9), (2, 18446744073709551615), (3, 18446744073709551616), (4, -18446744073709551615), (5, -18446744073709551616), (6, NULL);
+SELECT id, OCT(d) AS oct_value FROM oct_decimal_exact ORDER BY id;
+DROP TABLE oct_decimal_exact;
 select oct(0.00000000000000000000000001);
 select oct(-0.00000000000000000000000001);
 select oct("你好");
+SELECT oct('12tail') AS oct_prefix,
+       oct('12.5') AS oct_fraction,
+       oct('abc') AS oct_non_numeric,
+       oct('') AS oct_empty;
+SELECT oct('20240506') AS oct_compact,
+       oct('20240101123456') AS oct_compact_datetime;
+SELECT oct(TIME '12:34:56') AS oct_time,
+       oct(TIME '-12:34:56') AS oct_negative_time;
+SELECT oct(8) AS oct_text, oct(8) + 0 AS oct_numeric_context;
+SELECT oct(8) + oct(1) AS oct_add,
+       oct(8) - oct(1) AS oct_subtract,
+       oct(8) * oct(2) AS oct_multiply,
+       oct(8) / oct(2) AS oct_divide,
+       oct(8) % oct(3) AS oct_modulo,
+       oct(8) DIV oct(2) AS oct_integer_divide,
+       -oct(8) AS oct_unary_minus;
+SELECT OCT(0.5) AS oct_half, OCT(0.6) AS oct_fraction_below_one, OCT(1.5) AS oct_one_half, OCT(1.6) AS oct_one_fraction, OCT(-1.5) AS oct_negative_one_half, OCT(-2.5) AS oct_negative_two_half;
+SELECT oct('-18446744073709551616') AS oct_negative_overflow;
 
 create table t1(a int);
 insert into t1 values();
@@ -76,3 +106,16 @@ drop table t2;
 
 SELECT OCT(NULL) IS UNKNOWN;
 
+SELECT OCT(-9.999999999999999e-100) AS rounded_negative, OCT(9.999999999999999e-100) AS positive_control;
+
+# Empty NOT NULL string inputs still produce nullable OCT results, including CTAS.
+DROP TABLE IF EXISTS oct_nn_copy;
+DROP TABLE IF EXISTS oct_nn_source;
+CREATE TABLE oct_nn_source (id INT NOT NULL, v VARCHAR(10) NOT NULL, b VARBINARY(10) NOT NULL, n BIGINT NOT NULL);
+INSERT INTO oct_nn_source VALUES (1, '', X'', 0), (2, '12', X'3132', 12);
+SELECT id, OCT(v) AS text_oct, OCT(b) AS binary_oct, OCT(n) AS numeric_oct FROM oct_nn_source ORDER BY id;
+CREATE TABLE oct_nn_copy AS SELECT id, OCT(v) AS text_oct, OCT(b) AS binary_oct, OCT(n) AS numeric_oct FROM oct_nn_source;
+SELECT id, text_oct, binary_oct, numeric_oct FROM oct_nn_copy ORDER BY id;
+SELECT COLUMN_NAME, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oct_nn_copy' ORDER BY ORDINAL_POSITION;
+DROP TABLE oct_nn_copy;
+DROP TABLE oct_nn_source;

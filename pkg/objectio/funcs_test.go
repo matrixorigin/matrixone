@@ -43,8 +43,66 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestNewJsonVectorFromValuesUsesByteAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	values := []string{`{"a":1}`, `[1,2]`}
+	vec := NewVector(len(values), types.T_json.ToType(), mp, false, values)
+	require.NotNil(t, vec)
+	defer vec.Free(mp)
+
+	for i, value := range values {
+		parsed, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		expected, err := parsed.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, expected, vec.GetBytesAt(i))
+	}
+}
+
+func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
+	ctx := context.Background()
+	source := &validatedVectorCacheData{
+		data: fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte{1, 2, 3}),
+	}
+	defer source.Release()
+
+	rehomed := source.RehomeCacheData(func(data []byte) fscache.Data {
+		return fileservice.NewBytes(bytes.Clone(data))
+	})
+	defer rehomed.Release()
+
+	_, ok := rehomed.(validatedVectorCacheDataMarker)
+	require.True(t, ok)
+	require.Equal(t, []byte{1, 2, 3}, rehomed.Bytes())
+}
+
+type admissionTrackingData struct {
+	releaseTrackingData
+	blockedOwner *fscache.DataOwner
+}
+
+func (d *admissionTrackingData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	return owner != d.blockedOwner
+}
+
+func TestValidatedVectorCacheDataForwardsCacheAdmission(t *testing.T) {
+	blocked := new(fscache.DataOwner)
+	data := &validatedVectorCacheData{
+		data: &admissionTrackingData{blockedOwner: blocked},
+	}
+
+	require.False(t, data.CacheAdmissionAllowed(blocked))
+	require.True(t, data.CacheAdmissionAllowed(new(fscache.DataOwner)))
+}
+
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
+}
+
+func (r *releaseTrackingData) Capacity() int64 {
+	return int64(cap(r.bytes))
 }
 
 func (r *releaseTrackingData) Bytes() []byte {
@@ -73,6 +131,7 @@ func (d *validatedVectorBytesProbe) Bytes() []byte {
 }
 
 func (d *validatedVectorBytesProbe) Size() int64            { return int64(len(d.backing)) }
+func (d *validatedVectorBytesProbe) Capacity() int64        { return int64(cap(d.backing)) }
 func (d *validatedVectorBytesProbe) Slice(int) fscache.Data { return d }
 func (d *validatedVectorBytesProbe) Retain()                {}
 func (d *validatedVectorBytesProbe) Release()               {}
@@ -106,6 +165,10 @@ func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) e
 
 type trackingCacheDataAllocator struct {
 	data fscache.Data
+}
+
+func (t *trackingCacheDataAllocator) BackingSize(size int) int {
+	return size
 }
 
 type objectioRemoteCacheClient struct {
@@ -240,6 +303,139 @@ func TestReadOneBlockSynthesizesCommitTSForEmptyMetadata(t *testing.T) {
 	require.Len(t, ioVec.Entries, 1)
 	require.NotNil(t, ioVec.Entries[0].CachedData)
 	ioVec.ReleaseReadResultOnError()
+}
+
+func TestResolveSpecialColumnLayoutCompatibility(t *testing.T) {
+	t.Run("commit-only", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{0, SEQNUM_COMMITTS}))
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(1), layout.CommitTS)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
+	})
+
+	t.Run("commit-and-abort-with-sparse-schema", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{3, SEQNUM_COMMITTS, SEQNUM_ABORT}))
+		block.ColumnMeta(3).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(4).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(5).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(4), layout.CommitTS)
+		require.Equal(t, uint16(5), layout.Abort)
+	})
+
+	t.Run("physical-address-before-mvcc", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{
+			3,
+			SEQNUM_ROWID,
+			SEQNUM_COMMITTS,
+			SEQNUM_ABORT,
+		}))
+		block.ColumnMeta(3).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(4).setDataType(uint8(types.T_Rowid))
+		block.ColumnMeta(5).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(6).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(4), layout.PhysicalAddr)
+		require.Equal(t, uint16(5), layout.CommitTS)
+		require.Equal(t, uint16(6), layout.Abort)
+	})
+
+	t.Run("physical-address-between-commit-and-abort", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{
+			1,
+			SEQNUM_COMMITTS,
+			SEQNUM_ROWID,
+			SEQNUM_ABORT,
+		}))
+		block.ColumnMeta(1).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(2).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(3).setDataType(uint8(types.T_Rowid))
+		block.ColumnMeta(4).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(3), layout.PhysicalAddr)
+		require.Equal(t, uint16(2), layout.CommitTS)
+		require.Equal(t, uint16(4), layout.Abort)
+	})
+
+	t.Run("user-columns-are-not-special", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{0, 1}))
+		block.ColumnMeta(0).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(1).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.CommitTS)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
+	})
+}
+
+func TestTombstoneAbortSelectionIncludesCommitTS(t *testing.T) {
+	hidden := HiddenColumnSelection_Abort
+	require.Equal(
+		t,
+		[]uint16{0, 1, SEQNUM_COMMITTS, SEQNUM_ABORT},
+		GetTombstoneSeqnums(hidden),
+	)
+	require.Equal(
+		t,
+		[]string{
+			TombstoneAttr_Rowid_Attr,
+			TombstoneAttr_PK_Attr,
+			TombstoneAttr_CommitTs_Attr,
+			TombstoneAttr_Abort_Attr,
+		},
+		GetTombstoneAttrs(hidden),
+	)
+}
+
+func TestReadOneBlockAbortColumnCompatibility(t *testing.T) {
+	t.Run("new-object-reads-abort", func(t *testing.T) {
+		readErr := moerr.NewInternalErrorNoCtx("abort column storage read")
+		fs := &partialReadErrorFS{err: readErr}
+		meta := BuildMetaData(1, 3)
+		block := meta.GetBlockMeta(0)
+		block.BlockHeader().SetRows(1)
+		block.BlockHeader().SetMaxSeqnum(0)
+		block.BlockHeader().SetMetaColumnCount(3)
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(2).setDataType(uint8(types.T_bool))
+		block.ColumnMeta(2).setLocation(NewExtent(1, 0, 1, 1))
+
+		_, err := ReadOneBlockWithMeta(
+			context.Background(), &meta, "new-object", 0,
+			[]uint16{SEQNUM_ABORT}, []types.Type{types.T_bool.ToType()},
+			mpool.MustNewZero(), fs, constructorFactory, fileservice.Policy(0),
+		)
+		require.ErrorIs(t, err, readErr)
+	})
+
+	t.Run("old-object-synthesizes-missing-abort", func(t *testing.T) {
+		readErr := moerr.NewInternalErrorNoCtx("must not read storage")
+		fs := &partialReadErrorFS{err: readErr}
+		meta := BuildMetaData(1, 2)
+		block := meta.GetBlockMeta(0)
+		block.BlockHeader().SetRows(1)
+		block.BlockHeader().SetMaxSeqnum(0)
+		block.BlockHeader().SetMetaColumnCount(2)
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+
+		ioVec, err := ReadOneBlockWithMeta(
+			context.Background(), &meta, "old-object", 0,
+			[]uint16{SEQNUM_ABORT}, []types.Type{types.T_bool.ToType()},
+			mpool.MustNewZero(), fs, constructorFactory, fileservice.Policy(0),
+		)
+		require.NoError(t, err)
+		require.Len(t, ioVec.Entries, 1)
+		require.NotNil(t, ioVec.Entries[0].CachedData)
+		ioVec.ReleaseReadResultOnError()
+	})
 }
 
 func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
@@ -426,6 +622,15 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
 	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
+	window, err := MaterializeCachedVectorWindow(cacheData, 7000, 3, queryMP)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	require.Equal(t, bytes.Repeat([]byte{byte('a' + 7000%26)}, valueLen), window.GetBytesAt(0))
+	window.Free(queryMP)
+	_, err = MaterializeCachedVectorWindow(cacheData, rowCount-1, 2, queryMP)
+	require.Error(t, err)
+	_, err = MaterializeCachedVectorWindow(cacheData, 0, 1, nil)
+	require.Error(t, err)
 
 	needle := bytes.Repeat([]byte{'h'}, valueLen)
 	search := NewReadFilterSearch(types.T_varchar, [][]byte{needle})
@@ -723,6 +928,24 @@ func TestCachedCommitTSHelpersBroadcastConstants(t *testing.T) {
 	require.True(t, usable)
 	require.True(t, matched)
 
+	abortVec := vector.NewVec(types.T_bool.ToType())
+	for _, aborted := range []bool{false, false, false, true} {
+		require.NoError(t, vector.AppendFixed(abortVec, aborted, false, mp))
+	}
+	abortData := encode(abortVec)
+	abortVec.Free(mp)
+	defer abortData.Release()
+	matched, usable, err = AnyCachedTSInRangeWithAbort(
+		constData,
+		abortData,
+		[]int64{3},
+		types.BuildTS(15, 0),
+		types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	require.True(t, usable)
+	require.False(t, matched, "aborted rows must not count as persisted PK changes")
+
 	matched, usable, err = AnyCachedTSInRange(
 		constData,
 		[]int64{3},
@@ -812,6 +1035,41 @@ func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 		result.AllocedBytesPerOp(),
 		int64(4<<10),
 		"sparse PREFIX_IN must not allocate a block-sized marks array",
+	)
+}
+
+func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < rowCount; row++ {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			[]byte(fmt.Sprintf("key-%05d", row)),
+			false,
+			mp,
+		))
+	}
+	defer source.Free(mp)
+	search := CombineReadFilterSearch(
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-00123")}),
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-07111")}),
+	)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			rows := search.search(source, true)
+			if len(rows) != 2 || rows[0] != 123 || rows[1] != 7111 {
+				b.Fatalf("unexpected exact hits: %v", rows)
+			}
+		}
+	})
+	require.Less(
+		t,
+		result.AllocedBytesPerOp(),
+		int64(16<<10),
+		"combined exact search must not allocate an int64 mark per source row",
 	)
 }
 
@@ -1114,4 +1372,55 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	for i := int64(0); i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	var releases atomic.Int32
+	fs := &partialReadErrorFS{data: &releaseTrackingData{releases: &releases, bytes: encoded}}
+	meta := BuildMetaData(1, 1)
+	col := meta.GetBlockMeta(0).ColumnMeta(0)
+	col.setDataType(uint8(types.T_int64))
+	col.setLocation(NewExtent(1, 0, uint32(len(encoded)), uint32(len(encoded))))
+	queryMP := mpool.MustNewZero()
+	bat, err := ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		2, 3, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	bat.Clean(queryMP)
+	require.Equal(t, int32(1), releases.Load())
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 0, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.Error(t, err)
+
+	var errorReleases atomic.Int32
+	readErr := moerr.NewInternalErrorNoCtx("window read failed")
+	errorFS := &partialReadErrorFS{
+		data: &releaseTrackingData{releases: &errorReleases},
+		err:  readErr,
+	}
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 1, fileservice.Policy(0), errorFS, queryMP, 0, nil,
+	)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), errorReleases.Load())
+	require.Zero(t, queryMP.CurrNB())
+	mpool.DeleteMPool(queryMP)
+	mpool.DeleteMPool(writerMP)
 }

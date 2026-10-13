@@ -34,6 +34,7 @@ type mockHAKeeperClient struct {
 	clusterState        pb.CheckerState
 	NonVotingReplicaNum uint64
 	NonVotingLocality   pb.Locality
+	allocateIDByKey     func(context.Context, string) (uint64, error)
 }
 
 func newMockHAKeeperClient() *mockHAKeeperClient {
@@ -53,6 +54,9 @@ func (c *mockHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 }
 
 func (c *mockHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	if c.allocateIDByKey != nil {
+		return c.allocateIDByKey(ctx, key)
+	}
 	return 0, nil
 }
 

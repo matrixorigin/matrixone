@@ -590,7 +590,7 @@ func TestJSONOverlapsSQL(t *testing.T) {
 			[]int64{1, 0, 1, 0, 1}, []bool{false, false, false, true, false}),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -628,7 +628,7 @@ func TestJSONOverlapsMySQLDocumentCases(t *testing.T) {
 			[]int64{1, 1, 1, 1, 0, 0, 0, 1, 1}, nil),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -644,22 +644,31 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 
 	tooDeep := strings.Repeat(`{"a":`, bytejson.JSONDocumentMaxNestingDepth+1) + `1` +
 		strings.Repeat(`}`, bytejson.JSONDocumentMaxNestingDepth+1)
+	// Typed JSON now rejects excessive nesting at admission, before an
+	// expression can consume it. Text input still reaches the function's own
+	// document-depth check and retains its argument error below.
+	deepVector := vector.NewVec(types.T_json.ToType())
+	defer deepVector.Free(proc.Mp())
+	err := vector.AppendBytes(deepVector, []byte(mustJsonBinaryString(t, tooDeep)), false, proc.Mp())
+	require.ErrorContains(t, err, "invalid JSON vector payload")
+	require.Zero(t, deepVector.Length())
 	testCase = NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, tooDeep)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tooDeep}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
-	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
+	err = testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 	require.ErrorContains(t, err, "nesting depth exceeds 100")
 }
 
@@ -693,6 +702,7 @@ func TestJSONOverlapsEvaluationOrder(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{tt.wantError == ""}),
 				jsonOverlaps,
 			)
+			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(1))
 			err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 			if tt.wantError == "" {
@@ -799,7 +809,7 @@ func TestJSONOverlapsMySQLBinaryStringTypes(t *testing.T) {
 					[]int64{1, 0, 1, 0}, []bool{false, false, false, true}),
 				jsonOverlaps,
 			)
-			succeed, message := testCase.Run()
+			succeed, message := testCase.RunAndFree()
 			require.True(t, succeed, message)
 		})
 	}
@@ -816,6 +826,7 @@ func TestJSONOverlapsIgnoreAllRowsDoesNotParse(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, &FunctionSelectList{AllNull: true})
 	require.NoError(t, err)
@@ -835,6 +846,7 @@ func TestJSONOverlapEvaluableRowsExcludesSelectedAndNullRows(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	left := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[0])}
 	right := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[1])}
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}
@@ -854,6 +866,7 @@ func TestJSONOverlapsPartialSelectListSkipsParsingAndPreservesNulls(t *testing.T
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(4))
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, false}}
 

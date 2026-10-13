@@ -14,5 +14,17 @@ select hll_cardinality(hll_merge_agg(null));
 select hll_cardinality(null);
 select hll_cardinality(cast('bad' as varbinary));
 
+create table hll_add_ctas as select hll_add_agg(user_id) as sketch from hll_01;
+show create table hll_add_ctas;
+insert into hll_add_ctas values ();
+select hll_cardinality(sketch) from hll_add_ctas;
+
+create table hll_merge_ctas as select hll_merge_agg(sketch) as sketch from hll_add_ctas;
+show create table hll_merge_ctas;
+insert into hll_merge_ctas values ();
+select hll_cardinality(sketch) from hll_merge_ctas;
+
+drop table hll_merge_ctas;
+drop table hll_add_ctas;
 drop table hll_daily;
 drop table hll_01;

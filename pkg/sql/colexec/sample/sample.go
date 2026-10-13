@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -106,7 +107,8 @@ func (sample *Sample) Prepare(proc *process.Process) (err error) {
 		sample.ctr.groupVectors = make([]*vector.Vector, len(sample.GroupExprs))
 
 		keyWidth, groupKeyNullable := getGroupKeyWidth(sample.GroupExprs)
-		sample.ctr.useIntHashMap = keyWidth <= 8
+		sample.ctr.useIntHashMap = keyWidth <= 8 &&
+			!group.HasVariableLengthKey(sample.GroupExprs)
 		sample.ctr.groupVectorsNullable = groupKeyNullable
 	}
 

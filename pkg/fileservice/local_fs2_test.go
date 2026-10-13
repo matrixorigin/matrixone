@@ -112,6 +112,7 @@ func TestLocalFS2RawFormat(t *testing.T) {
 
 	vec, err := readOne(fs, "foobar", int64(len(content)))
 	require.NoError(t, err)
+	defer vec.Release()
 	require.True(t, bytes.Equal(content, vec.Entries[0].Data))
 }
 

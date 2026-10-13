@@ -95,7 +95,7 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 	// closer, and a hand-written 32.0 would have "found" a bug that isn't one.
 	f32t := types.T_array_float32.ToType()
 	for _, fn := range []string{
-		"l2_distance", "l2_distance_sq", "inner_product",
+		"l1_distance", "l2_distance", "l2_distance_sq", "inner_product",
 		"cosine_similarity", "cosine_distance",
 	} {
 		af := newVectorByType(mp, f32t, [][]float32{{1, 2, 3}}, &nulls.Nulls{})

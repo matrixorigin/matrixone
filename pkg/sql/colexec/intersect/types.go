@@ -18,7 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +33,8 @@ const (
 )
 
 type Intersect struct {
-	ctr container
+	ctr      container
+	KeyExprs []*plan.Expr
 
 	vm.OperatorBase
 }
@@ -73,21 +75,26 @@ type container struct {
 	// operator state
 	state int
 
-	// cnt record for intersect
-	cnts [][]int64
+	// unmatched records whether a build-side key has already been emitted.
+	// INTERSECT has set semantics, so one boolean per key is sufficient.
+	unmatched []bool
 
 	// Hash table for checking duplicate data
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	// Result batch of intersec column execute operator
 	buf *batch.Batch
+
+	keyEvaluator colexec.SetOperationKeyEvaluator
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.state = build
 	ctr.cleanHashMap()
-	ctr.putCnts(proc)
+	ctr.keyEvaluator.Reset()
+	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -96,7 +103,8 @@ func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, er
 func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.cleanHashMap()
-	ctr.putCnts(proc)
+	ctr.keyEvaluator.Free()
+	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
@@ -108,15 +116,10 @@ func (intersect *Intersect) ExecProjection(proc *process.Process, input *batch.B
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-}
-
-func (ctr *container) putCnts(proc *process.Process) {
-	for i := range ctr.cnts {
-		vector.PutSels(ctr.cnts[i])
-	}
-	ctr.cnts = nil
 }

@@ -130,15 +130,23 @@ func (n *Bitmap) Clone() *Bitmap {
 }
 
 func (n *Bitmap) Iterator() Iterator {
+	itr := n.IteratorValue()
+	return &itr
+}
+
+// IteratorValue returns a bitmap iterator by value for allocation-sensitive
+// callers. Iterator keeps its interface return type for compatibility, while
+// callers on hot paths can keep the iterator on their own stack.
+func (n *Bitmap) IteratorValue() BitmapIterator {
 	// When initialization, the itr.i is set to the first rightmost_one position.
 	itr := BitmapIterator{i: 0, bm: n}
 	if pos, has_next := itr.hasNext(0); has_next {
 		itr.i = pos
 		itr.has_next = true
-		return &itr
+		return itr
 	}
 	itr.has_next = false
-	return &itr
+	return itr
 }
 
 func rightmost_one_pos_64(word uint64) uint64 {
@@ -370,7 +378,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	count := 0
 	i, j := start>>6, (end-1)>>6
 	if i == j {
-		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) % 0x3F))
+		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
 		count = bits.OnesCount64(n.data[i] & mask)
 		n.data[i] &= ^mask
 		n.count -= int64(count)
@@ -403,11 +411,30 @@ func (n *Bitmap) IsSame(b *Bitmap) bool {
 
 func (n *Bitmap) Or(b *Bitmap) {
 	n.TryExpand(b)
-	size := (int(b.logicalLen()) + 63) / 64
-	for i := range size {
-		cnt := bits.OnesCount64(n.data[i])
-		n.data[i] |= b.data[i]
-		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
+	n.OrBounded(b, b.logicalLen())
+}
+
+// OrBounded merges source bits below limit without growing or changing the
+// destination's logical length. It is intended for caller-owned storage whose
+// physical capacity can be larger than its current logical row domain.
+func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
+	if n == nil || b == nil || limit <= 0 {
+		return
+	}
+	limit = min(limit, n.logicalLen(), b.logicalLen())
+	if limit <= 0 {
+		return
+	}
+
+	words := int((limit + 63) / 64)
+	for i := range words {
+		source := b.data[i]
+		if i == words-1 && limit&63 != 0 {
+			source &= (uint64(1) << uint(limit&63)) - 1
+		}
+		added := source &^ n.data[i]
+		n.data[i] |= source
+		n.count += int64(bits.OnesCount64(added))
 	}
 }
 
@@ -446,19 +473,27 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.logicalLen()) >= size {
 		return
 	}
-	newCap := (size + 63) / 64
+	requiredCap := (size + 63) / 64
+	if requiredCap > cap(n.data) && n.HasExternalStorage() {
+		// Keep the previous logical bitmap intact when caller-owned storage is
+		// insufficient. A recovered panic must not expose a length that its
+		// backing data cannot represent.
+		panic("bitmap external storage capacity exceeded")
+	}
 	n.setLogicalLen(int64(size))
-	if newCap > cap(n.data) {
-		if n.HasExternalStorage() {
-			panic("bitmap external storage capacity exceeded")
+	if requiredCap > cap(n.data) {
+		newCap := requiredCap
+		currentCap := cap(n.data)
+		if currentCap <= int(^uint(0)>>1)/2 {
+			newCap = max(requiredCap, max(1, currentCap*2))
 		}
 		data := make([]uint64, newCap)
 		copy(data, n.data)
-		n.data = data
+		n.data = data[:requiredCap]
 		return
 	}
-	if len(n.data) < newCap {
-		n.data = n.data[:newCap]
+	if len(n.data) < requiredCap {
+		n.data = n.data[:requiredCap]
 	}
 }
 
@@ -534,6 +569,12 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 // RemapMaskOrdered is RemapOrdered for an ordered bitmap selection. Selection
 // bitmap iteration is monotonic, so the rewrite uses no row-scaled scratch.
 func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
+	n.RemapMaskOrderedWithOffset(sels, negate, 0)
+}
+
+// RemapMaskOrderedWithOffset applies an ordered bitmap selection after adding
+// offset to every selected source row, without materializing an index slice.
+func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset uint64) {
 	if n == nil || sels == nil {
 		return
 	}
@@ -570,19 +611,19 @@ func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
 	iterator := sels.Iterator()
 	if !negate {
 		for iterator.HasNext() {
-			source := int64(iterator.Next())
+			source := int64(iterator.Next() + offset)
 			writeDestination(output, readSource(source))
 			output++
 		}
 	} else {
 		var selected int64 = -1
 		if iterator.HasNext() {
-			selected = int64(iterator.Next())
+			selected = int64(iterator.Next() + offset)
 		}
 		for source := int64(0); source < oldLength; source++ {
 			if source == selected {
 				if iterator.HasNext() {
-					selected = int64(iterator.Next())
+					selected = int64(iterator.Next() + offset)
 				} else {
 					selected = -1
 				}

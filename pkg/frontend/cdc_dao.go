@@ -142,6 +142,24 @@ func (t *CDCDao) CreateTask(
 		ctx context.Context,
 		tx taskservice.SqlExecutor,
 	) (ret int, err error) {
+		// The protocol version can advance before this catalog upgrade commits.
+		// Check the exact columns in the task-creation transaction.
+		columns, queryErr := tx.QueryContext(ctx,
+			"SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")
+		if queryErr != nil {
+			return 0, moerr.NewNotSupportedf(ctx,
+				"CDC target identity catalog columns are not available: %v", queryErr)
+		}
+		defer columns.Close()
+		for columns.Next() {
+			return 0, moerr.NewInternalError(ctx, "CDC target identity catalog probe unexpectedly returned a row")
+		}
+		if err = columns.Err(); err != nil {
+			return 0, err
+		}
+		if err = columns.Close(); err != nil {
+			return 0, err
+		}
 		var (
 			insertSql    string
 			rowsAffected int64
@@ -390,6 +408,17 @@ func (t *CDCDao) DeleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Debug(
+			"cdc.dao.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
+			return
+		}
 	}
 
 	return
@@ -516,6 +545,34 @@ func (t *CDCDao) PrepareUpdateTask(
 	return
 }
 
+// PrepareResumeTask publishes the legacy running admission only while the
+// catalog row has not already recorded a task failure. The state predicate is
+// evaluated by the same UPDATE that writes running, so a TableDetector failure
+// that commits before or concurrently with RESUME cannot be overwritten.
+func (t *CDCDao) PrepareResumeTask(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+) (affectedRows int64, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+		prepare  *sql.Stmt
+		result   sql.Result
+	)
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName) + " AND state <> ?"
+	if prepare, err = executor.PrepareContext(ctx, sql); err != nil {
+		return
+	}
+	defer prepare.Close()
+
+	if result, err = prepare.ExecContext(ctx, cdc.CDCState_Running, cdc.CDCState_Failed); err != nil {
+		return
+	}
+	affectedRows, err = result.RowsAffected()
+
+	return
+}
+
 func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	if t.ses == nil || t.ses.proc == nil || t.ses.proc.Base == nil {
 		return moerr.NewInternalError(ctx, "session or process is nil")
@@ -531,9 +588,6 @@ func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	}
 
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
-	if cluster == nil {
-		return moerr.NewInternalError(ctx, "cluster service is nil")
-	}
 
 	addresses := make([]string, 0, 4)
 	cluster.GetCNService(

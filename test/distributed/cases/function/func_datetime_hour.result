@@ -1,49 +1,50 @@
 SELECT HOUR('15:30:45') AS result1;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[4,32,0]  𝄀
+15
 SELECT HOUR('2024-12-20 15:30:45') AS result2;
-result2
+➤ result2[4,32,0]  𝄀
 15
 SELECT HOUR(NOW()) AS result3;
-result3
-22
+➤ result3[-6,8,0]  𝄀
+12
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
-time_cast
+➤ time_cast[4,32,0]  𝄀
 15
 SELECT HOUR(CAST('00:00:00' AS TIME)) AS midnight;
-midnight
+➤ midnight[4,32,0]  𝄀
 0
 SELECT HOUR(CAST('23:59:59' AS TIME)) AS end_of_day;
-end_of_day
+➤ end_of_day[4,32,0]  𝄀
 23
 SELECT HOUR(CAST('272:59:59' AS TIME)) AS extended_positive;
-extended_positive
+➤ extended_positive[4,32,0]  𝄀
 272
 SELECT HOUR(CAST('-272:59:59' AS TIME)) AS extended_negative;
-extended_negative
+➤ extended_negative[4,32,0]  𝄀
 272
 SELECT HOUR(CAST('2024-12-20 10:20:30' AS DATETIME)) AS datetime_hour;
-datetime_hour
+➤ datetime_hour[-6,8,0]  𝄀
 10
 SELECT HOUR(CAST('2024-12-20 00:00:00' AS DATETIME)) AS datetime_midnight;
-datetime_midnight
+➤ datetime_midnight[-6,8,0]  𝄀
 0
 SELECT HOUR(CAST('2024-12-20 23:59:59' AS DATETIME)) AS datetime_end;
-datetime_end
+➤ datetime_end[-6,8,0]  𝄀
 23
 SELECT HOUR(CAST('2024-12-20 12:30:45' AS TIMESTAMP)) AS timestamp_hour;
-timestamp_hour
+➤ timestamp_hour[-6,8,0]  𝄀
 12
 SELECT HOUR(CAST('00:00:00' AS TIME)) AS zero_hour;
-zero_hour
+➤ zero_hour[4,32,0]  𝄀
 0
 SELECT HOUR(CAST('12:00:00' AS TIME)) AS noon;
-noon
+➤ noon[4,32,0]  𝄀
 12
 SELECT HOUR(CAST('13:00:00' AS TIME)) AS one_pm;
-one_pm
+➤ one_pm[4,32,0]  𝄀
 13
 SELECT HOUR(NULL) AS null_result;
-null_result
+➤ null_result[-6,8,0]  𝄀
 null
 CREATE TABLE t1(t TIME, dt DATETIME, ts TIMESTAMP);
 INSERT INTO t1 VALUES
@@ -51,18 +52,306 @@ INSERT INTO t1 VALUES
 ('00:00:00', '2024-12-20 00:00:00', '2024-12-20 00:00:00'),
 ('23:59:59', '2024-12-20 23:59:59', '2024-12-20 23:59:59');
 SELECT t, HOUR(t) AS hour_from_time, dt, HOUR(dt) AS hour_from_datetime, ts, HOUR(ts) AS hour_from_timestamp FROM t1;
-t    hour_from_time    dt    hour_from_datetime    ts    hour_from_timestamp
-15:30:45    15    2024-12-20 15:30:45    15    2024-12-20 15:30:45    15
-00:00:00    0    2024-12-20 00:00:00    0    2024-12-20 00:00:00    0
-23:59:59    23    2024-12-20 23:59:59    23    2024-12-20 23:59:59    23
+➤ t[92,64,0]  ¦  hour_from_time[4,32,0]  ¦  dt[93,64,0]  ¦  hour_from_datetime[-6,8,0]  ¦  ts[93,64,0]  ¦  hour_from_timestamp[-6,8,0]  𝄀
+15:30:45  ¦  15  ¦  2024-12-20 15:30:45  ¦  15  ¦  2024-12-20 15:30:45  ¦  15  𝄀
+00:00:00  ¦  0  ¦  2024-12-20 00:00:00  ¦  0  ¦  2024-12-20 00:00:00  ¦  0  𝄀
+23:59:59  ¦  23  ¦  2024-12-20 23:59:59  ¦  23  ¦  2024-12-20 23:59:59  ¦  23
 DROP TABLE t1;
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('10:20:30'), ('23:59:59');
 SELECT * FROM t1 WHERE HOUR(t) = 15;
-t
+➤ t[92,64,0]  𝄀
 15:30:45
 SELECT * FROM t1 WHERE HOUR(t) > 12;
-t
-15:30:45
+➤ t[92,64,0]  𝄀
+15:30:45  𝄀
 23:59:59
 DROP TABLE t1;
+SELECT HOUR(CAST('12:30:00' AS VARCHAR)) AS varchar_hour,
+HOUR(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_hour,
+HOUR(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_hour,
+HOUR(CAST(NULL AS VARCHAR)) AS varchar_null_hour;
+➤ varchar_hour[4,32,0]  ¦  varchar_extended_hour[4,32,0]  ¦  varchar_datetime_hour[4,32,0]  ¦  varchar_null_hour[4,32,0]  𝄀
+12  ¦  272  ¦  15  ¦  null
+SELECT HOUR('2024-12-20') AS date_string_hour,
+HOUR(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_hour;
+➤ date_string_hour[4,32,0]  ¦  tomorrow_datetime_hour[4,32,0]  𝄀
+0  ¦  1
+SELECT HOUR(CAST('   ' AS CHAR)) AS char_spaces_hour,
+HOUR(CAST('\t' AS VARCHAR)) AS varchar_tab_hour,
+HOUR(CAST('   ' AS TEXT)) AS text_spaces_hour;
+➤ char_spaces_hour[4,32,0]  ¦  varchar_tab_hour[4,32,0]  ¦  text_spaces_hour[4,32,0]  𝄀
+null  ¦  null  ¦  null
+SELECT HOUR('241220153045') AS compact_datetime_hour,
+HOUR('15:30:45abc') AS trailing_time_hour,
+HOUR('2024-12-20 15:30:45abc') AS trailing_datetime_hour,
+HOUR('2024-12-20foo') AS malformed_datetime_hour;
+➤ compact_datetime_hour[4,32,0]  ¦  trailing_time_hour[4,32,0]  ¦  trailing_datetime_hour[4,32,0]  ¦  malformed_datetime_hour[4,32,0]  𝄀
+15  ¦  15  ¦  15  ¦  0
+SELECT HOUR('12:34:56.789012') AS fractional_time_hour,
+HOUR('2 03:04:05.9') AS day_fractional_time_hour,
+HOUR('-12:34:56.789012') AS negative_fractional_time_hour,
+HOUR('-2 03:04:05.9') AS negative_day_fractional_time_hour,
+HOUR('839:00:00') AS overflow_time_hour,
+HOUR('-839:00:00') AS negative_overflow_time_hour,
+HOUR('12:60:00') AS invalid_minute_hour,
+HOUR('12:34:60') AS invalid_second_hour,
+HOUR('123045.987654') AS compact_time_hour,
+HOUR('20241220153045.999999') AS compact_datetime_fractional_hour,
+HOUR('20241220156045') AS invalid_compact_datetime_hour,
+HOUR('2024-12-20') AS date_only_time_hour,
+HOUR('2024-12-20T15:30:45.123456') AS t_datetime_hour,
+HOUR('  12:34:56  ') AS trimmed_time_hour,
+HOUR('foo12:34:56') AS malformed_time_hour;
+➤ fractional_time_hour[4,32,0]  ¦  day_fractional_time_hour[4,32,0]  ¦  negative_fractional_time_hour[4,32,0]  ¦  negative_day_fractional_time_hour[4,32,0]  ¦  overflow_time_hour[4,32,0]  ¦  negative_overflow_time_hour[4,32,0]  ¦  invalid_minute_hour[4,32,0]  ¦  invalid_second_hour[4,32,0]  ¦  compact_time_hour[4,32,0]  ¦  compact_datetime_fractional_hour[4,32,0]  ¦  invalid_compact_datetime_hour[4,32,0]  ¦  date_only_time_hour[4,32,0]  ¦  t_datetime_hour[4,32,0]  ¦  trimmed_time_hour[4,32,0]  ¦  malformed_time_hour[4,32,0]  𝄀
+12  ¦  51  ¦  12  ¦  51  ¦  838  ¦  838  ¦  null  ¦  null  ¦  12  ¦  15  ¦  null  ¦  0  ¦  0  ¦  12  ¦  null
+SELECT HOUR('-2024-12-20 15:30:45') AS negative_datetime_hour,
+HOUR('-20241220153045') AS negative_compact_datetime_hour,
+HOUR('20240230010203') AS invalid_calendar_compact_datetime_hour,
+HOUR('2 30:00:00') AS extended_day_time_hour,
+HOUR('60') AS invalid_compact_second_hour;
+➤ negative_datetime_hour[4,32,0]  ¦  negative_compact_datetime_hour[4,32,0]  ¦  invalid_calendar_compact_datetime_hour[4,32,0]  ¦  extended_day_time_hour[4,32,0]  ¦  invalid_compact_second_hour[4,32,0]  𝄀
+15  ¦  15  ¦  null  ¦  78  ¦  null
+SELECT HOUR('24-12-20 15:30:45') AS two_digit_year_hour,
+HOUR('2000:01:01 12:34:56') AS colon_datetime_hour,
+HOUR('1998-01-01 00:00:009') AS wide_second_datetime_hour,
+HOUR('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_hour,
+HOUR('2001-11-00 01:02:03') AS incomplete_datetime_hour,
+HOUR('99999990000') AS uint32_overflow_hour,
+HOUR('- 12:34:56') AS signed_space_time_hour,
+HOUR('12:34:56.') AS trailing_dot_time_hour;
+➤ two_digit_year_hour[4,32,0]  ¦  colon_datetime_hour[4,32,0]  ¦  wide_second_datetime_hour[4,32,0]  ¦  invalid_wide_second_datetime_hour[4,32,0]  ¦  incomplete_datetime_hour[4,32,0]  ¦  uint32_overflow_hour[4,32,0]  ¦  signed_space_time_hour[4,32,0]  ¦  trailing_dot_time_hour[4,32,0]  𝄀
+15  ¦  12  ¦  0  ¦  null  ¦  1  ¦  null  ¦  12  ¦  12
+SELECT HOUR('0000-01-01 12:34:56') AS zero_year_datetime_hour,
+HOUR('2024-00-01 11:22:33') AS zero_month_datetime_hour,
+HOUR('2024-01-00 10:20:30') AS zero_day_datetime_hour,
+HOUR('0000-00-00 09:08:07') AS zero_date_datetime_hour,
+HOUR('2024-12-20T15:30:45.123456') AS iso_t_datetime_hour;
+➤ zero_year_datetime_hour[4,32,0]  ¦  zero_month_datetime_hour[4,32,0]  ¦  zero_day_datetime_hour[4,32,0]  ¦  zero_date_datetime_hour[4,32,0]  ¦  iso_t_datetime_hour[4,32,0]  𝄀
+12  ¦  11  ¦  10  ¦  9  ¦  0
+SELECT HOUR('2024-12-20 12:34') AS minute_datetime_hour,
+HOUR('0000-02-28 12:34:56') AS valid_zero_year_february_hour,
+HOUR('0000-02-29 12:34:56') AS invalid_zero_year_leap_day_hour,
+HOUR('0000-02-31 12:34:56') AS invalid_zero_year_february_hour,
+HOUR('0000-04-31 12:34:56') AS invalid_zero_year_april_hour,
+HOUR('1900-02-29 12:34:56') AS invalid_nonleap_datetime_hour,
+HOUR('2000-02-29 01:02:03') AS leap_datetime_hour;
+➤ minute_datetime_hour[4,32,0]  ¦  valid_zero_year_february_hour[4,32,0]  ¦  invalid_zero_year_leap_day_hour[4,32,0]  ¦  invalid_zero_year_february_hour[4,32,0]  ¦  invalid_zero_year_april_hour[4,32,0]  ¦  invalid_nonleap_datetime_hour[4,32,0]  ¦  leap_datetime_hour[4,32,0]  𝄀
+12  ¦  12  ¦  null  ¦  null  ¦  null  ¦  null  ¦  1
+SELECT HOUR('20241220153045') AS compact_14_hour,
+HOUR('241220153045') AS compact_12_hour,
+HOUR('202412201530451') AS compact_14_extra_digit_hour,
+HOUR('2412201530451') AS compact_12_extra_digit_hour,
+HOUR('20241220153045abc') AS compact_14_alpha_suffix_hour,
+HOUR('241220153045abc') AS compact_12_alpha_suffix_hour;
+➤ compact_14_hour[4,32,0]  ¦  compact_12_hour[4,32,0]  ¦  compact_14_extra_digit_hour[4,32,0]  ¦  compact_12_extra_digit_hour[4,32,0]  ¦  compact_14_alpha_suffix_hour[4,32,0]  ¦  compact_12_alpha_suffix_hour[4,32,0]  𝄀
+15  ¦  15  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT HOUR('20241220153045.123abc') AS compact_14_fraction_text_hour,
+HOUR('20241220153045.') AS compact_14_empty_fraction_hour,
+HOUR('241220153045.123abc') AS compact_12_fraction_text_hour,
+HOUR('241220153045.') AS compact_12_empty_fraction_hour,
+HOUR('20241220153045.-') AS compact_14_negative_fraction_hour,
+HOUR('20241220153045.+') AS compact_14_positive_fraction_hour,
+HOUR('241220153045.-') AS compact_12_negative_fraction_hour,
+HOUR('241220153045.+') AS compact_12_positive_fraction_hour,
+HOUR('20241220153045.123-') AS compact_14_fraction_negative_suffix_hour,
+HOUR('20241220153045.123+') AS compact_14_fraction_positive_suffix_hour,
+HOUR('241220153045.123-') AS compact_12_fraction_negative_suffix_hour,
+HOUR('241220153045.123+') AS compact_12_fraction_positive_suffix_hour,
+HOUR('20241220153045.123abc-') AS compact_14_fraction_text_negative_suffix_hour,
+HOUR('241220153045.123abc+') AS compact_12_fraction_text_positive_suffix_hour;
+➤ compact_14_fraction_text_hour[4,32,0]  ¦  compact_14_empty_fraction_hour[4,32,0]  ¦  compact_12_fraction_text_hour[4,32,0]  ¦  compact_12_empty_fraction_hour[4,32,0]  ¦  compact_14_negative_fraction_hour[4,32,0]  ¦  compact_14_positive_fraction_hour[4,32,0]  ¦  compact_12_negative_fraction_hour[4,32,0]  ¦  compact_12_positive_fraction_hour[4,32,0]  ¦  compact_14_fraction_negative_suffix_hour[4,32,0]  ¦  compact_14_fraction_positive_suffix_hour[4,32,0]  ¦  compact_12_fraction_negative_suffix_hour[4,32,0]  ¦  compact_12_fraction_positive_suffix_hour[4,32,0]  ¦  compact_14_fraction_text_negative_suffix_hour[4,32,0]  ¦  compact_12_fraction_text_positive_suffix_hour[4,32,0]  𝄀
+15  ¦  15  ¦  15  ¦  15  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  15  ¦  15
+SELECT HOUR('12:') AS trailing_colon_hour,
+HOUR(':34') AS leading_colon_hour,
+HOUR('12:34:56-') AS trailing_dash_hour,
+HOUR('12:34:56..') AS trailing_dots_hour,
+HOUR('123:') AS compact_3_trailing_colon_hour,
+HOUR('1234:') AS compact_4_trailing_colon_hour,
+HOUR('12345:') AS compact_5_trailing_colon_hour,
+HOUR('123456:') AS compact_6_trailing_colon_hour;
+➤ trailing_colon_hour[4,32,0]  ¦  leading_colon_hour[4,32,0]  ¦  trailing_dash_hour[4,32,0]  ¦  trailing_dots_hour[4,32,0]  ¦  compact_3_trailing_colon_hour[4,32,0]  ¦  compact_4_trailing_colon_hour[4,32,0]  ¦  compact_5_trailing_colon_hour[4,32,0]  ¦  compact_6_trailing_colon_hour[4,32,0]  𝄀
+0  ¦  0  ¦  12  ¦  12  ¦  0  ¦  0  ¦  1  ¦  12
+SELECT HOUR(':34:56') AS leading_colon_with_seconds_hour,
+HOUR('12:34:') AS trailing_second_colon_hour,
+HOUR('12::56') AS empty_minute_hour,
+HOUR('12:34:56:') AS fourth_field_colon_hour,
+HOUR('12-.abc') AS compact_prefix_before_fraction_hour;
+➤ leading_colon_with_seconds_hour[4,32,0]  ¦  trailing_second_colon_hour[4,32,0]  ¦  empty_minute_hour[4,32,0]  ¦  fourth_field_colon_hour[4,32,0]  ¦  compact_prefix_before_fraction_hour[4,32,0]  𝄀
+0  ¦  12  ¦  0  ¦  12  ¦  0
+CREATE TABLE time_extract_prefix_boundaries(v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_prefix_boundaries VALUES
+('12-34', '12-34', '12-34'),
+('1234-56', '1234-56', '1234-56'),
+('1 02', '1 02', '1 02'),
+('1 02:', '1 02:', '1 02:'),
+('1 02-34', '1 02-34', '1 02-34'),
+('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
+('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34'),
+('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
+('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
+('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
+('1\t02:34:56', '1\t02:34:56', '1\t02:34:56'),
+('12:34 56', '12:34 56', '12:34 56'),
+('1 02:34 56', '1 02:34 56', '1 02:34 56'),
+('1 02 34', '1 02 34', '1 02 34'),
+('2024--12--20 12:34:56', '2024--12--20 12:34:56', '2024--12--20 12:34:56'),
+('2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56'),
+('2024-12-20 -12:34:56', '2024-12-20 -12:34:56', '2024-12-20 -12:34:56'),
+('2024-12-20 +12:34:56', '2024-12-20 +12:34:56', '2024-12-20 +12:34:56'),
+('2024-12-20 12:34 56', '2024-12-20 12:34 56', '2024-12-20 12:34 56'),
+('2024-12-20 12 34', '2024-12-20 12 34', '2024-12-20 12 34');
+SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
+➤ HOUR(v)[4,32,0]  ¦  HOUR(c)[4,32,0]  ¦  HOUR(t)[4,32,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+26  ¦  26  ¦  26  𝄀
+26  ¦  26  ¦  26  𝄀
+26  ¦  26  ¦  26  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+26  ¦  26  ¦  26  𝄀
+12  ¦  12  ¦  12  𝄀
+26  ¦  26  ¦  26  𝄀
+26  ¦  26  ¦  26  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0
+DROP TABLE time_extract_prefix_boundaries;
+CREATE TABLE time_extract_ambiguous_prefix_ownership(v VARCHAR(40), c CHAR(40), t TEXT);
+INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
+('1 2', '1 2', '1 2'),
+('1 02', '1 02', '1 02'),
+('12:34:56', '12:34:56', '12:34:56'),
+('12:34:56 78', '12:34:56 78', '12:34:56 78'),
+('1-2-3 4:5:6', '1-2-3 4:5:6', '1-2-3 4:5:6'),
+('12345:', '12345:', '12345:'),
+('12345-1-1 1:2:3', '12345-1-1 1:2:3', '12345-1-1 1:2:3'),
+('-12:34', '-12:34', '-12:34'),
+('--12:34', '--12:34', '--12:34'),
+('2024-12-20 +12:34', '2024-12-20 +12:34', '2024-12-20 +12:34'),
+('2024-12-20 ++12:34', '2024-12-20 ++12:34', '2024-12-20 ++12:34'),
+('2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc'),
+('2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc'),
+('2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc'),
+('1 2:3', '1 2:3', '1 2:3'),
+('1 2:3:4', '1 2:3:4', '1 2:3:4'),
+('12 3', '12 3', '12 3'),
+('12 3:4', '12 3:4', '12 3:4'),
+('12 3:4:5', '12 3:4:5', '12 3:4:5'),
+('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
+('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
+('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
+('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
+('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
+SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_ambiguous_prefix_ownership;
+➤ HOUR(v)[4,32,0]  ¦  HOUR(c)[4,32,0]  ¦  HOUR(t)[4,32,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+26  ¦  26  ¦  26  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  𝄀
+null  ¦  null  ¦  null  𝄀
+12  ¦  12  ¦  12  𝄀
+null  ¦  null  ¦  null  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+26  ¦  26  ¦  26  𝄀
+26  ¦  26  ¦  26  𝄀
+0  ¦  0  ¦  0  𝄀
+291  ¦  291  ¦  291  𝄀
+291  ¦  291  ¦  291  𝄀
+4  ¦  4  ¦  4  𝄀
+4  ¦  4  ¦  4  𝄀
+4  ¦  4  ¦  4  𝄀
+0  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0
+DROP TABLE time_extract_ambiguous_prefix_ownership;
+DROP TABLE IF EXISTS time_extract_one_digit_year_clock_width;
+CREATE TABLE time_extract_one_digit_year_clock_width (v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_one_digit_year_clock_width VALUES
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:2:3', '1-1-1 01:2:3', '1-1-1 01:2:3'),
+('1-1-1 1:02:3', '1-1-1 1:02:3', '1-1-1 1:02:3'),
+('1-1-1 1:2:03', '1-1-1 1:2:03', '1-1-1 1:2:03'),
+('1-1-1 1:02:03', '1-1-1 1:02:03', '1-1-1 1:02:03'),
+('1-1-1 01:2:03', '1-1-1 01:2:03', '1-1-1 01:2:03'),
+('1-1-1 01:02:3', '1-1-1 01:02:3', '1-1-1 01:02:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('0-1-1 1:2:3', '0-1-1 1:2:3', '0-1-1 1:2:3'),
+('0-1-1 1:02:03', '0-1-1 1:02:03', '0-1-1 1:02:03'),
+('0-1-1 1:2:03', '0-1-1 1:2:03', '0-1-1 1:2:03'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56');
+SELECT concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)) AS v_clock,
+concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)) AS c_clock,
+concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)) AS t_clock
+FROM time_extract_one_digit_year_clock_width;
+➤ v_clock[12,-1,0]  ¦  c_clock[12,-1,0]  ¦  t_clock[12,-1,0]  𝄀
+0/0/1  ¦  0/0/1  ¦  0/0/1  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+0/0/0  ¦  0/0/0  ¦  0/0/0  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+12/34/56  ¦  12/34/56  ¦  12/34/56
+DROP TABLE time_extract_one_digit_year_clock_width;
+DROP TABLE IF EXISTS time_extract_consumption_boundaries;
+CREATE TABLE time_extract_consumption_boundaries (v VARCHAR(48), c CHAR(48), t TEXT);
+INSERT INTO time_extract_consumption_boundaries VALUES
+('1-1-1 1:2:3 ', '1-1-1 1:2:3 ', '1-1-1 1:2:3 '),
+('0-1-1 12::56', '0-1-1 12::56', '0-1-1 12::56'),
+('12:1:1 12:34:56', '12:1:1 12:34:56', '12:1:1 12:34:56'),
+('12345/1/1 12:34:56', '12345/1/1 12:34:56', '12345/1/1 12:34:56'),
+('12345!1!1 12:34:56', '12345!1!1 12:34:56', '12345!1!1 12:34:56'),
+('2024-12-20 1:2:3 abc', '2024-12-20 1:2:3 abc', '2024-12-20 1:2:3 abc');
+SELECT concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)) AS v_clock,
+concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)) AS c_clock,
+concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)) AS t_clock
+FROM time_extract_consumption_boundaries;
+➤ v_clock[6,-1,0]  ¦  c_clock[6,-1,0]  ¦  t_clock[6,-1,0]  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+12/56/0  ¦  12/56/0  ¦  12/56/0  𝄀
+12/34/56  ¦  12/34/56  ¦  12/34/56  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3
+DROP TABLE time_extract_consumption_boundaries;
+SELECT HOUR('123:34:56 78') AS unpadded_123_hour,
+HOUR('123:34:56 78 ') AS padded_123_hour,
+HOUR('\t123:34:56 78\t') AS tab_padded_123_hour,
+HOUR('838:59:59 78') AS unpadded_838_hour,
+HOUR('838:59:59 78 ') AS padded_838_hour,
+HOUR('\t838:59:59 78\t') AS tab_padded_838_hour;
+➤ unpadded_123_hour[4,32,0]  ¦  padded_123_hour[4,32,0]  ¦  tab_padded_123_hour[4,32,0]  ¦  unpadded_838_hour[4,32,0]  ¦  padded_838_hour[4,32,0]  ¦  tab_padded_838_hour[4,32,0]  𝄀
+null  ¦  123  ¦  123  ¦  null  ¦  838  ¦  838

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,47 @@ func TestVisitPlanExploresIndexReaderParam(t *testing.T) {
 	require.Equal(t, uint64(7), node.IndexReaderParam.DistRange.UpperBound.GetLit().GetU64Val())
 }
 
+func TestVisitPlanUpdateTypeResetOnlyCastsChangedExpressions(t *testing.T) {
+	timeType := planpb.Type{Id: int32(types.T_time), Scale: 6}
+	joinResult := &planpb.Expr{
+		Typ:  timeType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
+	}
+	join := &planpb.Node{
+		NodeId:      0,
+		NodeType:    planpb.Node_JOIN,
+		ProjectList: []*planpb.Expr{joinResult},
+	}
+	changedResult := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	project := &planpb.Node{
+		NodeId:      1,
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{0},
+		ProjectList: []*planpb.Expr{changedResult},
+	}
+	query := &planpb.Query{
+		StmtType: planpb.Query_UPDATE,
+		Nodes:    []*planpb.Node{join, project},
+		Steps:    []int32{1},
+	}
+	visitor := NewVisitPlan(
+		&planpb.Plan{Plan: &planpb.Plan_Query{Query: query}},
+		[]VisitPlanRule{replaceParamWithSevenRule{}},
+	)
+
+	require.NoError(t, visitor.Visit(context.Background()))
+	require.Same(t, joinResult, join.ProjectList[0])
+	require.NotNil(t, join.ProjectList[0].GetCol(), "unchanged JOIN results must remain positional column references")
+
+	restored := project.ProjectList[0]
+	require.Equal(t, int32(types.T_float64), restored.Typ.Id)
+	require.Equal(t, "cast", restored.GetF().GetFunc().GetObjName())
+	require.Equal(t, uint64(7), restored.GetF().Args[0].GetLit().GetU64Val())
+}
+
 func TestVisitPlanExploresAggregateAndGroupExpressions(t *testing.T) {
 	paramExpr := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
@@ -131,9 +173,10 @@ func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
 	groupBy := param(1)
 	agg := param(2)
 	window := param(3)
+	physicalKey := param(4)
 	query := &planpb.Query{Nodes: []*planpb.Node{
 		{NodeId: 0, GroupBy: []*planpb.Expr{groupBy}},
-		{NodeId: 1, Children: []int32{0, 0}, AggList: []*planpb.Expr{agg}, WinSpecList: []*planpb.Expr{window}},
+		{NodeId: 1, Children: []int32{0, 0}, AggList: []*planpb.Expr{agg}, WinSpecList: []*planpb.Expr{window}, PhysicalEqualityKeyList: []*planpb.Expr{physicalKey}},
 	}}
 	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
 
@@ -141,6 +184,7 @@ func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
 	require.Equal(t, int32(0), groupBy.GetP().Pos)
 	require.Equal(t, int32(1), agg.GetP().Pos)
 	require.Equal(t, int32(2), window.GetP().Pos)
+	require.Equal(t, int32(3), physicalKey.GetP().Pos)
 
 	require.ErrorContains(t, visitMissingNodeExprs(query, []int32{-1}, []VisitPlanRule{rule}), "invalid query node id")
 }

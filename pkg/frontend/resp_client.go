@@ -32,6 +32,21 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 	return ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", isLastStmt)
 }
 
+// recordLastFoundRows publishes the count for a successfully returned result
+// set. Status statements and failed statements leave the preceding value
+// untouched. The process copy serves a following statement in the same
+// multi-statement request; the session copy seeds the next request.
+func recordLastFoundRows(ses *Session, execCtx *ExecCtx) {
+	if ses == nil || ses.IsDerivedStmt() || execCtx == nil || execCtx.stmt == nil || execCtx.proc == nil ||
+		execCtx.stmt.StmtKind().OutputType() != tree.OUTPUT_RESULT_ROW {
+		return
+	}
+	if !execCtx.proc.FoundRowsRecorded() {
+		execCtx.proc.SetFoundRows(execCtx.proc.GetResultRows())
+	}
+	ses.SetLastFoundRows(execCtx.proc.GetFoundRows())
+}
+
 // recordLastAffectedRows records the value the ROW_COUNT() builtin should return
 // for the statement that just finished. It is called once per statement, right
 // after execution, so it covers both single- and multi-statement COM_QUERY and
@@ -108,6 +123,9 @@ func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	if execCtx.inMigration {
 		return nil
+	}
+	if err = publishPreparedCursorQueryResult(execCtx); err != nil {
+		return err
 	}
 	err = execCtx.resper.RespPostMeta(execCtx, nil)
 	if err != nil {
@@ -214,22 +232,32 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
-	// Output.Reset cannot propagate errors from its terminal nil callback. PERFORM
-	// finalizes saved-result metadata explicitly after runner.Run succeeds, where
-	// the error can still prevent the OK response.
-	if isPerformStatement(execCtx.stmt) && bat == nil {
+	// Output.Reset also invokes nil callbacks on failed attempts and cannot
+	// propagate their errors. PERFORM and deferred SELECT metadata finalize
+	// saved results explicitly after Run succeeds with the final schema.
+	if bat == nil && (isPerformStatement(execCtx.stmt) || execCtx.resultMetadata != nil) {
 		return nil
 	}
+	if bat != nil {
+		execCtx.proc.AddResultRows(uint64(bat.RowCount()))
+	}
 
-	if resper.binWr != nil {
-		//write batch into fileservice
-		err = resper.binWr.Write(execCtx, crs, bat)
-		if err != nil {
-			return err
-		}
+	if err = resper.saveResultBatch(execCtx, crs, bat); err != nil {
+		return err
 	}
 
 	return resper.writeClientBatch(execCtx, crs, bat)
+}
+
+// saveResultBatch persists a result batch without writing it to the client.
+// Server cursors use this path while retaining rows for COM_STMT_FETCH, so
+// cursor execution must keep the same save_query_result lifecycle as a normal
+// result stream.
+func (resper *MysqlResp) saveResultBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	if resper.binWr == nil {
+		return nil
+	}
+	return resper.binWr.Write(execCtx, crs, bat)
 }
 
 func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
@@ -290,7 +318,7 @@ func (resper *MysqlResp) finalizeQueryResult(execCtx *ExecCtx) error {
 	return resper.binWr.Write(execCtx, nil, nil)
 }
 
-func finalizePerformQueryResult(execCtx *ExecCtx) error {
+func finalizeQueryResult(execCtx *ExecCtx) error {
 	finalizer, ok := execCtx.resper.(queryResultFinalizer)
 	if !ok {
 		return nil

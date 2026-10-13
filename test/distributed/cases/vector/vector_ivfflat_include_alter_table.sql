@@ -70,7 +70,7 @@ insert into vector_ivfflat_include_phase7_plain values
     (4, "[2,2,2]", "n4");
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, note
 from vector_ivfflat_include_phase7_plain
 where note in ("n2", "n4")

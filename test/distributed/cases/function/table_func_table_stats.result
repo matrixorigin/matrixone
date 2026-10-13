@@ -30,9 +30,6 @@ select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
 select * from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  approx_object_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  ¦  sampling_ratio[8,54,0]  ¦  ndv_map[12,0,0]  ¦  min_val_map[12,0,0]  ¦  max_val_map[12,0,0]  ¦  data_type_map[12,0,0]  ¦  null_cnt_map[12,0,0]  ¦  size_map[12,0,0]  ¦  shuffle_range_map[12,0,0]  𝄀
 table_func_table_stats.t1  ¦  2048.0  ¦  1  ¦  2  ¦  1  ¦  1.0  ¦  {

@@ -46,13 +46,25 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-
 	_, t, err := ctx.Resolve(dbName, tblName, nil)
 	if err != nil {
 		return nil, err
 	}
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	qualifierDB := string(stmt.TargetDatabaseName)
+	if qualifierDB == "" {
+		qualifierDB = dbName
+	}
+	qualifierTable := string(stmt.TargetTableName)
+	if qualifierTable == "" {
+		qualifierTable = tblName
+	}
+	if err = validateInsertColumnQualifiers(
+		ctx.GetContext(), stmt.ColumnNames, qualifierDB, qualifierTable, ctx.GetLowerCaseTableNames(),
+	); err != nil {
+		return nil, err
 	}
 	if t.TableType == catalog.SystemSourceRel {
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
@@ -77,9 +89,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
-	// CHAR/VARCHAR writes to truncation instead of rejection.
-	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	// INSERT IGNORE is a statement-level conversion policy and may coexist with
+	// an executable ODKU assignment list.
+	builder.isInsertIgnore = stmt.IsIgnore()
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -119,7 +131,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		} else if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
 		}
-		if len(stmt.OnDuplicateUpdate) > 0 {
+		if len(stmt.GetOnDuplicateUpdate()) > 0 {
 			if isIcebergMapping {
 				return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on Iceberg table mapping")
 			}
@@ -182,6 +194,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	}
+	if len(tableDef.Fkeys) > 0 {
+		// Legacy INSERT plans depend on foreign_key_checks too. In particular,
+		// no-real-key ODKU falls back here before the modern builder can mark the
+		// query, so keep every FK child plan sensitive in either session state.
+		query.HasForeignKeyAction = true
+	}
 	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
 		dbName, tableDef.Name, tableDef.Cols, tableDef.Fkeys)
 	if err != nil {
@@ -190,7 +208,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
-	reCheckifNeedLockWholeTable(builder)
+	applyLockTableFallback(builder)
 
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -344,6 +362,40 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		}
 	}
 	return insertColsName, nil
+}
+
+func validateInsertColumnQualifiers(
+	ctx context.Context,
+	columnNames []*tree.UnresolvedName,
+	dbName string,
+	tableName string,
+	lowerCaseTableNames int64,
+) error {
+	dbName = tree.NewCStr(dbName, lowerCaseTableNames).Compare()
+	tableName = tree.NewCStr(tableName, lowerCaseTableNames).Compare()
+	for _, columnName := range columnNames {
+		if columnName == nil {
+			continue
+		}
+		if qualifier := columnName.TblName(); qualifier != "" && qualifier != tableName {
+			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
+		}
+		if qualifier := columnName.DbName(); qualifier != "" && qualifier != dbName {
+			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
+		}
+	}
+	return nil
+}
+
+func qualifiedInsertColumnName(columnName *tree.UnresolvedName) string {
+	switch columnName.NumParts {
+	case 3:
+		return columnName.DbNameOrigin() + "." + columnName.TblNameOrigin() + "." + columnName.ColNameOrigin()
+	case 2:
+		return columnName.TblNameOrigin() + "." + columnName.ColNameOrigin()
+	default:
+		return columnName.ColNameOrigin()
+	}
 }
 
 // canUsePkFilter checks if the primary key filter can be used for the given insert statement.
@@ -678,7 +730,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 }
 
 func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
-	if len(info.onDuplicateIdx) == 0 {
+	// INSERT IGNORE + ODKU has a distinct action policy and affected-row
+	// contract; it must not be collapsed into REPLACE even when every assignment
+	// is a VALUES(self) no-op.
+	if stmt.IsIgnore() || len(info.onDuplicateIdx) == 0 {
 		return nil
 	}
 	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
@@ -715,10 +770,13 @@ func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSel
 	}
 
 	replaceStmt := &tree.Replace{
-		Table:          stmt.Table,
-		PartitionNames: stmt.PartitionNames,
-		Columns:        stmt.Columns,
-		Rows:           stmt.Rows,
+		Table:              stmt.Table,
+		TargetDatabaseName: stmt.TargetDatabaseName,
+		TargetTableName:    stmt.TargetTableName,
+		PartitionNames:     stmt.PartitionNames,
+		Columns:            stmt.Columns,
+		ColumnNames:        stmt.ColumnNames,
+		Rows:               stmt.Rows,
 	}
 	return replaceStmt
 }

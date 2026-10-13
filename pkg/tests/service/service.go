@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -257,7 +258,8 @@ type testCluster struct {
 	}
 
 	log struct {
-		once sync.Once
+		once                  sync.Once
+		initialClusterInfoErr error
 
 		sync.Mutex
 		cfgs []logservice.Config
@@ -363,7 +365,10 @@ func (c *testCluster) acquireAdmissionLocked() error {
 	if c.mu.admission != nil {
 		return moerr.NewInvalidStateNoCtx("test cluster cleanup is incomplete")
 	}
-	admission, err := clusteradmission.Acquire(context.Background())
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.Exclusive,
+	)
 	if err != nil {
 		return err
 	}
@@ -386,37 +391,37 @@ func (c *testCluster) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.mu.running {
-		return c.releaseAdmissionLocked()
-	}
-
-	// close all cn services first
-	if err := c.closeCNServices(); err != nil {
-		return err
+	// A diagnostic does not retain dependencies after local CN retirement.
+	complete, closeErr := c.closeCNServices()
+	if !complete {
+		return closeErr
 	}
 
 	// close all tn services
 	if err := c.closeTNServices(); err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 
 	// close all log services
 	if err := c.closeLogServices(); err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 
 	c.mu.running = false
-	if err := c.releaseAdmissionLocked(); err != nil {
-		return err
+	if c.fileservices != nil {
+		c.fileservices.Close(context.Background())
 	}
 	c.stopper.Stop()
+	if err := c.releaseAdmissionLocked(); err != nil {
+		return errors.Join(closeErr, err)
+	}
 
 	if !c.opt.keepData {
 		if err := os.RemoveAll(c.opt.rootDataDir); err != nil {
-			return err
+			return errors.Join(closeErr, err)
 		}
 	}
-	return nil
+	return closeErr
 }
 
 func (c *testCluster) releaseAdmissionLocked() error {
@@ -641,7 +646,12 @@ func (c *testCluster) IsClusterHealthy() bool {
 // The following are implements for interface `ClusterWaitState`.
 // --------------------------------------------------------------
 func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
+	ticker := time.NewTicker(defaultWaitInterval)
+	defer ticker.Stop()
 	for {
+		if leader := c.getHAKeeperLeader(); leader != nil {
+			return leader
+		}
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
@@ -649,13 +659,7 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 				"terminated when waiting for hakeeper leader",
 				"error: %s cause: %s ", ctx.Err(), context.Cause(ctx),
 			)
-		default:
-			time.Sleep(defaultWaitInterval)
-
-			leader := c.getHAKeeperLeader()
-			if leader != nil {
-				return leader
-			}
+		case <-ticker.C:
 		}
 	}
 }
@@ -1062,7 +1066,7 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
 func (c *testCluster) ListTNServices() []string {
-	ids := make([]string, 0, len(c.tn.svcs))
+	ids := make([]string, 0, len(c.tn.cfgs))
 	for _, cfg := range c.tn.cfgs {
 		ids = append(ids, cfg.UUID)
 	}
@@ -1078,8 +1082,11 @@ func (c *testCluster) ListLogServices() []string {
 }
 
 func (c *testCluster) ListCnServices() []string {
-	ids := make([]string, 0, len(c.cn.svcs))
-	for _, svc := range c.cn.svcs {
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
+	ids := make([]string, 0, len(svcs))
+	for _, svc := range svcs {
 		ids = append(ids, svc.ID())
 	}
 	return ids
@@ -1093,9 +1100,9 @@ func (c *testCluster) GetTNService(uuid string) (TNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
-	for i, cfg := range c.tn.cfgs {
-		if cfg.UUID == uuid {
-			return c.tn.svcs[i], nil
+	for _, svc := range c.tn.svcs {
+		if svc.ID() == uuid {
+			return svc, nil
 		}
 	}
 	return nil, moerr.NewNoServiceNoCtx(uuid)
@@ -1114,10 +1121,11 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
 
-	for _, svc := range c.cn.svcs {
+	for _, svc := range svcs {
 		if svc.ID() == uuid {
 			return svc, nil
 		}
@@ -1146,8 +1154,8 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 }
 
 func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	defer c.cn.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
 		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
@@ -1264,6 +1272,11 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 }
 
 func (c *testCluster) StartCNServices(n int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.mu.running {
+		return moerr.NewInternalErrorNoCtx("cannot expand a stopped cluster")
+	}
 	offset := len(c.cn.svcs)
 	c.buildCNConfigs(n)
 	c.initCNServices(c.fileservices, offset)
@@ -1369,21 +1382,22 @@ func (c *testCluster) buildCNConfigs(n int) {
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		c.cn.opts = append(c.cn.opts, opt)
 
-		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs,
-			c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName))
+		fs := c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName)
+		c.fileservices.Lock()
+		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs, fs)
 		c.fileservices.cnServiceNum++
+		c.fileservices.Unlock()
 	}
 }
 
 // initTNServices builds all tn services.
 //
 // Before initializing tn service, log service must be started already.
-func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
+func (c *testCluster) initTNServices(fileservices *fileServices) error {
 	batch := c.opt.initial.tnServiceNum
 
 	c.logger.Info("initialize tn services", zap.Int("batch", batch))
 
-	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]
@@ -1393,14 +1407,21 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 			fileservices.getS3FileService(),
 		)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		ds, err := newTNService(
+		_, err = newTNService(
 			cfg,
 			c.newRuntime(cfg.UUID),
 			fs,
+			func(owner TNService) {
+				c.tn.Lock()
+				c.tn.svcs = append(c.tn.svcs, owner)
+				c.tn.Unlock()
+			},
 			opt)
-		require.NoError(c.t, err)
+		if err != nil {
+			return err
+		}
 
 		c.logger.Info(
 			"dn service initialized",
@@ -1408,10 +1429,9 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 			zap.Any("config", cfg),
 		)
 
-		svcs = append(svcs, ds)
 	}
 
-	return svcs
+	return nil
 }
 
 // initLogServices builds all log services.
@@ -1457,11 +1477,21 @@ func (c *testCluster) initCNServices(
 			panic(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cs, err := newCNService(cfg, ctx, fs, opt)
+		_, err = newCNService(
+			cfg,
+			ctx,
+			cancel,
+			fs,
+			func(owner CNService) {
+				c.cn.Lock()
+				c.cn.svcs = append(c.cn.svcs, owner)
+				c.cn.Unlock()
+			},
+			opt,
+		)
 		if err != nil {
 			panic(err)
 		}
-		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",
@@ -1469,14 +1499,15 @@ func (c *testCluster) initCNServices(
 			zap.Any("config", cfg),
 		)
 
-		c.cn.svcs = append(c.cn.svcs, cs)
 	}
 }
 
 // startTNServices initializes and starts all tn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all tn services
-	c.tn.svcs = c.initTNServices(c.fileservices)
+	if err := c.initTNServices(c.fileservices); err != nil {
+		return err
+	}
 
 	// start tn services
 	for _, ds := range c.tn.svcs {
@@ -1507,7 +1538,7 @@ func (c *testCluster) startLogServices(ctx context.Context) error {
 	}
 
 	// initialize cluster information
-	if err := c.setInitialClusterInfo(); err != nil {
+	if err := c.setInitialClusterInfo(ctx); err != nil {
 		return err
 	}
 
@@ -1557,18 +1588,20 @@ func (c *testCluster) closeLogServices() error {
 	return nil
 }
 
-func (c *testCluster) closeCNServices() error {
+func (c *testCluster) closeCNServices() (bool, error) {
 	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
-
+	var closeErr error
 	for i, cs := range c.cn.svcs {
 		c.logger.Info("close cn service", zap.Int("index", i))
 		if err := cs.Close(); err != nil {
-			return err
+			closeErr = errors.Join(closeErr, err)
+			if cs.Status() != ServiceClosed {
+				return false, closeErr
+			}
 		}
 		c.logger.Info("cn service closed", zap.Int("index", i))
 	}
-
-	return nil
+	return true, closeErr
 }
 
 // getClusterState fetches cluster state from arbitrary hakeeper.

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -39,14 +38,16 @@ import (
 func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	w, ok := c.sqlWriter.(*Fulltext2SqlWriter)
 	if !ok {
-		reportIndexConsumerErr(errch, moerr.NewInternalError(ctx, "fulltext2 iscp Run: unexpected writer type"))
+		errch <- moerr.NewInternalError(ctx, "fulltext2 iscp Run: unexpected writer type")
 		return
 	}
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
-	tokenize, err := fulltext2.CdcTokenizer(w.cfg.Parser)
+	// The json term shape travels with the config so this path and the CREATE
+	// build agree on the terms they emit.
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
 	if err != nil {
-		reportIndexConsumerErr(errch, err)
+		errch <- err
 		return
 	}
 	var bopts []fulltext2.BuildOpt
@@ -64,7 +65,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	}
 	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, spillDir, tokenize, bopts...)
 	if err != nil {
-		reportIndexConsumerErr(errch, err)
+		errch <- err
 		return
 	}
 	defer tb.Cleanup()
@@ -75,16 +76,15 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	for {
 		select {
 		case <-ctx.Done():
-			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e := <-errch:
-			reportIndexConsumerErr(errch, e)
+			errch <- e
 			return
 		case blob, ok := <-c.sqlBufSendCh:
 			if !ok {
 				segs, ferr := tb.Finish()
 				if ferr != nil {
-					reportIndexConsumerErr(errch, ferr)
+					errch <- ferr
 					return
 				}
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
@@ -98,7 +98,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
 						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
 						// contiguous in frame order, so recency is unchanged.
-						sqls, chunkID := fulltext2.TailFramesInsertSqls(w.cfg, startChunk, segs)
+						// The frames' rows record the version this flush applied, written in
+						// THIS transaction alongside the bytes they describe -- so an index's
+						// recorded coverage can never disagree with what it actually stores,
+						// which a watermark read from elsewhere cannot promise.
+						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
+							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
 							res, e := sqlexec.RunSql(sqlproc, s)
 							if e != nil {
@@ -118,31 +123,24 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						return nil
 					})
 				if err != nil {
-					reportIndexConsumerErr(errch, err)
+					errch <- err
 					return
 				}
-				// Evict the cached search index so the next query reloads tag=0 + the
-				// freshly-appended tag=1 frames, instead of serving the warm (stale)
-				// cache until its idle TTL. Only when frames were actually written.
-				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
-				// a known cache-layer gap deferred to a follow-up PR (see the Decision
-				// block on veccache.VectorIndexCache.Remove).
-				if len(segs) > 0 {
-					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
-					veccache.Cache.Remove(w.cfg.IndexTable)
-					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
-				}
+				// A successful CDC flush only makes the new tail durable. Search-cache
+				// freshness is governed by the normal generation/stale/TTL lifecycle;
+				// CDC must not evict or refresh a warm read-only search object here.
+				// This also avoids making every ordinary tail flush contend with readers.
 				return
 			}
 
 			cdc, derr := fulltext2.DecodeCdc(blob)
 			if derr != nil {
-				reportIndexConsumerErr(errch, derr)
+				errch <- derr
 				return
 			}
 			nevents += len(cdc.Events)
 			if aerr := tb.AddBatch(cdc); aerr != nil {
-				reportIndexConsumerErr(errch, aerr)
+				errch <- aerr
 				return
 			}
 		}

@@ -64,7 +64,15 @@ func (limit *Limit) Prepare(proc *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
+	drainForFoundRows := limit.drainInputForFoundRows && proc.IsSqlCalcFoundRows()
+	if drainForFoundRows && limit.ctr.draining {
+		return limit.drainForFoundRows(proc)
+	}
 	if limit.ctr.seen >= limit.ctr.limit {
+		if drainForFoundRows {
+			limit.ctr.draining = true
+			return limit.drainForFoundRows(proc)
+		}
 		result := vm.NewCallResult()
 		result.Status = vm.ExecStop
 		return result, nil
@@ -77,7 +85,13 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+	if result.Batch == nil {
+		if limit.calcFoundRows && proc.IsSqlCalcFoundRows() && !proc.FoundRowsRecorded() {
+			proc.SetFoundRows(limit.ctr.seen)
+		}
+		return result, nil
+	}
+	if result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
 	bat := result.Batch
@@ -97,8 +111,39 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		limit.ctr.buf.SetRowCount(bat.RowCount())
 		batch.SetLength(limit.ctr.buf, int(limit.ctr.limit-limit.ctr.seen))
 		result.Batch = limit.ctr.buf
-		result.Status = vm.ExecStop
+		if drainForFoundRows {
+			limit.ctr.draining = true
+			result.Status = vm.ExecNext
+		} else {
+			result.Status = vm.ExecStop
+		}
 	}
 	limit.ctr.seen = newSeen
 	return result, nil
+}
+
+func (limit *Limit) drainForFoundRows(proc *process.Process) (vm.CallResult, error) {
+	for {
+		result, err := vm.ChildrenCall(limit.GetChildren(0), proc, limit.OpAnalyzer)
+		if err != nil {
+			return result, err
+		}
+		if result.Batch == nil {
+			if limit.calcFoundRows && !proc.FoundRowsRecorded() {
+				proc.SetFoundRows(limit.ctr.seen)
+			}
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		if result.Batch.Last() {
+			if limit.calcFoundRows && !proc.FoundRowsRecorded() {
+				proc.SetFoundRows(limit.ctr.seen)
+			}
+			return result, nil
+		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
+		limit.ctr.seen += uint64(result.Batch.RowCount())
+	}
 }

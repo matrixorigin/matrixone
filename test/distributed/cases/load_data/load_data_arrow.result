@@ -1,0 +1,14 @@
+drop database if exists arrow_load_bvt;
+create database arrow_load_bvt;
+use arrow_load_bvt;
+create table arrow_file_default(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_file_default;
+select count(*) from arrow_file_default;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table arrow_stream_default(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_stream.arrow', 'format'='arrow'} into table arrow_stream_default;
+select count(*) from arrow_stream_default;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database arrow_load_bvt;

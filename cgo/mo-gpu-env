@@ -1,0 +1,63 @@
+#!/bin/sh
+# Copyright 2026 Matrix Origin
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Source from GPU test/build scripts after pixi run --frozen. Make consumes
+# the same fixed Pixi layout in gpu-toolchain.mk; CPU paths never source this.
+mo_gpu_env_error() {
+    printf 'GPU build: %s\n' "$1" >&2
+    return 1
+}
+
+if [ -z "${PIXI_PROJECT_ROOT:-}" ] || [ -z "${PIXI_ENVIRONMENT_NAME:-}" ] ||
+    [ -z "${CONDA_PREFIX:-}" ]; then
+    mo_gpu_env_error 'GPU builds require an activated Pixi environment' || return 1
+fi
+for mo_gpu_path in "$PIXI_PROJECT_ROOT" "$CONDA_PREFIX"; do
+    case "$mo_gpu_path" in
+        /*) ;;
+        *) mo_gpu_env_error "unsupported Pixi path: $mo_gpu_path" || return 1 ;;
+    esac
+    case "$mo_gpu_path" in
+        *[!A-Za-z0-9_./+@-]*) mo_gpu_env_error "unsupported Pixi path: $mo_gpu_path" || return 1 ;;
+    esac
+done
+mo_gpu_expected_prefix=$PIXI_PROJECT_ROOT/.pixi/envs/$PIXI_ENVIRONMENT_NAME
+if [ ! -d "$CONDA_PREFIX" ] || [ ! -d "$mo_gpu_expected_prefix" ] ||
+    [ "$(CDPATH= cd -P "$CONDA_PREFIX" && pwd)" != \
+      "$(CDPATH= cd -P "$mo_gpu_expected_prefix" && pwd)" ]; then
+    mo_gpu_env_error 'CONDA_PREFIX does not match the activated Pixi environment' || return 1
+fi
+MO_GPU_PREFIX=$(CDPATH= cd -P "$CONDA_PREFIX" && pwd)
+MO_GPU_CUDA_ROOT=$MO_GPU_PREFIX/targets/x86_64-linux
+MO_GPU_CC=$MO_GPU_PREFIX/bin/x86_64-conda-linux-gnu-cc
+MO_GPU_CXX=$MO_GPU_PREFIX/bin/x86_64-conda-linux-gnu-c++
+MO_GPU_NVCC=$MO_GPU_PREFIX/bin/nvcc
+for mo_gpu_path in "$PIXI_PROJECT_ROOT/pixi.lock" \
+    "$MO_GPU_CC" "$MO_GPU_CXX" "$MO_GPU_NVCC" \
+    "$MO_GPU_CUDA_ROOT/include/cuda.h" \
+    "$MO_GPU_CUDA_ROOT/lib/libcudart.so" \
+    "$MO_GPU_CUDA_ROOT/lib/stubs/libcuda.so" \
+    "$MO_GPU_PREFIX/include/cuvs/core/c_api.h" \
+    "$MO_GPU_PREFIX/lib/libcuvs.so" \
+    "$MO_GPU_PREFIX/lib/libcuvs_c.so" \
+    "$MO_GPU_PREFIX/lib/librmm.so"; do
+    if [ ! -f "$mo_gpu_path" ]; then
+        mo_gpu_env_error "incomplete Pixi GPU environment: $mo_gpu_path" || return 1
+    fi
+done
+MO_GPU_CFLAGS="-I$MO_GPU_CUDA_ROOT/include -I$MO_GPU_PREFIX/include"
+MO_GPU_LDFLAGS="-L$MO_GPU_CUDA_ROOT/lib/stubs -lcuda -L$MO_GPU_CUDA_ROOT/lib -lcudart -L$MO_GPU_PREFIX/lib -lcuvs -lcuvs_c -lstdc++"
+MO_GPU_RUNTIME_PATH="$MO_GPU_CUDA_ROOT/lib:$MO_GPU_PREFIX/lib"
+CC=$MO_GPU_CC
+CXX=$MO_GPU_CXX
+export MO_GPU_PREFIX MO_GPU_CUDA_ROOT MO_GPU_CC MO_GPU_CXX MO_GPU_NVCC
+export MO_GPU_CFLAGS MO_GPU_LDFLAGS MO_GPU_RUNTIME_PATH CC CXX
+unset mo_gpu_path mo_gpu_expected_prefix

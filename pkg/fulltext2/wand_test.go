@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,4 +140,71 @@ func TestWANDParityLoaded(t *testing.T) {
 			requireSameRanking(t, fmt.Sprintf("loaded algo=%d k=%d", algo, k), wand, full)
 		}
 	}
+}
+
+// TestScoreRangeContains pins the interval semantics the planner relies on: each end is
+// optional and carries its own inclusivity, so `>`, `>=`, `<`, `<=` and their AND-combinations
+// all map onto one object.
+func TestScoreRangeContains(t *testing.T) {
+	var nilRange *ScoreRange
+	require.True(t, nilRange.contains(0), "a nil range accepts everything")
+	require.True(t, nilRange.contains(1e9))
+
+	gt := &ScoreRange{HasMin: true, Min: 0.5}
+	require.False(t, gt.contains(0.5), "exclusive min rejects the bound itself")
+	require.False(t, gt.contains(0.4))
+	require.True(t, gt.contains(0.5001))
+
+	gte := &ScoreRange{HasMin: true, Min: 0.5, MinInclusive: true}
+	require.True(t, gte.contains(0.5), "inclusive min keeps the bound")
+	require.False(t, gte.contains(0.4999))
+
+	lt := &ScoreRange{HasMax: true, Max: 0.5}
+	require.False(t, lt.contains(0.5))
+	require.True(t, lt.contains(0.4999))
+
+	lte := &ScoreRange{HasMax: true, Max: 0.5, MaxInclusive: true}
+	require.True(t, lte.contains(0.5))
+	require.False(t, lte.contains(0.5001))
+
+	both := &ScoreRange{HasMin: true, Min: 0.2, HasMax: true, Max: 0.8, MaxInclusive: true}
+	require.False(t, both.contains(0.2))
+	require.True(t, both.contains(0.5))
+	require.True(t, both.contains(0.8))
+	require.False(t, both.contains(0.9))
+
+	// a relevance of 0 -- what a NON-matching document scores -- must fail any lower bound,
+	// which is exactly why only lower-bounded predicates may drive an INNER-JOINed stream.
+	require.False(t, (&ScoreRange{HasMin: true, Min: 0}).contains(0))
+}
+
+// TestStreamSinkHonorsScoreRange: the streaming path (no pushed LIMIT) drops out-of-range
+// documents before they are batched, so they never leave the TVF.
+func TestStreamSinkHonorsScoreRange(t *testing.T) {
+	seg := fulltextCorpus(t)
+	idx := &Index{segments: []*Segment{seg}, globalN: seg.N}
+
+	collect := func(rng *ScoreRange) []float32 {
+		var got []float32
+		sink := newStreamSink(idx, false, &prefilter{scoreRange: rng}, func(o *vectorindex.SearchOutput) error {
+			got = append(got, o.Dists...)
+			PutColumnBuffer(o.Keys)
+			return nil
+		})
+		for ord := int64(0); ord < seg.N; ord++ {
+			sink.pushPk(seg, ord, float32(ord)/10) // scores 0.0, 0.1, 0.2, ...
+		}
+		sink.flush()
+		return got
+	}
+
+	all := collect(nil)
+	require.Equal(t, int(seg.N), len(all), "no range keeps every doc")
+
+	bounded := collect(&ScoreRange{HasMin: true, Min: 0.15, HasMax: true, Max: 0.35, MaxInclusive: true})
+	for _, s := range bounded {
+		require.Greater(t, s, float32(0.15))
+		require.LessOrEqual(t, s, float32(0.35))
+	}
+	require.Less(t, len(bounded), len(all), "the range must actually drop documents")
 }

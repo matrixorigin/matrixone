@@ -76,14 +76,15 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		Snapshots:      loadTableSnapshots(selector),
 	}
 	loaded, err := CachedTableMetadataLoader{
-		Catalog:           p.Catalog,
-		Metadata:          p.Metadata,
-		ObjectReader:      p.ObjectReader,
-		Cache:             p.Cache,
-		CredentialHash:    p.CredentialHash,
-		ExternalRef:       selector.RefName,
-		SnapshotSelector:  selector,
-		PlanningMaxMemory: cfg.planningMaxMemory,
+		Catalog:                    p.Catalog,
+		Metadata:                   p.Metadata,
+		ObjectReader:               p.ObjectReader,
+		Cache:                      p.Cache,
+		RevalidateMetadataLocation: mutableSnapshotSelector(selector),
+		CredentialHash:             p.CredentialHash,
+		ExternalRef:                selector.RefName,
+		SnapshotSelector:           selector,
+		PlanningMaxMemory:          cfg.planningMaxMemory,
 	}.Load(planningCtx, tableReq)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
@@ -611,6 +612,10 @@ func loadTableSnapshots(selector api.SnapshotSelector) string {
 		return "all"
 	}
 	return selector.RefName
+}
+
+func mutableSnapshotSelector(selector api.SnapshotSelector) bool {
+	return !selector.HasSnapshotID && !selector.HasTimestampMS
 }
 
 func selectScanManifests(ctx context.Context, manifests []api.ManifestFile, pruner scanPruner, enableDeleteApply bool) ([]api.ManifestFile, []api.ManifestFile, int, error) {

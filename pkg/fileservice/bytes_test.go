@@ -15,11 +15,14 @@
 package fileservice
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBytes(t *testing.T) {
@@ -101,6 +104,7 @@ func TestBytesResurrection(t *testing.T) {
 	assert.Panics(t, func() { bs.Bytes() }, "use after free")
 	assert.Panics(t, func() { bs.Slice(1) }, "slice after free")
 	assert.Panics(t, func() { bs.Size() }, "size after free")
+	assert.Panics(t, func() { bs.Capacity() }, "capacity after free")
 	assert.Equal(t, 1, deallocated, "still exactly one deallocation")
 }
 
@@ -193,4 +197,108 @@ func TestBytesConcurrent(t *testing.T) {
 	bs.Release()
 	assert.Equal(t, 1, deallocated, "exactly one deallocation")
 	assert.Panics(t, func() { bs.Release() }, "double free")
+}
+
+func TestBytesSliceKeepsBackingCapacity(t *testing.T) {
+	data := NewBytes(make([]byte, 700, 1024))
+	defer data.Release()
+
+	data.Slice(3)
+	require.Equal(t, int64(3), data.Size())
+	require.Equal(t, int64(1024), data.Capacity())
+}
+
+func TestDefaultCacheDataAllocatorReportsJemallocClassBackingSize(t *testing.T) {
+	const request = 700 * 1024
+	backingSize := DefaultCacheDataAllocator().BackingSize(request)
+	require.GreaterOrEqual(t, backingSize, request)
+	data := DefaultCacheDataAllocator().AllocateCacheData(context.Background(), request)
+	defer data.Release()
+	require.Equal(t, int64(backingSize), data.Capacity())
+}
+
+func TestFileServiceCacheDataAllocatorsReserveBackingCapacity(t *testing.T) {
+	ctx := context.Background()
+	const request = 10
+	want := DefaultCacheDataAllocator().BackingSize(request)
+
+	allocators := []struct {
+		name string
+		new  func(*MemCache) CacheDataAllocator
+	}{
+		{
+			name: "local",
+			new: func(cache *MemCache) CacheDataAllocator {
+				return &LocalFS{memCache: cache}
+			},
+		},
+		{
+			name: "s3",
+			new: func(cache *MemCache) CacheDataAllocator {
+				return &S3FS{memCache: cache}
+			},
+		},
+	}
+	operations := []struct {
+		name     string
+		allocate func(CacheDataAllocator) fscache.Data
+	}{
+		{
+			name: "allocate",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheData(ctx, request)
+			},
+		},
+		{
+			name: "allocate-with-hint",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheDataWithHint(ctx, request, malloc.NoClear)
+			},
+		},
+		{
+			name: "copy",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.CopyToCacheData(ctx, make([]byte, request))
+			},
+		},
+	}
+
+	for _, allocatorTest := range allocators {
+		for _, operation := range operations {
+			t.Run(allocatorTest.name+"/"+operation.name, func(t *testing.T) {
+				cache := NewMemCache(fscache.ConstCapacity(int64(want)), nil, nil, "")
+				defer cache.Close(ctx)
+
+				seed := NewBytes(make([]byte, 1))
+				_, err := cache.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed)
+				require.NoError(t, err)
+				seed.Release()
+
+				allocator := allocatorTest.new(cache)
+				require.Equal(t, want, allocator.BackingSize(request))
+
+				data := operation.allocate(allocator)
+				defer data.Release()
+				require.Equal(t, int64(0), cache.cache.Used())
+				require.Equal(t, int64(want), data.Capacity())
+			})
+		}
+	}
+}
+
+func TestMemCachesUseIndependentJemallocArenas(t *testing.T) {
+	first := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "first")
+	defer first.Close(context.Background())
+	second := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "second")
+	defer second.Close(context.Background())
+
+	require.NotNil(t, first.arenaAllocator)
+	require.NotNil(t, second.arenaAllocator)
+	require.NotSame(t, first.arenaAllocator, second.arenaAllocator)
+
+	data := first.AllocateCacheData(context.Background(), 1024)
+	defer data.Release()
+	stats, err := first.arenaAllocator.Stats()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, stats.Allocated, uint64(data.Capacity()))
 }

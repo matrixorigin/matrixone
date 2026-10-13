@@ -62,7 +62,7 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
 
-	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 
 	var result *planpb.Expr
@@ -78,8 +78,111 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 	require.Equal(t, int32(2), result.Typ.Scale)
 }
 
+func TestMinMaxMixedTextLeastGreatestPreservesBinaryCollation(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	mock.ctxt.tables["bind_select"].Cols[1].Typ = planpb.Type{
+		Id:      int32(types.T_varchar),
+		Width:   80,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = planpb.Type{
+		Id:      int32(types.T_text),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(least(b, c)), max(greatest(c, b)) from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*planpb.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 2)
+	for _, aggregate := range aggregates {
+		require.Equal(t, int32(types.T_text), aggregate.Typ.Id)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+		require.Len(t, aggregate.GetF().Args, 1)
+
+		leastGreatest := aggregate.GetF().Args[0]
+		require.Equal(t, int32(types.T_text), leastGreatest.Typ.Id)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), leastGreatest.Typ.Charset)
+		require.Contains(t, []string{"least", "greatest"}, leastGreatest.GetF().Func.ObjName)
+		require.Len(t, leastGreatest.GetF().Args, 2)
+		for _, argument := range leastGreatest.GetF().Args {
+			require.Equal(t, int32(types.T_text), argument.Typ.Id)
+			require.Equal(t, uint32(types.CharsetUTF8MB4Bin), argument.Typ.Charset)
+		}
+	}
+}
+
+func TestMinMaxJSONLeastGreatestPreservesBinaryCollation(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        string
+		argumentOIDs []types.T
+	}{
+		{
+			name:         "json mixed string path",
+			query:        "select min(least(b, c)), max(greatest(c, b)) from select_test.bind_select",
+			argumentOIDs: []types.T{types.T_varchar, types.T_varchar},
+		},
+		{
+			name:         "json date path",
+			query:        "select min(least(b, c, a)), max(greatest(b, c, a)) from select_test.bind_select",
+			argumentOIDs: []types.T{types.T_varchar, types.T_varchar, types.T_date},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			mock.ctxt.tables["bind_select"].Cols[0].Typ = planpb.Type{Id: int32(types.T_date)}
+			mock.ctxt.tables["bind_select"].Cols[1].Typ = planpb.Type{
+				Id:      int32(types.T_varchar),
+				Width:   80,
+				Charset: uint32(types.CharsetUTF8MB4Bin),
+			}
+			mock.ctxt.tables["bind_select"].Cols[2].Typ = planpb.Type{Id: int32(types.T_json)}
+
+			p, err := runOneStmt(mock, t, test.query)
+			require.NoError(t, err)
+
+			var aggregates []*planpb.Expr
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_AGG {
+					aggregates = node.AggList
+					break
+				}
+			}
+			require.Len(t, aggregates, 2)
+			for _, aggregate := range aggregates {
+				require.Equal(t, int32(types.T_varchar), aggregate.Typ.Id)
+				require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+				require.Len(t, aggregate.GetF().Args, 1)
+
+				leastGreatest := aggregate.GetF().Args[0]
+				require.Equal(t, int32(types.T_varchar), leastGreatest.Typ.Id)
+				require.Equal(t, uint32(types.CharsetUTF8MB4Bin), leastGreatest.Typ.Charset)
+				require.Contains(t, []string{"least", "greatest"}, leastGreatest.GetF().Func.ObjName)
+				require.Len(t, leastGreatest.GetF().Args, len(test.argumentOIDs))
+				for i, argument := range leastGreatest.GetF().Args {
+					require.Equal(t, int32(test.argumentOIDs[i]), argument.Typ.Id)
+					if test.argumentOIDs[i].IsMySQLString() {
+						require.Equal(t, uint32(types.CharsetUTF8MB4Bin), argument.Typ.Charset)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestConstantFoldLeastGreatestTemporalScale(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
@@ -154,7 +257,7 @@ func TestConstantFoldLeastGreatestBitUsesNumericText(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 

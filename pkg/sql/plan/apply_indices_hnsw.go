@@ -15,10 +15,8 @@
 package plan
 
 import (
-	"fmt"
-
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,24 +37,6 @@ type hnswIndexContext struct {
 	pkType       plan.Type
 	params       string
 	nThread      int64
-}
-
-func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
-	return []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id: int32(types.T_varchar),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblCfgStr,
-					},
-				},
-			},
-		},
-		DeepCopyExpr(vecLitArg),
-	}
 }
 
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
@@ -85,17 +65,20 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := decodeVectorIndexAlgoParams(metaDef.IndexAlgoParams)
 	if err != nil {
 		return nil, nil
 	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
+	opType, ok := vectorIndexStringParam(params, catalog.IndexAlgoParamOpType)
+	if !ok {
 		return nil, nil
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
+	// An index serves this distance function when its op_type is metric-equivalent to the
+	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
+	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
+	if !metric.OpTypeServesDistFunc(opType, origFuncName) {
 		return nil, nil
 	}
 
@@ -122,7 +105,7 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 
-	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("hnsw_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -137,18 +120,37 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
+		nThread:      nThread,
 	}, nil
 }
 
-func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
+// resolveInt64Variable reads an int64 system variable. Some execution
+// contexts (stored procedures, Starlark mo.sql) resolve variables through a
+// background session that can return nil for a variable it does not carry,
+// so a nil value falls back to the variable's default instead of panicking
+// on a type assertion.
+func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64, error) {
+	value, err := builder.compCtx.ResolveVariable(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return def, nil
+	}
+	v, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtxf("ResolveVariable: %s is not int64 but %T", name, value)
+	}
+	return v, nil
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
-	projNode := vecCtx.projNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -159,70 +161,67 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
-		scanNode.ObjRef.SchemaName,
-		scanNode.TableDef.Name,
-		hnswCtx.metaDef.IndexTableName,
-		hnswCtx.idxDef.IndexTableName,
-		hnswCtx.nThread,
-		hnswCtx.origFuncName)
+	// With a residual filter the hnsw search is JOIN-ed against the scan and the
+	// filter drops index candidates, so execution over-fetches the candidate
+	// budget from k (#26869).
+	postFilterOverFetch := len(scanNode.FilterList) > 0
 
-	// JOIN between source table and hnsw_search table function
-	tableFuncTag := builder.genNewBindTag()
-	tableFuncNode := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  hnswplan.HNSWSearchFuncName,
-				Param: []byte(hnswCtx.params),
-			},
-			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
-		},
-		BindingTags:     []int32{tableFuncTag},
-		Children:        vectorSearchProviderChildren(vecCtx),
-		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
-	}
-	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
-
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx)
+	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{ThreadsSearch: hnswCtx.nThread})
 	if err != nil {
 		return 0, err
 	}
 
-	// pushdown limit to Table Function
-	// When there are filters, over-fetch to get more candidates
-	// This ensures we have enough candidates after filtering
-	if len(scanNode.FilterList) > 0 {
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limit.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
+	// JOIN between source table and the hnsw index search
+	tableFuncTag := builder.genNewBindTag()
+	tableFuncNode := &plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		// The search reads the whole cached index; it is not partitioned, so it
+		// runs in one local scope (IndexSearchScanPartitioned).
+		Stats:  &plan.Stats{},
+		ObjRef: DeepCopyObjectRef(scanNode.ObjRef),
+		TableDef: &plan.TableDef{
+			Name:      scanNode.TableDef.Name,
+			TableType: "vector_index_scan",
+			Cols:      DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
+		},
+		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
+		// Named-snapshot read TS; DeepCopySnapshot(nil) is nil (#27927).
+		ScanSnapshot: DeepCopySnapshot(scanNode.ScanSnapshot),
+		IndexSearchScan: &plan.IndexSearchScan{
+			SourceTable:         DeepCopyObjectRef(scanNode.ObjRef),
+			SourceTableDef:      DeepCopyTableDef(scanNode.TableDef, true),
+			ScanSnapshot:        DeepCopySnapshot(scanNode.ScanSnapshot),
+			Index:               DeepCopyIndexDef(hnswCtx.idxDef),
+			QueryPayload:        DeepCopyExpr(hnswCtx.vecLitArg),
+			DistanceFunction:    hnswCtx.origFuncName,
+			Direction:           vecCtx.sortDirection,
+			CandidateLimit:      DeepCopyExpr(limit),
+			PostFilterOverFetch: postFilterOverFetch,
+			AlgoOptions:         algoOptions,
+			HiddenTables: []*plan.IndexHiddenTableRef{
+				{Role: catalog.Hnsw_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.metaDef.IndexTableName}},
+				{Role: catalog.Hnsw_TblType_Storage, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.idxDef.IndexTableName}},
+			},
+		},
+	}
+	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-			tableFuncNode.Limit = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
-		}
-	} else {
-		// No filters, use original limit
-		tableFuncNode.Limit = DeepCopyExpr(limit)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx, "")
+	if err != nil {
+		return 0, err
+	}
+	// A provider row supplies the query vector: run the search per row.
+	candidateNodeID := tableFuncNodeID
+	if len(tableFuncNode.Children) == 1 {
+		providerNodeID := tableFuncNode.Children[0]
+		tableFuncNode.Children = nil
+		candidateNodeID = builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_APPLY,
+			Children:  []int32{providerNodeID, tableFuncNodeID},
+			ApplyType: plan.Node_CROSSAPPLY,
+			Stats:     DeepCopyStats(tableFuncNode.Stats),
+		}, ctx)
 	}
 
 	// oncond
@@ -249,7 +248,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 
 	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, tableFuncNodeID},
+		Children: []int32{scanNode.NodeId, candidateNodeID},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
 		// Don't set Limit/Offset on JOIN - they should be applied after SORT
@@ -286,23 +285,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
-	projNode.Children[0] = sortByID
-
-	if childNode != nil {
-		sortIdx := orderExpr.GetCol().ColPos
-		projMap := make(map[[2]int32]*plan.Expr)
-		for i, proj := range childNode.ProjectList {
-			if i == int(sortIdx) {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-			} else {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
-			}
-		}
-
-		replaceColumnsForNode(projNode, projMap)
-	}
-
-	return nodeID, nil
+	// Anchored at the PROJECT above the Top-K, or at the Top-K sort itself when a
+	// consumer (outer ORDER BY, join) sits between it and any project.
+	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, nil)
+	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
 func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {

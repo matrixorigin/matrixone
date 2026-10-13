@@ -211,6 +211,9 @@ func extendWithBitmaps(
 	needNulls bool,
 	needGrouping bool,
 ) error {
+	if m != nil && v.prepareParamKinds == nil {
+		v.prepareParamKindsMP = m
+	}
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to
@@ -240,6 +243,21 @@ func extendWithBitmaps(
 		}
 		v.data = ndata
 	}
+	if v.prepareParamKinds != nil {
+		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
+			return err
+		}
+	}
+	if v.stringSources != nil {
+		if err := v.preExtendStringSources(tgtLen, m); err != nil {
+			return err
+		}
+	}
+	if v.binaryStringRowsActive {
+		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	}
 	v.data = v.data[:cap(v.data)]
 	return nil
 }
@@ -263,10 +281,14 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
+	typ, err := types.TypeFromPlan(vec.Type)
+	if err != nil {
+		return nil, err
+	}
 	rvec := NewVecFromReuse()
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
-	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.typ = typ
 	rvec.cantFreeData = true
 	rvec.cantFreeArea = true
 
@@ -286,15 +308,11 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 }
 
 func TypeToProtoType(typ types.Type) plan.Type {
-	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return typ.PlanType()
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.MustTypeFromPlan(typ)
 }
 
 func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {

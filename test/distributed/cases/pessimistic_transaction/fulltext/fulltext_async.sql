@@ -19,15 +19,16 @@ create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary 
 
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'),  ('id4', 4, 'bright red null', NULL);
 
--- sleep and wait for src and src2 finish
-select sleep(20);
-
 -- select src
+-- Both async indexes were started before this point. Use their existing result
+-- assertions as readiness checks instead of sleeping for a fixed 20 seconds.
+-- @wait_expect(2, 120)
 select * from src where match(body, title) against('red');
 show create table src;
 alter table src rename to src1;
 
 -- select src2
+-- @wait_expect(2, 120)
 select * from src2 where match(body, title) against('red');
 show create table src2;
 

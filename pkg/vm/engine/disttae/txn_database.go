@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -68,7 +69,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
+	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, sqlquote.String(db.databaseName))
 
 	res, err := execReadSql(ctx, db.op, sql, true)
 	if err != nil {
@@ -182,6 +183,8 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 }
 
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
+	db.getTxn().beginCatalogMutation()
+	defer db.getTxn().endCatalogMutation()
 	_, err := db.deleteTable(ctx, name, false, false)
 	return err
 }
@@ -234,7 +237,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
-	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name))
 
 	rmFault := func() {}
 
@@ -251,6 +254,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"FIND_TABLE deleteTableError",
@@ -268,10 +272,11 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
+	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name), id), true)
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	for _, b := range res.Batches {
 		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
 			rowids = append(rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](v, i))
@@ -361,6 +366,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	db.getTxn().beginCatalogMutation()
+	defer db.getTxn().endCatalogMutation()
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
@@ -378,16 +385,36 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
-	return db.createWithID(ctx, name, tableId, defs, false, nil)
+
+	logicalId := tableId
+	replaceLogicalIdIndex := false
+	logicalIdFromCtx := ctx.Value(defines.LogicalIdKey{})
+	// A base-table recreate puts its old logical ID in the statement context. The
+	// same context is also used to create its hidden index tables, which must keep
+	// their own logical IDs instead of inheriting the base table's logical ID.
+	if logicalIdFromCtx != nil && !strings.HasPrefix(name, catalog.IndexTableNamePrefix) {
+		logicalId = logicalIdFromCtx.(uint64)
+		replaceLogicalIdIndex = true
+	}
+	return db.createWithID(ctx, name, tableId, logicalId, replaceLogicalIdIndex, defs, false, nil, nil)
+}
+
+type tableCatalogOwnership struct {
+	creator     uint32
+	owner       uint32
+	createdTime types.Timestamp
 }
 
 func (db *txnDatabase) createWithID(
 	ctx context.Context,
 	name string,
 	tableId uint64,
+	logicalId uint64,
+	replaceLogicalIdIndex bool,
 	defs []engine.TableDef,
 	useAlterNote bool,
 	extra *api.SchemaExtra,
+	preservedOwnership *tableCatalogOwnership,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
@@ -413,9 +440,9 @@ func (db *txnDatabase) createWithID(
 		tbl.db = db
 		tbl.tableName = name
 		tbl.tableId = tableId
+		tbl.logicalId = logicalId
 		tbl.accountId = accountId
 		tbl.extraInfo = extra
-
 		if tbl.extraInfo == nil {
 			tbl.extraInfo = &api.SchemaExtra{}
 		}
@@ -498,15 +525,6 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	var logicalId uint64 = tbl.tableId
-	// Check if this is an UPDATE operation (ALTER/TRUNCATE) by looking for LogicalIdKey in context
-	// This is checked once and reused later
-	logicalIdFromCtx := ctx.Value(defines.LogicalIdKey{})
-	isUpdate := logicalIdFromCtx != nil && !strings.HasPrefix(name, catalog.IndexTableNamePrefix)
-	if isUpdate {
-		logicalId = logicalIdFromCtx.(uint64)
-	}
-	tbl.logicalId = logicalId
 	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
 	{                      // 3. Write create table batch, update tbl.rowiod
 
@@ -532,6 +550,11 @@ func (db *txnDatabase) createWithID(
 			Version:       tbl.version,
 			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 			LogicalId:     logicalId,
+		}
+		if preservedOwnership != nil {
+			arg.UserId = preservedOwnership.creator
+			arg.RoleId = preservedOwnership.owner
+			arg.CreatedTime = preservedOwnership.createdTime
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {
@@ -573,7 +596,7 @@ func (db *txnDatabase) createWithID(
 	}
 
 	{ // 5. Write logical_id index entry (after mo_columns to maintain entry ordering for TN)
-		if err = db.syncLogicalIdIndexInsert(ctx, logicalId, compositePk, isUpdate); err != nil {
+		if err = db.syncLogicalIdIndexInsert(ctx, logicalId, compositePk, replaceLogicalIdIndex); err != nil {
 			return err
 		}
 	}
@@ -607,7 +630,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	)
 	// query table
 	{
-		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
+		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, sqlquote.String(db.databaseName), sqlquote.String(name))
 		var res executor.Result
 		res, err = execReadSql(ctx, db.op, tblSql, true)
 		if err != nil {
@@ -634,7 +657,7 @@ func (db *txnDatabase) loadTableFromStorage(
 
 	{
 		// fresh columns
-		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
+		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, sqlquote.String(db.databaseName), sqlquote.String(name), tblid)
 		var res executor.Result
 		res, err = execReadSql(ctx, db.op, colSql, true)
 		if err != nil {
@@ -682,6 +705,19 @@ func (db *txnDatabase) getTableItem(
 	var err error
 	c := engine.GetLatestCatalogCache()
 	if ok := c.GetTable(&item); !ok {
+		// A session-owned definition may have committed after this data snapshot.
+		// Only the schema is made visible; txn row/object timestamps stay unchanged.
+		if defines.IsTempTableName(name) {
+			latest := cache.TableItem{
+				Name: name, DatabaseId: db.databaseId, DatabaseName: db.databaseName,
+				AccountId: accountID, Ts: types.MaxTs().ToTimestamp(),
+			}
+			if c.GetTable(&latest) && isSessionTemporaryCatalogItem(
+				c, &latest, accountID, db.databaseId, db.databaseName,
+			) {
+				return &latest, nil
+			}
+		}
 		var tableitem *cache.TableItem
 		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
 			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
@@ -702,13 +738,14 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	ctx context.Context,
 	logicalId uint64,
 	compositePk []byte,
-	isUpdate bool,
+	replaceLogicalIdIndex bool,
 ) error {
 	txn := db.getTxn()
 	m := txn.proc.Mp()
 
-	// For UPDATE operations (ALTER/TRUNCATE), we need to delete the old record first
-	if isUpdate {
+	// A metadata recreation preserves the logical ID, so replace the index row
+	// that deleteTable(forAlter=true) deliberately kept.
+	if replaceLogicalIdIndex {
 		if err := db.syncLogicalIdIndexDelete(ctx, logicalId); err != nil {
 			return err
 		}

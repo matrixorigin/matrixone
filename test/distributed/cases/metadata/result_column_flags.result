@@ -1,0 +1,47 @@
+drop database if exists result_column_flags_bvt;
+create database result_column_flags_bvt;
+use result_column_flags_bvt;
+create table result_column_flags (
+id int not null auto_increment,
+unique_value int not null,
+nullable_value varchar(32),
+plain_value int,
+primary key (id),
+unique key uk_result_column_flags (unique_value)
+);
+insert into result_column_flags (unique_value, nullable_value, plain_value)
+values (10, 'first', 100), (20, null, 200);
+select id, unique_value, nullable_value, plain_value
+from result_column_flags
+where id > 0
+order by id;
+id    unique_value    nullable_value    plain_value
+1    10    first    100
+2    20    null    200
+select id, unique_value, nullable_value
+from (
+select id, unique_value, nullable_value
+from result_column_flags
+) as projected
+order by id;
+id    unique_value    nullable_value
+1    10    first
+2    20    null
+select id + 1 as id_plus_one, unique_value, nullable_value
+from result_column_flags
+order by unique_value;
+id_plus_one    unique_value    nullable_value
+2    10    first
+3    20    null
+select column_name, column_key, is_nullable, extra
+from information_schema.columns
+where table_schema = 'result_column_flags_bvt'
+and table_name = 'result_column_flags'
+order by ordinal_position;
+column_name    column_key    is_nullable    extra
+id    PRI    NO    auto_increment
+unique_value    UNI    NO
+nullable_value        YES
+plain_value        YES
+drop table result_column_flags;
+drop database result_column_flags_bvt;

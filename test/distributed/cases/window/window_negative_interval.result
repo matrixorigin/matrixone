@@ -1,0 +1,36 @@
+drop database if exists window_negative_interval;
+create database window_negative_interval;
+use window_negative_interval;
+create table t(id int primary key, ts timestamp(6), v int);
+insert into t values
+(1, '2024-01-01 00:00:00.000000', 10),
+(2, '2024-01-01 00:00:01.000000', 20),
+(3, '2024-01-01 00:00:02.000000', 30);
+select id, sum(v) over (order by ts range between interval -1 microsecond preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 second preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 minute preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 hour preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 day preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 month preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval -1 year preceding and current row) as s from t order by id;
+SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, sum(v) over (order by ts range between interval 1 second preceding and current row) as s from t order by id;
+➤ id[4,32,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  50
+select id, sum(v) over (order by ts range between interval 0 second preceding and current row) as s from t order by id;
+➤ id[4,32,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop database window_negative_interval;

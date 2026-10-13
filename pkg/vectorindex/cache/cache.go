@@ -15,9 +15,12 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/signal"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,15 +28,40 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+// Register the freshness-interval override hook so the query-service handler (mo_ctl
+// SetVectorIndexFreshnessInterval) can drive the global cache without importing this package --
+// that edge would close a test import cycle through catalog/fileservice.
+func init() {
+	moruntime.RegisterVectorIndexStaleCheckIntervalSetter(func(d time.Duration) {
+		Cache.SetStaleCheckInterval(d)
+	})
+	moruntime.RegisterVectorIndexCacheKeyCounter(func(key string) int64 {
+		return Cache.CountKey(key)
+	})
+	moruntime.RegisterVectorIndexCacheEvictor(func(ctx context.Context, key string) int64 {
+		return Cache.EvictKey(ctx, key)
+	})
+	moruntime.RegisterVectorIndexCacheKeyLister(func() []string {
+		return Cache.Keys()
+	})
+}
+
 // stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
 // The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
 // cadence — the bound on how long a remote CN can serve a stale index before it ages out.
 const stalenessCheckEveryNTicks = 4
+
+// MinStaleCheckInterval is the safety floor for a positive freshness-sweep override
+// (SetStaleCheckInterval). A sub-second base ticker would run HouseKeeping every tick and the
+// IsStale scan every few ticks fast enough to peg a CN; 1s is small enough for tests to converge
+// in seconds yet far from a busy loop. 0 (restore default) is unaffected.
+const MinStaleCheckInterval = time.Second
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -73,6 +101,18 @@ func (e retryableLoadError) Error() string {
 func (e retryableLoadError) Unwrap() error {
 	return e.cause
 }
+
+// errIndexDestroyed is the CACHE's own "this entry is gone, retry" signal, and the only thing
+// the search retry loop reacts to. It is compared by IDENTITY, never by error code.
+//
+// The distinction is load-bearing. moerr.ErrInvalidState is a public code an ALGORITHM may
+// raise for its own reasons -- a paused txn client, a failed remote run -- and those are
+// permanent for this attempt. Retrying on the code meant a resident entry whose backend kept
+// failing was re-invoked forever: `loaded` stays true, the entry stays STATUS_LOADED and in the
+// map, so nothing ever changes and the loop spins. Gating on this sentinel keeps the retry to
+// the case it exists for -- the cache itself tore the entry down underneath the caller -- and
+// lets every backend error propagate on the first attempt.
+var errIndexDestroyed = moerr.NewInvalidStateNoCtx("Index destroyed")
 
 // NewRetryableLoadError marks a cache-internal load outcome that can be retried
 // after the exact failed entry is destroyed. Ordinary algorithm load errors,
@@ -140,7 +180,39 @@ type VectorIndexSearchIf interface {
 	// Implemented by fulltext2; the vector algos stub it "not supported" until each migrates
 	// (mirrors how fulltext2 stubs SearchFloat32).
 	SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error
+	// Preload does the measurable, non-resident half of a load: read the metadata, fetch the
+	// artifacts, and work out what the index will cost -- everything up to, but not
+	// including, materializing it in host or device memory. After it returns, GetIndexSize
+	// reports the size the following Load will claim.
+	//
+	// The split exists so the cache can reclaim room for THIS index before it is loaded,
+	// rather than discovering the cost afterwards. It is what makes peak residency track the
+	// budget instead of exceeding it by one whole index, and it lets the reclaim happen while
+	// no entry lock is held -- the cache calls Preload and Load as separate locked sections
+	// and does its bookkeeping in the gap between them.
+	//
+	// Two obligations. It must leave nothing resident that Destroy would not release, because
+	// a load can be abandoned between Preload and Load. And it must be safe to call AGAIN on
+	// the same object after a completed Destroy: Search/SearchInto re-wrap the caller's algo on
+	// every retry attempt, so an entry that was evicted mid-load comes back here. The retry
+	// paths wait on awaitDestroyed first, so an implementation may assume the previous
+	// teardown finished -- but not that it never ran.
+	Preload(*sqlexec.SqlProcess) error
 	Load(*sqlexec.SqlProcess) error
+	// GetIndexSize reports the bytes this index holds resident after a successful Load, for
+	// the max_index_cache_size governor, split by arena: hostBytes is RAM, deviceBytes is
+	// VRAM. They are NOT interchangeable and must never be summed into one figure -- a CN has
+	// far more of one than the other, so a conflated total bounds neither. An implementation
+	// reports 0 for an arena it does not occupy: the CPU algos report host only, the cuVS
+	// algos report the device-resident quantity their load gate already measures.
+	//
+	// The cache calls it once, right after Load, and caches the result on the entry, so it
+	// need not be cheap and is never called on the search path.
+	GetIndexSize() (hostBytes, deviceBytes int64)
+	// BuildTS reports the greatest source-table commit this loaded generation reflects,
+	// for the async-index freshness gate. fulltext2 returns MAX(metadata.build_ts); the
+	// vector algos, whose freshness is handled elsewhere, return 0. 0 = unknown.
+	BuildTS() int64
 	Destroy()
 }
 
@@ -149,6 +221,23 @@ type VectorIndexSearchIf interface {
 // contract unchanged; FULLTEXT2 uses it to classify the next load miss.
 type cacheInvalidationAware interface {
 	OnCacheInvalidated(reason string)
+}
+
+// devicePlacement is implemented by an algorithm whose device bytes land on SPECIFIC GPUs. The
+// governor needs it because placement, not the sum, is what a load has to fit into: a SINGLE_GPU
+// index occupies devices[0] alone, so an aggregate budget spanning every card can be satisfied
+// while the one card the arrival needs is full.
+//
+// An algorithm that does not implement it is charged as before, against the aggregate.
+type devicePlacement interface {
+	DeviceResidency() map[int]int64
+}
+
+// reservationAware is implemented by an algorithm whose own load-time memory gate must account
+// for loads already in flight. The governor knows what the arrivals ahead of this one promised;
+// a gate that samples free memory alone cannot, and two concurrent loads then spend it twice.
+type reservationAware interface {
+	SetReservedAhead(int64)
 }
 
 type loadWaiterAware interface {
@@ -195,8 +284,124 @@ type VectorIndexSearch struct {
 	ttlMu       sync.Mutex  // serializes sliding TTL renewal with eviction claims
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
-	evicting         atomic.Bool
+	evicting atomic.Bool
+	// destroyed is closed once this wrapper's Algo teardown has finished, so a caller about to
+	// REUSE that Algo in a fresh wrapper can wait for the old one to let go of it. See
+	// awaitDestroyed.
+	destroyed   chan struct{}
+	destroyOnce sync.Once
+	// accountID is the tenant that loaded this entry, taken from the loading request. An
+	// index table name is globally unique, so a key belongs to one tenant for its whole life.
+	accountID atomic.Uint32
+	// hostBytes/deviceBytes are Algo.GetIndexSize() published by captureSize under this
+	// entry's lock -- an estimate after Preload, the real figure after Load -- and are the
+	// ONLY size the governor reads. Kept apart because RAM and VRAM are separate budgets.
+	// Both 0 until Preload runs; usage sums ignore them until Status is STATUS_LOADED, so the
+	// estimate never counts toward anyone's budget.
+	hostBytes   atomic.Int64
+	deviceBytes atomic.Int64
+	// buildTS is Algo.BuildTS() published by captureSize under this entry's lock, so the
+	// freshness gate (GetBuildTS) reads it from the atomic and never touches the algo, which
+	// a concurrent eviction may be tearing down. 0 until Load runs.
+	buildTS atomic.Int64
+	// devicePerCard is deviceBytes broken down by GPU, published by captureSize when the
+	// algorithm knows its placement. nil means "aggregate only".
+	devicePerCard    atomic.Value // map[int]int64
 	invalidationOnce sync.Once
+}
+
+// newVectorIndexSearch wraps algo for the cache. Both retry loops build every attempt through
+// here, so each attempt's wrapper has its own teardown signal.
+func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
+	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{})}
+	// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	return s
+}
+
+// markDestroyed publishes that Algo teardown is complete. Idempotent, and a no-op on a wrapper
+// built without the constructor (tests), whose awaitDestroyed then returns immediately.
+func (s *VectorIndexSearch) markDestroyed() {
+	if s.destroyed == nil {
+		return
+	}
+	s.destroyOnce.Do(func() { close(s.destroyed) })
+}
+
+// awaitDestroyed blocks until this wrapper has finished tearing its Algo down.
+//
+// The retry loops in Search/SearchInto re-wrap the SAME caller-supplied algo on every attempt,
+// so without this a retry can call Preload/Load on an algo that an evicting goroutine is still
+// inside Destroy on: two wrappers, two different mutexes, one object -- a data race, and a load
+// that reuses state another goroutine is tearing down.
+//
+// It cannot hang. An entry only becomes unreachable through a CompareAndDelete that is
+// immediately followed by Destroy or destroyFailedLoad (evictEntry, discardFailedLoad, and both
+// load error paths), so whoever takes the entry away always completes the teardown and closes
+// this channel. The wait is bounded by whatever that Destroy waits on -- at worst an in-flight
+// search holding the read lock.
+// searchCtx is the caller's context, or Background when there is none to honour. A nil
+// SqlProcess (and one carrying neither a Proc nor a SqlCtx) is legal on the internal load paths
+// and in tests; cancellation simply does not apply to those callers.
+func searchCtx(sqlproc *sqlexec.SqlProcess) context.Context {
+	if sqlproc == nil || (sqlproc.Proc == nil && sqlproc.SqlCtx == nil) {
+		return context.Background()
+	}
+	if ctx := sqlproc.GetContext(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
+// awaitDestroyed blocks until this wrapper has finished tearing its Algo down, or until ctx is
+// done -- whichever comes first.
+//
+// ONLY THE LOADER MAY CALL THIS. The retry loops re-wrap the SAME caller-supplied algo on every
+// attempt, so a retry can otherwise call Preload/Load on an algo an evicting goroutine is still
+// inside Destroy on. That hazard exists only when this wrapper wraps the caller's OWN algo: a
+// caller that merely found someone else's resident entry shares nothing with it, since the
+// search path reads the cached Algo and never touches the passed newalgo.
+//
+// Cancellation matters because the wait is bounded only by the teardown, and Destroy takes the
+// write lock -- so without a context a caller can be parked behind an unrelated goroutine's
+// in-flight native search, unable to honour its own deadline, for an entry it shares nothing
+// with. It returns ctx.Err() in that case; the caller is being abandoned anyway.
+func (s *VectorIndexSearch) awaitDestroyed(ctx context.Context) error {
+	if s.destroyed == nil {
+		return nil
+	}
+	if ctx == nil {
+		<-s.destroyed
+		return nil
+	}
+	select {
+	case <-s.destroyed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// tryClaimIdle takes the entry's search lock IF no search is in flight, and KEEPS it. The
+// caller owns the entry from here until it calls destroyClaimed or releaseClaim -- no search
+// can start in between, so the decision "this one is idle" is still true when the destroy runs.
+//
+// The governor needs a victim it can destroy without waiting: destroy takes the same lock, so
+// taking a busy entry parks the CACHE MISS that triggered the eviction behind somebody else's
+// search. It used to ask with a TryLock/Unlock pair and then destroy later, which answered a
+// question about the past: a search starting in that window turned the "free" victim into
+// exactly the blocking destroy the check existed to avoid, and with no busy fallback left the
+// pass had already committed to this victim. Claiming and holding closes that window.
+//
+// Returns false when a search holds the lock; the caller moves on to the next candidate.
+func (s *VectorIndexSearch) tryClaimIdle() bool {
+	return s.Mutex.TryLock()
+}
+
+// releaseClaim drops a claim taken by tryClaimIdle without destroying the entry, for when a
+// later check (the map CAS, the eviction flag) rules the victim out.
+func (s *VectorIndexSearch) releaseClaim() {
+	s.Mutex.Unlock()
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -227,6 +432,20 @@ func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
 	return s.evicting.CompareAndSwap(false, true)
 }
 
+// destroyClaimed destroys an entry whose search lock the caller ALREADY holds via
+// tryClaimIdle, and releases it. Same work as DestroyWithReason, minus the acquire it would
+// deadlock on.
+func (s *VectorIndexSearch) destroyClaimed(reason string) {
+	defer func() {
+		s.Mutex.Unlock()
+		s.Cond.Broadcast()
+	}()
+	s.notifyCacheInvalidated(reason)
+	s.Algo.Destroy()
+	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
+}
+
 func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	s.Mutex.Lock()
 	defer func() {
@@ -237,6 +456,7 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 // destroyFailedLoad releases an entry whose load failed after the caller has
@@ -252,6 +472,53 @@ func (s *VectorIndexSearch) destroyFailedLoad() {
 	}()
 	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
+}
+
+// Preload runs the algorithm's measuring half under the same lock discipline as Load. It is a
+// SEPARATE locked section on purpose: the caller reclaims cache room between Preload and Load,
+// and must not do that while holding this entry's write lock (it would block on a victim's lock,
+// and would run the governor's catalog read under a lock held across a whole index load).
+//
+// Releasing the lock in the gap is safe. Only the LoadOrStore winner ever reaches here, so no
+// second loader can interleave; searchers wait on Status via Cond and simply keep waiting; and
+// an eviction claimed in the gap is caught by Load's evicting check, which sends the caller
+// around the retry loop.
+func (s *VectorIndexSearch) Preload(sqlproc *sqlexec.SqlProcess) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	if s.evicting.Load() {
+		return errIndexDestroyed
+	}
+	if err := s.Algo.Preload(sqlproc); err != nil {
+		return err
+	}
+	s.captureSize()
+	return nil
+}
+
+// captureSize reads Algo.GetIndexSize into the entry's atomics. MUST be called under the entry
+// lock: GetIndexSize walks algorithm state (s.Indexes and friends) that Destroy nils out, so
+// reading it from outside -- as the governor would, between Preload and Load -- races a
+// concurrent eviction. Publishing to atomics here means the governor never touches the algo.
+func (s *VectorIndexSearch) captureSize() {
+	host, device := s.Algo.GetIndexSize()
+	s.hostBytes.Store(host)
+	s.deviceBytes.Store(device)
+	s.buildTS.Store(s.Algo.BuildTS())
+	if placed, ok := s.Algo.(devicePlacement); ok {
+		if perCard := placed.DeviceResidency(); len(perCard) > 0 {
+			s.devicePerCard.Store(perCard)
+		}
+	}
+}
+
+// deviceResidency returns this entry's bytes per GPU, or nil when the algorithm does not know
+// its placement. Read from the atomic, never from the algorithm, which a concurrent eviction
+// may be tearing down.
+func (s *VectorIndexSearch) deviceResidency() map[int]int64 {
+	perCard, _ := s.devicePerCard.Load().(map[int]int64)
+	return perCard
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -261,7 +528,7 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		s.Cond.Broadcast()
 	}()
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 
 	err := s.Algo.Load(sqlproc)
@@ -283,6 +550,8 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 		return err
 	}
+	// Replace Preload's estimate with what the load actually claimed, still under this lock.
+	s.captureSize()
 	// Loaded
 	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
@@ -344,7 +613,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -356,7 +625,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+			return nil, nil, errIndexDestroyed
 		} else {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
 		}
@@ -367,9 +636,19 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	// here. Search is therefore pure-read under the shared read lock — no mutation of the
 	// cached algo, so concurrent searches on one entry cannot race on its config.
 	if !s.extendForSearch() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
-	return s.Algo.Search(sqlproc, query, rt)
+	// Publish the generation being searched to the caller UNDER this lock, atomic with the search,
+	// so a follow-up bounded to it (the fulltext2 json-probe tail) cannot bind a newer generation a
+	// concurrent evict+reload publishes after this returns. See RuntimeConfig.SearchedBuildTS.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
+	keys, distances, err = s.Algo.Search(sqlproc, query, rt)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return keys, distances, err
 }
 
 // SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
@@ -385,7 +664,7 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -395,14 +674,22 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return moerr.NewInvalidStateNoCtx("Index destroyed")
+			return errIndexDestroyed
 		}
 		return moerr.NewInternalErrorNoCtx("Load index error")
 	}
 	if !s.extendForSearch() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
-	return s.Algo.SearchInto(sqlproc, query, rt, out)
+	// See Search: publish the searched generation under this lock for a bounded follow-up.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
+	err := s.Algo.SearchInto(sqlproc, query, rt, out)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return err
 }
 
 // implementation of VectorIndexCache
@@ -417,6 +704,52 @@ type VectorIndexCache struct {
 	once           sync.Once
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
+	capRefreshing  atomic.Bool // single-flight guard for the async cap refresh + enforcement
+
+	// staleCheckIntervalNs overrides the cross-CN freshness (IsStale) sweep's BASE ticker, in
+	// nanoseconds. 0 (the default) keeps the built-in ~10-minute cadence (VectorIndexCacheTTL/2
+	// ticker × stalenessCheckEveryNTicks). >0 shortens the ticker; the sweep still runs every
+	// stalenessCheckEveryNTicks ticks, so the effective freshness period is that × the override
+	// (e.g. 2s → ~8s). Refresh remains entirely the periodic sweep's job -- this only changes its
+	// cadence. Sys-admin-only test/ops knob (mo_ctl SetVectorIndexFreshnessInterval), never persisted.
+	staleCheckIntervalNs atomic.Int64
+
+	// effectiveTickerNs records, in nanoseconds, the interval the LIVE sweep ticker was last
+	// created with (serve) or Reset to (SetStaleCheckInterval). It exists so a test can
+	// deterministically confirm an override that races serve() actually reached the running
+	// ticker -- not merely the stored staleCheckIntervalNs, which the ticker could lag.
+	effectiveTickerNs atomic.Int64
+
+	// serveMu serializes serve()'s ticker creation + started publication with
+	// SetStaleCheckInterval's started-check + Reset. Without it an override that lands during the
+	// first lazy serve() (after serve reads the default interval but before it publishes started)
+	// would be stored yet never applied, leaving this CN on the default cadence indefinitely.
+	serveMu sync.Mutex
+
+	// evictInFlight tracks evictions between the moment an entry is removed from IndexMap and the
+	// moment its teardown (Destroy) finishes. It is keyed by the per-eviction done channel (unique per
+	// make) with the cache key as the value: doneCh -> cacheKey, closed on completion. A concurrent
+	// evictor that finds the entry already gone waits on every in-flight channel for that cache key
+	// instead of reporting a premature success while an old search / native handle is still alive.
+	// Keying by the channel (not the cache key) is deliberate: several generations of the SAME cache
+	// key can be tearing down at once (one removed-but-still-destroying while a reload was evicted
+	// under the same key), and a cacheKey->chan map would overwrite the older generation's completion
+	// signal, letting EvictKey return before it finished (#28985 EvictKey race).
+	evictInFlight sync.Map
+
+	// The residency budget and everything that decides it. Held by value so a zero
+	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
+	governor     VectorIndexGovernor
+	governorOnce sync.Once
+}
+
+// gov returns this cache's governor, attaching the back-reference the first time. The governor
+// needs the cache to see what is resident and to evict; the cache needs the governor to decide
+// what may become resident. Keeping the wiring in one accessor means a VectorIndexCache built as
+// a zero value -- as tests and embedded users do -- still has a working governor.
+func (c *VectorIndexCache) gov() *VectorIndexGovernor {
+	c.governorOnce.Do(func() { c.governor.cache = c })
+	return &c.governor
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -425,19 +758,192 @@ func NewVectorIndexCache() *VectorIndexCache {
 	return c
 }
 
+// staleTickerInterval is the base ticker cadence in effect: the override when set (>0), else the
+// default TickerInterval. HouseKeeping (TTL eviction) and the every-Nth-tick IsStale sweep both run
+// off this ticker, so a short override speeds up both. The IsStale sweep still runs every
+// stalenessCheckEveryNTicks ticks (never every tick), so the effective ongoing freshness period is
+// stalenessCheckEveryNTicks × this -- the same 4x relationship as the default. An immediate
+// one-shot sweep (see SetStaleCheckInterval) covers the "evict now" case so the ongoing cadence
+// does not need to be hammered every tick.
+func (c *VectorIndexCache) staleTickerInterval() time.Duration {
+	if ns := c.staleCheckIntervalNs.Load(); ns > 0 {
+		return time.Duration(ns)
+	}
+	return c.TickerInterval
+}
+
+// SetStaleCheckInterval overrides the cross-CN freshness sweep cadence live. d<=0 restores the
+// default. It re-arms the running ticker immediately (via Reset), so the shortened cadence takes
+// effect within one new interval rather than waiting out the remainder of the old (possibly
+// ~10-min) cycle. Safe before serve() starts: the value is stored and serve() arms the ticker
+// from it.
+//
+// It deliberately does NOT evict anything itself -- refresh is left entirely to the periodic
+// IsStale sweep now running at the shortened cadence. That is the whole point: this is a knob on
+// the eventual-consistency mechanism, not a manual "evict now" command, so a test that lowers it
+// and then observes a stale cross-CN entry refresh is proving the periodic sweep works.
+func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
+	if d < 0 {
+		d = 0
+	} else if d > 0 && d < MinStaleCheckInterval {
+		// Floor a positive override: a sub-second ticker turns the per-tick HouseKeeping (and the
+		// every-Nth-tick stale scan) into a near busy-loop on every CN. 0 still restores the default.
+		d = MinStaleCheckInterval
+	}
+	c.staleCheckIntervalNs.Store(int64(d))
+	reset := false
+	// serveMu makes this check+Reset atomic w.r.t. serve()'s ticker-create + started publication:
+	// the store above happens-before the lock, so if serve() has not published started yet, serve()
+	// will read the new value when it creates the ticker; otherwise we Reset the live ticker here.
+	// Only re-arm a live ticker: after Destroy() the serve goroutine is gone (exited=true) but
+	// started stays true, so without the exited guard this would Reset a stopped ticker whose
+	// consumer no longer exists. The stored value above still governs if serve() runs again.
+	c.serveMu.Lock()
+	if c.started.Load() && !c.exited.Load() && c.ticker != nil {
+		iv := c.staleTickerInterval()
+		c.ticker.Reset(iv)
+		c.effectiveTickerNs.Store(int64(iv))
+		reset = true
+	}
+	c.serveMu.Unlock()
+	// Debug-logged (not hot-path: only the sys-admin mo_ctl reaches here) so an operator/test can
+	// confirm the override actually applied on THIS CN -- the mo_ctl Result only echoes the request.
+	logutil.Debugf("[veccache] stale-check interval override set to %v; effective sweep ticker=%v (every %d ticks), ticker_reset=%v",
+		d, c.staleTickerInterval(), stalenessCheckEveryNTicks, reset)
+}
+
+// CountKey returns how many cached entries this cache holds under the EXACT cache key (0 or 1 on
+// one CN); key=="" counts every entry. The key is the exact cache key, which is algorithm-specific:
+// fulltext2 and hnsw key by the bare hidden index-table name, while the ivf family keys by
+// "<index-table>:<version>" (optionally "tenant=<id>:" prefixed and ":<part>/<parts>" suffixed).
+// Distinct versions and named-snapshot generations are separate keys and are counted only when
+// passed exactly -- matching EvictKey, so what GetVectorIndexCacheInfo reports is exactly what
+// EvictVectorIndexCache would remove. Read-only: it does not touch or warm any entry.
+func (c *VectorIndexCache) CountKey(key string) int64 {
+	var n int64
+	c.IndexMap.Range(func(k, _ any) bool {
+		ks, ok := k.(string)
+		if !ok {
+			return true
+		}
+		if key == "" || ks == key {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// EvictKey drops the cache entry under the EXACT cache key (see CountKey for the per-algorithm key
+// form), returning how many it removed (0 or 1 on one CN). Synchronous force-evict (waits out any
+// in-flight search), so the next query reloads a current generation. It deliberately evicts only
+// the exact key -- not other versions or named-snapshot generations -- so the caller controls
+// precisely what is dropped. Backs the EvictVectorIndexCache mo_ctl. key=="" is a no-op returning 0
+// (refuse to flush the whole cache by accident).
+func (c *VectorIndexCache) EvictKey(ctx context.Context, key string) int64 {
+	if key == "" {
+		return 0
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Capture the current occupant first: if we lose the claim to a concurrent evictor we can wait
+	// on THAT entry's teardown rather than returning before it finishes.
+	occupant, hadOccupant := c.IndexMap.Load(key)
+	// Report what THIS call actually removed, not a pre-read occupancy count. evictEntry claims the
+	// entry (beginEviction + CompareAndDelete) and synchronously destroys it, returning true only for
+	// the caller that won the claim. A pre-count instead let two concurrent callers both see 1 and
+	// both report evicted=1 while only one owned the removal, and let a losing caller report success
+	// though it removed nothing. The winner's Destroy waits out any in-flight search before returning.
+	var removed int64
+	if c.evictEntry(key, nil, "ctl") {
+		removed = 1
+	}
+	// The count above is what THIS call removed; it is independent of the completion barrier below.
+	// Before returning -- on BOTH the success and the failure path -- wait until every OTHER in-flight
+	// teardown of this key has fully completed (its in-flight search drained and native handle freed),
+	// so a caller polling for "gone" cannot observe a still-alive resource for the key (#28985). This
+	// matters even when we just removed the current generation: a PRIOR generation can be
+	// removed-but-still-destroying under the same key (its evictor parked in Destroy) while the reload
+	// we evicted occupied the map. Returning removed==1 immediately would report completion while that
+	// prior generation is still alive. Both waits are bounded: whoever removes an entry always follows
+	// with Destroy, which closes both signals; our own eviction, if any, already cleared its channel
+	// via finishEviction before evictEntry returned, so this never self-waits.
+	//
+	// ctx bounds these FOLLOWER waits only. The teardown this call may own already ran to
+	// completion inside evictEntry above (which never takes a context), so cancelling here never
+	// interrupts our own cleanup: if we owned the occupant's teardown its `destroyed` is already
+	// closed and awaitDestroyed returns immediately regardless of ctx; if a concurrent evictor owns
+	// it, ctx cancellation lets us abandon the wait while that owner's cleanup completes on its own.
+	// The removed count is fixed before any cancellable wait, so an early return still reports what
+	// THIS call actually removed.
+	if hadOccupant {
+		if algo, ok := occupant.(*VectorIndexSearch); ok {
+			if err := algo.awaitDestroyed(ctx); err != nil {
+				return removed
+			}
+		}
+	}
+	// Wait on EVERY in-flight eviction of this cache key, not just one: several generations of the
+	// same key can be tearing down concurrently (a removed-but-still-destroying generation while a
+	// reload was evicted under the same key), and each has its own completion channel. Snapshot the
+	// matching channels first, then wait outside Range (blocking inside Range would stall it).
+	var pending []chan struct{}
+	c.evictInFlight.Range(func(k, v any) bool {
+		if ks, ok := v.(string); ok && ks == key {
+			if ch, ok := k.(chan struct{}); ok {
+				pending = append(pending, ch)
+			}
+		}
+		return true
+	})
+	for _, ch := range pending {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return removed
+		}
+	}
+	return removed
+}
+
+// Keys returns the exact cache keys this cache currently holds, sorted. Read-only introspection
+// backing the GetVectorIndexCacheKeys mo_ctl: an operator lists the keys here to learn the exact
+// key (e.g. an ivf "<index-table>:<version>") to pass to GetVectorIndexCacheInfo / EvictKey.
+func (c *VectorIndexCache) Keys() []string {
+	var keys []string
+	c.IndexMap.Range(func(k, _ any) bool {
+		if ks, ok := k.(string); ok {
+			keys = append(keys, ks)
+		}
+		return true
+	})
+	sort.Strings(keys)
+	return keys
+}
+
 func (c *VectorIndexCache) serve() {
 	if c.started.Load() {
 		return
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
-	c.ticker = time.NewTicker(c.TickerInterval)
+	// serveMu makes ticker creation + started publication atomic w.r.t. SetStaleCheckInterval, so a
+	// freshness-interval override that lands during startup is either read here or Reset afterwards.
+	c.serveMu.Lock()
+	serveIv := c.staleTickerInterval()
+	if serveStartBarrier != nil {
+		serveStartBarrier()
+	}
+	c.ticker = time.NewTicker(serveIv)
+	c.effectiveTickerNs.Store(int64(serveIv))
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
 
 	// channel initizalized.  set started to true
 	c.started.Store(true)
+	c.serveMu.Unlock()
 
 	go func() {
 		defer c.ticker.Stop()
@@ -473,33 +979,133 @@ func (c *VectorIndexCache) Once() {
 }
 
 func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
-	value, loaded := c.IndexMap.Load(key)
-	if !loaded {
+	algo, done, ok := c.claimForEviction(key, expected, reason)
+	if !ok {
 		return false
 	}
-	algo, ok := value.(*VectorIndexSearch)
-	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
-		return false
-	}
-	value, loaded = c.IndexMap.Load(key)
-	if !loaded || value != algo {
-		return false
-	}
-	// Publish the invalidation while the old entry still occupies the key. A
-	// replacement can only be inserted after CompareAndDelete, so it cannot
-	// observe a later generation bump from the old entry's blocked destroy.
-	algo.notifyCacheInvalidated(reason)
-	if !c.IndexMap.CompareAndDelete(key, algo) {
-		return false
-	}
+	defer c.finishEviction(done)
 	algo.Destroy()
 	return true
 }
 
+// afterIdleClaim runs, when set, in the instant between deciding a victim is idle and
+// destroying it -- the window a check-then-destroy leaves open. Nil in production; a test sets
+// it to land a search there.
+var afterIdleClaim func(key string)
+
+// serveStartBarrier runs, when set, inside serve() AFTER it has read the sweep interval but BEFORE
+// it creates/publishes the live ticker (still holding serveMu). Nil in production; a test sets it to
+// force the startup race -- land a SetStaleCheckInterval override in exactly that window and prove
+// the override still reaches the live ticker.
+var serveStartBarrier func()
+
+// evictIdleEntry evicts key ONLY if no search is in flight on it, and holds that claim through
+// removal and destroy so the entry cannot become busy in between. Returns false if a search
+// holds it, or if it lost the same races evictEntry can lose.
+func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearch, reason string) bool {
+	if expected == nil {
+		return false
+	}
+	if !expected.tryClaimIdle() {
+		return false
+	}
+	if afterIdleClaim != nil {
+		afterIdleClaim(key)
+	}
+	algo, done, ok := c.claimForEviction(key, expected, reason)
+	if !ok {
+		expected.releaseClaim()
+		return false
+	}
+	defer c.finishEviction(done)
+	algo.destroyClaimed(reason)
+	return true
+}
+
+// claimForEviction wins the right to destroy key's entry: it must still be the expected entry,
+// must not already be evicting, and must survive removal from the map. It publishes the
+// invalidation while the old entry still occupies the key -- a replacement can only be inserted
+// after CompareAndDelete, so it cannot observe a later generation bump from the old entry's
+// blocked destroy.
+func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, chan struct{}, bool) {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return nil, nil, false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
+		return nil, nil, false
+	}
+	// Publish this eviction as in-flight BEFORE removing the entry from the map, so a concurrent
+	// evictor that later finds the entry already gone can wait on `done` rather than reporting a
+	// premature completion. Keyed by the unique `done` channel (value = cache key) so a second
+	// generation evicting under the same cache key cannot overwrite this generation's completion
+	// signal. The winning caller closes+clears it via finishEviction after Destroy.
+	done := make(chan struct{})
+	c.evictInFlight.Store(done, key)
+	value, loaded = c.IndexMap.Load(key)
+	if !loaded || value != algo {
+		c.finishEviction(done)
+		return nil, nil, false
+	}
+	algo.notifyCacheInvalidated(reason)
+	if !c.IndexMap.CompareAndDelete(key, algo) {
+		c.finishEviction(done)
+		return nil, nil, false
+	}
+	return algo, done, true
+}
+
+// finishEviction publishes that this in-flight eviction is complete: it drops its own registry entry
+// (keyed by the done channel, so other generations' in-flight evictions of the same cache key are
+// left intact) and wakes any evictor waiting on it.
+func (c *VectorIndexCache) finishEviction(done chan struct{}) {
+	c.evictInFlight.Delete(done)
+	close(done)
+}
+
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
+	// Publish this teardown as in-flight BEFORE removing the entry, so a concurrent EvictKey that
+	// finds neither an occupant (already CompareAndDelete'd) nor an in-flight eviction still waits
+	// on `done` rather than reporting a premature completion while destroyFailedLoad is still
+	// releasing the native handle (#28985). Keyed by the unique `done` channel so it never
+	// overwrites another generation's signal; cleared after destruction. destroyFailedLoad (not
+	// Destroy) preserves the failed-load path's deliberate skip of the key-wide invalidation hook.
+	done := make(chan struct{})
+	c.evictInFlight.Store(done, key)
+	defer c.finishEviction(done)
 	if c.IndexMap.CompareAndDelete(key, algo) {
 		algo.destroyFailedLoad()
 	}
+}
+
+// algoEmptyGeneration reports a freshly loaded generation the cache should NOT retain: one
+// that holds no searchable vectors. Each algorithm defines that for its own layout --
+// fulltext2: no tag=0 base and no tag=1 cdc_tail (the transient copy-alter init window before
+// the REINDEX builds the base, or an empty table); ivfflat: the NULL-vector centroid
+// placeholder only; hnsw: no populated model; ivfpq/cagra: no sub-index and no CDC overflow.
+// An algorithm that does not implement the optional interface is cached as before. Callers
+// must hold the entry's read lock: it reads algo.Algo state that DestroyWithReason mutates
+// under the write lock.
+func algoEmptyGeneration(algo *VectorIndexSearch) bool {
+	e, ok := algo.Algo.(interface{ EmptyGeneration() bool })
+	return ok && e.EmptyGeneration()
+}
+
+// retireEmptyGeneration drops a just-loaded generation that reports no searchable vectors, so the
+// next query reloads and picks up the vectors once the build writes them under the same
+// generation. Only the LOADER retires it: a caller that found the entry already resident is
+// looking at another caller's generation, and a concurrent reader already completed on it.
+//
+// Called on BOTH the success and the post-load error path. An error after Load must retire it
+// too: the loader is the only one who ever would, a later query finds the entry resident and
+// skips this, and ivfflat has no IsStale -- so one failed entries scan during the async-build
+// window would pin bucket-1 routing for as long as traffic keeps refreshing the TTL (#29011).
+func (c *VectorIndexCache) retireEmptyGeneration(key string, algo *VectorIndexSearch, loaded, emptyGen bool) {
+	if loaded || !emptyGen {
+		return
+	}
+	c.evictEntry(key, algo, "empty-generation")
 }
 
 // house keeping to check expired keys and delete from cache
@@ -528,10 +1134,32 @@ func (c *VectorIndexCache) HouseKeeping() {
 			reason = "generation_changed"
 		}
 		if c.evictEntry(entry.key, entry.algo, reason) {
-			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
+			logutil.Debugf("[veccache] evicted index %s from cache (reason=%s)", entry.key, reason)
 		}
 	}
+	c.refreshAndEnforceCaps()
 	runLifecycleHooks(false)
+}
+
+// refreshAndEnforceCaps runs the cap refresh and its enforcement OFF the lifecycle goroutine,
+// single-flighted like the freshness sweep above.
+//
+// enforceMemoizedCaps reads the catalog, and catalog reads are unbounded in the way that
+// matters here: a slow or unreachable catalog turns each one into a timeout. Running that
+// inline made the ticker goroutine wait for it, and everything that goroutine owns waits too --
+// TTL eviction, lifecycle hooks, and the Stop/SIGTERM path it also serves. Shutdown must not
+// queue behind a catalog.
+//
+// Dropping a tick when one is still running is the right behaviour, not a compromise: the pass
+// is idempotent, and a second one would read exactly what the first is already reading.
+func (c *VectorIndexCache) refreshAndEnforceCaps() {
+	if !c.capRefreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer c.capRefreshing.Store(false)
+		c.gov().enforceMemoizedCaps()
+	}()
 }
 
 // checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
@@ -552,11 +1180,21 @@ func (c *VectorIndexCache) checkStale() {
 		if algo.Status.Load() != STATUS_LOADED {
 			return true // skip loading/errored/destroyed entries
 		}
+		// Snapshot generations are immutable; IsStale compares against the current
+		// generation, which does not apply to them.
+		if k, ok := key.(string); ok && IsSnapshotKey(k) {
+			return true
+		}
 		if sc, ok := algo.Algo.(StaleChecker); ok {
 			entries = append(entries, staleEntry{algo, sc, key})
 		}
 		return true
 	})
+	// Debug-logged every sweep so an operator/test can see the freshness sweep actually running at
+	// the configured cadence (interval override via SetVectorIndexFreshnessInterval); the per-entry
+	// "marking"/"evicted" lines below show what it found and dropped.
+	logutil.Debugf("[veccache] freshness sweep: checking %d loaded stale-checkable entries (ticker=%v)",
+		len(entries), c.staleTickerInterval())
 	for _, e := range entries {
 		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
 		// goroutine (and any resources it pins) alive long after Destroy.
@@ -597,39 +1235,123 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
+			// Measure first, reclaim room for what it will cost, then load. The reclaim
+			// runs in the gap between the two locked sections -- see Preload.
+			if perr := algo.Preload(sqlproc); perr != nil {
+				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return nil, nil, werr
+					}
+					continue
+				}
+				if IsRetryableLoadError(perr) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
+					c.discardFailedLoad(key, algo)
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return nil, nil, werr
+					}
+					continue
+				}
+				c.discardFailedLoad(key, algo)
+				return nil, nil, perr
+			}
+			// Overload: nothing idle left to reclaim, and live queries are not preempted
+			// for an arrival. Refuse before Load allocates anything, tearing this entry
+			// down exactly as a failed load would.
+			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
+			if rerr != nil {
+				c.discardFailedLoad(key, algo)
+				return nil, nil, rerr
+			}
 			// Remove only this exact failed entry, then destroy it without a
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
-			err := algo.Load(sqlproc)
+			// The admission reservation is released on EVERY exit from Load --
+			// success, any failure branch below, or a panic -- because one left
+			// behind holds budget for a load that is not coming.
+			err := func() error {
+				defer release()
+				return algo.Load(sqlproc)
+			}()
 			if err != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return nil, nil, werr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return nil, nil, werr
+					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return nil, nil, err
 			}
+			c.gov().chargeAndEnforce(sqlproc, key, algo)
 		}
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry!
+			if errors.Is(err, errIndexDestroyed) {
+				// The CACHE tore this entry down underneath us -- retry. Gated on the private
+				// sentinel, never on moerr.ErrInvalidState: that code is also raised by an
+				// ALGORITHM for its own reasons, and retrying those spun forever because the
+				// resident entry stayed STATUS_LOADED and in the map, so the next attempt
+				// re-invoked the same failing backend with nothing changed.
+				// Only the LOADER waits: `loaded` means the entry was already resident and
+				// wraps another caller's algo, whose teardown touches nothing of ours, so
+				// waiting would park this query behind a stranger's in-flight search.
+				// evictEntry removes the key from the map BEFORE the blocking Destroy, so the
+				// retry finds it gone and loads afresh.
+				if !loaded && algo.evicting.Load() {
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return nil, nil, werr
+					}
+				} else if cerr := searchCtx(sqlproc).Err(); cerr != nil {
+					return nil, nil, cerr
+				} else if loaded {
+					runtime.Gosched()
+				}
 				continue
 			}
+			// The generation stays behind on a non-retryable error, so retire it here as well
+			// as on the success path -- see retireEmptyGeneration. The error returns no keys,
+			// so nothing aliases the index memory the teardown frees.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return nil, nil, err
 		}
 
+		// Do not retain a generation with no searchable vectors (the transient copy-alter init
+		// window, the ASYNC-build window before the first vectors are committed, or an empty
+		// table): serve its empty result, but evict so the next query reloads and picks up the
+		// vectors once the build writes them under the same generation. The CDC-flush
+		// RemoveIdle still refreshes a NON-empty stale generation. The evicted result is empty,
+		// so its keys alias no index memory the teardown frees.
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return keys, distances, nil
 	}
 }
@@ -639,38 +1361,127 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 // Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			if err := algo.Load(sqlproc); err != nil {
+			if perr := algo.Preload(sqlproc); perr != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return werr
+					}
+					continue
+				}
+				if IsRetryableLoadError(perr) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
+					c.discardFailedLoad(key, algo)
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return werr
+					}
+					continue
+				}
+				c.discardFailedLoad(key, algo)
+				return perr
+			}
+			// See Search: refuse rather than preempt a live query.
+			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
+			if rerr != nil {
+				c.discardFailedLoad(key, algo)
+				return rerr
+			}
+			// Released on every exit from Load; see Search.
+			lerr := func() error {
+				defer release()
+				return algo.Load(sqlproc)
+			}()
+			if err := lerr; err != nil {
+				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return werr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return werr
+					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return err
 			}
+			c.gov().chargeAndEnforce(sqlproc, key, algo)
 		}
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				continue // index destroyed by Remove()/HouseKeeping — retry
+			if errors.Is(err, errIndexDestroyed) {
+				// See Search: the private sentinel only. An ErrInvalidState from
+				// Algo.SearchInto itself is the algorithm's own error and is terminal.
+				// See Search: only the loader waits.
+				if !loaded && algo.evicting.Load() {
+					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
+						return werr
+					}
+				} else if cerr := searchCtx(sqlproc).Err(); cerr != nil {
+					return cerr
+				} else if loaded {
+					runtime.Gosched()
+				}
+				continue
 			}
+			// Retire an empty generation on the error path too -- see Search.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return err
 		}
+		// Do not retain a vector-less generation; see Search. out already holds the (empty)
+		// result and is caller-owned, so the teardown frees nothing it references.
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return nil
 	}
 }
 
 // remove key from cache
+// GetBuildTS returns the source-table coverage (MAX(metadata.build_ts), base + cdc_tail)
+// of the LOADED index generation currently cached under key -- i.e. what a probe issued
+// now would actually search. found is false when no loaded generation is cached (a search
+// would load a fresh one), which the async-index freshness gate treats as "no cached copy
+// to under-serve, proceed". Using the cached generation's own build_ts, rather than the
+// durable metadata, is what keeps a stale warm entry from over-reporting coverage.
+func (c *VectorIndexCache) GetBuildTS(key string) (ts int64, found bool) {
+	v, ok := c.IndexMap.Load(key)
+	if !ok {
+		return 0, false
+	}
+	s, ok := v.(*VectorIndexSearch)
+	if !ok || s.Status.Load() != STATUS_LOADED {
+		return 0, false
+	}
+	// Read the entry's published atomic, never s.Algo: a concurrent eviction may be tearing
+	// the algorithm down. captureSize published buildTS under the entry lock before the
+	// STATUS_LOADED store this read observed.
+	return s.buildTS.Load(), true
+}
+
 // Remove drops a cached index by key so the next Search reloads it. Callers use
 // it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
 // stale. It is LOCAL to this process — a prompt local optimization only; cross-CN
@@ -684,6 +1495,62 @@ func (c *VectorIndexCache) Remove(key string) {
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
+}
+
+// RemoveIdle drops the cached entry for key ONLY if no search is in flight on it,
+// so the next Search reloads the post-append generation. Unlike Remove it never
+// evicts a busy entry: a concurrent reader keeps the warm object and RemoveIdle
+// returns false, deferring the refresh to a later idle moment (or the pull-based
+// IsStale sweep). Called on a CDC/ISCP append where staleness is tolerable but a
+// forced evict on every flush would thrash concurrent readers. Current entry only
+// — an append does not invalidate a snapshot generation (see RemoveAllGenerations).
+func (c *VectorIndexCache) RemoveIdle(key, reason string) bool {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok {
+		return false
+	}
+	return c.evictIdleEntry(key, algo, reason)
+}
+
+// RemoveAllGenerations drops the index's CURRENT entry and every named-snapshot generation of
+// it. For DDL only -- CREATE, DROP INDEX, DROP TABLE, DROP DATABASE -- where the index table
+// itself is going away or being rebuilt, so its history is no longer readable.
+//
+// Snapshot generations are keyed "<index table>@<physical>-<logical>", which no exact-key evict
+// matches, and the staleness sweep deliberately skips them (a snapshot generation is immutable,
+// so it is never "stale"). Without this a drop leaves every historical generation resident until
+// its TTL expires -- pinning VRAM for the cuVS algorithms, and charging bytes to
+// max_index_cache_size for an index that no longer exists.
+//
+// It is deliberately NOT what Remove does. Remove is called on every ordinary CDC/ISCP append
+// (see each algorithm's sync.go), and an append does not invalidate a snapshot: the generation
+// is a read AT A PAST TIMESTAMP, whose contents the new rows cannot change. Clearing history
+// from the append path threw away every snapshot generation on every flush, so a workload that
+// both writes and reads snapshots reloaded them continuously.
+func (c *VectorIndexCache) RemoveAllGenerations(key, reason string) {
+	c.RemoveWithReason(key, reason)
+	if !IsSnapshotKey(key) {
+		c.removeSnapshotGenerations(key, reason)
+	}
+}
+
+// removeSnapshotGenerations evicts every named-snapshot generation of one index table.
+func (c *VectorIndexCache) removeSnapshotGenerations(indexTable, reason string) {
+	prefix := indexTable + snapshotKeySep
+	var keys []string
+	c.IndexMap.Range(func(key, _ any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+		return true
+	})
+	for _, k := range keys {
+		c.evictEntry(k, nil, reason)
+	}
 }
 
 // RemovePrefix removes every cached index whose key starts with prefix.

@@ -1,0 +1,22 @@
+-- #28854: percentile aggregates must use the SQL ORDER BY NaN relation.
+drop database if exists issue_28854_percentile_nan;
+create database issue_28854_percentile_nan;
+use issue_28854_percentile_nan;
+create table issue_28854_percentile_nan(v double);
+insert into issue_28854_percentile_nan values
+    (-1), (0), (1), (cast('NaN' as double));
+
+select approx_percentile(v, 0) as approx_p0,
+       approx_percentile(v, 0.5) as approx_p50,
+       approx_percentile(v, 1) as approx_p100,
+       median(v) as median_x
+from issue_28854_percentile_nan;
+
+select approx_percentile(0.5) within group (order by v desc) as approx_desc_p50,
+       percentile_cont(0) within group (order by v) as exact_p0,
+       percentile_cont(0.5) within group (order by v) as exact_p50,
+       percentile_cont(0) within group (order by v desc) as exact_desc_p0,
+       percentile_cont(0.5) within group (order by v desc) as exact_desc_p50
+from issue_28854_percentile_nan;
+
+drop database issue_28854_percentile_nan;

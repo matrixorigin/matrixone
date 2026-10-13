@@ -20,12 +20,21 @@ import "strings"
 type Insert struct {
 	statementImpl
 	Table TableExpr
+	// TargetDatabaseName and TargetTableName preserve the user-visible target
+	// identity even when resolution rewrites Table to a temporary physical name.
+	TargetDatabaseName Identifier
+	TargetTableName    Identifier
 
-	Accounts          IdentifierList
-	PartitionNames    IdentifierList
-	PartitionValues   PartitionValues
-	Columns           IdentifierList
-	Rows              *Select
+	Accounts        IdentifierList
+	PartitionNames  IdentifierList
+	PartitionValues PartitionValues
+	Columns         IdentifierList
+	ColumnNames     []*UnresolvedName
+	Rows            *Select
+	// Ignore keeps INSERT's error-conversion policy independent from the
+	// duplicate-key action.  In particular, INSERT IGNORE ... ON DUPLICATE KEY
+	// UPDATE must still carry the ordered UPDATE expressions.
+	Ignore            bool
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
 	IsRestore         bool
@@ -40,7 +49,7 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
-	ignore := len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil
+	ignore := node.IsIgnore()
 	if node.Overwrite {
 		ctx.WriteString("insert overwrite ")
 	} else if ignore {
@@ -60,7 +69,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 
-	if node.Columns != nil {
+	if node.ColumnNames != nil {
+		ctx.WriteString(" (")
+		formatUnresolvedNames(ctx, node.ColumnNames)
+		ctx.WriteByte(')')
+	} else if node.Columns != nil {
 		ctx.WriteString(" (")
 		node.Columns.Format(ctx)
 		ctx.WriteByte(')')
@@ -74,9 +87,10 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
-	if len(node.OnDuplicateUpdate) > 0 && !ignore {
+	updates := node.GetOnDuplicateUpdate()
+	if len(updates) > 0 {
 		ctx.WriteString(" on duplicate key update ")
-		node.OnDuplicateUpdate.Format(ctx)
+		updates.Format(ctx)
 	}
 	if node.HasReturning() {
 		ctx.WriteString(" returning ")
@@ -85,6 +99,24 @@ func (node *Insert) Format(ctx *FmtCtx) {
 }
 
 func (node *Insert) HasReturning() bool { return len(node.Returning) > 0 }
+
+// IsIgnore reports the statement-level INSERT IGNORE policy.  The nil update
+// sentinel is retained as a read-only compatibility fallback for callers that
+// construct pre-28159 ASTs directly; the parser no longer emits it.
+func (node *Insert) IsIgnore() bool {
+	return node != nil && (node.Ignore ||
+		(len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil))
+}
+
+// GetOnDuplicateUpdate returns only executable ODKU assignments.  The former
+// [nil] sentinel represented INSERT IGNORE/ON DUPLICATE KEY IGNORE and must not
+// be interpreted as an UPDATE list by planners or prepared-statement binders.
+func (node *Insert) GetOnDuplicateUpdate() UpdateExprs {
+	if node == nil || (len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil) {
+		return nil
+	}
+	return node.OnDuplicateUpdate
+}
 
 func (node *Insert) GetStatementType() string { return "Insert" }
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }
@@ -99,8 +131,23 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 }
 
 type Assignment struct {
-	Column Identifier
-	Expr   Expr
+	Column     Identifier
+	ColumnName *UnresolvedName
+	Expr       Expr
+}
+
+type InsertColumns struct {
+	Identifiers IdentifierList
+	Names       []*UnresolvedName
+}
+
+func formatUnresolvedNames(ctx *FmtCtx, names []*UnresolvedName) {
+	for i, name := range names {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		name.Format(ctx)
+	}
 }
 
 type InsertPartitionClause struct {

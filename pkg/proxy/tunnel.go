@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -148,6 +149,11 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
+	// cacheIdentityChanged permanently disables cache publication for this
+	// tunnel generation after a command changes the authenticated principal.
+	// COM_CHANGE_USER and SET ROLE alter CN-side identity that ResetSession does
+	// not reconstruct from the original handshake.
+	cacheIdentityChanged atomic.Bool
 	// requestBoundary is the authoritative request/response ownership state.
 	// It deliberately becomes permanently unsafe for this tunnel generation if
 	// a client pipelines commands: the MySQL command protocol is sequential and
@@ -157,9 +163,29 @@ type tunnel struct {
 		inFlight                 bool
 		ambiguous                bool
 		command                  frontend.CommandType
+		statementID              uint32
+		statementIDValid         bool
+		requestContinuation      bool
+		responseContinuation     bool
+		responseNextSequence     byte
+		localInfileUpload        bool
+		requestNextSequence      byte
 		phase                    responsePhase
 		legacyResultEOFSeen      bool
 		prepareMetadataRemaining uint32
+		// pendingLongData records whether a later backend response has fenced
+		// each statement's most recent COM_STMT_SEND_LONG_DATA. An unfenced
+		// entry cannot be reconciled through the query service because the
+		// no-response command may still be waiting on the SQL socket.
+		pendingLongData  map[uint32]bool
+		closedStatements map[string]struct{}
+		// The maps above stay bounded. Overflow is recoverable because a later
+		// terminal response fences every earlier no-response command. Unknown
+		// long-data state additionally requires an authoritative CN check before
+		// migration, since the response proves delivery but not consumption.
+		closedStatementsOverflow      bool
+		pendingLongDataOverflow       bool
+		pendingLongDataOverflowFenced bool
 	}
 	clientDeprecatesEOF bool
 
@@ -339,6 +365,16 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
+func (t *tunnel) markCacheIdentityChanged() {
+	if t != nil {
+		t.cacheIdentityChanged.Store(true)
+	}
+}
+
+func (t *tunnel) hasCacheIdentityChanged() bool {
+	return t != nil && t.cacheIdentityChanged.Load()
+}
+
 type responsePhase uint8
 
 const (
@@ -348,36 +384,156 @@ const (
 	responsePhasePrepareMetadata
 )
 
-func commandHasNoResponse(cmd frontend.CommandType) bool {
-	return cmd == frontend.COM_QUIT ||
-		cmd == frontend.COM_STMT_SEND_LONG_DATA ||
-		cmd == frontend.COM_STMT_CLOSE
+const maxTrackedStatementIDs = 1024
+
+type clientRequestCommit struct {
+	closedStatementID uint32
+	closesStatement   bool
 }
 
-func (t *tunnel) trackClientRequest(msg []byte) {
-	msg = firstMySQLPacketPrefix(msg)
-	if t == nil || len(msg) < preRecvLen || msg[3] != 0 {
-		return
+func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
+	var commit clientRequestCommit
+	if t == nil {
+		return commit
 	}
-	cmd := frontend.CommandType(msg[4])
-	if commandHasNoResponse(cmd) {
-		return
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < mysqlHeadLen {
+		return commit
 	}
 
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	if t.requestBoundary.inFlight {
+	s := &t.requestBoundary
+	if s.localInfileUpload {
+		if msg[3] != s.requestNextSequence {
+			s.ambiguous = true
+			return commit
+		}
+		s.requestNextSequence++
+		if mysqlPacketPayloadLength(msg) == 0 {
+			s.localInfileUpload = false
+		}
+		return commit
+	}
+	if s.requestContinuation {
+		if msg[3] != s.requestNextSequence {
+			s.ambiguous = true
+			return commit
+		}
+		s.requestNextSequence++
+		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
+			s.requestContinuation = false
+		}
+		return commit
+	}
+	if msg[3] != 0 {
+		// A non-zero sequence is safe only in one of the explicitly tracked
+		// multi-packet request phases above. The CN packet reader does not reject
+		// an otherwise unexpected sequence, so ignoring it here could let a
+		// second command execute without owning a tracked response.
+		s.ambiguous = true
+		return commit
+	}
+	if len(msg) < preRecvLen || mysqlPacketPayloadLength(msg) < 1 {
+		s.ambiguous = true
+		return commit
+	}
+	if s.inFlight {
 		// MySQL commands are sequential. Once a peer pipelines two commands we
 		// keep this generation non-cacheable instead of retaining an unbounded
 		// command queue or guessing which response belongs to which request.
-		t.requestBoundary.ambiguous = true
+		s.ambiguous = true
+		return commit
+	}
+	if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		s.requestContinuation = true
+		s.requestNextSequence = 1
+	}
+
+	cmd := frontend.CommandType(msg[4])
+	switch cmd {
+	case frontend.COM_QUIT:
+		return commit
+	case frontend.COM_CHANGE_USER:
+		// COM_CHANGE_USER carries a new authenticated principal and database.
+		// The backend generation cannot be safely reconstructed by ResetSession,
+		// so never publish it to the cache after this command is observed.
+		t.cacheIdentityChanged.Store(true)
+	case frontend.COM_STMT_SEND_LONG_DATA:
+		if mysqlPacketPayloadLength(msg) < 7 || len(msg) < mysqlHeadLen+7 {
+			s.ambiguous = true
+			return commit
+		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		if s.pendingLongData == nil {
+			s.pendingLongData = make(map[uint32]bool)
+		}
+		if _, ok := s.pendingLongData[statementID]; !ok {
+			if len(s.pendingLongData) >= maxTrackedStatementIDs {
+				s.pendingLongDataOverflow = true
+				s.pendingLongDataOverflowFenced = false
+				return commit
+			}
+		}
+		// Repeated chunks start a new unfenced generation too. A response that
+		// preceded this chunk says nothing about whether the backend received it.
+		s.pendingLongData[statementID] = false
+		return commit
+	case frontend.COM_STMT_CLOSE:
+		if mysqlPacketPayloadLength(msg) < 5 || len(msg) < mysqlHeadLen+5 {
+			s.ambiguous = true
+			return commit
+		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		s.inFlight = true
+		s.command = cmd
+		s.statementID = statementID
+		s.statementIDValid = true
+		commit.closedStatementID = statementID
+		commit.closesStatement = true
+		return commit
+	}
+
+	s.inFlight = true
+	s.command = cmd
+	s.statementIDValid = false
+	if (cmd == frontend.COM_STMT_EXECUTE || cmd == frontend.COM_STMT_RESET) &&
+		mysqlPacketPayloadLength(msg) >= 5 && len(msg) >= mysqlHeadLen+5 {
+		s.statementID = binary.LittleEndian.Uint32(msg[5:9])
+		s.statementIDValid = true
+	}
+	s.phase = responsePhaseFirst
+	s.legacyResultEOFSeen = false
+	s.prepareMetadataRemaining = 0
+	return commit
+}
+
+func (t *tunnel) commitClientRequest(commit clientRequestCommit) {
+	if t == nil || !commit.closesStatement {
 		return
 	}
-	t.requestBoundary.inFlight = true
-	t.requestBoundary.command = cmd
-	t.requestBoundary.phase = responsePhaseFirst
-	t.requestBoundary.legacyResultEOFSeen = false
-	t.requestBoundary.prepareMetadataRemaining = 0
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.ambiguous ||
+		!t.requestBoundary.inFlight ||
+		t.requestBoundary.command != frontend.COM_STMT_CLOSE ||
+		!t.requestBoundary.statementIDValid ||
+		t.requestBoundary.statementID != commit.closedStatementID {
+		return
+	}
+	if t.requestBoundary.closedStatements == nil {
+		t.requestBoundary.closedStatements = make(map[string]struct{})
+	}
+	statementName := frontend.GetPrepareStmtName(commit.closedStatementID)
+	if _, ok := t.requestBoundary.closedStatements[statementName]; !ok {
+		if len(t.requestBoundary.closedStatements) >= maxTrackedStatementIDs {
+			t.requestBoundary.closedStatementsOverflow = true
+		} else {
+			t.requestBoundary.closedStatements[statementName] = struct{}{}
+		}
+	}
+	delete(t.requestBoundary.pendingLongData, commit.closedStatementID)
+	t.resetTrackedRequestLocked()
 }
 
 func (t *tunnel) hasInFlightClientRequest() bool {
@@ -389,17 +545,213 @@ func (t *tunnel) hasInFlightClientRequest() bool {
 	return t.requestBoundary.inFlight
 }
 
-func (t *tunnel) finishTrackedResponseLocked(status uint16) {
+func (t *tunnel) hasUnsafeClientState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight ||
+		t.requestBoundary.requestContinuation ||
+		t.requestBoundary.localInfileUpload ||
+		t.requestBoundary.ambiguous ||
+		t.requestBoundary.closedStatementsOverflow ||
+		t.requestBoundary.pendingLongDataOverflow ||
+		len(t.requestBoundary.pendingLongData) > 0 ||
+		len(t.requestBoundary.closedStatements) > 0
+}
+
+// hasFenceableClosedStatementState reports whether the only remaining unsafe
+// client state is a completed COM_STMT_CLOSE. A successful COM_PING on the same
+// backend socket fences every packet sent before it, including an overflowed
+// close tombstone set. Other protocol states remain non-cacheable.
+func (t *tunnel) hasFenceableClosedStatementState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.inFlight || s.requestContinuation || s.localInfileUpload || s.ambiguous ||
+		s.pendingLongDataOverflow || len(s.pendingLongData) > 0 {
+		return false
+	}
+	return s.closedStatementsOverflow || len(s.closedStatements) > 0
+}
+
+// completeClosedStatementFence clears only state proven delivered by the
+// same-backend PING. It deliberately leaves every other protocol state intact.
+func (t *tunnel) completeClosedStatementFence() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
+}
+
+func (t *tunnel) hasUntransferableClientState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.inFlight || t.requestBoundary.requestContinuation ||
+		t.requestBoundary.localInfileUpload ||
+		t.requestBoundary.ambiguous ||
+		t.requestBoundary.closedStatementsOverflow ||
+		(t.requestBoundary.pendingLongDataOverflow &&
+			!t.requestBoundary.pendingLongDataOverflowFenced) {
+		return true
+	}
+	for _, fenced := range t.requestBoundary.pendingLongData {
+		if !fenced {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectPendingLongDataReconciliation makes the current staged-data
+// generation non-transferable again after the old CN reports that it still
+// owns binary parameter data. A later backend response may fence a subsequent
+// SQL EXECUTE, RESET, DEALLOCATE, or PREPARE transition and permit another
+// authoritative reconciliation attempt.
+func (t *tunnel) rejectPendingLongDataReconciliation() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	for statementID := range t.requestBoundary.pendingLongData {
+		t.requestBoundary.pendingLongData[statementID] = false
+	}
+	if t.requestBoundary.pendingLongDataOverflow {
+		t.requestBoundary.pendingLongDataOverflowFenced = false
+	}
+}
+
+// acceptPendingLongDataSnapshot verifies that every staged-data generation is
+// fenced by a later SQL-socket response and that the exporting CN understands
+// the authoritative pending-data check. The capability check keeps rolling
+// upgrades fail-closed when a new proxy is paired with an older CN.
+func (t *tunnel) acceptPendingLongDataSnapshot(checked bool) bool {
+	if t == nil {
+		return true
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if len(t.requestBoundary.pendingLongData) == 0 &&
+		!t.requestBoundary.pendingLongDataOverflow {
+		return true
+	}
+	if !checked {
+		return false
+	}
+	for _, fenced := range t.requestBoundary.pendingLongData {
+		if !fenced {
+			return false
+		}
+	}
+	return true
+}
+
+func (t *tunnel) filterClosedStatementsForMigration(stmts []*query.PrepareStmt) []*query.PrepareStmt {
+	if t == nil {
+		return stmts
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if len(t.requestBoundary.closedStatements) == 0 {
+		return stmts
+	}
+	filtered := stmts[:0]
+	for _, stmt := range stmts {
+		if stmt == nil {
+			filtered = append(filtered, stmt)
+			continue
+		}
+		if _, closed := t.requestBoundary.closedStatements[stmt.Name]; !closed {
+			filtered = append(filtered, stmt)
+		}
+	}
+	return filtered
+}
+
+func (t *tunnel) clearMigratedStatementState() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
+	clear(t.requestBoundary.pendingLongData)
+	t.requestBoundary.closedStatementsOverflow = false
+	t.requestBoundary.pendingLongDataOverflow = false
+	t.requestBoundary.pendingLongDataOverflowFenced = false
+}
+
+func (t *tunnel) resetTrackedRequestLocked() {
+	// Do not clear the framing substates here. A no-response command can commit
+	// after its first MaxPayload packet; its continuation must keep migration
+	// gated until the final packet is forwarded. A valid backend response only
+	// arrives after both substates have already closed.
+	t.requestBoundary.inFlight = false
+	t.requestBoundary.command = 0
+	t.requestBoundary.statementID = 0
+	t.requestBoundary.statementIDValid = false
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.responseContinuation = false
+	t.requestBoundary.responseNextSequence = 0
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
+}
+
+// finishLocallyConsumedRequest closes only the proxy-owned request boundary.
+// Unlike a backend response, a local KILL or UPGRADE completion does not prove
+// that the CN has processed earlier no-response statement commands.
+func (t *tunnel) finishLocallyConsumedRequest() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.inFlight && !t.requestBoundary.ambiguous {
+		t.resetTrackedRequestLocked()
+	}
+}
+
+func (t *tunnel) finishTrackedResponseLocked(status uint16, successful bool) {
 	if status&frontend.SERVER_MORE_RESULTS_EXISTS != 0 {
 		t.requestBoundary.phase = responsePhaseFirst
 		t.requestBoundary.legacyResultEOFSeen = false
 		return
 	}
-	t.requestBoundary.inFlight = false
-	t.requestBoundary.command = 0
-	t.requestBoundary.phase = responsePhaseFirst
-	t.requestBoundary.legacyResultEOFSeen = false
-	t.requestBoundary.prepareMetadataRemaining = 0
+	if t.requestBoundary.statementIDValid {
+		switch t.requestBoundary.command {
+		case frontend.COM_STMT_EXECUTE:
+			delete(t.requestBoundary.pendingLongData, t.requestBoundary.statementID)
+		case frontend.COM_STMT_RESET:
+			if successful {
+				delete(t.requestBoundary.pendingLongData, t.requestBoundary.statementID)
+			}
+		}
+	}
+	// A terminal response is a causal fence for every earlier no-response
+	// command on this MySQL connection. CLOSE tombstones are no longer needed:
+	// the old CN snapshot now reflects the close and any same-name SQL PREPARE
+	// that followed it. Staged long data becomes eligible for authoritative
+	// reconciliation by MigrateConnFrom, but remains unsafe for connection cache.
+	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
+	for statementID := range t.requestBoundary.pendingLongData {
+		t.requestBoundary.pendingLongData[statementID] = true
+	}
+	if t.requestBoundary.pendingLongDataOverflow {
+		t.requestBoundary.pendingLongDataOverflowFenced = true
+	}
+	t.resetTrackedRequestLocked()
 }
 
 func (t *tunnel) trackServerResponse(msg []byte) {
@@ -407,7 +759,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		return
 	}
 	msg = firstMySQLPacketPrefix(msg)
-	if len(msg) < preRecvLen {
+	if len(msg) < mysqlHeadLen {
 		return
 	}
 	t.requestBoundary.Lock()
@@ -416,8 +768,38 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 	if !s.inFlight || s.ambiguous {
 		return
 	}
+	if s.requestContinuation || s.localInfileUpload {
+		// A backend response cannot complete while the corresponding client
+		// request is still being framed or uploaded. Keep this generation
+		// permanently non-transferable rather than guessing packet ownership.
+		s.ambiguous = true
+		return
+	}
+	// MySQL splits one logical response packet into MaxPayloadSize wire
+	// packets followed by a shorter (possibly empty) continuation. A short
+	// continuation can have exactly the shape of an EOF/OK/ERR packet, but it
+	// is still row data. Do not interpret any fragment as a response boundary.
+	if s.responseContinuation {
+		if msg[3] != s.responseNextSequence {
+			s.ambiguous = true
+			return
+		}
+		s.responseNextSequence++
+		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
+			s.responseContinuation = false
+		}
+		return
+	}
+	if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		s.responseContinuation = true
+		s.responseNextSequence = msg[3] + 1
+		return
+	}
+	if len(msg) < preRecvLen {
+		return
+	}
 	if isErrPacket(msg) {
-		t.finishTrackedResponseLocked(0)
+		t.finishTrackedResponseLocked(0, false)
 		return
 	}
 
@@ -427,18 +809,18 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			s.prepareMetadataRemaining--
 		}
 		if s.prepareMetadataRemaining == 0 {
-			t.finishTrackedResponseLocked(0)
+			t.finishTrackedResponseLocked(0, true)
 		}
 		return
 	case responsePhaseLocalInfile:
 		if status, ok := okPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		}
 		return
 	case responsePhaseResult:
 		if t.clientDeprecatesEOF {
 			if status, ok := eofOKPacketStatus(msg); ok {
-				t.finishTrackedResponseLocked(status)
+				t.finishTrackedResponseLocked(status, true)
 			}
 			return
 		}
@@ -447,10 +829,18 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			return
 		}
 		if !s.legacyResultEOFSeen {
+			// Cursor EXECUTE has no row stream: its sole EOF follows the column
+			// definitions and carries CURSOR_EXISTS. Ordinary result sets still
+			// have a second EOF after their rows.
+			if s.command == frontend.COM_STMT_EXECUTE &&
+				status&frontend.SERVER_STATUS_CURSOR_EXISTS != 0 {
+				t.finishTrackedResponseLocked(status, true)
+				return
+			}
 			s.legacyResultEOFSeen = true
 			return
 		}
-		t.finishTrackedResponseLocked(status)
+		t.finishTrackedResponseLocked(status, true)
 		return
 	}
 
@@ -459,37 +849,74 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		if !ok {
 			return
 		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		delete(s.closedStatements, frontend.GetPrepareStmtName(statementID))
 		if remaining == 0 {
-			t.finishTrackedResponseLocked(0)
+			t.finishTrackedResponseLocked(0, true)
 		} else {
 			s.phase = responsePhasePrepareMetadata
 			s.prepareMetadataRemaining = remaining
 		}
 		return
 	}
+	if s.command == frontend.COM_STMT_FETCH {
+		// FETCH returns binary rows without a result-set header. A row can
+		// begin with 0x00 and look like an OK packet, so only its actual EOF
+		// terminator may complete this response.
+		if status, ok := legacyEOFPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		} else if status, ok := eofOKPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		}
+		return
+	}
 	if status, ok := okPacketStatus(msg); ok {
-		t.finishTrackedResponseLocked(status)
+		t.finishTrackedResponseLocked(status, true)
 		return
 	}
 	if s.command == frontend.COM_STATISTICS {
-		t.finishTrackedResponseLocked(0)
+		t.finishTrackedResponseLocked(0, true)
 		return
 	}
-	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
+	if s.command == frontend.COM_FIELD_LIST {
 		if status, ok := legacyEOFPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		} else if status, ok := eofOKPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		}
 		return
 	}
 	if isLoadDataLocalInfileRespPacket(msg) {
 		s.phase = responsePhaseLocalInfile
+		s.localInfileUpload = true
+		s.requestNextSequence = msg[3] + 1
 		return
 	}
 	// All other first packets begin a result set. Its terminal packet depends
 	// on CLIENT_DEPRECATE_EOF; row packets cannot release request ownership.
 	s.phase = responsePhaseResult
+}
+
+// FETCH binary rows can also resemble OK packets to the independent
+// transaction-status parser. Only a FETCH terminator supplies server status.
+func (t *tunnel) responseMayCarryTxnStatus(msg []byte) bool {
+	if t == nil {
+		return true
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.responseContinuation || mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		return false
+	}
+	if !s.inFlight || s.command != frontend.COM_STMT_FETCH {
+		return true
+	}
+	if _, ok := legacyEOFPacketStatus(msg); ok {
+		return true
+	}
+	_, ok := eofOKPacketStatus(msg)
+	return ok
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -609,14 +1036,21 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	return nil
 }
 
-// canStartTransfer checks whether the transfer can be started.
-func (t *tunnel) canStartTransfer(sync bool) bool {
+// admitTransfer atomically checks transfer eligibility and closes the client
+// publication gate. For synchronous migration, the returned c2s pipe owns the
+// gate until finishSyncTransfer is called. Asynchronous migration uses the
+// existing paused-pipe lifecycle instead.
+func (t *tunnel) admitTransfer(sync bool) (*pipe, bool) {
+	return t.admitTransferWithGate(sync, nil)
+}
+
+func (t *tunnel) admitTransferWithGate(sync bool, prearmed *pipe) (*pipe, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// The tunnel has not started.
 	if t.mu.closed || !t.mu.started {
-		return false
+		return nil, false
 	}
 
 	csp, scp := t.mu.csp, t.mu.scp
@@ -625,24 +1059,41 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer csp.mu.Unlock()
 	defer scp.mu.Unlock()
 
-	// The last message must be from server to client.
-	if scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime) {
-		t.logger.Info("reason: client packet is after server packet")
-		return false
+	gateOwned := sync && prearmed == csp && csp.mu.syncTransferDone != nil
+	if prearmed != nil && !gateOwned {
+		return nil, false
+	}
+	if csp.mu.paused || scp.mu.paused {
+		return nil, false
+	}
+	if csp.clientMessageActive.Load() ||
+		(csp.mu.syncTransferDone != nil && !gateOwned) {
+		t.logger.Info("reason: client message publication is active")
+		return nil, false
+	}
+	if t.hasUntransferableClientState() {
+		t.logger.Info("reason: client protocol state is not transferable")
+		return nil, false
+	}
+	if t.hasExpectedClientQuit() {
+		t.logger.Info("reason: client connection is terminating")
+		return nil, false
 	}
 
 	// We are now in a transaction.
 	if !scp.safeToTransferLocked() {
 		t.logger.Info("reason: txn status is true")
-		return false
+		return nil, false
 	}
 
-	if !sync {
+	if sync && !gateOwned {
+		csp.mu.syncTransferDone = make(chan struct{})
+	} else if !sync {
 		csp.mu.paused = true
 		scp.mu.paused = true
 	}
 
-	return true
+	return csp, true
 }
 
 func (t *tunnel) setTransferIntent(i bool) {
@@ -726,7 +1177,7 @@ func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 func (t *tunnel) transfer(ctx context.Context) error {
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(false); !ok {
+	if _, ok := t.admitTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
 		typ := t.getTransferType()
 		t.finishTransferAttempt()
@@ -768,14 +1219,25 @@ func (t *tunnel) transfer(ctx context.Context) error {
 }
 
 func (t *tunnel) transferSync(ctx context.Context) error {
+	return t.transferSyncWithGate(ctx, nil)
+}
+
+func (t *tunnel) transferSyncWithGate(ctx context.Context, gate *pipe) error {
+	if gate != nil {
+		defer gate.finishSyncTransfer()
+	}
 	if ok := t.tryStartTransferAttempt(); !ok {
 		t.logger.Info("tunnel is already in transfer, skip sync transfer")
 		return nil
 	}
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(true); !ok {
+	csp, ok := t.admitTransferWithGate(true, gate)
+	if !ok {
 		t.finishTransferAttempt()
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if gate == nil {
+		defer csp.finishSyncTransfer()
 	}
 	start := time.Now()
 	defer t.finishTransfer(start)
@@ -871,9 +1333,14 @@ type pipe struct {
 	src *MySQLConn
 	dst *MySQLConn
 
-	// this value do not need in mutex as it is read and write in
-	// a single goroutine.
-	transferred bool
+	// syncTransferArmed is owned by the s2c goroutine. It records that c2s has
+	// closed its publication gate for the next synchronous transfer attempt.
+	syncTransferArmed bool
+	// clientMessageActive covers the interval after c2s claims a buffered
+	// message and before forwarding/local consumption commits. Admission and
+	// the false-to-true transition are serialized by mu; completion only needs
+	// a release store.
+	clientMessageActive atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -890,17 +1357,17 @@ type pipe struct {
 		// inTxn indicates that if the session is in a txn. It only
 		// matters for server end.
 		inTxn bool
-		// Track last cmd time and whether we are in a transaction.
-		lastCmdTime time.Time
+		// syncTransferDone is non-nil while synchronous migration owns the
+		// client publication gate. Closing it releases a waiting c2s pipe.
+		syncTransferDone chan struct{}
 	}
 
 	// tun is the tunnel that the pipe belongs to.
 	tun *tunnel
 
-	wg sync.WaitGroup
-
 	testHelper struct {
-		beforeSend func()
+		beforeSend         func()
+		onSyncTransferWait func()
 	}
 	//id of goroutine that runs the pipe
 	goId int64
@@ -945,6 +1412,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		return false, nil
 	}
 	finish := func() {
+		if p.name == pipeServerToClient && p.syncTransferArmed {
+			p.syncTransferArmed = false
+		}
 		// Best-effort flush of buffered writes before shutting down.
 		if p.src != nil && p.src.msgBuf != nil {
 			_ = p.src.flushBufDst()
@@ -963,8 +1433,14 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var lastSeq int16 = -1
 	var rotated bool
 	var stopAfterSend bool
+	var armSyncTransfer bool
+	var clientCommit clientRequestCommit
+	var clientRequest []byte
 	prepareNextMessage := func() (terminate bool, err error) {
 		stopAfterSend = false
+		armSyncTransfer = false
+		clientCommit = clientRequestCommit{}
+		clientRequest = nil
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -979,15 +1455,19 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}
 		packetSize, re := p.src.preRecv()
 		// A fragmented packet may leave only its four-byte header in the buffer.
-		// c2s needs the command byte for event detection. s2c needs a bounded
-		// prefix containing both length-encoded OK fields and its status flags;
+		// c2s needs the command and prepared-statement identifiers for request
+		// tracking. s2c needs a bounded prefix containing both length-encoded OK
+		// fields and its status flags;
 		// otherwise a fragmented terminal response would never release request
 		// ownership and every later clean QUIT would unnecessarily miss cache.
 		if re == nil && packetSize >= preRecvLen {
-			prefixLen := preRecvLen
+			var prefixLen int
 			if p.name == pipeServerToClient {
 				const responseTrackingPrefixLen = mysqlHeadLen + 1 + 9 + 9 + 2
 				prefixLen = min(packetSize, responseTrackingPrefixLen)
+			} else {
+				const requestTrackingPrefixLen = mysqlHeadLen + 1 + 4 + 2
+				prefixLen = min(packetSize, requestTrackingPrefixLen)
 			}
 			re = p.src.receiveAtLeast(prefixLen)
 		}
@@ -1049,32 +1529,26 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				firstCond = false
 			}
 
-			inTxn, ok := checkTxnStatus(tempBuf, mustOK)
-			if ok {
-				p.mu.inTxn = inTxn
+			if p.tun.responseMayCarryTxnStatus(tempBuf) {
+				inTxn, ok := checkTxnStatus(tempBuf, mustOK)
+				if ok {
+					p.mu.inTxn = inTxn
+				}
 			}
 			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
-				peer.wg.Add(1)
-				p.transferred = true
+				armSyncTransfer = true
 			}
 			if len(tempBuf) > 3 {
 				lastSeq = int16(tempBuf[3])
 			}
-			p.mu.lastCmdTime = time.Now()
 		} else {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
 			}
-			if isCmdQuit(tempBuf) {
-				p.tun.markExpectedClientQuit()
-				stopAfterSend = true
-			}
-			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
-				if !isCmdQuit(tempBuf) {
-					p.tun.trackClientRequest(tempBuf)
-				}
-				p.mu.lastCmdTime = time.Now()
+			if !isEmptyPacket(tempBuf) {
+				clientRequest = tempBuf
+				stopAfterSend = isCmdQuit(tempBuf)
 			}
 		}
 		return false, nil
@@ -1091,22 +1565,51 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	defer finish()
 
 	for ctx.Err() == nil {
-		if p.name == pipeServerToClient && p.transferred {
-			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
+		if p.name == pipeServerToClient && p.syncTransferArmed {
+			if err := p.handleTransferIntent(ctx, peer); err != nil {
 				p.logger.Error("failed to transfer connection", zap.Error(err))
 			}
 		}
 		if terminate, err := prepareNextMessage(); err != nil || terminate {
 			return err
 		}
+		if p.name == pipeServerToClient && armSyncTransfer {
+			p.syncTransferArmed = peer.tryArmSyncTransfer()
+		}
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
 		}
-		// If the server is in transfer, we wait here until the transfer is finished.
-		p.wg.Wait()
+		if p.name == pipeClientToServer {
+			var publish bool
+			clientCommit, publish, err = p.claimClientMessage(
+				ctx, clientRequest, stopAfterSend)
+			if err != nil {
+				return err
+			}
+			if !publish {
+				// Asynchronous migration won the publication boundary. Keep the
+				// packet in the shared client buffer; the replacement c2s pipe will
+				// publish and forward it after migration.
+				return nil
+			}
+		}
 
-		if err = p.src.sendTo(p.dst); err != nil {
+		handled, err := p.src.sendTo(p.dst)
+		if err != nil {
+			if p.name == pipeClientToServer {
+				p.finishClientMessageClaim()
+			}
 			return wrapPipeSendError(p.name, err)
+		}
+		if p.name == pipeClientToServer {
+			if handled {
+				if !stopAfterSend {
+					p.tun.finishLocallyConsumedRequest()
+				}
+			} else {
+				p.tun.commitClientRequest(clientCommit)
+			}
+			p.finishClientMessageClaim()
 		}
 		if stopAfterSend {
 			// COM_QUIT is terminal even when another complete packet is already
@@ -1118,16 +1621,85 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	return ctx.Err()
 }
 
-func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {
-	// If it is not in a txn and transfer intent is true, transfer it sync.
-	if p.tun != nil && p.safeToTransfer() {
-		err := p.tun.transferSync(ctx)
-		// we have set transferred back to false, with "wg.Done()" together.
-		p.transferred = false
-		wg.Done()
-		return err
+// claimClientMessage is the common ownership boundary between c2s and both
+// transfer modes. If c2s wins, clientMessageActive blocks transfer admission
+// until forwarding/local consumption commits. If synchronous transfer wins,
+// c2s waits for the replacement backend. If asynchronous transfer wins, the old
+// pipe leaves the message in the shared buffer for its replacement.
+func (p *pipe) claimClientMessage(
+	ctx context.Context,
+	request []byte,
+	quit bool,
+) (clientRequestCommit, bool, error) {
+	for {
+		p.mu.Lock()
+		if p.mu.paused {
+			p.mu.Unlock()
+			return clientRequestCommit{}, false, nil
+		}
+		if done := p.mu.syncTransferDone; done != nil {
+			onWait := p.testHelper.onSyncTransferWait
+			p.mu.Unlock()
+			if onWait != nil {
+				onWait()
+			}
+			select {
+			case <-done:
+				if err := context.Cause(ctx); err != nil {
+					return clientRequestCommit{}, false, err
+				}
+				continue
+			case <-ctx.Done():
+				return clientRequestCommit{}, false, context.Cause(ctx)
+			}
+		}
+		p.clientMessageActive.Store(true)
+		var commit clientRequestCommit
+		if len(request) > 0 {
+			if quit {
+				p.tun.markExpectedClientQuit()
+			} else {
+				commit = p.tun.trackClientRequest(request)
+			}
+		}
+		p.mu.Unlock()
+		return commit, true, nil
 	}
-	return nil
+}
+
+func (p *pipe) finishClientMessageClaim() {
+	p.clientMessageActive.Store(false)
+}
+
+func (p *pipe) finishSyncTransfer() {
+	p.mu.Lock()
+	if done := p.mu.syncTransferDone; done != nil {
+		p.mu.syncTransferDone = nil
+		close(done)
+	}
+	p.mu.Unlock()
+}
+
+func (p *pipe) tryArmSyncTransfer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mu.closed || p.mu.paused || p.mu.syncTransferDone != nil ||
+		p.clientMessageActive.Load() {
+		return false
+	}
+	p.mu.syncTransferDone = make(chan struct{})
+	return true
+}
+
+func (p *pipe) handleTransferIntent(ctx context.Context, peer *pipe) error {
+	if p.tun == nil {
+		peer.finishSyncTransfer()
+		p.syncTransferArmed = false
+		return nil
+	}
+	err := p.tun.transferSyncWithGate(ctx, peer)
+	p.syncTransferArmed = false
+	return err
 }
 
 // waitReady waits the pip starts up.
@@ -1258,14 +1830,6 @@ func (p *pipe) pause(ctx context.Context) error {
 		p.mu.cond.Wait()
 	}
 	return nil
-}
-
-// safeToTransfer indicates whether it is safe to transfer the session.
-// NB: the pipe MUST be server-to-client pipe.
-func (p *pipe) safeToTransfer() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return !p.mu.inTxn
 }
 
 func (p *pipe) safeToTransferLocked() bool {

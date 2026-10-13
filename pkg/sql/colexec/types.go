@@ -76,15 +76,15 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	// StopSending is a downstream early-stop signal. It owns this remote
-	// pipeline tree, not the query that may still have other active pipelines.
+	// StopSending owns one remote pipeline tree or an unconsumed notify
+	// wait, not the query that may still have other active pipelines.
 	pipelineCancel context.CancelCauseFunc
 
 	isDispatch bool
 	receiver   *process.WrapCs
 }
 
-func (info *runningPipelineInfo) cancelPipeline() {
+func (info *runningPipelineInfo) cancelPipeline(cause error) {
 	// If this was a pipeline responsible for distributing data, we cannot end this
 	// because we are just one of the receivers.
 	if info.isDispatch {
@@ -94,16 +94,17 @@ func (info *runningPipelineInfo) cancelPipeline() {
 
 	} else {
 		if info.pipelineCancel != nil {
-			info.pipelineCancel(nil)
+			info.pipelineCancel(cause)
 		}
 	}
 }
 
 type uuidProcMapItem struct {
-	proc    *process.Process
-	ch      process.RemotePipelineInformationChannel
-	ownerCh process.RemotePipelineInformationChannel
-	state   remoteReceiverRegistryState
+	proc     *process.Process
+	ch       process.RemotePipelineInformationChannel
+	ownerCh  process.RemotePipelineInformationChannel
+	state    remoteReceiverRegistryState
+	terminal *RemoteReceiverTerminal
 }
 
 type remoteReceiverRegistryState uint8
@@ -112,7 +113,7 @@ const (
 	remoteReceiverReady remoteReceiverRegistryState = iota
 	remoteReceiverAttached
 	remoteReceiverClosed
-	remoteReceiverTombstone
+	remoteReceiverFinished
 )
 
 // RemoteReceiverAttachState is the result of an atomic receiver attach lookup.
@@ -125,6 +126,7 @@ const (
 	RemoteReceiverAttachedNow
 	RemoteReceiverAlreadyAttached
 	RemoteReceiverAlreadyClosed
+	RemoteReceiverFinished
 )
 
 type UuidProcMap struct {

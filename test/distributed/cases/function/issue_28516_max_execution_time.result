@@ -1,0 +1,26 @@
+set @@session.max_execution_time = 100;
+select sleep(2);
+Query execution was interrupted, maximum statement execution time exceeded
+set @@session.max_execution_time = 0;
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+set @@session.max_execution_time = 100;
+begin;
+select sleep(2);
+Query execution was interrupted, maximum statement execution time exceeded
+set @@session.max_execution_time = 0;
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+rollback;
+set @@session.max_execution_time = 100;
+prepare issue_28516 from 'select sleep(?)';
+set @duration = 2;
+execute issue_28516 using @duration;
+Query execution was interrupted, maximum statement execution time exceeded
+set @@session.max_execution_time = 0;
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+deallocate prepare issue_28516;

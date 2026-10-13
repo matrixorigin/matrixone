@@ -27,6 +27,8 @@
 #include "cuvs_types.h"
 #include "quantize.hpp"
 #include "helper.h"
+#include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -185,6 +187,7 @@ public:
     using storage_type = T;
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using search_result_t = ivf_pq_search_result_t;
+
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
     using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
@@ -222,9 +225,10 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
-        this->host_ids.reserve(this->count);
+        this->allocate_host_capacity("ivf_pq build", /*with_ids=*/true);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -254,9 +258,10 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
-        this->host_ids.reserve(this->count);
+        this->allocate_host_capacity("ivf_pq build", /*with_ids=*/true);
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -280,6 +285,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->current_offset_ = 0;
     }
@@ -451,6 +458,34 @@ public:
                       << std::endl;
         };
 
+        // WHY THE DATASET IS NEVER UPLOADED
+        // ---------------------------------
+        // Every branch below hands cuVS a raft::host_matrix_view over
+        // flattened_host_dataset rather than copying it to the device first.
+        // cuVS's build is templated on the mdspan accessor
+        // (ivf_pq_build.cuh:1223), so the host view runs the same code with two
+        // differences that are exactly what a large build needs:
+        //
+        //   * sample_rows branches on cudaPointerGetAttributes and gathers the
+        //     k-means trainset ON THE HOST (sample_rows.cuh:47-63), so only the
+        //     trainset is ever uploaded — not the dataset.
+        //   * build_impl ends with detail::extend(dataset.data_handle(), ...)
+        //     (:1374), which streams through utils::batch_load_iterator with a
+        //     batch size that halves until it fits free memory (:1050-1097).
+        //
+        // Measured by cgo/cuvs/test/bench_hostview.cu at dim 960: while the
+        // dataset fits the card the two paths are within noise (+0.8% at 1M),
+        // and peak VRAM drops by the whole dataset (4.94 GB -> 1.35 GB at 1M,
+        // near flat as rows grow). Once the dataset exceeds VRAM the host path
+        // is 2.0x faster. recall@10 is identical at 1.000 across 250k..2.5M.
+        //
+        // Consequence: there is no build dataset left on the device afterwards,
+        // so neither dataset_device_ptr_ nor replicated_datasets_ is populated
+        // here. Both stay declared in index_base.hpp for the algorithms that do
+        // need a resident dataset (cagra keeps its to search). The resets and
+        // erases on the extend paths are now no-ops kept for those algorithms'
+        // symmetry, and the SHARDED post-build clear in build() has nothing left
+        // to free.
         try {
             cuvs::neighbors::ivf_pq::index_params index_params;
             index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -461,19 +496,10 @@ public:
 
             if (this->dist_mode == DistributionMode_REPLICATED) {
                 auto res = handle.get_raft_resources();
-                log_mem("REPLICATED:before-alloc");
-                // Pool-bypass: training matrix is one huge transient allocation that
-                // must not pin the per-device pool's high-water mark. See
-                // matrixone::raw_device_mr() rationale in cuvs_worker.hpp.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(this->count) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-                log_mem("REPLICATED:after-alloc");
-                raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-                raft::resource::sync_stream(*res);
+                // Every device replicates the whole dataset, so each reads the
+                // same host buffer; cuVS uploads only its own trainset.
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
                 log_mem("REPLICATED:before-cuvs-build");
 
                 // Serialize concurrent builds on the same physical device — cuVS
@@ -482,8 +508,21 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build", this->budget_percent());
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("REPLICATED:after-cuvs-build");
 
@@ -492,7 +531,6 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -514,18 +552,11 @@ public:
                           << " start_row=" << start_row << " num_rows=" << num_rows
                           << " bytes_device=" << ((size_t)num_rows * this->dimension * sizeof(T))
                           << std::endl;
-                log_mem("SHARDED:before-alloc");
-                // Pool-bypass training shard — see REPLICATED branch.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(num_rows) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
-                log_mem("SHARDED:after-alloc");
-                raft::copy(*res, dataset_device,
-                           raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
-                raft::resource::sync_stream(*res);
+                // This rank's slice of the shared host buffer. Ranks read disjoint
+                // ranges of one immutable buffer, so no copy and no coordination.
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data() + (start_row * this->dimension),
+                    (int64_t)num_rows, (int64_t)this->dimension);
                 log_mem("SHARDED:before-cuvs-build");
 
                 // Serialize concurrent builds on the same physical device — cuVS
@@ -534,8 +565,30 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    // SHARDED claims THIS SHARD, not the logical index. rows_fitting()
+                    // returns min_rows * distinct_devices for SHARDED (index_cost.hpp), so
+                    // this->count is the N-card total while this rank only ever builds its
+                    // own num_rows slice. Claiming the total against one card's budget
+                    // refuses every SHARDED build that is sized to fill the cards -- two
+                    // 27 GiB shards make a 54 GiB count, and each rank asked its own 27 GiB
+                    // budget to admit 54. Taken from the view so the claim cannot drift
+                    // from what is actually built. REPLICATED and SINGLE_GPU keep
+                    // this->count: they each hold the whole index.
+                    const size_t peak = this->build_peak_bytes(dataset_host.extent(0));
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build", this->budget_percent());
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("SHARDED:after-cuvs-build");
 
@@ -544,31 +597,29 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else {
                 // Do all GPU work outside the lock — holding shared_mutex across GPU calls
                 // would block concurrent readers for the entire build duration.
                 auto res = handle.get_raft_resources();
-                log_mem("SINGLE_GPU:before-alloc");
-                // Pool-bypass training matrix — see REPLICATED branch.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(this->count) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-                log_mem("SINGLE_GPU:after-alloc");
-                raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-                raft::resource::sync_stream(*res);
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
                 log_mem("SINGLE_GPU:before-cuvs-build");
 
                 std::unique_ptr<ivf_pq_index> new_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // See the REPLICATED site: max(kmeans trainset, PQ codes),
+                        // released when this scope ends -- before handle.sync()
+                        // waits on the compute.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build", this->budget_percent());
+                    }
                     new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("SINGLE_GPU:after-cuvs-build");
 
@@ -578,7 +629,6 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     index_ = std::move(new_idx);
-                    this->dataset_device_ptr_ = std::move(dataset_storage);
                 }
             }
         } catch (const std::exception& e) {
@@ -915,98 +965,11 @@ public:
         return this->worker->submit(task);
     }
 
-    // =====================================================================
-    // WARNING: cuVS IVF-PQ bitset_filter quirk — filter-excluded rows leak
-    //          into the result when popcount(filter) < limit.
-    // ---------------------------------------------------------------------
-    // When the number of rows passing (user_filter AND NOT deleted) is less
-    // than `limit`, cuVS IVF-PQ pads the remaining result slots with
-    // filter-excluded nearest neighbors instead of returning sentinels.
-    // So rows explicitly excluded by predicate or by soft-delete can still
-    // appear in search_res.neighbors.
-    //   Canonical reproducer: FilteredSearchCombinesWithDeleteBitset in
-    //   cgo/cuvs/test/ivf_pq_test.cu.
-    //
-    // Mitigation: re-apply the combined (user_filter AND NOT deleted) mask
-    // on the host and replace any failing slot with (-1, float::max). The
-    // Go layer already treats -1 as an empty slot (see multi_index.go), so
-    // callers see a result array with fewer than `limit` valid neighbors,
-    // not a corrupted one. Only IVF-PQ is patched; IVF-Flat and CAGRA paths
-    // correctly write -1 for filter-excluded slots natively.
-    //
-    // Skip-fast: the quirk can only trigger when popcount(combined_mask) is
-    // strictly less than num_queries * limit. build_search_bitset returns
-    // the popcount via out_popcount; callers gate this function behind
-    //   popcount >= num_queries * limit * kPqPostFilterSkipFactor
-    // (with kPqPostFilterSkipFactor = 4 for empirical headroom). At moderate
-    // selectivity (5–50% pass), this skips the post-filter pass and its
-    // shared_lock acquisition entirely. The canonical reproducer above sits
-    // well below the threshold (popcount=2, n*limit=5) so it still exercises
-    // this function.
-    //
-    // Mask sources (after build_search_bitset refactor):
-    //   * User filter present — user_host_mask already holds (user ∧ ¬deleted)
-    //     because build_search_bitset ANDs on the host before upload. Just
-    //     bit-test it; no further combine needed.
-    //   * Deletes-only path  — user_host_mask is empty (cached device delete
-    //     bitset is reused for the search itself). Synthesize a host mask
-    //     here by copying the delete-bitset slice over [start_row,
-    //     start_row+shard_sz).
-    //
-    // Caveats:
-    //   * Suppresses junk only — cannot recover valid rows that cuVS never
-    //     scored (e.g. rows living in non-probed IVF lists).
-    //
-    // Caller must hold mutex_ as shared_lock; this function reads
-    // deleted_bitset_ / deleted_count_.
-    // =====================================================================
-    // user_host_mask is consumed read-only on the user-filter path (the bundle
-    // may be shared across shards on the new prebuilt path, so we can't mutate
-    // it). On the deletes-only path the caller passes an empty vector and we
-    // synthesize the delete-bitset slice into a local scratch vector — this
-    // costs one slice allocation per deletes-only post-filter pass, which is
-    // dominated by the per-result raw-position bit test.
-    void apply_pq_post_filter_locked(search_result_t& search_res,
-                                     uint64_t start_row,
-                                     uint64_t shard_sz,
-                                     const std::vector<uint32_t>& user_host_mask) const {
-        const bool has_user = !user_host_mask.empty();  // non-empty iff build_search_bitset ran the user-filter path
-        const bool has_del  = this->deleted_count_ > 0;
-        if (!has_user && !has_del) return;
-
-        std::vector<uint32_t> synthesized_del_slice;
-        const std::vector<uint32_t>* host_mask = &user_host_mask;
-        if (!has_user) {
-            // Deletes-only: copy the delete-bitset slice straight into the
-            // local scratch. start_row is 0 (non-SHARDED) or a multiple of 32
-            // (SHARDED), so start_word is always an integer (see
-            // index_base.hpp lifecycle).
-            const uint64_t n_mask_words = (shard_sz + 31) / 32;
-            const uint64_t start_word   = start_row / 32;
-            const uint64_t del_words    = this->deleted_bitset_.size();
-            synthesized_del_slice.resize(n_mask_words);
-            for (uint64_t w = 0; w < n_mask_words; ++w) {
-                synthesized_del_slice[w] = (start_word + w < del_words)
-                                             ? this->deleted_bitset_[start_word + w]
-                                             : 0xFFFFFFFFu;
-            }
-            host_mask = &synthesized_del_slice;
-            // Tail bits past shard_sz are unreachable: the raw-position check
-            // below rejects p >= shard_sz before touching host_mask.
-        }
-
-        const float kDistSentinel = std::numeric_limits<float>::max();
-        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            int64_t raw = search_res.neighbors[i];
-            if (raw < 0) continue;
-            uint64_t p = static_cast<uint64_t>(raw);
-            if (p >= shard_sz
-                || !(((*host_mask)[p / 32] >> (p % 32)) & 1U)) {
-                search_res.neighbors[i] = -1;
-                search_res.distances[i] = kDistSentinel;
-            }
-        }
-    }
+    // Filtered results are re-tested on the host by
+    // apply_host_post_filter_locked (index_base.hpp): cuVS fills slots past
+    // popcount(user_filter AND NOT deleted) with excluded rows. The pass is
+    // skipped when that popcount is at least
+    //   num_queries * limit * kPqPostFilterSkipFactor.
 
     // `prebuilt`, when non-null, supplies a host_mask_bundle_t computed off the
     // worker thread (see search_with_filter below). On that path we skip the
@@ -1064,13 +1027,13 @@ public:
         // (see WARNING comment below).
         uint64_t start_row = 0, shard_sz = this->count;
         // Pointer (not owned) into either the prebuilt bundle's mask or the
-        // local fallback below. apply_pq_post_filter_locked reads it after the
+        // local fallback below. apply_host_post_filter_locked reads it after the
         // GPU finishes; the underlying buffer outlives the GPU work because:
         //  - prebuilt path: caller's lambda capture keeps bundle alive
         //  - legacy path:   `local_user_mask` lives until function return
         const std::vector<uint32_t>* user_host_mask_ptr = nullptr;
         std::vector<uint32_t> local_user_mask;
-        uint64_t user_filter_popcount = 0;     // popcount(user_filter ∧ ¬deleted); see WARNING above
+        uint64_t user_filter_popcount = 0;     // popcount(user_filter ∧ ¬deleted); see apply_host_post_filter_locked
 
         if (local_index) {
             // Reuse per-thread grow-only workspace buffers (Step C). Allocated
@@ -1106,7 +1069,7 @@ public:
             // searches (apply_indices.go:84), so small indexes can ask for k > rows.
             // We run cuVS at effective_k and pad the (num_queries × limit) host
             // result with (-1, FLT_MAX) sentinels — downstream readers already
-            // skip -1 (apply_pq_post_filter_locked, map_neighbor_id, the SHARDED
+            // skip -1 (apply_host_post_filter_locked, map_neighbor_id, the SHARDED
             // merger). See index_base.hpp for the helpers.
             const uint32_t effective_k = matrixone::clamp_k_to_index_size(
                 static_cast<uint32_t>(limit), shard_sz);
@@ -1192,7 +1155,7 @@ public:
 
             // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
             // comfortably above num_queries * limit — the cuVS bitset_filter
-            // leak quirk cannot trigger in that regime (see WARNING above for
+            // leak quirk cannot trigger in that regime (see the post-filter note above for
             // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
             // paths leave user_host_mask_ptr null and fall through to the
             // existing function (which is itself a no-op there).
@@ -1205,9 +1168,9 @@ public:
                     kPqPostFilterSkipFactor;
             if (!skip_pq_post_filter) {
                 // Empty vec on the deletes-only / unfiltered paths — the
-                // function synthesizes the delete-bitset slice locally there.
+                // function looks each returned row up in deleted_bitset_ there.
                 static const std::vector<uint32_t> kEmptyMask;
-                apply_pq_post_filter_locked(search_res, start_row, shard_sz,
+                this->apply_host_post_filter_locked(search_res, start_row, shard_sz,
                     user_host_mask_ptr ? *user_host_mask_ptr : kEmptyMask);
             }
 
@@ -1437,7 +1400,7 @@ public:
         uint64_t start_row = 0, shard_sz = this->count;
         const std::vector<uint32_t>* user_host_mask_ptr = nullptr;
         std::vector<uint32_t> local_user_mask;  // legacy fallback storage
-        uint64_t user_filter_popcount = 0;      // popcount(user_filter ∧ ¬deleted); see WARNING above
+        uint64_t user_filter_popcount = 0;      // popcount(user_filter ∧ ¬deleted); see apply_host_post_filter_locked
 
         if (local_index) {
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1530,7 +1493,7 @@ public:
 
             // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
             // comfortably above num_queries * limit — the cuVS bitset_filter
-            // leak quirk cannot trigger in that regime (see WARNING above for
+            // leak quirk cannot trigger in that regime (see the post-filter note above for
             // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
             // paths leave user_host_mask_ptr null and fall through to the
             // existing function (which is a no-op there).
@@ -1546,7 +1509,7 @@ public:
                 std::vector<uint32_t>& mask_ref =
                     user_host_mask_ptr ? const_cast<std::vector<uint32_t>&>(*user_host_mask_ptr)
                                        : empty_mask;
-                apply_pq_post_filter_locked(search_res, start_row, shard_sz, mask_ref);
+                this->apply_host_post_filter_locked(search_res, start_row, shard_sz, mask_ref);
             }
 
             int64_t offset = 0;
@@ -1679,6 +1642,12 @@ public:
         auto task = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_pq_index>(*res);
+            // Claim the VRAM this load is about to materialise so a concurrent
+            // build or load on this device cannot spend the same free bytes. The
+            // claim holds no lock; it is dropped at scope exit, by which point the
+            // memory is resident and cudaMemGetInfo accounts for it.
+            const size_t load_bytes = matrixone::required_path_bytes(filename, "ivf_pq::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load", this->budget_percent());
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
             // Drain `res`'s stream so any H2D copy committed by deserialize is
             // visible before any search thread reads the loaded index. Without
@@ -1813,6 +1782,11 @@ public:
     // target_mode overrides this->dist_mode, allowing a SINGLE_GPU .tar to be
     // loaded as REPLICATED (broadcasts index.bin to all GPUs) without rebuilding.
     void load_dir(const std::string& dir, distribution_mode_t target_mode) {
+        // Held for the whole of load_dir: the host components are materialised
+        // by the deserialisation below, and the claim drops on return, once the
+        // availability reading has moved by the same bytes.
+        auto host_claim = this->claim_host_components(dir, "ivf_pq load");
+
         auto m = this->read_manifest(dir, "ivf_pq");
         if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
             throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");
@@ -1845,6 +1819,12 @@ public:
             auto task = [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                // Claim the VRAM this load is about to materialise so a concurrent
+                // build or load on this device cannot spend the same free bytes. The
+                // claim holds no lock; it is dropped at scope exit, by which point the
+                // memory is resident and cudaMemGetInfo accounts for it.
+                const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load", this->budget_percent());
                 cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                 // Drain `res`'s stream so deserialize's H2D copy is committed
                 // before any search thread reads the loaded index. See the
@@ -1869,6 +1849,12 @@ public:
                 [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load", this->budget_percent());
                     cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1894,6 +1880,12 @@ public:
                     std::string shard_path = dir + "/" + shard_files[rank];
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(shard_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load", this->budget_percent());
                     cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

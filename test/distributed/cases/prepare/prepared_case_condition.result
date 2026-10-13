@@ -1,0 +1,21 @@
+DROP DATABASE IF EXISTS prepared_case_condition;
+CREATE DATABASE prepared_case_condition;
+USE prepared_case_condition;
+PREPARE case_condition FROM 'SELECT CASE WHEN ? THEN 7 ELSE -7 END AS got';
+SET @condition = TRUE;
+EXECUTE case_condition USING @condition;
+➤ got[-5,64,0]  𝄀
+7
+SET @condition = FALSE;
+EXECUTE case_condition USING @condition;
+➤ got[-5,64,0]  𝄀
+-7
+SET @condition = NULL;
+EXECUTE case_condition USING @condition;
+➤ got[-5,64,0]  𝄀
+-7
+SELECT CASE WHEN TRUE THEN 7 ELSE -7 END AS got;
+➤ got[-5,64,0]  𝄀
+7
+DEALLOCATE PREPARE case_condition;
+DROP DATABASE prepared_case_condition;

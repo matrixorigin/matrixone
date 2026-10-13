@@ -82,6 +82,10 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		defer anal.mu.Unlock()
 		if !isPrepare {
 			anal.phyPlan = nil
+		} else if anal.phyPlan != nil {
+			// Prepared topology is reusable; the previous request summary is not.
+			// An early Run failure may bypass the normal summary refresh.
+			anal.phyPlan.Resource = nil
 		}
 
 		anal.remotePhyPlans = nil
@@ -97,6 +101,10 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.remotePendingAllocationGroups = nil
 		anal.remoteCompletedAllocationGroups = nil
 		if anal.qry != nil {
+			// BackgroundQueries are populated from operator statistics after an
+			// execution. They are runtime diagnostics rather than immutable plan
+			// content, so a reused prepared plan must start each generation empty.
+			anal.qry.BackgroundQueries = nil
 			for _, node := range anal.qry.Nodes {
 				if node.AnalyzeInfo == nil {
 					node.AnalyzeInfo = new(plan.AnalyzeInfo)

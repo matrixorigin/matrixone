@@ -131,7 +131,22 @@ func (s *memStore) GetColumns(
 	if txnOp != nil {
 		m = s.uncommitted[string(txnOp.Txn().ID)]
 	}
-	return m[tableID], nil
+	return append([]AutoColumn(nil), m[tableID]...), nil
+}
+
+func (s *memStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+	for _, col := range m[tableID] {
+		if col.ColName == colName {
+			return col.Offset, col.Step, nil
+		}
+	}
+	return 0, 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", colName, tableID)
 }
 
 func (s *memStore) Allocate(
@@ -236,12 +251,13 @@ func (s *memStore) SetOffset(
 	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
 }
 
-// ForceSetOffset sets the offset of an auto-increment column to any value,
-// bypassing the monotonic guard. Only called from service.SetOffset during
-// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+// ForceSetOffset sets the offset and current name of an auto-increment column
+// to any value, bypassing the monotonic guard. Only called from service.SetOffset
+// during ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
 func (s *memStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
+	colIndex int,
 	colName string,
 	offset uint64,
 	txnOp client.TxnOperator,
@@ -261,12 +277,13 @@ func (s *memStore) ForceSetOffset(
 		return moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
 	}
 	for i := range cols {
-		if cols[i].ColName == colName {
+		if cols[i].ColIndex == colIndex {
+			cols[i].ColName = colName
 			cols[i].Offset = offset
 			return nil
 		}
 	}
-	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
+	return moerr.NewInternalErrorf(ctx, "incrservice: column index %d not found for table %d in memStore", colIndex, tableID)
 }
 
 func (s *memStore) Delete(

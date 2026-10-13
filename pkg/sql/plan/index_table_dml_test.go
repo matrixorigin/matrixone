@@ -51,7 +51,7 @@ func TestSingleSQLQuery(t *testing.T) {
 
 	sql := "update emp, (select deptno from dept) as tx set emp.sal = 3333 where tx.deptno = emp.empno"
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -59,9 +59,40 @@ func TestSingleSQLQuery(t *testing.T) {
 	outPutPlan(logicPlan, false, t)
 }
 
+func TestRegularIndexDMLRejectsStalePrefixMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{name: "insert", sql: "insert into constraint_test.dept values (1, 'SALES', 'NY')"},
+		{name: "update", sql: "update constraint_test.dept set dname = 'SALES' where deptno = 1"},
+		{name: "delete", sql: "delete from constraint_test.dept where deptno = 1"},
+		{name: "replace", sql: "replace into constraint_test.dept values (1, 'SALES', 'NY')"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+"/valid", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+		})
+
+		t.Run(test.name+"/stale", func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			tableDef := mock.ctxt.tables["dept"]
+			require.NotNil(t, tableDef)
+			require.NotEmpty(t, tableDef.Indexes)
+			tableDef.Indexes[0].IndexName = "idx_dname"
+			tableDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"old_dname:4"}`
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.ErrorContains(t, err, "invalid prefix metadata for index \"idx_dname\"")
+		})
+	}
+}
+
 // Single column unique index
 func TestSingleTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"DELETE FROM emp where sal > 2000",
@@ -80,7 +111,7 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 
 // Composite unique index
 func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"insert into dept values(), (), ()",
@@ -95,7 +126,7 @@ func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMaterialized(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -116,7 +147,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -132,13 +163,13 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.NoError(t, err)
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -156,7 +187,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -164,14 +195,14 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInProjection(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -189,7 +220,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -205,14 +236,14 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInLockMaterialization(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -230,7 +261,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -244,14 +275,14 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -269,7 +300,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -277,14 +308,14 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")
 }
 
 func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"delete from employees where sal > 2000",
@@ -304,7 +335,7 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 
 // Single column unique index
 func TestMultiTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sqls := []string{
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and sal > 2000",
@@ -323,7 +354,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 
 // Delete without index table
 func TestWithoutIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"delete from nation",
@@ -338,7 +369,7 @@ func TestWithoutIndexTableDeleteSQL(t *testing.T) {
 }
 
 func TestSingleTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"update dept set dname = 'XXX' where deptno = 10",
@@ -355,7 +386,7 @@ func TestSingleTableUpdate(t *testing.T) {
 }
 
 func TestSingleTableWithAliasUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"update emp t1 set t1.sal = t1.sal + 500, t1.comm = 1200 where t1.deptno = 10",
@@ -375,7 +406,7 @@ func TestSingleTableWithAliasUpdate(t *testing.T) {
 }
 
 func TestMultiTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		//1.-----------------
@@ -411,12 +442,10 @@ func TestMultiTableUpdate(t *testing.T) {
 }
 
 // TestBindReplaceWithUniqueSecondaryIndex verifies that REPLACE INTO on a table
-// with both an AUTO_INCREMENT PK and a unique secondary index disables the
-// merged-scan optimization and falls back to the legacy LEFT JOIN path with
-// OR'ed unique-key conditions, so unique-key conflicts can be resolved by
-// deleting the old row instead of raising a duplicate-entry error.
+// with both an AUTO_INCREMENT PK and a unique secondary index uses independent
+// equality lookup branches instead of an OR join over the base table.
 func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.dept(dname, loc) values ('SALES', 'CHICAGO')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -443,7 +472,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	}
 	require.True(t, hasUnique, "dept table is expected to have a unique secondary index")
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -454,32 +483,14 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
 
-	leftJoinFound := false
-	leftJoinHasOr := false
-	for _, n := range builder.qry.Nodes {
-		if n.NodeType != planpb.Node_JOIN || n.JoinType != planpb.Node_LEFT {
-			continue
-		}
-		leftJoinFound = true
-		for _, cond := range n.OnList {
-			if f := cond.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "or" {
-				leftJoinHasOr = true
-				break
-			}
-		}
-		if leftJoinHasOr {
-			break
-		}
-	}
-	require.True(t, leftJoinFound, "REPLACE on table with unique secondary index should use legacy LEFT JOIN path")
-	require.True(t, leftJoinHasOr, "LEFT JOIN ON clause should combine PK and UK equality with OR")
+	requireReplaceConflictLookupPlan(t, builder.qry, true)
 }
 
 // TestBindReplaceWithCompositeUniqueIndex verifies that for tables with a
-// composite unique secondary index the planner generates an AND-chain for the
-// UK parts inside the OR-combined LEFT JOIN ON clause.
+// composite unique secondary index the planner probes the serialized hidden
+// index key through the same equality-only conflict lookup path.
 func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.dept_composite_uk(dname, loc) values ('SALES', 'CHICAGO')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -497,7 +508,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -508,36 +519,11 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
 
-	// The LEFT JOIN ON clause should be: pk_match OR (dname_match AND loc_match).
-	// Verify that the OR node contains an AND child (the composite UK condition).
-	leftJoinFound := false
-	orHasAndChild := false
-	for _, n := range builder.qry.Nodes {
-		if n.NodeType != planpb.Node_JOIN || n.JoinType != planpb.Node_LEFT {
-			continue
-		}
-		leftJoinFound = true
-		for _, cond := range n.OnList {
-			f := cond.GetF()
-			if f == nil || f.Func == nil || f.Func.ObjName != "or" {
-				continue
-			}
-			for _, arg := range f.Args {
-				if af := arg.GetF(); af != nil && af.Func != nil && af.Func.ObjName == "and" {
-					orHasAndChild = true
-				}
-			}
-		}
-		if orHasAndChild {
-			break
-		}
-	}
-	require.True(t, leftJoinFound, "REPLACE on table with composite unique index should use LEFT JOIN path")
-	require.True(t, orHasAndChild, "OR clause should contain an AND child for composite UK parts")
+	requireReplaceConflictLookupPlan(t, builder.qry, true)
 }
 
 func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.fake_pk_t(a, b) values (null, 'nullable')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -557,7 +543,7 @@ func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
 	require.Len(t, tableDef.Indexes, 1)
 	require.True(t, tableDef.Indexes[0].Unique)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -600,7 +586,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), tt.sql, 1)
 			require.NoError(t, err)
@@ -619,7 +605,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			require.Len(t, tableDef.Indexes, 1)
 			require.True(t, tableDef.Indexes[0].Unique)
 
-			lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+			lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 				bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 			)
 			require.NoError(t, err)

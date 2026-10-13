@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -43,8 +45,10 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
@@ -53,6 +57,64 @@ var (
 	iscpExecutorReadyTimeout = 2 * time.Second
 	iscpGetExecutorRuntimeFn = iscp.GetExecutorRuntime
 )
+
+type queryWorkLifecycle struct {
+	sync.Mutex
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closing   bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (l *queryWorkLifecycle) beginClose() {
+	l.Lock()
+	l.closing = true
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.Unlock()
+}
+
+func (l *queryWorkLifecycle) admit() (func(), bool) {
+	l.Lock()
+	defer l.Unlock()
+	if l.closing {
+		return nil, false
+	}
+	l.wg.Add(1)
+	return l.wg.Done, true
+}
+
+func (l *queryWorkLifecycle) launch(executor taskservice.TaskExecutor, asyncTask task.Task) bool {
+	l.Lock()
+	if l.closing {
+		l.Unlock()
+		return false
+	}
+	if l.cancel == nil {
+		l.ctx, l.cancel = context.WithCancel(context.Background())
+	}
+	ctx := l.ctx
+	l.wg.Add(1)
+	l.Unlock()
+
+	go func() {
+		defer l.wg.Done()
+		_ = executor(ctx, asyncTask)
+	}()
+	return true
+}
+
+func (l *queryWorkLifecycle) close(closeIngress func() error) error {
+	l.closeOnce.Do(func() {
+		l.beginClose()
+		l.closeErr = closeIngress()
+		l.wg.Wait()
+	})
+	return l.closeErr
+}
 
 func (s *service) initQueryService() error {
 	if s.gossipNode != nil {
@@ -80,41 +142,69 @@ func (s *service) initQueryService() error {
 }
 
 func (s *service) initQueryCommandHandler() {
-	s.queryService.AddHandleFunc(query.CmdMethod_KillConn, s.handleKillConn, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_AlterAccount, s.handleAlterAccount, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_TraceSpan, s.handleTraceSpan, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetLockInfo, s.handleGetLockInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheData, s.handleGetCacheData, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire, false)
+	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
+	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
+	s.addQueryCommandHandler(query.CmdMethod_TraceSpan, s.handleTraceSpan)
+	s.addQueryCommandHandler(query.CmdMethod_GetLockInfo, s.handleGetLockInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo)
+	s.addQueryCommandHandler(query.CmdMethod_SyncCommit, s.handleSyncCommit)
+	s.addQueryCommandHandler(query.CmdMethod_GetCommit, s.handleGetCommit)
+	s.addQueryCommandHandler(query.CmdMethod_ShowProcessList, s.handleShowProcessList)
+	s.addQueryCommandHandler(query.CmdMethod_RunTask, s.handleRunTask)
+	s.addQueryCommandHandler(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable)
+	s.addQueryCommandHandler(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable)
+	s.addQueryCommandHandler(query.CmdMethod_GetCacheData, s.handleGetCacheData)
+	s.addQueryCommandHandler(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo)
+	s.addQueryCommandHandler(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom)
+	s.addQueryCommandHandler(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo)
+	s.addQueryCommandHandler(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache)
+	s.addQueryCommandHandler(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount)
+	s.addQueryCommandHandler(query.CmdMethod_CtlReader, s.handleCtlReader)
+	s.addQueryCommandHandler(query.CmdMethod_ResetSession, s.handleResetSession)
+	s.addQueryCommandHandler(query.CmdMethod_RefreshSessionAuth, s.handleRefreshSessionAuth)
+	s.addQueryCommandHandler(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs)
+	s.addQueryCommandHandler(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit)
+	s.addQueryCommandHandler(query.CmdMethod_GOGCPercent, s.handleGoGCPercent)
+	s.addQueryCommandHandler(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest)
+	s.addQueryCommandHandler(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest)
+	s.addQueryCommandHandler(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest)
+	s.addQueryCommandHandler(query.CmdMethod_FaultInject, s.handleFaultInjection)
+	s.addQueryCommandHandler(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats)
+	s.addQueryCommandHandler(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest)
+	s.addQueryCommandHandler(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp)
+	s.addQueryCommandHandler(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed)
+	s.addQueryCommandHandler(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer)
+	s.addQueryCommandHandler(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate)
+	s.addQueryCommandHandler(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire)
+}
+
+func (s *service) addQueryCommandHandler(
+	method query.CmdMethod,
+	handler func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error,
+) {
+	s.queryService.AddHandleFunc(
+		method,
+		func(ctx context.Context, req *query.Request, resp *query.Response, buf *morpc.Buffer) error {
+			release, ok := s.queryWork.admit()
+			if !ok {
+				return moerr.NewServiceUnavailableNoCtx("CN query service is closing")
+			}
+			defer release()
+			return handler(ctx, req, resp, buf)
+		},
+		false,
+	)
+}
+
+func (s *service) closeQueryService() error {
+	return s.queryWork.close(func() error {
+		if s.queryService != nil {
+			return s.queryService.Close()
+		}
+		return nil
+	})
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -299,7 +389,13 @@ func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTask
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.
 func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.GetLockInfoResponse = new(query.GetLockInfoResponse)
+	resp.GetLockInfoResponse = &query.GetLockInfoResponse{
+		CnId:          s.metadata.UUID,
+		LockServiceID: s.lockService.GetServiceID(),
+	}
+	if req.GetLockInfoRequest != nil && req.GetLockInfoRequest.IdentityOnly {
+		return nil
+	}
 
 	//get lock info from lock service in current cn
 	locks := make([]*query.LockInfo, 0)
@@ -329,7 +425,6 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 	s.lockService.IterLocks(getAllLocks)
 
 	// fill the response
-	resp.GetLockInfoResponse.CnId = s.metadata.UUID
 	resp.GetLockInfoResponse.LockInfoList = locks
 	return nil
 }
@@ -340,9 +435,10 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 
 	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
 		info := &query.TxnInfo{
-			CreateAt: view.CreateAt,
-			Meta:     copyTxnMeta(view.Meta),
-			UserTxn:  view.UserTxn,
+			CreateAt:  view.CreateAt,
+			AccountID: view.AccountID,
+			Meta:      copyTxnMeta(view.Meta),
+			UserTxn:   view.UserTxn,
 		}
 
 		for _, lock := range view.WaitLocks {
@@ -411,12 +507,12 @@ func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *q
 		}
 		return nil
 	}
-	go func() {
-		_ = exec(context.Background(), &task.AsyncTask{
-			ID:       0,
-			Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
-		})
-	}()
+	if !s.queryWork.launch(exec, &task.AsyncTask{
+		ID:       0,
+		Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
+	}) {
+		return moerr.NewServiceUnavailableNoCtx("CN query service is closing")
+	}
 	resp.RunTask = &query.RunTaskResponse{
 		Result: "OK",
 	}
@@ -549,13 +645,20 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	if req.GetStatsInfoRequest == nil {
+	if req.GetStatsInfoRequest == nil || req.GetStatsInfoRequest.StatsInfoKey == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	// The parameter sync is false, as the read request is from remote node,
 	// and we do not need wait for the data sync.
+	key := *req.GetStatsInfoRequest.StatsInfoKey
+	var info *statsinfo.StatsInfo
+	if exporter, ok := s.storeEngine.(engine.RemoteStatsExporter); ok {
+		info = exporter.StatsForRemote(ctx, key)
+	} else {
+		info = s.storeEngine.Stats(ctx, key, false)
+	}
 	resp.GetStatsInfoResponse = &query.GetStatsInfoResponse{
-		StatsInfo: s.storeEngine.Stats(ctx, *req.GetStatsInfoRequest.StatsInfoKey, false),
+		StatsInfo: info,
 	}
 	return nil
 }
@@ -647,6 +750,28 @@ func (s *service) handleResetSession(
 		return err
 	}
 	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleRefreshSessionAuth(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil || req.RefreshSessionAuthRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if rm == nil {
+		return moerr.NewInternalError(ctx, "routine manager not initialized")
+	}
+	resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{}
+	if err := rm.RefreshSessionAuthWithContext(
+		ctx,
+		req.RefreshSessionAuthRequest,
+		resp.RefreshSessionAuthResponse,
+	); err != nil {
+		logutil.Errorf("failed to refresh session authentication: %v", err)
+		return err
+	}
 	return nil
 }
 

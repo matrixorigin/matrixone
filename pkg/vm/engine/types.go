@@ -161,6 +161,9 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return nil, nil, err
+	}
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
 	var propDef *PropertiesDef
@@ -184,10 +187,14 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:    tableDef.FeatureFlag,
-		AutoIncrOffset: tableDef.AutoIncrOffset,
-		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
-		Checks:         tableDef.Checks,
+		FeatureFlag:      tableDef.FeatureFlag,
+		AutoIncrOffset:   tableDef.AutoIncrOffset,
+		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
+		AutoIdCache:      tableDef.AutoIdCache,
+		Checks:           tableDef.Checks,
+		DefaultCharset:   tableDef.DefaultCharset,
+		CollationVersion: tableDef.CollationVersion,
+		KeyFormat:        tableDef.KeyFormat,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -241,11 +248,12 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
+		exeTyp := types.MustTypeFromPlan(colTyp)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Type:          exeTyp,
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				GeneratedCol:  col.GetGeneratedCol(),
@@ -531,90 +539,107 @@ const (
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
-	buf := bytes.NewBuffer(make([]byte, 0))
+	data = make([]byte, 0, def.marshalSize())
 	for _, ct := range def.Cts {
 		switch def := ct.(type) {
 		case *IndexDef:
-			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Indexes))); err != nil {
-				return nil, err
-			}
-
+			data = append(data, byte(Index))
+			data = appendConstraintUint64(data, uint64(len(def.Indexes)))
 			for _, indexdef := range def.Indexes {
-				bytes, err := indexdef.Marshal()
+				data, err = appendConstraintProto(data, indexdef)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *RefChildTableDef:
-			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(RefChildTable))
+			data = appendConstraintUint64(data, uint64(len(def.Tables)))
 			for _, tblId := range def.Tables {
-				if err := binary.Write(buf, binary.BigEndian, tblId); err != nil {
-					return nil, err
-				}
+				data = appendConstraintUint64(data, tblId)
 			}
 
 		case *ForeignKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, ForeignKey); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Fkeys))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(ForeignKey))
+			data = appendConstraintUint64(data, uint64(len(def.Fkeys)))
 			for _, fk := range def.Fkeys {
-				bytes, err := fk.Marshal()
+				data, err = appendConstraintProto(data, fk)
 				if err != nil {
 					return nil, err
 				}
-
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *PrimaryKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
-				return nil, err
-			}
-			bytes, err := def.Pkey.Marshal()
+			data = append(data, byte(PrimaryKey))
+			data, err = appendConstraintProto(data, def.Pkey)
 			if err != nil {
 				return nil, err
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
-				return nil, err
-			}
-			buf.Write(bytes)
 		case *StreamConfigsDef:
-			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(StreamConfig))
+			data = appendConstraintUint64(data, uint64(len(def.Configs)))
 			for _, c := range def.Configs {
-				bytes, err := c.Marshal()
+				data, err = appendConstraintProto(data, c)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		}
 	}
-	return buf.Bytes(), nil
+	return data, nil
+}
+
+type constraintProtoMarshaler interface {
+	ProtoSize() int
+	MarshalTo([]byte) (int, error)
+}
+
+func (def *ConstraintDef) marshalSize() int {
+	size := 0
+	for _, ct := range def.Cts {
+		switch def := ct.(type) {
+		case *IndexDef:
+			size += 1 + 8
+			for _, indexdef := range def.Indexes {
+				size += 8 + indexdef.ProtoSize()
+			}
+		case *RefChildTableDef:
+			size += 1 + 8 + 8*len(def.Tables)
+		case *ForeignKeyDef:
+			size += 1 + 8
+			for _, fk := range def.Fkeys {
+				size += 8 + fk.ProtoSize()
+			}
+		case *PrimaryKeyDef:
+			size += 1 + 8 + def.Pkey.ProtoSize()
+		case *StreamConfigsDef:
+			size += 1 + 8
+			for _, config := range def.Configs {
+				size += 8 + config.ProtoSize()
+			}
+		}
+	}
+	return size
+}
+
+func appendConstraintUint64(data []byte, value uint64) []byte {
+	start := len(data)
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint64(data[start:], value)
+	return data
+}
+
+func appendConstraintProto(data []byte, message constraintProtoMarshaler) ([]byte, error) {
+	size := message.ProtoSize()
+	data = appendConstraintUint64(data, uint64(size))
+	start := len(data)
+	data = data[:start+size]
+	written, err := message.MarshalTo(data[start:])
+	if err != nil {
+		return nil, err
+	}
+	if written != size {
+		return nil, moerr.NewInternalErrorNoCtx("constraint protobuf size mismatch")
+	}
+	return data, nil
 }
 
 func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
@@ -850,7 +875,12 @@ type Tombstoner interface {
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
 
-	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+	PrefetchTombstones(
+		ctx context.Context,
+		srvId string,
+		fs fileservice.FileService,
+		bid []objectio.Blockid,
+	)
 
 	// it applies the block related in-memory tombstones to the rowsOffset
 	// `bid` is the block id
@@ -1147,8 +1177,6 @@ type Relation interface {
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
-	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
@@ -1163,6 +1191,21 @@ type Relation interface {
 // exclusively owned, reusable handle over the shared relation.
 type RelationHandleFactory interface {
 	NewRelationHandle() Relation
+}
+
+// SourceCommitTSProvider is an optional relation capability used by async
+// indexes that must prove their source-table coverage.  It is intentionally not
+// part of Relation: engines without a logtail partition state simply do not
+// provide the proof and planners fail closed to a table scan.
+//
+// mustExceed is an early-exit hint, not a filter: the caller only needs to know
+// whether the true source commit is greater than this value (the index build_ts),
+// so an implementation may return as soon as it establishes that -- skipping the
+// per-object I/O it would otherwise do to compute the exact maximum. An empty
+// mustExceed disables the short-circuit and returns the exact maximum. The result
+// is always a valid lower bound: >= mustExceed when it short-circuits, else exact.
+type SourceCommitTSProvider interface {
+	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine
@@ -1187,6 +1230,20 @@ type Reader interface {
 	SetIndexParam(*plan.IndexReaderParam)
 	SetFilterZM(objectio.ZoneMap)
 	//SetScanType()
+}
+
+// ExplainDiagnosticReader is an optional Reader capability for execution
+// details that must reach EXPLAIN ANALYZE. TakeExplainDiagnostics transfers
+// ownership to the caller and must not return the same diagnostic twice.
+type ExplainDiagnosticReader interface {
+	TakeExplainDiagnostics() []*plan.Query
+}
+
+// ExplainVectorTopStatsReader is an optional Reader capability used only by
+// standalone EXPLAIN ANALYZE. The reader borrows stats until Close and updates
+// it synchronously while executing vector Top-K pushdown.
+type ExplainVectorTopStatsReader interface {
+	SetExplainVectorTopStats(*objectio.IndexReaderTopStats)
 }
 
 // ReaderFilterResult describes which rows survived a ReaderFilter. Sels must
@@ -1223,6 +1280,23 @@ type LateMaterializationReader interface {
 		mp *mpool.MPool,
 		outBatch *batch.Batch,
 	) (isEnd bool, err error)
+}
+
+// FilteredTopKReader is an optional Reader capability for vector-index scans.
+// It applies the exact residual filter before storage Top-K, so filtered-out
+// rows can neither occupy the distance heap nor force wide-vector
+// materialization. topKApplied is false when the reader safely fell back to a
+// filter-only read and the caller must compute and compact Top-K itself.
+type FilteredTopKReader interface {
+	ReadWithFilterAndTopK(
+		ctx context.Context,
+		cols []string,
+		earlyColumns []int,
+		filter ReaderFilter,
+		indexParam *plan.IndexReaderParam,
+		mp *mpool.MPool,
+		outBatch *batch.Batch,
+	) (isEnd bool, topKApplied bool, err error)
 }
 
 type Database interface {
@@ -1304,6 +1378,127 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+}
+
+// TableVersionedStats is an optional engine capability for readers that know
+// the table definition used by their plan. Implementations must not return
+// schema-bound statistics collected for another definition version. It is
+// optional so engines and mocks that expose only metadata-derived statistics
+// keep the existing Engine contract.
+type TableVersionedStats interface {
+	StatsAtTableVersion(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		sync bool,
+		tableDefVersion uint32,
+	) *pb.StatsInfo
+}
+
+// RemoteStatsExporter is an optional engine capability for serving statistics
+// to another CN. Unlike a local unversioned Stats reader, the remote caller
+// cannot prove which table-definition version it will use. Implementations
+// must therefore reject schema-bound statistics rather than serialize them.
+type RemoteStatsExporter interface {
+	StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo
+}
+
+// StatsRefreshOptions carries statistics that the statement computed from a
+// table-wide scan. Object metadata remains the source of all fields not
+// present here.
+type StatsRefreshOptions struct {
+	// TableDefVersion is the schema version that owned the table-wide
+	// observation. It is required whenever TableRowCount or ColumnNDVs carries
+	// an observation. The engine rejects it if the current physical table has
+	// crossed a schema boundary, preventing an old column value from being
+	// applied to a dropped-and-recreated column with the same name.
+	TableDefVersion *uint32
+
+	// TableRowCount is the exact row count observed by the same table-wide scan
+	// as ColumnNDVs. Nil leaves the object-metadata estimate unchanged.
+	TableRowCount *float64
+
+	// ColumnNDVs maps canonical column names to table-wide approximate distinct
+	// counts. The engine validates the names and values, caps them at the
+	// effective table row count, and applies them before publishing the new
+	// statistics object.
+	ColumnNDVs map[string]float64
+}
+
+// StatsRefresher is an optional engine capability for statements that define
+// a synchronous statistics-publication boundary, such as ANALYZE TABLE.
+// Implementations must not return until Stats() can observe the returned
+// statistics on the local engine instance.
+type StatsRefresher interface {
+	RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error)
+}
+
+// StatsRefresherWithOptions extends StatsRefresher without breaking engines
+// that implement the original synchronous refresh capability.
+type StatsRefresherWithOptions interface {
+	StatsRefresher
+	RefreshTableStatsWithOptions(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		options StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
+}
+
+// AnalyzeTableRequest is the storage-facing contract for a manual ANALYZE
+// collection. The relation owns snapshot visibility and physical range
+// selection; callers provide only bounded policy inputs and resolved columns.
+type AnalyzeTableRequest struct {
+	Process           any
+	Columns           []string
+	FullScan          bool
+	Seed              [32]byte
+	TargetRows        uint64
+	MinBlocks         uint64
+	MaxBlocks         uint64
+	MaxStrata         uint32
+	MaxDistinctValues uint64
+	ColumnsPerPass    uint32
+}
+
+// AnalyzeTableResult contains the StatsInfo compatibility adapter and explicit
+// collection diagnostics. The relation never publishes this result itself.
+type AnalyzeTableResult struct {
+	Stats             *pb.StatsInfo
+	Mode              string
+	Coverage          string
+	PopulationRows    uint64
+	PopulationExact   bool
+	PopulationBlocks  uint64
+	SampleRows        uint64
+	SampleBlocks      uint64
+	SampleBytes       uint64
+	ColumnsAnalyzed   uint32
+	SampleNumerator   uint64
+	SampleDenominator uint64
+}
+
+// AnalyzableRelation is optional so non-disttae engines and existing relation
+// mocks are not forced to implement a storage-specific maintenance operation.
+type AnalyzableRelation interface {
+	AnalyzeTable(ctx context.Context, request AnalyzeTableRequest) (*AnalyzeTableResult, error)
+}
+
+// AnalyzedStatsPublisher owns the publication boundary after successful data
+// collection. Durable publication can evolve behind this same capability.
+type AnalyzedStatsPublisher interface {
+	PublishAnalyzedStats(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		tableDefVersion uint32,
+		stats *pb.StatsInfo,
+	) (*pb.StatsInfo, error)
+}
+
+// LogtailReadBarrier is an optional engine capability that establishes a
+// linearizable read boundary against the TN commit/logtail publication order.
+// On success, all commits completed before the boundary are visible through
+// this local engine instance and frontier is the exact applied logtail target.
+type LogtailReadBarrier interface {
+	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
 }
 
 type VectorPool interface {

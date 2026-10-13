@@ -33,6 +33,10 @@ type iscpLogBatch struct {
 	jobIDs     []uint64
 	jobSpecs   []string
 	jobStatuss []string
+	// watermarks mirrors the durable mo_iscp_log.watermark column, the
+	// consumption boundary collectChangesCtxForJobs reads. An omitted entry
+	// defaults to the zero TS a freshly registered row carries.
+	watermarks []string
 }
 
 func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
@@ -64,7 +68,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 		return result, nil
 	}
 
-	jobSpecs, prevStatuses, err := GetJobSpecs(
+	jobSpecs, prevStatuses, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -83,6 +87,42 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 	require.Equal(t, "idx02", jobSpecs[1].IndexName)
 	require.Equal(t, uint64(33), prevStatuses[0].LSN)
 	require.Equal(t, uint64(22), prevStatuses[1].LSN)
+}
+
+func TestGetJobSpecsEscapesJobNameLiteral(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() {
+		ExecWithResult = oldExecWithResult
+	}()
+
+	jobName := `index_'idx\01`
+	result, mp := newISCPLogResult(t, []iscpLogBatch{
+		{
+			jobNames:   []string{jobName},
+			jobIDs:     []uint64{3},
+			jobSpecs:   []string{mustMarshalJobSpec(t, "idx01")},
+			jobStatuss: []string{mustMarshalJobStatus(t, 33, JobStage_Running)},
+		},
+	})
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	var capturedSQL string
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		capturedSQL = sql
+		return result, nil
+	}
+
+	jobSpecs, _, _, err := GetJobSpecs(
+		context.Background(), "", nil, nil, nil, 0, 42,
+		[]string{jobName}, []uint64{101}, types.TS{},
+		[]*JobStatus{{}}, []uint64{3},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "idx01", jobSpecs[0].IndexName)
+	require.Contains(t, capturedSQL, `job_name = 'index_''idx\\01'`)
 }
 
 func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing.T) {
@@ -130,7 +170,7 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		return nil
 	}
 
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -249,7 +289,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				return nil
 			}
 
-			jobSpecs, prevStatuses, err := GetJobSpecs(
+			jobSpecs, prevStatuses, _, err := GetJobSpecs(
 				context.Background(),
 				"",
 				nil,
@@ -363,6 +403,7 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 			types.T_uint64.ToType(),
 			types.T_json.ToType(),
 			types.T_json.ToType(),
+			types.T_varchar.ToType(),
 		},
 		mp,
 	)
@@ -372,8 +413,21 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 		require.NoError(t, executor.AppendFixedRows(memRes, 1, batch.jobIDs))
 		require.NoError(t, executor.AppendBytesRows(memRes, 2, encodeJSONRows(t, batch.jobSpecs)))
 		require.NoError(t, executor.AppendBytesRows(memRes, 3, encodeJSONRows(t, batch.jobStatuss)))
+		require.NoError(t, executor.AppendStringRows(memRes, 4, iscpLogWatermarks(batch)))
 	}
 	return memRes.GetResult(), mp
+}
+
+func iscpLogWatermarks(batch iscpLogBatch) []string {
+	watermarks := make([]string, len(batch.jobNames))
+	zero := types.TS{}.ToString()
+	for i := range watermarks {
+		watermarks[i] = zero
+		if i < len(batch.watermarks) && batch.watermarks[i] != "" {
+			watermarks[i] = batch.watermarks[i]
+		}
+	}
+	return watermarks
 }
 
 func mustMarshalJobSpec(t *testing.T, indexName string) string {
@@ -395,6 +449,32 @@ func mustMarshalJobStatus(t *testing.T, lsn uint64, stage int8) string {
 	})
 	require.NoError(t, err)
 	return string(jobStatus)
+}
+
+func TestAtomicInitCompletionStatusCarriesDurableEvidence(t *testing.T) {
+	previous := &JobStatus{
+		LSN:              7,
+		Stage:            JobStage_Init,
+		LifecycleVersion: atomicInitLifecycleVersion + 1,
+		TaskID:           9,
+		ErrorCode:        2,
+		ErrorMsg:         "old error",
+	}
+
+	completed := atomicInitCompletionStatus(previous, 8)
+
+	require.Equal(t, uint64(8), completed.LSN)
+	require.Equal(t, int8(JobStage_Running), completed.Stage)
+	require.Equal(t, atomicInitLifecycleVersion+1, completed.LifecycleVersion)
+	require.Equal(t, uint64(9), completed.TaskID)
+	require.Zero(t, completed.ErrorCode)
+	require.Empty(t, completed.ErrorMsg)
+	// Building the completion must not mutate the snapshot read from catalog.
+	require.Equal(t, uint64(7), previous.LSN)
+	require.Equal(t, int8(JobStage_Init), previous.Stage)
+
+	legacy := atomicInitCompletionStatus(&JobStatus{}, 1)
+	require.Equal(t, atomicInitLifecycleVersion, legacy.LifecycleVersion)
 }
 
 func encodeJSONRows(t *testing.T, rows []string) [][]byte {
@@ -459,6 +539,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		0,
 	)
 	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
 	require.False(t, isPermanentError(err))
 	require.Contains(t, err.Error(), "affected 0 rows")
 }
@@ -510,7 +591,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("update affected 0 rows for job")
 	}
 
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,

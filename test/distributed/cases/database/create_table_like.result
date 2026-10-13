@@ -26,8 +26,8 @@ create table test like test;
 table test already exists
 create view view1 as select * from test;
 show create view view1;
-View    Create View    character_set_client    collation_connection
-view1    create view view1 as select * from test;    utf8mb4    utf8mb4_general_ci
+➤ View[12,3,0]  ¦  Create View[12,44,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+view1  ¦  create view `view1` as select `test`.`a` as `a` from `test`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 create table new_test like view1;
 internal error: test1.view1 is not BASE TABLE
 drop database test1;

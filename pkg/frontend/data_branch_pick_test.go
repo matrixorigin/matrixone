@@ -573,6 +573,60 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
 }
 
+func TestAppendExprToVecWithPrepareParams(t *testing.T) {
+	newVector := func(t *testing.T, values []string, null bool) (*mpool.MPool, *vector.Vector) {
+		t.Helper()
+		mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+		require.NoError(t, err)
+		params := vector.NewVec(types.T_text.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(params, []byte(value), null, mp))
+		}
+		return mp, params
+	}
+
+	t.Run("converts prepared value", func(t *testing.T) {
+		mp, params := newVector(t, []string{"42"}, false)
+		defer mp.Free(nil)
+		defer params.Free(mp)
+
+		vec := vector.NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		expr := tree.NewParentExpr(tree.NewParamExpr(1))
+		require.NoError(t, appendExprToVecWithPrepareParams(
+			vec, expr, *vec.GetType(), time.UTC, mp, params))
+		require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](vec))
+	})
+
+	for _, tc := range []struct {
+		name   string
+		values []string
+		null   bool
+		offset int
+		want   string
+	}{
+		{name: "missing execution values", offset: 1, want: "has no execution value"},
+		{name: "parameter out of range", values: []string{"1"}, offset: 2, want: "out of range"},
+		{name: "null parameter", values: []string{""}, null: true, offset: 1, want: "must not be NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, params := newVector(t, tc.values, tc.null)
+			defer mp.Free(nil)
+			defer params.Free(mp)
+
+			vec := vector.NewVec(types.T_int32.ToType())
+			defer vec.Free(mp)
+			if tc.name == "missing execution values" {
+				params = nil
+			}
+			err := appendExprToVecWithPrepareParams(
+				vec, tree.NewParamExpr(tc.offset), *vec.GetType(), time.UTC, mp, params)
+			require.ErrorContains(t, err, tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestAppendExprToVec_BoolLiteral(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -1449,7 +1503,11 @@ func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
 	srcVec := vector.NewVec(types.T_json.ToType())
 	defer srcVec.Free(mp)
 
-	require.NoError(t, vector.AppendBytes(srcVec, []byte(`{"k":1}`), false, mp))
+	jsonValue, err := types.ParseStringToByteJson(`{"k":1}`)
+	require.NoError(t, err)
+	jsonBytes, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(srcVec, jsonBytes, false, mp))
 
 	coerced, owned, err := coercePickKeyVectorToType(nil, srcVec, types.T_int32.ToType(), mp)
 	require.Error(t, err)
@@ -1513,6 +1571,77 @@ func TestExtractPKValYear(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
 
 	require.Equal(t, pkVal, extractPKVal(vec, 0))
+}
+
+func TestExtractPKValArrayTypes(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector) error
+		want   any
+	}{
+		{
+			name: "float32",
+			typ:  types.New(types.T_array_float32, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float32{1, 2}, false, mp)
+			},
+			want: []float32{1, 2},
+		},
+		{
+			name: "float64",
+			typ:  types.New(types.T_array_float64, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float64{1, 2}, false, mp)
+			},
+			want: []float64{1, 2},
+		},
+		{
+			name: "bf16",
+			typ:  types.New(types.T_array_bf16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+			},
+			want: []types.BF16{1, 2},
+		},
+		{
+			name: "float16",
+			typ:  types.New(types.T_array_float16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+			},
+			want: []types.Float16{1, 2},
+		},
+		{
+			name: "int8",
+			typ:  types.New(types.T_array_int8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+			},
+			want: []int8{1, 2},
+		},
+		{
+			name: "uint8",
+			typ:  types.New(types.T_array_uint8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []uint8{1, 2}, false, mp)
+			},
+			want: []uint8{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, tt.append(vec))
+			require.Equal(t, tt.want, extractPKVal(vec, 0))
+		})
+	}
 }
 
 func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
@@ -2091,7 +2220,11 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 			name: "unsupported json",
 			typ:  types.T_json.ToType(),
 			append: func(vec *vector.Vector) {
-				require.NoError(t, vector.AppendBytes(vec, []byte(`{"k":1}`), false, mp))
+				value, err := types.ParseStringToByteJson(`{"k":1}`)
+				require.NoError(t, err)
+				encoded, err := types.EncodeJson(value)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
 			},
 			wantErr: "not supported",
 		},

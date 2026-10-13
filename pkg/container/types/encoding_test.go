@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"testing"
 
@@ -28,6 +29,45 @@ import (
 
 type binaryStub struct {
 	data []byte
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	return len(data) - 1, nil
+}
+
+type headerThenShortWriter struct {
+	writes int
+}
+
+func (writer *headerThenShortWriter) Write(data []byte) (int, error) {
+	writer.writes++
+	if writer.writes == 1 {
+		return len(data), nil
+	}
+	return len(data) - 1, nil
+}
+
+func TestFixedWidthWritersRejectShortWrites(t *testing.T) {
+	writer := shortWriter{}
+	for _, write := range []func() error{
+		func() error { return WriteInt16(writer, 1) },
+		func() error { return WriteUint16(writer, 1) },
+		func() error { return WriteInt32(writer, 1) },
+		func() error { return WriteUint32(writer, 1) },
+		func() error { return WriteInt64(writer, 1) },
+		func() error { return WriteUint64(writer, 1) },
+		func() error { return WriteSizeBytes([]byte("payload"), writer) },
+	} {
+		require.ErrorIs(t, write(), io.ErrShortWrite)
+	}
+	payloadWriter := &headerThenShortWriter{}
+	require.ErrorIs(t,
+		WriteSizeBytes([]byte("payload"), payloadWriter), io.ErrShortWrite)
 }
 
 func (b binaryStub) MarshalBinary() ([]byte, error) {

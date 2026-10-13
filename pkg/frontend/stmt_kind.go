@@ -90,6 +90,17 @@ func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
 	return false
 }
 
+func isDataBranchStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		return true
+	default:
+		return false
+	}
+}
+
 func planChangesCatalog(queryPlan *plan.Plan) bool {
 	ddl := queryPlan.GetDdl()
 	if ddl == nil {
@@ -146,18 +157,31 @@ func IsCreateDropSequence(stmt tree.Statement) bool {
 }
 
 /*
-NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
-in an active transaction.
-
-Currently, it includes the drop statement, the administration statement ,
-
-	the parameter modification statement.
+NeedToBeCommittedInActiveTransaction checks statements whose execution must commit
+an already active transaction. Ordinary SET statements are intentionally excluded;
+their session state changes must not commit a user's explicit transaction. The
+SET autocommit OFF -> ON transition commits through TxnHandler.SetAutocommit.
 */
 func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || isLockTableStatement(stmt)
+}
+
+// isImplicitCommitStatement identifies statements whose MySQL-compatible
+// transaction boundary is handled by the statement executor. TRUNCATE and
+// RENAME TABLE are deliberately kept separate from IsDDL: MatrixOne supports
+// transactional execution for several other DDL statements. These must commit the
+// preceding transaction before it is attempted and commit its own transaction
+// after it succeeds.
+func isImplicitCommitStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.TruncateTable, *tree.RenameTable:
+		return true
+	default:
+		return false
+	}
 }
 
 func isLockTableStatement(stmt tree.Statement) bool {
@@ -212,7 +236,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
+	case *tree.Insert, *tree.MultiInsert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
@@ -258,9 +282,15 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
+		if isDataBranchStatement(st.Stmt) {
+			// PREPARE only records the frontend statement; it does not perform
+			// the data-branch operation or enter its transaction policy. EXECUTE
+			// rechecks the stored statement below.
+			return true, nil
+		}
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
 	case *tree.PrepareString:
 		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, st.Sql)
@@ -288,12 +318,12 @@ func statementCanBeExecutedInUncommittedTransaction(
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable:
+	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable, *tree.RenameTable:
 		return true, nil
 	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
-	case *tree.SetVar:
+	case *tree.SetVar, *tree.SetTransaction:
 		return true, nil
 	case *tree.CloneTable,
 		*tree.CloneDatabase,
@@ -351,5 +381,8 @@ func preparedSQLCanBeExecutedInUncommittedTransaction(
 		return false, err
 	}
 	defer preStmt.Free()
+	if isDataBranchStatement(preStmt) {
+		return true, nil
+	}
 	return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 }

@@ -18,9 +18,20 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeepCopyTypePreservesPadSpace(t *testing.T) {
+	source := &planpb.Type{Id: int32(types.T_varchar), PadSpace: true}
+	cloned := DeepCopyType(source)
+
+	require.Equal(t, source, cloned)
+	require.NotSame(t, source, cloned)
+}
 
 func TestCloneTableDefForPlan(t *testing.T) {
 	require.Nil(t, CloneTableDefForPlan(nil, true))
@@ -57,6 +68,146 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyTableDefOwnsName2ColIndex(t *testing.T) {
+	source := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "a"}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+
+	for _, withCols := range []bool{true, false} {
+		cloned := DeepCopyTableDef(source, withCols)
+		require.Equal(t, source.Name2ColIndex, cloned.Name2ColIndex)
+		cloned.Name2ColIndex["a"] = 1
+		cloned.Name2ColIndex["new"] = 2
+		require.Equal(t, map[string]int32{"a": 0}, source.Name2ColIndex)
+		if withCols {
+			require.Len(t, cloned.Cols, 1)
+		} else {
+			require.Nil(t, cloned.Cols)
+		}
+	}
+
+	withoutMap := DeepCopyTableDef(&planpb.TableDef{}, true)
+	require.Nil(t, withoutMap.Name2ColIndex)
+}
+
+func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
+	source := &planpb.ColDef{
+		Name:          "display_name",
+		OriginName:    "source_name",
+		TblName:       "table_alias",
+		OriginTblName: "source_table",
+		DbName:        "source_db",
+	}
+
+	cloned := DeepCopyColDef(source)
+	require.NotSame(t, source, cloned)
+	require.Equal(t, source, cloned)
+}
+
+func TestDeepCopyIndexSearchScanOwnsNestedMetadata(t *testing.T) {
+	source := &planpb.IndexSearchScan{
+		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
+		SourceTableDef:      &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
+		Index:               &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+		HiddenTables:        []*planpb.IndexHiddenTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
+		QueryPayload:        &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		CandidateLimit:      MakePlan2Uint64ConstExprWithType(4),
+		IncludedColumns:     []string{"payload"},
+		AlgoOptions:         []byte(`{"initial_probe_count":2}`),
+		AlgoExprs:           []*planpb.Expr{MakePlan2Uint64ConstExprWithType(3)},
+		AlgoExprNames:       []string{"first_round_limit"},
+		ScanSnapshot:        &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 9}, Tenant: &planpb.SnapshotTenant{TenantID: 7}},
+		PostFilterOverFetch: true,
+	}
+
+	cloned := DeepCopyIndexSearchScan(source)
+	require.NotSame(t, source, cloned)
+	require.Equal(t, source.SourceTable, cloned.SourceTable)
+	require.Equal(t, source.Index, cloned.Index)
+	require.Equal(t, source.QueryPayload, cloned.QueryPayload)
+	require.Equal(t, source.CandidateLimit, cloned.CandidateLimit)
+	require.Equal(t, source.IncludedColumns, cloned.IncludedColumns)
+	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.True(t, cloned.PostFilterOverFetch)
+	require.NotSame(t, source.SourceTable, cloned.SourceTable)
+	require.NotSame(t, source.SourceTableDef, cloned.SourceTableDef)
+	require.NotSame(t, source.Index, cloned.Index)
+	require.NotSame(t, source.HiddenTables[0], cloned.HiddenTables[0])
+	require.NotSame(t, source.QueryPayload, cloned.QueryPayload)
+	require.NotSame(t, source.CandidateLimit, cloned.CandidateLimit)
+	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.Equal(t, source.AlgoOptions, cloned.AlgoOptions)
+	require.Equal(t, source.AlgoExprs, cloned.AlgoExprs)
+	require.Equal(t, source.AlgoExprNames, cloned.AlgoExprNames)
+	require.NotSame(t, &source.AlgoOptions[0], &cloned.AlgoOptions[0])
+	require.NotSame(t, source.AlgoExprs[0], cloned.AlgoExprs[0])
+}
+
+func TestDeepCopyExprAuxIdSemantics(t *testing.T) {
+	require.Nil(t, DeepCopyExpr(nil))
+	for _, test := range []struct {
+		name        string
+		auxID, want int32
+	}{
+		{"zero", 0, 0},
+		{"execution numbering", 7, 0},
+		{"memo key", -7, -7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := &planpb.Expr{
+				Typ:   planpb.Type{Id: int32(types.T_int64)},
+				AuxId: test.auxID, Ndv: 3, Selectivity: 0.25,
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}},
+			}
+			expected := *source
+			expected.AuxId = test.want
+			cloned := DeepCopyExpr(source)
+			require.True(t, proto.Equal(&expected, cloned))
+			require.NotSame(t, source, cloned)
+			cloned.GetP().Pos = 9
+			require.Equal(t, int32(2), source.GetP().Pos)
+			require.Equal(t, test.auxID, source.AuxId)
+		})
+	}
+	t.Run("nested numbering and provenance", func(t *testing.T) {
+		source := &planpb.Expr{
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "+"},
+				Args: []*planpb.Expr{
+					{AuxId: 3, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+					{AuxId: -4, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}},
+				},
+			}},
+			PreparedNumeric: &planpb.PreparedNumericMetadata{
+				Fallback: true, ParamPos: 2, FallbackSource: true,
+				FallbackSourceNodeId: 7, FallbackSourceColPos: 5,
+				StringDomainSource: &planpb.Expr{AuxId: 8, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}}},
+			},
+		}
+		cloned := DeepCopyExpr(source)
+		require.Zero(t, cloned.GetF().Args[0].AuxId)
+		require.Equal(t, int32(-4), cloned.GetF().Args[1].AuxId)
+		require.Zero(t, cloned.PreparedNumeric.StringDomainSource.AuxId)
+		expectedMetadata := *source.PreparedNumeric
+		expectedDomain := *source.PreparedNumeric.StringDomainSource
+		expectedDomain.AuxId = 0
+		expectedMetadata.StringDomainSource = &expectedDomain
+		require.True(t, proto.Equal(&expectedMetadata, cloned.PreparedNumeric))
+		cloned.GetF().Args[0].GetP().Pos = 9
+		cloned.GetF().Args[1].GetP().Pos = 9
+		cloned.PreparedNumeric.ParamPos = 9
+		cloned.PreparedNumeric.StringDomainSource.GetP().Pos = 9
+		require.Equal(t, int32(0), source.GetF().Args[0].GetP().Pos)
+		require.Equal(t, int32(1), source.GetF().Args[1].GetP().Pos)
+		require.Equal(t, int32(2), source.PreparedNumeric.ParamPos)
+		require.Equal(t, int32(2), source.PreparedNumeric.StringDomainSource.GetP().Pos)
+		require.Equal(t, int32(3), source.GetF().Args[0].AuxId)
+		require.Equal(t, int32(-4), source.GetF().Args[1].AuxId)
+		require.Equal(t, int32(8), source.PreparedNumeric.StringDomainSource.AuxId)
+	})
+}
+
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	source := &planpb.Expr{
 		Expr: &planpb.Expr_F{F: &planpb.Function{
@@ -67,6 +218,8 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	}
 
 	cloned := DeepCopyExpr(source)
+	require.True(t, proto.Equal(source, cloned))
+	require.NotSame(t, source.GetF().Func, cloned.GetF().Func)
 	require.NotSame(t, source.GetF(), cloned.GetF())
 	require.Equal(t, source.GetF().Func, cloned.GetF().Func)
 	require.Equal(t, source.GetF().AggConfig, cloned.GetF().AggConfig)
@@ -74,6 +227,22 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 
 	cloned.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}
+
+func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
+	source := &planpb.PreInsertCtx{
+		HasTargetSelector:  true,
+		TargetRowNumberCol: 7,
+		TargetActiveCol:    8,
+		TargetRowIdCol:     9,
+	}
+
+	cloned := DeepCopyPreInsertCtx(source)
+	require.NotSame(t, source, cloned)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIdCol)
 }
 
 func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
@@ -84,6 +253,8 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 		BuildExpr:           MakePlan2Int64ConstExprWithType(1),
 		NotOnPk:             true,
 		UseMembershipFilter: true,
+		ScalarPredicate:     true,
+		MustApply:           true,
 		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
 		ProbeType: &planpb.Type{
 			Id:         4,
@@ -104,6 +275,8 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	require.Equal(t, source.UpperLimit, cloned.UpperLimit)
 	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
 	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
+	require.True(t, cloned.ScalarPredicate)
+	require.True(t, cloned.MustApply)
 	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
 	require.Equal(t, source.ProbeType, cloned.ProbeType)
 	require.NotSame(t, source.ProbeType, cloned.ProbeType)
@@ -138,6 +311,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesProbeLayout(t *testing.T) {
 }
 
 func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
+	physicalKey := MakePlan2Int64ConstExprWithType(7)
 	buildSpec := &planpb.RuntimeFilterSpec{
 		Tag:         8,
 		BuildExpr:   MakePlan2Int64ConstExprWithType(1),
@@ -148,12 +322,14 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 		Expr: MakePlan2Int64ConstExprWithType(1),
 	}
 	source := &planpb.Node{
-		NodeType:               planpb.Node_FUZZY_FILTER,
-		FuzzyBuildSide:         planpb.Node_FUZZY_BUILD_SIDE_SINK,
-		IfInsertFromUnique:     true,
-		SpillMem:               64 << 10,
-		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{probeSpec},
-		RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{buildSpec},
+		NodeType:                planpb.Node_FUZZY_FILTER,
+		FuzzyBuildSide:          planpb.Node_FUZZY_BUILD_SIDE_SINK,
+		IfInsertFromUnique:      true,
+		SpillMem:                64 << 10,
+		PartitionAlgorithm:      planpb.Node_PARTITION_ALGORITHM_HASH,
+		PhysicalEqualityKeyList: []*planpb.Expr{physicalKey},
+		RuntimeFilterProbeList:  []*planpb.RuntimeFilterSpec{probeSpec},
+		RuntimeFilterBuildList:  []*planpb.RuntimeFilterSpec{buildSpec},
 		Fuzzymessage: &planpb.OriginTableMessageForFuzzy{
 			ParentTableName:  "parent",
 			ParentUniqueCols: []*planpb.ColDef{{Name: "uk"}},
@@ -165,6 +341,8 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.FuzzyBuildSide, cloned.FuzzyBuildSide)
 	require.Equal(t, source.IfInsertFromUnique, cloned.IfInsertFromUnique)
 	require.Equal(t, source.SpillMem, cloned.SpillMem)
+	require.Equal(t, source.PartitionAlgorithm, cloned.PartitionAlgorithm)
+	require.Equal(t, source.PhysicalEqualityKeyList, cloned.PhysicalEqualityKeyList)
 	require.Equal(t, source.RuntimeFilterProbeList,
 		cloned.RuntimeFilterProbeList)
 	require.Equal(t, source.RuntimeFilterBuildList,
@@ -172,6 +350,8 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.Fuzzymessage, cloned.Fuzzymessage)
 	require.NotSame(t, source.RuntimeFilterProbeList[0],
 		cloned.RuntimeFilterProbeList[0])
+	require.NotSame(t, source.PhysicalEqualityKeyList[0],
+		cloned.PhysicalEqualityKeyList[0])
 	require.NotSame(t, source.RuntimeFilterBuildList[0],
 		cloned.RuntimeFilterBuildList[0])
 	require.NotSame(t, source.Fuzzymessage, cloned.Fuzzymessage)
@@ -180,15 +360,296 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 
 	cloned.FuzzyBuildSide = planpb.Node_FUZZY_BUILD_SIDE_TABLE
 	cloned.SpillMem = 1
+	cloned.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
+	cloned.PhysicalEqualityKeyList[0].Typ.Scale = 9
 	cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale = 9
 	cloned.Fuzzymessage.ParentUniqueCols[0].Name = "changed"
 	require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		source.FuzzyBuildSide)
 	require.Equal(t, int64(64<<10), source.SpillMem)
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, source.PartitionAlgorithm)
+	require.NotEqual(t,
+		cloned.PhysicalEqualityKeyList[0].Typ.Scale,
+		source.PhysicalEqualityKeyList[0].Typ.Scale)
 	require.NotEqual(t,
 		cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale,
 		source.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale)
 	require.Equal(t, "uk", source.Fuzzymessage.ParentUniqueCols[0].Name)
+}
+
+func TestDeepCopyNodePreservesJoinMessages(t *testing.T) {
+	source := &planpb.Node{
+		SendMsgList: []planpb.MsgHeader{{MsgTag: 17, MsgType: 1}},
+		RecvMsgList: []planpb.MsgHeader{{MsgTag: 17, MsgType: 2}},
+	}
+
+	cloned := DeepCopyNode(source)
+
+	require.Equal(t, source.SendMsgList, cloned.SendMsgList)
+	require.Equal(t, source.RecvMsgList, cloned.RecvMsgList)
+	require.NotSame(t, &source.SendMsgList[0], &cloned.SendMsgList[0])
+	require.NotSame(t, &source.RecvMsgList[0], &cloned.RecvMsgList[0])
+
+	cloned.SendMsgList[0].MsgTag = 23
+	cloned.RecvMsgList[0].MsgType = 4
+	require.Equal(t, int32(17), source.SendMsgList[0].MsgTag)
+	require.Equal(t, int32(2), source.RecvMsgList[0].MsgType)
+}
+
+func TestDeepCopyAsofRightColumnAcrossQueryAndPlan(t *testing.T) {
+	sourceNode := &planpb.Node{
+		NodeType:     planpb.Node_JOIN,
+		JoinType:     planpb.Node_ASOF,
+		AsofRightCol: 7,
+	}
+	query := &planpb.Query{Nodes: []*planpb.Node{sourceNode}}
+	clonedQuery := DeepCopyQuery(query)
+	require.Equal(t, int32(7), clonedQuery.Nodes[0].AsofRightCol)
+
+	pl := &Plan{Plan: &planpb.Plan_Query{Query: query}, IsPrepare: true, TryRunTimes: 3}
+	clonedPlan := DeepCopyPlan(pl)
+	require.NotNil(t, clonedPlan)
+	require.True(t, clonedPlan.IsPrepare)
+	require.Equal(t, int32(3), clonedPlan.TryRunTimes)
+	require.NotSame(t, pl, clonedPlan)
+	require.NotSame(t, query, clonedPlan.GetQuery())
+	require.NotSame(t, sourceNode, clonedQuery.Nodes[0])
+	require.NotSame(t, sourceNode, clonedPlan.GetQuery().Nodes[0])
+	require.Equal(t, int32(7), clonedPlan.GetQuery().Nodes[0].AsofRightCol)
+}
+
+func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
+	source := &planpb.Node{
+		NodeType:          planpb.Node_MULTI_UPDATE,
+		OnDuplicateAction: planpb.Node_UPDATE,
+		ApplyType:         planpb.Node_OUTERAPPLY,
+		ScanSnapshot: &planpb.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: 11, LogicalTime: 7},
+		},
+		PreInsertSkCtx: &planpb.PreInsertUkCtx{
+			Columns:                []int32{1, 3},
+			KeyColumns:             []int32{4, 5},
+			ConflictColumns:        []int32{6},
+			TargetColumns:          []int32{7, 8},
+			OutputColumns:          2,
+			PkColumn:               1,
+			InsertIgnoreMultiDedup: true,
+			OdkuTargetArbitration:  true,
+		},
+		PostDmlCtx: &planpb.PostDmlCtx{
+			Ref:            &planpb.ObjectRef{Obj: 42, ObjName: "t"},
+			PrimaryKeyIdx:  3,
+			PrimaryKeyName: "id",
+			IsInsert:       true,
+		},
+	}
+
+	cloned := DeepCopyNode(source)
+	require.Equal(t, source.OnDuplicateAction, cloned.OnDuplicateAction)
+	require.Equal(t, source.ApplyType, cloned.ApplyType)
+	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.NotSame(t, source.ScanSnapshot.TS, cloned.ScanSnapshot.TS)
+	require.Equal(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.NotSame(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.Equal(t, source.PostDmlCtx, cloned.PostDmlCtx)
+	require.NotSame(t, source.PostDmlCtx, cloned.PostDmlCtx)
+	require.NotSame(t, source.PostDmlCtx.Ref, cloned.PostDmlCtx.Ref)
+
+	cloned.OnDuplicateAction = planpb.Node_IGNORE
+	cloned.ScanSnapshot.TS.PhysicalTime = 99
+	cloned.PreInsertSkCtx.Columns[0] = 9
+	cloned.PreInsertSkCtx.TargetColumns[0] = 99
+	cloned.PostDmlCtx.Ref.ObjName = "changed"
+	require.Equal(t, planpb.Node_UPDATE, source.OnDuplicateAction)
+	require.Equal(t, int64(11), source.ScanSnapshot.TS.PhysicalTime)
+	require.Equal(t, int32(1), source.PreInsertSkCtx.Columns[0])
+	require.Equal(t, int32(7), source.PreInsertSkCtx.TargetColumns[0])
+	require.Equal(t, "t", source.PostDmlCtx.Ref.ObjName)
+}
+
+func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
+	source := &planpb.Query{
+		ViewReferences: []*planpb.ViewReference{{
+			ViewPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "inner", SubscriptionName: "sub",
+				Snapshot: &planpb.Snapshot{
+					TS:        &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+					Tenant:    &planpb.SnapshotTenant{TenantID: 9, TenantName: "tenant"},
+					ExtraInfo: &planpb.SnapshotExtraInfo{Name: "historical", Level: "account", ObjId: 9},
+				}}},
+		}},
+		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{
+			{Table: &planpb.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_missing"},
+			nil,
+		},
+		Params:              []*planpb.Expr{{AuxId: -3, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}}}},
+		CatalogDependencies: []*planpb.ObjectRef{{SchemaName: "db", ObjName: "dependency"}},
+		HasReturning:        true, ReturningStep: 7, ApplySqlSelectLimit: true,
+		Steps:       []int32{3, 7},
+		Headings:    []string{"id"},
+		LoadTag:     true,
+		LoadWriteS3: true,
+		MaxDop:      8,
+		BackgroundQueries: []*planpb.Query{{
+			StmtType: planpb.Query_SELECT,
+			Headings: []string{"background"},
+		}, nil},
+	}
+
+	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
+	cloned := DeepCopyQuery(source)
+	require.True(t, proto.Equal(source, cloned))
+	require.Equal(t, source.ViewReferences, cloned.ViewReferences)
+	cloned.ViewReferences[0].ViewPath[0].ViewName = "changed"
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name = "changed"
+	require.Equal(t, "inner", source.ViewReferences[0].ViewPath[0].ViewName)
+	require.Equal(t, int64(42), source.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime)
+	require.Equal(t, uint32(9), source.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID)
+	require.Equal(t, "historical", source.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name)
+	require.Equal(t, source.UnresolvedIndexHints, cloned.UnresolvedIndexHints)
+	require.NotSame(t, source.UnresolvedIndexHints[0], cloned.UnresolvedIndexHints[0])
+	require.NotSame(t, source.UnresolvedIndexHints[0].Table, cloned.UnresolvedIndexHints[0].Table)
+	cloned.UnresolvedIndexHints[0].IndexName = "changed"
+	cloned.UnresolvedIndexHints[0].Table.ObjName = "changed"
+	require.Equal(t, "idx_missing", source.UnresolvedIndexHints[0].IndexName)
+	require.Equal(t, "t", source.UnresolvedIndexHints[0].Table.ObjName)
+	require.Equal(t, source.Steps, cloned.Steps)
+	require.Equal(t, source.Headings, cloned.Headings)
+	require.True(t, cloned.LoadTag)
+	require.True(t, cloned.LoadWriteS3)
+	require.Equal(t, int64(8), cloned.MaxDop)
+	require.Len(t, cloned.BackgroundQueries, 2)
+	require.Nil(t, cloned.BackgroundQueries[1])
+	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
+
+	cloned.Params[0].GetP().Pos = 99
+	cloned.CatalogDependencies[0].ObjName = "changed"
+	require.Equal(t, int32(2), source.Params[0].GetP().Pos)
+	require.Equal(t, "dependency", source.CatalogDependencies[0].ObjName)
+	cloned.Steps[0] = 99
+	cloned.Headings[0] = "changed"
+	cloned.BackgroundQueries[0].Headings[0] = "changed"
+	require.Equal(t, int32(3), source.Steps[0])
+	require.Equal(t, "id", source.Headings[0])
+	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
+}
+
+func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T) {
+	source := &planpb.DataDefinition{
+		DdlType: planpb.DataDefinition_CREATE_TABLE,
+		Definition: &planpb.DataDefinition_CreateTable{
+			CreateTable: &planpb.CreateTable{
+				Database:          "db",
+				CreateAsSelectSql: "insert into `db`.`ctas` select ?",
+				UpdateFkSqls:      []string{"insert into mo_foreign_keys ..."},
+				RawSQL:            "create table `db`.`ctas` as select ?",
+				FkDbs:             []string{"db"},
+				FkTables:          []string{"parent"},
+				FkCols:            []*planpb.FkColName{{Cols: []string{"parent_id"}}},
+				FksReferToMe: []*planpb.ForeignKeyInfo{{
+					Db:    "db",
+					Table: "child",
+					Cols:  &planpb.FkColName{Cols: []string{"id"}},
+					Def: &planpb.ForeignKeyDef{
+						Name:        "fk_child_parent",
+						ForeignTbl:  17,
+						ForeignCols: []uint64{3},
+					},
+				}},
+			},
+		},
+	}
+
+	cloned := DeepCopyDataDefinition(source)
+	require.Equal(t, source, cloned)
+	createTable := cloned.GetCreateTable()
+	require.NotSame(t, source.GetCreateTable(), createTable)
+	require.NotSame(t, source.GetCreateTable().FkCols[0], createTable.FkCols[0])
+	require.NotSame(t, source.GetCreateTable().FksReferToMe[0], createTable.FksReferToMe[0])
+	require.NotSame(t, source.GetCreateTable().FksReferToMe[0].Def,
+		createTable.FksReferToMe[0].Def)
+
+	createTable.CreateAsSelectSql = "changed"
+	createTable.UpdateFkSqls[0] = "changed"
+	createTable.RawSQL = "changed"
+	createTable.FkCols[0].Cols[0] = "changed"
+	createTable.FksReferToMe[0].Def.Name = "changed"
+	require.Equal(t, "insert into `db`.`ctas` select ?", source.GetCreateTable().CreateAsSelectSql)
+	require.Equal(t, "insert into mo_foreign_keys ...", source.GetCreateTable().UpdateFkSqls[0])
+	require.Equal(t, "create table `db`.`ctas` as select ?", source.GetCreateTable().RawSQL)
+	require.Equal(t, "parent_id", source.GetCreateTable().FkCols[0].Cols[0])
+	require.Equal(t, "fk_child_parent", source.GetCreateTable().FksReferToMe[0].Def.Name)
+}
+
+func TestDeepCopyDataDefinitionTruncatePreservesExecutionFields(t *testing.T) {
+	source := &planpb.DataDefinition{
+		DdlType: planpb.DataDefinition_TRUNCATE_TABLE,
+		Definition: &planpb.DataDefinition_TruncateTable{
+			TruncateTable: &planpb.TruncateTable{
+				Database:        "db",
+				Table:           "t",
+				IndexTableNames: []string{"idx_t"},
+				TableId:         42,
+				ForeignTbl:      []uint64{7, 8},
+				IsDelete:        true,
+			},
+		},
+	}
+
+	cloned := DeepCopyDataDefinition(source)
+	require.Equal(t, source, cloned)
+	require.NotSame(t, source.GetTruncateTable(), cloned.GetTruncateTable())
+
+	cloned.GetTruncateTable().ForeignTbl[0] = 99
+	cloned.GetTruncateTable().IndexTableNames[0] = "changed"
+	cloned.GetTruncateTable().TableId = 100
+	require.Equal(t, uint64(7), source.GetTruncateTable().ForeignTbl[0])
+	require.Equal(t, "idx_t", source.GetTruncateTable().IndexTableNames[0])
+	require.Equal(t, uint64(42), source.GetTruncateTable().TableId)
+}
+
+func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
+	source := &planpb.Node{
+		NodeType:               planpb.Node_FILTER,
+		FilterIsBarrier:        true,
+		DedupInputKeysUnique:   true,
+		EmitCompressedRowCount: true,
+	}
+
+	cloned := DeepCopyNode(source)
+	require.True(t, cloned.FilterIsBarrier)
+	require.True(t, cloned.DedupInputKeysUnique)
+	require.True(t, cloned.EmitCompressedRowCount)
+
+	payload, err := source.Marshal()
+	require.NoError(t, err)
+	roundTrip := new(planpb.Node)
+	require.NoError(t, roundTrip.Unmarshal(payload))
+	require.True(t, roundTrip.FilterIsBarrier)
+	require.True(t, roundTrip.DedupInputKeysUnique)
+	require.True(t, roundTrip.EmitCompressedRowCount)
+}
+
+func TestDeepCopyNodePreservesSecondaryIndexPreInsertContext(t *testing.T) {
+	source := &planpb.Node{
+		NodeType: planpb.Node_PRE_INSERT_SK,
+		PreInsertSkCtx: &planpb.PreInsertUkCtx{
+			Columns:  []int32{1, 3},
+			PkColumn: 4,
+		},
+	}
+
+	cloned := DeepCopyNode(source)
+	require.Equal(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.NotSame(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	cloned.PreInsertSkCtx.Columns[0] = 2
+	require.Equal(t, int32(1), source.PreInsertSkCtx.Columns[0])
 }
 
 var clonedTableDef *planpb.TableDef

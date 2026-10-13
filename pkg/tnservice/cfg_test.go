@@ -16,7 +16,9 @@ package tnservice
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/assert"
@@ -28,6 +30,22 @@ func TestValidateRejectsInvalidLogtailRPCMessageSize(t *testing.T) {
 		c.LogtailServer.RpcMaxMessageSize = size
 		assert.Error(t, c.Validate())
 	}
+}
+
+func TestValidateHeartbeatDurations(t *testing.T) {
+	for name, interval := range map[string]time.Duration{
+		"negative interval":       -time.Nanosecond,
+		"exceeds progress budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{UUID: "tn1"}
+			cfg.HAKeeper.HeatbeatInterval.Duration = interval
+			assert.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat interval")
+		})
+	}
+	cfg := Config{UUID: "tn1"}
+	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
+	assert.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
 }
 
 func TestValidateRejectsRemovedMemoryStorage(t *testing.T) {

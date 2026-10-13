@@ -130,9 +130,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := DoWithRetryContext(ctx, "cos bucket head", func() (*cos.Response, error) {
+		_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
 			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
-		}, maxRetryAttemps, IsRetryableError)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -150,6 +150,7 @@ func NewQCloudSDK(
 }
 
 var _ objectStorageCopier = new(QCloudSDK)
+var _ objectStorageIdentityReader = new(QCloudSDK)
 
 func (a *QCloudSDK) CopyObject(
 	ctx context.Context,
@@ -251,6 +252,63 @@ func (a *QCloudSDK) Stat(
 	return
 }
 
+func (a *QCloudSDK) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	header, err := a.statObject(ctx, key)
+	if err != nil {
+		if a.is404(err) {
+			return ObjectIdentity{}, moerr.NewFileNotFoundNoCtx(key)
+		}
+		return ObjectIdentity{}, err
+	}
+	size, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	identity := ObjectIdentity{
+		VersionID: header.Get("x-cos-version-id"),
+		ETag:      header.Get("ETag"),
+		Size:      size,
+	}
+	if modified := header.Get("Last-Modified"); modified != "" {
+		identity.LastModified, err = http.ParseTime(modified)
+		if err != nil {
+			return ObjectIdentity{}, err
+		}
+	}
+	return identity, identity.Validate()
+}
+
+func (a *QCloudSDK) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	r, err := a.getObjectWithIdentity(ctx, key, min, max, &expected)
+	if err != nil {
+		return nil, mapQCloudConditionalReadError(err)
+	}
+	r = mapReadCloserErrors(r, mapQCloudConditionalReadError)
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+}
+
+func mapQCloudConditionalReadError(err error) error {
+	var response *cos.ErrorResponse
+	if errors.As(err, &response) && response.Response != nil &&
+		(response.Response.StatusCode == http.StatusNotFound ||
+			response.Response.StatusCode == http.StatusPreconditionFailed) {
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional COS read failed"))
+	}
+	return err
+}
+
 func (a *QCloudSDK) Exists(
 	ctx context.Context,
 	key string,
@@ -301,7 +359,7 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
@@ -334,13 +392,32 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
 	}
 
 	return
+}
+
+// Only Write owns a replayable PUT body. Keep HTTP EOF recovery local to it,
+// without making source-reader EOF or state-creating multipart POST retryable.
+func isRetryableQCloudPutError(err error) bool {
+	if IsRetryableError(err) {
+		return true
+	}
+	var retryErr *cos.RetryError
+	if errors.As(err, &retryErr) {
+		for _, innerErr := range retryErr.Errs {
+			if isRetryableQCloudPutError(innerErr) {
+				return true
+			}
+		}
+		return false
+	}
+	var httpErr *url.Error
+	return errors.As(err, &httpErr) && httpErr.Op == "Put" && errors.Is(httpErr.Err, io.EOF)
 }
 
 func (a *QCloudSDK) SupportsParallelMultipart() bool {
@@ -601,7 +678,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				<-getParallelUploadSemaphore()
 				<-uploadSlots
 			}()
-			if ctx.Err() != nil {
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				setErr(ctxErr)
 				releasePartBuffer(job.part)
 				return
 			}
@@ -676,9 +757,6 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	if firstErr != nil {
 		err = firstErr
 		return err
-	}
-	if len(parts) == 0 {
-		return nil
 	}
 	if len(parts) != int(partNum) {
 		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
@@ -821,7 +899,7 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 		opts.MaxKeys = a.listMaxKeys
 	}
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
@@ -834,8 +912,6 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 			}
 			return result, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -843,7 +919,7 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
@@ -856,8 +932,6 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 			}
 			return resp.Header, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -891,6 +965,16 @@ func (a *QCloudSDK) putObject(
 }
 
 func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	return a.getObjectWithIdentity(ctx, key, min, max, nil)
+}
+
+func (a *QCloudSDK) getObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected *ObjectIdentity,
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.getObject")
 	defer task.End()
 
@@ -902,22 +986,33 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 		func(offset int64) (io.ReadCloser, error) {
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			opts := &cos.ObjectGetOptions{
 				Range: rang,
 			}
+			if expected != nil && expected.VersionID == "" {
+				headers := make(http.Header)
+				headers.Set("If-Match", expected.ETag)
+				opts.XOptionHeader = &headers
+			}
 
-			return DoWithRetryContext(
+			return doQCloudReadWithRetry(
 				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					resp, err := a.client.Object.Get(ctx, key, opts)
+					var resp *cos.Response
+					var err error
+					if expected != nil && expected.VersionID != "" {
+						resp, err = a.client.Object.Get(ctx, key, opts, expected.VersionID)
+					} else {
+						resp, err = a.client.Object.Get(ctx, key, opts)
+					}
 					if err != nil {
 						return nil, err
 					}
@@ -930,14 +1025,52 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 						},
 					}, nil
 				},
-				maxRetryAttemps,
-				IsRetryableError,
 			)
 
 		},
 		*min,
 		IsRetryableError,
 	)
+}
+
+// doQCloudReadWithRetry keeps cancellation recognizable across the COS SDK's
+// opaque RetryError boundary. It is limited to side-effect-free operations;
+// mutating requests need operation-specific handling for ambiguous outcomes.
+func doQCloudReadWithRetry[T any](
+	ctx context.Context,
+	what string,
+	fn func() (T, error),
+) (T, error) {
+	result, err := DoWithRetryContext(
+		ctx,
+		what,
+		fn,
+		maxRetryAttemps,
+		IsRetryableError,
+	)
+	return result, normalizeQCloudContextError(ctx, err)
+}
+
+func normalizeQCloudContextError(ctx context.Context, err error) error {
+	if err == nil || ctx == nil {
+		return err
+	}
+	contextErr := ctx.Err()
+	if contextErr == nil {
+		return err
+	}
+
+	// cos.RetryError does not implement Unwrap, so an in-flight request can
+	// lose its cancellation identity even when its only child is ctx.Err().
+	// Do not collapse mixed or unrelated storage errors.
+	retryErr, ok := err.(*cos.RetryError)
+	if !ok ||
+		len(retryErr.Errs) != 1 ||
+		!errors.Is(retryErr.Errs[0], contextErr) {
+		return err
+	}
+
+	return contextErr
 }
 
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {

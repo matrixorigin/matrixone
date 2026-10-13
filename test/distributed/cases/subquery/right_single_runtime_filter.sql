@@ -1,6 +1,7 @@
 -- @suite
--- This suite asserts SQL semantics only and is intentionally topology-agnostic:
--- the same file runs in standalone and multi-CN BVT jobs.
+-- This suite asserts SQL semantics plus the stable logical runtime-filter
+-- contract, while remaining deployment-topology agnostic: the same file runs
+-- in standalone and multi-CN BVT jobs.
 -- @setup
 drop database if exists right_single_rf;
 create database right_single_rf;
@@ -18,6 +19,13 @@ insert into small_lookup values
     (2, 5000, 49999),
     (3, 30000, 0),
     (4, null, 0);
+
+-- @case
+-- @desc: a naturally local query uses bounded right-SINGLE RF when small-build statistics are unavailable
+-- @label:bvt
+explain select s.id, (select b.v from big_pk b where b.id = s.lookup_id) as scalar_v
+from small_lookup s
+order by s.id;
 
 -- @case
 -- @desc: right-SINGLE exact-IN keeps match, missing and NULL preserved rows
@@ -81,6 +89,32 @@ insert into big_composite values (1, 3, 101);
 select s.id, (select b.v from big_composite b where b.a = s.a) as scalar_v
 from small_composite s
 where s.id = 1;
+
+-- @case
+-- @desc: a component IN is not a full-key lookup; keep every matching suffix
+-- @label:bvt
+select s.id, b.a, b.b, b.v
+from big_composite b join small_lookup s on b.a = s.lookup_id
+order by s.id, b.b;
+
+-- @case
+-- @desc: leading-key membership preserves duplicate probe values
+-- @label:bvt
+select b.a, b.b from big_composite b
+where b.a in (select lookup_id from small_lookup)
+order by b.a, b.b;
+
+-- @case
+-- @desc: partial-key filtering must not remove unmatched preserved rows
+-- @label:bvt
+select s.id, b.b from small_lookup s
+left join big_composite b on b.a = s.lookup_id
+order by s.id, b.b;
+
+-- @case
+-- @desc: empty component-key build returns no matches
+-- @label:bvt
+select count(*) from big_composite b join empty_lookup e on b.a = e.lookup_id;
 
 -- @case
 -- @desc: UPDATE SET correlated scalar preserves affected rows and missing NULL

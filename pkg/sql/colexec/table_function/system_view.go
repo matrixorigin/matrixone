@@ -22,12 +22,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -45,16 +47,57 @@ const (
 	lockStatusNone     = "none"     // nobody waits and holds the lock
 )
 
-func getLockStatus(li *query.LockInfo) string {
-	hasHolders := len(li.GetHolders()) != 0
-	hasWaiters := len(li.GetWaiters()) != 0
-	if !hasHolders && !hasWaiters {
+func getLockStatus(holders, waiters []*pblock.WaitTxn) string {
+	if len(holders) == 0 && len(waiters) == 0 {
 		return lockStatusNone
-	} else if hasHolders {
+	} else if len(holders) != 0 {
 		return lockStatusAcquired
 	} else {
 		return lockStatusWait
 	}
+}
+
+func filterTxnInfoForAccount(accountID uint32, txns []*query.TxnInfo) []*query.TxnInfo {
+	if accountID == catalog.System_Account {
+		return txns
+	}
+
+	filtered := make([]*query.TxnInfo, 0, len(txns))
+	for _, txn := range txns {
+		if txn != nil && txn.GetAccountID() == accountID {
+			filtered = append(filtered, txn)
+		}
+	}
+	return filtered
+}
+
+func collectTxnIDs(rsps []*query.GetTxnInfoResponse) map[string]struct{} {
+	txnIDs := make(map[string]struct{})
+	for _, rsp := range rsps {
+		if rsp == nil {
+			continue
+		}
+		for _, txn := range rsp.GetTxnInfoList() {
+			if txn == nil || txn.GetMeta() == nil || len(txn.GetMeta().GetID()) == 0 {
+				continue
+			}
+			txnIDs[string(txn.GetMeta().GetID())] = struct{}{}
+		}
+	}
+	return txnIDs
+}
+
+func filterWaitTxns(txns []*pblock.WaitTxn, visibleTxnIDs map[string]struct{}) []*pblock.WaitTxn {
+	filtered := make([]*pblock.WaitTxn, 0, len(txns))
+	for _, txn := range txns {
+		if txn == nil {
+			continue
+		}
+		if _, ok := visibleTxnIDs[string(txn.GetTxnID())]; ok {
+			filtered = append(filtered, txn)
+		}
+	}
+	return filtered
 }
 
 func getRangeKeys(li *query.LockInfo) ([]byte, []byte) {
@@ -105,6 +148,20 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+
+	var visibleTxnIDs map[string]struct{}
+	if accountID != catalog.System_Account {
+		txnRsps, err := getTxns(proc)
+		if err != nil {
+			return err
+		}
+		visibleTxnIDs = collectTxnIDs(txnRsps)
+	}
+
 	rsps, err := getLocks(proc)
 	if err != nil {
 		return err
@@ -142,15 +199,21 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 
 			//lock mode
 			lockMode := lock.GetLockMode().String()
-			//lock status
-			lockStatus := getLockStatus(lock)
 			//lock wait
 			lockWait := ""
 
 			hList := lock.GetHolders()
-			hLen := len(hList)
 			wList := lock.GetWaiters()
+			if visibleTxnIDs != nil {
+				hList = filterWaitTxns(hList, visibleTxnIDs)
+				wList = filterWaitTxns(wList, visibleTxnIDs)
+				if len(hList) == 0 && len(wList) == 0 {
+					continue
+				}
+			}
+			hLen := len(hList)
 			wLen := len(wList)
+			lockStatus := getLockStatus(hList, wList)
 
 			record := make([][]byte, len(plan2.MoLocksColNames))
 			record[plan2.MoLocksColTypeCnId] = []byte(cnId)
@@ -545,7 +608,10 @@ func fillTxnRecord(proc *process.Process, attrs []string, bat *batch.Batch, reco
 
 // getTxns get txn info from all cn
 func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
-	var err error
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
 	var nodes []string
 
 	selectSuperTenant(
@@ -568,7 +634,11 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 
 	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
 		if rsp != nil && rsp.GetTxnInfoResponse != nil {
-			rsps = append(rsps, rsp.GetTxnInfoResponse)
+			txnRsp := rsp.GetTxnInfoResponse
+			rsps = append(rsps, &query.GetTxnInfoResponse{
+				CnId:        txnRsp.GetCnId(),
+				TxnInfoList: filterTxnInfoForAccount(accountID, txnRsp.GetTxnInfoList()),
+			})
 		}
 	}
 

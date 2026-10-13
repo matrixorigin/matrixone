@@ -28,47 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ivfpqScanNode mirrors cagraScanNode for the ivfpq tests — same column shape
-// (vec_col at pos 0, id PK at pos 1).
-func ivfpqScanNode() *plan.Node {
-	return &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
-			},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
-		},
-	}
-}
-
-func ivfpqVecCtx(scanNode *plan.Node) *vectorSortContext {
-	limit := makePlan2Uint64ConstExprWithType(10)
-	return &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{ObjName: "l2_distance"},
-			Args: []*plan.Expr{
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
-				},
-			},
-		},
-		scanNode:    scanNode,
-		limit:       DeepCopyExpr(limit),
-		resultLimit: limit,
-	}
-}
-
 func ivfpqMTI(algoParams string) *MultiTableIndex {
 	return &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -84,28 +43,28 @@ func ivfpqMTI(algoParams string) *MultiTableIndex {
 }
 
 func TestPrepareIvfpqIndexContext_NilVecCtx(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareIvfpqIndexContext(nil, &MultiTableIndex{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_NilMultiTableIndex(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareIvfpqIndexContext(&vectorSortContext{}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_NilDistFnExpr(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareIvfpqIndexContext(&vectorSortContext{distFnExpr: nil}, &MultiTableIndex{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_ForceMode(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}},
 		rankOption: &plan.RankOption{Mode: "force"},
@@ -116,7 +75,7 @@ func TestPrepareIvfpqIndexContext_ForceMode(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_DescBlocksRewrite(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{
 		distFnExpr:    &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}},
 		sortDirection: plan.OrderBySpec_DESC,
@@ -127,7 +86,7 @@ func TestPrepareIvfpqIndexContext_DescBlocksRewrite(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_NilMetaDef(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -141,7 +100,7 @@ func TestPrepareIvfpqIndexContext_NilMetaDef(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_NilIdxDef(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -155,7 +114,7 @@ func TestPrepareIvfpqIndexContext_NilIdxDef(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI("not valid json")
 	r, err := b.prepareIvfpqIndexContext(v, mti)
@@ -164,7 +123,7 @@ func TestPrepareIvfpqIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_OpTypeMismatch(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI(`{"op_type": "vector_cosine_ops"}`)
 	r, err := b.prepareIvfpqIndexContext(v, mti)
@@ -175,7 +134,7 @@ func TestPrepareIvfpqIndexContext_OpTypeMismatch(t *testing.T) {
 // op_type present but not a string → StrictString fails and the function
 // returns (nil, nil).
 func TestPrepareIvfpqIndexContext_OpTypeNotString(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI(`{"op_type": 123}`)
 	r, err := b.prepareIvfpqIndexContext(v, mti)
@@ -184,8 +143,8 @@ func TestPrepareIvfpqIndexContext_OpTypeNotString(t *testing.T) {
 }
 
 func TestPrepareIvfpqIndexContext_ArgsNotFound(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	scan := ivfpqScanNode()
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	scan := vectorProviderScanNode()
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{ObjName: "l2_distance"},
@@ -204,7 +163,7 @@ func TestPrepareIvfpqIndexContext_ArgsNotFound(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_ResolveThreadsError(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			if name == "ivfpq_threads_search" {
 				return nil, moerr.NewInternalError(context.Background(), "threads error")
@@ -213,7 +172,7 @@ func TestPrepareIvfpqIndexContext_ResolveThreadsError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -222,7 +181,7 @@ func TestPrepareIvfpqIndexContext_ResolveThreadsError(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_ResolveBatchWindowError(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			if name == "ivfpq_threads_search" {
 				return int64(4), nil
@@ -234,7 +193,7 @@ func TestPrepareIvfpqIndexContext_ResolveBatchWindowError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -243,7 +202,7 @@ func TestPrepareIvfpqIndexContext_ResolveBatchWindowError(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_ResolveProbeLimitError(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			if name == "ivfpq_threads_search" {
 				return int64(4), nil
@@ -258,7 +217,7 @@ func TestPrepareIvfpqIndexContext_ResolveProbeLimitError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -267,7 +226,7 @@ func TestPrepareIvfpqIndexContext_ResolveProbeLimitError(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "ivfpq_threads_search":
@@ -282,14 +241,14 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
 	algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()), ivfpqMTI(algo))
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
 	assert.Equal(t, "l2_distance", r.origFuncName)
 	assert.Equal(t, int32(0), r.partPos)
 	assert.Equal(t, int32(1), r.pkPos)
-	assert.Equal(t, algo, r.params)
+	assert.Equal(t, algo, r.idxDef.IndexAlgoParams)
 	assert.Equal(t, int64(8), r.nThread)
 	assert.Equal(t, int64(64), r.batchWindow)
 	assert.Equal(t, int64(15), r.nProbe)
@@ -297,40 +256,40 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 }
 
 func TestApplyIndicesForSortUsingIvfpq_NilGuards(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
-	got, err := b.applyIndicesForSortUsingIvfpq(7, nil, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingIvfpq(7, nil, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 }
 
 func TestApplyIndicesForSortUsingIvfpq_PrepareReturnsNil(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	// applyIndicesForSortUsingIvfpq indexes builder.ctxByNode[nodeID] before
 	// calling prepare, so we must seed at least one slot.
 	b.ctxByNode = append(b.ctxByNode, NewBindContext(b, nil))
 
-	scan := ivfpqScanNode()
-	v := ivfpqVecCtx(scan)
+	scan := vectorProviderScanNode()
+	v := vectorProviderVecCtx(scan)
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 
-	got, err := b.applyIndicesForSortUsingIvfpq(0, v, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingIvfpq(0, v, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(0), got)
 }
 
 func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "ivfpq_threads_search":
@@ -409,7 +368,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	sortID := vecCtx.projNode.Children[0]
@@ -419,8 +378,22 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	join := builder.qry.Nodes[joinID]
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, ivfpqplan.IVFPQSearchFuncName, right.TableDef.TblFunc.Name)
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	spec := right.IndexSearchScan
+	require.NotNil(t, spec)
+	assert.Equal(t, "l2_distance", spec.DistanceFunction)
+	assert.False(t, spec.PostFilterOverFetch)
+	assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
+	require.Len(t, spec.HiddenTables, 2)
+	assert.Equal(t, catalog.Ivfpq_TblType_Metadata, spec.HiddenTables[0].Role)
+	assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
+	assert.Equal(t, catalog.Ivfpq_TblType_Storage, spec.HiddenTables[1].Role)
+	assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
+	opts, err := ivfpqplan.DecodeScanOptions(spec.AlgoOptions)
+	require.NoError(t, err)
+	assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
+	assert.Empty(t, opts.FilterJSON)
+	assert.Equal(t, uint(10), opts.Nprobe)
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through
@@ -431,7 +404,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 //   - vecCtx.childNode set so the projMap rewrite runs
 func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "ivfpq_threads_search":
@@ -573,21 +546,26 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	sortID := vecCtx.projNode.Children[0]
 	sort := builder.qry.Nodes[sortID]
 	join := builder.qry.Nodes[sort.Children[0]]
 	tf := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, tf.NodeType)
-	assert.Equal(t, 3, len(tf.TblFuncExprList), "expected predsJSON arg appended")
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tf.NodeType)
+	assert.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	opts, err := ivfpqplan.DecodeScanOptions(tf.IndexSearchScan.AlgoOptions)
+	require.NoError(t, err)
+	assert.NotEmpty(t, opts.FilterJSON, "INCLUDE predicate should be pushed to the search")
+	// The distance filter moves onto the index search scan.
 	assert.NotEmpty(t, tf.FilterList)
+	assert.Len(t, scanNode.FilterList, 1)
 }
 
 func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "ivfpq_threads_search":
@@ -669,6 +647,89 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
+
+	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	join := builder.qry.Nodes[sort.Children[0]]
+	right := builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	assert.True(t, right.IndexSearchScan.PostFilterOverFetch)
+	// The candidate limit stays the raw k; execution over-fetches.
+	assert.NotNil(t, right.IndexSearchScan.CandidateLimit.GetCol())
+	assert.Nil(t, right.Limit)
+}
+
+// Exercise the actual GPU context builders: nil settings use their defaults,
+// while procedure-local values and resolver errors cannot cause an assertion panic.
+func TestPrepareIvfpqAndCagraIndexContext_Variables(t *testing.T) {
+	resolverErr := moerr.NewInternalError(context.Background(), "probe resolver failed")
+	for _, tc := range []struct {
+		name       string
+		probe      any
+		resolveErr error
+		nonzero    bool
+		wantProbe  int64
+		wantErr    bool
+	}{
+		{"nil defaults", nil, nil, false, 20, false},
+		{"explicit settings", int64(7), nil, true, 7, false},
+		{"string procedure variable", "7", nil, false, 0, true},
+		{"boolean procedure variable", true, nil, false, 0, true},
+		{"resolver error", nil, resolverErr, false, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := map[string]int64{}
+			if tc.nonzero {
+				settings = map[string]int64{"ivfpq_threads_search": 3, "ivfpq_batch_window": 5,
+					"cagra_threads_search": 7, "cagra_batch_window": 11, "gpu_multi_simulation": 4}
+			}
+			mock := &customMockCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+				resolveVarFunc: func(name string, _, _ bool) (interface{}, error) {
+					if name == "probe_limit" {
+						return tc.probe, tc.resolveErr
+					}
+					if value, ok := settings[name]; ok {
+						return value, nil
+					}
+					return nil, nil
+				},
+			}
+			b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
+			var err error
+			var pq *ivfpqIndexContext
+			algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
+			require.NotPanics(t, func() {
+				pq, err = b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
+			})
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, pq)
+				if tc.resolveErr != nil {
+					require.ErrorIs(t, err, tc.resolveErr)
+				} else {
+					require.Contains(t, err.Error(), "probe_limit")
+				}
+				return
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, pq)
+				assert.Equal(t, settings["ivfpq_threads_search"], pq.nThread)
+				assert.Equal(t, settings["ivfpq_batch_window"], pq.batchWindow)
+				assert.Equal(t, settings["gpu_multi_simulation"], pq.gpuMultiSim)
+				assert.Equal(t, tc.wantProbe, pq.nProbe)
+			}
+			var cg *cagraIndexContext
+			algo = `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
+			require.NotPanics(t, func() {
+				cg, err = b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
+			})
+			require.NoError(t, err)
+			require.NotNil(t, cg)
+			assert.Equal(t, settings["cagra_threads_search"], cg.nThread)
+			assert.Equal(t, settings["cagra_batch_window"], cg.batchWindow)
+			assert.Equal(t, settings["gpu_multi_simulation"], cg.gpuMultiSim)
+		})
+	}
 }

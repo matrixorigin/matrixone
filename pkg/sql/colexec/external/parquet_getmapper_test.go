@@ -53,6 +53,11 @@ func TestGetMapper_OptionalToNotNullable(t *testing.T) {
 	require.NotNil(t, mp, "optional column should map to notNullable type (runtime NULL check)")
 }
 
+func TestGetMapper_NilColumn(t *testing.T) {
+	var h ParquetHandler
+	require.Nil(t, h.getMapper(nil, plan.Type{Id: int32(types.T_int32)}))
+}
+
 // Test type mismatch cases that return nil mapper
 func TestGetMapper_TypeMismatch(t *testing.T) {
 	tests := []struct {
@@ -612,9 +617,10 @@ func TestGetMapper_RemainingTypes(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_char, 0, 0))
+		vec := vector.NewVec(types.New(types.T_char, 3, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
-		mp := h.getMapper(col, plan.Type{Id: int32(types.T_char), NotNullable: true})
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_char), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 2, vec.Length())

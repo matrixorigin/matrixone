@@ -16,8 +16,6 @@ package malloc
 
 import (
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -66,7 +64,7 @@ func init() {
 	go func() {
 		for {
 			slice := <-unmapChan
-			_ = unix.Munmap(slice)
+			unmapMemory(slice)
 		}
 	}()
 }
@@ -74,14 +72,22 @@ func init() {
 func NewFixedSizeMmapAllocator(
 	size uint64,
 ) (ret *fixedSizeMmapAllocator) {
+	return newFixedSizeMmapAllocator(
+		size,
+		int(min(smallClassCap/size, maxBuffer1Cap)),
+		buffer2Cap,
+	)
+}
 
-	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
-	num1 := min(smallClassCap/size, maxBuffer1Cap)
-
+func newFixedSizeMmapAllocator(
+	size uint64,
+	residentBufferCap int,
+	releasedBufferCap int,
+) (ret *fixedSizeMmapAllocator) {
 	ret = &fixedSizeMmapAllocator{
 		size:    size,
-		buffer1: make(chan unsafe.Pointer, num1),
-		buffer2: make(chan unsafe.Pointer, buffer2Cap),
+		buffer1: make(chan unsafe.Pointer, residentBufferCap),
+		buffer2: make(chan unsafe.Pointer, releasedBufferCap),
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
@@ -146,12 +152,7 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints, clearSize uint64) (slice 
 
 		default:
 			// allocate new
-			slice, err = unix.Mmap(
-				-1, 0,
-				int(f.size),
-				unix.PROT_READ|unix.PROT_WRITE,
-				unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-			)
+			slice, err = mmapMemory(int(f.size))
 			if err != nil {
 				return nil, nil, err
 			}

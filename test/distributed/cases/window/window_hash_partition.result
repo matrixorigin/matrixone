@@ -1,0 +1,70 @@
+drop database if exists window_hash_partition;
+create database window_hash_partition;
+use window_hash_partition;
+create table t (
+id int primary key,
+k int,
+ck char(3),
+v int
+);
+insert into t
+select result, result % 50, cast(result % 50 as char(3)), result
+from generate_series(1, 10000) g;
+analyze table t(k, ck);
+table_name	mode	coverage	columns_analyzed	population_rows	population_exact	sample_rows	sample_blocks	sample_bytes	status	message
+window_hash_partition.t	AUTO	SNAPSHOT_VISIBLE_V1	2	10000	1	10000	3	760000	OK	q=1/1
+explain (check '["Partition"]')
+select sum(v) over (partition by k) from t;
+-- @regex("Hash Partition", false)
+TP QUERY PLAN
+Project
+  ->  Window
+        Window Function: sum(t.v); Partition By: t.k
+        ->  Partition
+              Sort Key: t.k INTERNAL
+              ->  Table Scan on window_hash_partition.t
+select sum(part_sum) from (
+select sum(v) over (partition by k) as part_sum from t
+) q;
+sum(part_sum)
+10001000000
+select sum(rnk) from (
+select rank() over (partition by k order by v) as rnk from t
+) q;
+sum(rnk)
+1005000
+select sum(first_v) from (
+select first_value(v) over (partition by k order by v) as first_v from t
+) q;
+sum(first_v)
+255000
+select sum(frame_sum) from (
+select sum(v) over (
+partition by k order by v rows between 1 preceding and current row
+) as frame_sum from t
+) q;
+sum(frame_sum)
+99511225
+select sum(frame_sum) from (
+select sum(v) over (
+partition by k order by v range between 50 preceding and current row
+) as frame_sum from t
+) q;
+sum(frame_sum)
+99511225
+explain (check '["Partition"]')
+select sum(v) over (partition by ck) from t;
+-- @regex("Hash Partition", false)
+TP QUERY PLAN
+Project
+  ->  Window
+        Window Function: sum(t.v); Partition By: t.ck
+        ->  Partition
+              Sort Key: t.ck INTERNAL
+              ->  Table Scan on window_hash_partition.t
+select sum(part_sum) from (
+select sum(v) over (partition by ck) as part_sum from t
+) q;
+sum(part_sum)
+10001000000
+drop database window_hash_partition;

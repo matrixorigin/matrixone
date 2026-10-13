@@ -72,41 +72,6 @@ func MustGetServer(serviceID string) *Server {
 	return s
 }
 
-// GetProcByUuid used the uuid to get a process from the srv.
-// if the process is nil, it means the process has done.
-// if forcedDelete, do an action to avoid another routine to put a new item.
-func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, process.RemotePipelineInformationChannel, bool) {
-	srv.uuidCsChanMap.Lock()
-	defer srv.uuidCsChanMap.Unlock()
-	return srv.getProcByUuidLocked(u, forcedDelete)
-}
-
-func (srv *Server) getProcByUuidLocked(u uuid.UUID, forcedDelete bool) (*process.Process, process.RemotePipelineInformationChannel, bool) {
-	p, ok := srv.uuidCsChanMap.mp[u]
-	if !ok {
-		if forcedDelete {
-			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{
-				state: remoteReceiverTombstone,
-			}
-		}
-		return nil, nil, false
-	}
-
-	if p.state != remoteReceiverReady {
-		if !srv.retainClosedReceiverForWaitersLocked(u, p) {
-			delete(srv.uuidCsChanMap.mp, u)
-		}
-		return nil, nil, true
-	}
-	resultProc := p.proc
-	resultCh := p.ch
-	p.proc = nil
-	p.ch = nil
-	p.state = remoteReceiverAttached
-	srv.uuidCsChanMap.mp[u] = p
-	return resultProc, resultCh, true
-}
-
 // AttachProcByUuidOrWait atomically attaches one notify stream to a ready
 // receiver. Missing receivers return a generation-scoped wait handle.
 // Attached and closed receivers are terminal states and are not consumed or
@@ -119,6 +84,7 @@ func (srv *Server) AttachProcByUuidOrWait(
 	process.RemotePipelineInformationChannel,
 	RemoteReceiverAttachState,
 	*RemoteReceiverWaiter,
+	*RemoteReceiverTerminal,
 ) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
@@ -135,7 +101,7 @@ func (srv *Server) AttachProcByUuidOrWait(
 			server: srv,
 			uid:    u,
 			state:  waiter,
-		}
+		}, nil
 	}
 	switch item.state {
 	case remoteReceiverReady:
@@ -145,14 +111,22 @@ func (srv *Server) AttachProcByUuidOrWait(
 		item.ch = nil
 		item.state = remoteReceiverAttached
 		srv.uuidCsChanMap.mp[u] = item
-		return proc, ch, RemoteReceiverAttachedNow, nil
+		return proc, ch, RemoteReceiverAttachedNow, nil, item.terminal
 	case remoteReceiverAttached:
-		return nil, nil, RemoteReceiverAlreadyAttached, nil
-	case remoteReceiverClosed, remoteReceiverTombstone:
+		return nil, nil, RemoteReceiverAlreadyAttached, nil, nil
+	case remoteReceiverFinished:
+		// Exactly one late consumer may claim the successful/failed result.
+		item.state = remoteReceiverClosed
+		srv.uuidCsChanMap.mp[u] = item
 		if !srv.retainClosedReceiverForWaitersLocked(u, item) {
 			delete(srv.uuidCsChanMap.mp, u)
 		}
-		return nil, nil, RemoteReceiverAlreadyClosed, nil
+		return nil, nil, RemoteReceiverFinished, nil, item.terminal
+	case remoteReceiverClosed:
+		if !srv.retainClosedReceiverForWaitersLocked(u, item) {
+			delete(srv.uuidCsChanMap.mp, u)
+		}
+		return nil, nil, RemoteReceiverAlreadyClosed, nil, nil
 	default:
 		panic("unknown remote receiver registry state")
 	}
@@ -183,7 +157,7 @@ func (w *RemoteReceiverWaiter) Close() {
 		if state.refs <= 0 {
 			delete(w.server.uuidCsChanMap.waiters, w.uid)
 			if item, ok := w.server.uuidCsChanMap.mp[w.uid]; ok &&
-				item.state == remoteReceiverClosed &&
+				(item.state == remoteReceiverClosed || item.state == remoteReceiverFinished) &&
 				item.ownerCh == state.ownerCh {
 				delete(w.server.uuidCsChanMap.mp, w.uid)
 			}
@@ -191,7 +165,9 @@ func (w *RemoteReceiverWaiter) Close() {
 	})
 }
 
-func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
+// PutProcIntoUuidMapWithTerminal publishes one complete registration generation.
+// Its terminal remains the outcome owner after the Process has been recycled.
+func (srv *Server) PutProcIntoUuidMapWithTerminal(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel, terminal *RemoteReceiverTerminal) error {
 	srv.uuidCsChanMap.Lock()
 	if item, ok := srv.uuidCsChanMap.mp[u]; ok {
 		oldState := "ready"
@@ -200,23 +176,22 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch proces
 			oldState = "attached"
 		case remoteReceiverClosed:
 			oldState = "closed"
-		case remoteReceiverTombstone:
-			oldState = "tombstone"
-			delete(srv.uuidCsChanMap.mp, u)
+		case remoteReceiverFinished:
+			oldState = "finished"
 		}
 		srv.uuidCsChanMap.Unlock()
 		return moerr.NewInternalErrorNoCtxf(
 			"remote receiver %s already done (existing registry state: %s)", u.String(), oldState)
 	}
-	if p == nil || ch == nil {
+	if p == nil || ch == nil || terminal == nil {
 		srv.uuidCsChanMap.Unlock()
 		return moerr.NewInvalidStateNoCtxf(
-			"remote receiver %s requires a non-nil process and notification channel",
+			"remote receiver %s requires a non-nil process, notification channel, and terminal",
 			u.String(),
 		)
 	}
 
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch, ownerCh: ch}
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch, ownerCh: ch, terminal: terminal}
 	waiter := srv.uuidCsChanMap.waiters[u]
 	if waiter != nil {
 		waiter.ownerCh = ch
@@ -228,22 +203,28 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch proces
 	return nil
 }
 
-func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
+// CloseRemoteReceivers retains the terminal result only for this owner. A
+// delayed Reset must not close a replacement registration using the same UUID.
+func (srv *Server) CloseRemoteReceivers(uuids []uuid.UUID, ownerCh process.RemotePipelineInformationChannel) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	for i := range uuids {
 		p, ok := srv.uuidCsChanMap.mp[uuids[i]]
-		if !ok {
+		if !ok || p.ownerCh != ownerCh {
 			continue
 		}
 
-		if p.state != remoteReceiverReady &&
+		if p.state != remoteReceiverReady && p.state != remoteReceiverFinished &&
 			!srv.retainClosedReceiverForWaitersLocked(uuids[i], p) {
 			delete(srv.uuidCsChanMap.mp, uuids[i])
 		} else {
 			p.proc = nil
 			p.ch = nil
-			p.state = remoteReceiverClosed
+			if p.state == remoteReceiverReady || p.state == remoteReceiverFinished {
+				p.state = remoteReceiverFinished
+			} else {
+				p.state = remoteReceiverClosed
+			}
 			srv.uuidCsChanMap.mp[uuids[i]] = p
 		}
 	}
@@ -264,7 +245,9 @@ func (srv *Server) RemoveUuidsOwned(
 			if srv.retainClosedReceiverForWaitersLocked(uuids[i], item) {
 				item.proc = nil
 				item.ch = nil
-				item.state = remoteReceiverClosed
+				if item.state != remoteReceiverFinished {
+					item.state = remoteReceiverClosed
+				}
 				srv.uuidCsChanMap.mp[uuids[i]] = item
 			} else {
 				delete(srv.uuidCsChanMap.mp, uuids[i])

@@ -43,3 +43,8 @@ func TestGetFirstTNResponse(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
 	})
 }
+
+func TestMergeObjectsCommandRemoved(t *testing.T) {
+	_, ok := supportedCmds["MERGEOBJECTS"]
+	require.False(t, ok)
+}

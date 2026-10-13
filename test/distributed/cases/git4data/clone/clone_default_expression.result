@@ -1,0 +1,52 @@
+drop database if exists clone_default_src;
+drop database if exists clone_default_table_dst;
+drop database if exists clone_default_db_dst;
+create database clone_default_src;
+use clone_default_src;
+create sequence seq increment 5 start 10;
+create table t_seq (
+id bigint primary key default nextval('seq'),
+v varchar(20)
+);
+create table t_literal (id bigint default 42);
+insert into t_seq(v) values ('source');
+insert into t_literal values ();
+show create table t_seq;
+➤ Table[12,3,0]  ¦  Create Table[12,93,0]  𝄀
+t_seq  ¦  CREATE TABLE `t_seq` (
+  `id` bigint NOT NULL DEFAULT nextval('seq'),
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show create table t_literal;
+➤ Table[12,6,0]  ¦  Create Table[12,39,0]  𝄀
+t_literal  ¦  CREATE TABLE `t_literal` (
+  `id` bigint DEFAULT 42
+)
+create database clone_default_table_dst;
+create table clone_default_table_dst.t_seq clone clone_default_src.t_seq;
+create table clone_default_table_dst.t_literal clone clone_default_src.t_literal;
+show tables from clone_default_table_dst;
+➤ Tables_in_clone_default_table_dst[12,3750,0]  𝄀
+t_literal  𝄀
+t_seq
+select * from clone_default_table_dst.t_seq;
+➤ id[-5,64,0]  ¦  v[12,15,0]  𝄀
+10  ¦  source
+select * from clone_default_table_dst.t_literal;
+➤ id[-5,64,0]  𝄀
+42
+create database clone_default_db_dst clone clone_default_src;
+show tables from clone_default_db_dst;
+➤ Tables_in_clone_default_db_dst[12,3750,0]  𝄀
+t_literal  𝄀
+t_seq
+select * from clone_default_db_dst.t_seq;
+➤ id[-5,64,0]  ¦  v[12,15,0]  𝄀
+10  ¦  source
+select * from clone_default_db_dst.t_literal;
+➤ id[-5,64,0]  𝄀
+42
+drop database if exists clone_default_src;
+drop database if exists clone_default_table_dst;
+drop database if exists clone_default_db_dst;

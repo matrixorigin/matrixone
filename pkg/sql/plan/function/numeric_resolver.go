@@ -37,6 +37,55 @@ type numericTypeResolution struct {
 	result types.Type
 }
 
+// CommonMediumIntType resolves only same-signed 32-bit integer branches that
+// include MEDIUMINT. The physical OID stays int32/uint32, while Width preserves
+// the narrower domain only when every value-bearing branch has it.
+func CommonMediumIntType(source []types.Type) (types.Type, bool) {
+	var result types.Type
+	hasType := false
+	hasMediumInt := false
+	hasOrdinaryInt := false
+	for _, typ := range source {
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if typ.Oid != types.T_int32 && typ.Oid != types.T_uint32 {
+			return types.Type{}, false
+		}
+		if hasType && typ.Oid != result.Oid {
+			return types.Type{}, false
+		}
+		if !hasType {
+			result = typ
+			hasType = true
+		}
+		if typ.IsMediumInt() {
+			hasMediumInt = true
+		} else {
+			hasOrdinaryInt = true
+		}
+	}
+	if !hasType || !hasMediumInt {
+		return types.Type{}, false
+	}
+	if hasOrdinaryInt {
+		result.Width = 32
+	} else {
+		result.Width = 24
+	}
+	return result, true
+}
+
+func sameMediumIntCommonType(left, right types.Type) bool {
+	if left.Oid != right.Oid {
+		return false
+	}
+	if left.Oid == types.T_int32 || left.Oid == types.T_uint32 {
+		return left.Width == right.Width && left.Scale == right.Scale
+	}
+	return left.Eq(right)
+}
+
 // InferNumericParameterType selects the computation type for unresolved
 // numeric parameters. known may contain operands from any depth in one
 // arithmetic subtree. Approximate operands dominate exact operands, followed
@@ -278,18 +327,46 @@ func resolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (numericTypeResolution, bool) {
+	// Resolve the BIT dividend before T_any inference and generic coercion so
+	// its unsigned result domain and declared width are not lost.
+	if op == numericOpIntegerDiv {
+		if bitLeft, bitRight, bitOperands := integerDivBitTypes(left, right); bitOperands {
+			left, right = bitLeft, bitRight
+		}
+	}
 	left, right, ok := resolveUnknownNumericOperands(left, right, outer)
 	if !ok {
 		return numericTypeResolution{}, false
+	}
+	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
+		isMixedUnsignedInteger(left, right) {
+		return numericTypeResolution{
+			left:   left,
+			right:  right,
+			result: types.New(types.T_uint64, 64, -1),
+		}, true
 	}
 
 	var cast bool
 	var castLeft, castRight types.Type
 	switch op {
-	case numericOpDiv, numericOpIntegerDiv:
+	case numericOpIntegerDiv:
+		if integerDivBitResolvedTypes(left, right) {
+			// BIT DIV preserves the left BIT column but computes in BIGINT
+			// UNSIGNED; the executor consumes this canonical signature.
+		} else if integerDivOperatorSupports(left, right) {
+			// Keep same-domain operands in their original physical type.
+		} else if mixedLeft, mixedRight, mixed := integerDivUnsignedMixedTypes(left, right); mixed {
+			left, right = mixedLeft, mixedRight
+		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
+			left, right = exactLeft, exactRight
+		} else {
+			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		}
+	case numericOpDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
 	default:
-		cast, castLeft, castRight = fixedTypeCastRule1(left, right)
+		cast, castLeft, castRight = arithmeticTypeCastRule1(left, right)
 	}
 	if cast {
 		left, right = castLeft, castRight
@@ -350,7 +427,8 @@ func numericOperatorSupports(op numericBinaryOp, left, right types.Type) bool {
 	case numericOpDiv:
 		return divOperatorSupports(left, right)
 	case numericOpIntegerDiv:
-		return integerDivOperatorSupports(left, right)
+		return integerDivBitResolvedTypes(left, right) ||
+			integerDivOperatorSupports(left, right) || integerDivUnsignedMixedResolvedTypes(left, right)
 	case numericOpMod:
 		return modOperatorSupports(left, right)
 	default:
@@ -361,6 +439,9 @@ func numericOperatorSupports(op numericBinaryOp, left, right types.Type) bool {
 func numericBinaryResultType(op numericBinaryOp, left, right types.Type) types.Type {
 	switch op {
 	case numericOpIntegerDiv:
+		if integerDivBitResolvedTypes(left, right) {
+			return types.T_uint64.ToType()
+		}
 		return types.T_int64.ToType()
 	case numericOpAdd, numericOpSub:
 		if left.Oid.IsDecimal() || right.Oid.IsDecimal() {
@@ -408,17 +489,11 @@ func decimalMulResultType(left, right types.Type) types.Type {
 }
 
 func decimalDivResultType(left, right types.Type) types.Type {
-	scale := int32(12)
-	if scale > left.Scale+6 {
-		scale = left.Scale + 6
+	parameters := []types.Type{left, right}
+	if result, ok := decimalDivisionReturnType(parameters, parameters, DefaultDivPrecisionIncrement); ok {
+		return result
 	}
-	if scale < left.Scale {
-		scale = left.Scale
-	}
-	if left.Oid == types.T_decimal256 || right.Oid == types.T_decimal256 {
-		return types.New(types.T_decimal256, 65, scale)
-	}
-	return types.New(types.T_decimal128, 38, scale)
+	return left
 }
 
 func max32(left, right int32) int32 {

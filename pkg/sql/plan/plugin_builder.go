@@ -95,24 +95,24 @@ func vectorSortApplyResult(
 	return newNodeID, applied, err
 }
 
-func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vc, m)
+	newID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vc, m, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
-func (builder *QueryBuilder) ApplyIndicesForSortUsingCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+func (builder *QueryBuilder) ApplyIndicesForSortUsingCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingCagra(nodeID, vc, m)
+	newID, err := builder.applyIndicesForSortUsingCagra(nodeID, vc, m, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
-func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vc, m)
+	newID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vc, m, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
@@ -171,19 +171,21 @@ func toPlanplugin(vc *vectorSortContext, m *MultiTableIndex) (*planplugin.Vector
 	var vctx *planplugin.VectorSortContext
 	if vc != nil {
 		vctx = &planplugin.VectorSortContext{
-			ProjNode:       vc.projNode,
-			SortNode:       vc.sortNode,
-			ScanNode:       vc.scanNode,
-			ChildNode:      vc.childNode,
-			OrderExpr:      vc.orderExpr,
-			DistFnExpr:     vc.distFnExpr,
-			SortDirection:  vc.sortDirection,
-			Limit:          vc.limit,
-			ResultLimit:    vc.resultLimit,
-			ResultOffset:   vc.resultOffset,
-			RankOption:     vc.rankOption,
-			ProviderNodeID: vc.providerNodeID,
-			VecArgExpr:     vc.vecArgExpr,
+			ProjNode:         vc.projNode,
+			SortNode:         vc.sortNode,
+			ScanNode:         vc.scanNode,
+			ChildNode:        vc.childNode,
+			OrderExpr:        vc.orderExpr,
+			DistFnExpr:       vc.distFnExpr,
+			SortDirection:    vc.sortDirection,
+			Limit:            vc.limit,
+			ResultLimit:      vc.resultLimit,
+			ResultOffset:     vc.resultOffset,
+			RankOption:       vc.rankOption,
+			ProviderNodeID:   vc.providerNodeID,
+			VecArgExpr:       vc.vecArgExpr,
+			MembershipNodeID: vc.membershipNodeID,
+			HasMembership:    vc.hasMembership,
 		}
 	}
 	var mti *planplugin.MultiTableIndexRef
@@ -204,19 +206,21 @@ func fromPlanplugin(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTab
 	var vc *vectorSortContext
 	if vctx != nil {
 		vc = &vectorSortContext{
-			projNode:       vctx.ProjNode,
-			sortNode:       vctx.SortNode,
-			scanNode:       vctx.ScanNode,
-			childNode:      vctx.ChildNode,
-			orderExpr:      vctx.OrderExpr,
-			distFnExpr:     vctx.DistFnExpr,
-			sortDirection:  vctx.SortDirection,
-			limit:          vctx.Limit,
-			resultLimit:    vctx.ResultLimit,
-			resultOffset:   vctx.ResultOffset,
-			rankOption:     vctx.RankOption,
-			providerNodeID: vctx.ProviderNodeID,
-			vecArgExpr:     vctx.VecArgExpr,
+			projNode:         vctx.ProjNode,
+			sortNode:         vctx.SortNode,
+			scanNode:         vctx.ScanNode,
+			childNode:        vctx.ChildNode,
+			orderExpr:        vctx.OrderExpr,
+			distFnExpr:       vctx.DistFnExpr,
+			sortDirection:    vctx.SortDirection,
+			limit:            vctx.Limit,
+			resultLimit:      vctx.ResultLimit,
+			resultOffset:     vctx.ResultOffset,
+			rankOption:       vctx.RankOption,
+			providerNodeID:   vctx.ProviderNodeID,
+			vecArgExpr:       vctx.VecArgExpr,
+			membershipNodeID: vctx.MembershipNodeID,
+			hasMembership:    vctx.HasMembership,
 		}
 	}
 	var m *MultiTableIndex

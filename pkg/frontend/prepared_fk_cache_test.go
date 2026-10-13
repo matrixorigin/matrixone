@@ -49,6 +49,13 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
 	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
 	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
+
+	subscriptionMetadataPlan := makePlan(plan.Query_SELECT, false)
+	subscriptionMetadataPlan.GetQuery().Nodes = []*plan.Node{{
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
+	}}
+	require.True(t, shouldRebuildPreparePlan(false, subscriptionMetadataPlan))
+	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))
 }
 
 func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {

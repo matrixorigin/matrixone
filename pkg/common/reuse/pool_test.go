@@ -16,8 +16,10 @@ package reuse
 
 import (
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -108,6 +110,7 @@ func TestCheckLeakFree(t *testing.T) {
 					delete(pools, key)
 				}
 				use(spi)
+				released := make(chan struct{})
 				CreatePool[person](
 					func() *person { return &person{} },
 					func(p *person) {
@@ -117,6 +120,9 @@ func TestCheckLeakFree(t *testing.T) {
 					},
 					DefaultOptions[person]().
 						WithEnableChecker().
+						WithReleaseFunc(func(*person) {
+							close(released)
+						}).
 						withGCRecover(func() {
 							assert.NotNil(t, recover())
 						}),
@@ -127,8 +133,81 @@ func TestCheckLeakFree(t *testing.T) {
 				assert.Equal(t, 0, p.age)
 				p = nil
 				debug.FreeOSMemory()
+				select {
+				case <-released:
+				case <-time.After(time.Second):
+					assert.Fail(t, "release callback did not run")
+				}
 			})
 		}
+	})
+}
+
+func newCheckedPersonSyncPool() *syncPoolBased[person, *person] {
+	return newSyncPoolBased(
+		func() *person { return &person{} },
+		func(p *person) { *p = person{} },
+		DefaultOptions[person]().WithEnableChecker(),
+	).(*syncPoolBased[person, *person])
+}
+
+func assertOnlyPersonCheckerStatus(
+	t *testing.T,
+	c *checker[person, *person],
+	want step,
+) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	assert.Len(t, c.mu.m, 1)
+	for _, status := range c.mu.m {
+		assert.Equal(t, want, status.step)
+		assert.Equal(t, checkerActive.current(), status.epoch)
+	}
+}
+
+func TestSyncPoolCheckerAdoptsObjectCreatedBeforeScope(t *testing.T) {
+	pool := newCheckedPersonSyncPool()
+	pool.c.enable = false
+	p := pool.Alloc()
+	pool.Free(p)
+	assert.Empty(t, pool.c.mu.m)
+	pool.c.enable = true
+
+	RunReuseTests(func() {
+		got := pool.Alloc()
+		assertOnlyPersonCheckerStatus(t, pool.c, inUse)
+		pool.Free(got)
+	})
+}
+
+func TestSyncPoolCheckerAdoptsObjectFreedInsideScope(t *testing.T) {
+	pool := newCheckedPersonSyncPool()
+	pool.c.enable = false
+	p := pool.Alloc()
+	pool.c.enable = true
+
+	RunReuseTests(func() {
+		pool.Free(p)
+		assertOnlyPersonCheckerStatus(t, pool.c, idle)
+		runtime.KeepAlive(p)
+		got := pool.Alloc()
+		pool.Free(got)
+	})
+}
+
+func TestSyncPoolCheckerStillDetectsDoubleFreeAfterAdoption(t *testing.T) {
+	pool := newCheckedPersonSyncPool()
+	pool.c.enable = false
+	p := pool.Alloc()
+	pool.Free(p)
+	pool.c.enable = true
+
+	RunReuseTests(func() {
+		got := pool.Alloc()
+		pool.Free(got)
+		assert.Panics(t, func() {
+			pool.Free(got)
+		})
 	})
 }
 

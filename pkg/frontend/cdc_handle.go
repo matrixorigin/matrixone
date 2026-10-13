@@ -513,12 +513,15 @@ func onPreUpdateCDCTasks(
 		)
 	}
 
-	if cnt, err = dao.PrepareUpdateTask(
-		ctx,
-		accountId,
-		taskName,
-		targetCDCStatus,
-	); err != nil {
+	if targetTaskStatus == task.TaskStatus_ResumeRequested {
+		// A permanent table failure may commit before or concurrently with
+		// RESUME admission. Preserve that durable failure until replacement
+		// startup publishes running and clears err_msg atomically.
+		cnt, err = dao.PrepareResumeTask(ctx, accountId, taskName)
+	} else {
+		cnt, err = dao.PrepareUpdateTask(ctx, accountId, taskName, targetCDCStatus)
+	}
+	if err != nil {
 		logutil.Error("cdc.on_pre_update.update_task_status.failed",
 			zap.String("task-name", taskName),
 			zap.String("target-cdc-status", targetCDCStatus),

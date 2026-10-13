@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,6 +68,138 @@ func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
 	}
 	// return bm.rebuild()
 	return Null, moerr.NewInvalidArgNoCtx("invalid path", path.String())
+}
+
+func (bm *bytejsonModifier) arrayAppend(path *Path, newBj ByteJson) (ByteJson, error) {
+	selected, exists := bm.bj.querySimpleExist(path, true)
+	if !exists {
+		return bm.bj, nil
+	}
+	arraySize := arrayAppendSize(selected, newBj)
+	if arraySize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array append result is too large")
+	}
+	documentSize := arrayAppendDocumentSize(bm.bj, selected, arraySize)
+	if documentSize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array append result is too large")
+	}
+
+	elemCnt := 1
+	if selected.Type == TpCodeArray {
+		elemCnt = selected.GetElemCnt()
+	}
+	elems := make([]ByteJson, 0, elemCnt+1)
+	if selected.Type == TpCodeArray {
+		for i := 0; i < elemCnt; i++ {
+			elems = append(elems, selected.getArrayElem(i))
+		}
+	} else {
+		elems = append(elems, selected)
+	}
+	elems = append(elems, newBj)
+
+	bm.modifyPtr = &selected.Data[0]
+	bm.modifyVal = buildBinaryJSONArray(elems)
+	result := bm.rebuild()
+	if err := ValidateJSONDocumentDepth(result); err != nil {
+		return Null, err
+	}
+	return result, nil
+}
+
+func (bm *bytejsonModifier) arrayInsert(path *Path, newBj ByteJson) (ByteJson, error) {
+	if path == nil || path.empty() {
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", "$")
+	}
+
+	parentPath, lastSub := path.popOneSubPath()
+	if lastSub.tp != subPathIdx || lastSub.idx == nil {
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", path.String())
+	}
+
+	parent, exists := bm.bj.querySimpleExistWithWrapping(&parentPath, false, false)
+	if !exists || parent.Type != TpCodeArray {
+		return bm.bj, nil
+	}
+
+	elemCnt := parent.GetElemCnt()
+	insertIdx := 0
+	switch lastSub.idx.tp {
+	case numberIndices:
+		insertIdx = lastSub.idx.num
+		if insertIdx > elemCnt {
+			insertIdx = elemCnt
+		}
+	case lastIndices:
+		// JSON_ARRAY_INSERT('$[last-N]') inserts before the selected element.
+		// Underflow clamps to the head; an empty array naturally inserts at 0.
+		insertIdx = elemCnt - lastSub.idx.num - 1
+		if insertIdx < 0 {
+			insertIdx = 0
+		}
+		if insertIdx > elemCnt {
+			insertIdx = elemCnt
+		}
+	default:
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", path.String())
+	}
+	arraySize := uint64(len(parent.Data)) + uint64(valEntrySize)
+	if newBj.Type != TpCodeLiteral {
+		arraySize += uint64(len(newBj.Data))
+	}
+	if arraySize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
+	documentSize := arrayAppendDocumentSize(bm.bj, parent, arraySize)
+	if documentSize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
+
+	elems := make([]ByteJson, 0, elemCnt+1)
+	for i := 0; i < elemCnt; i++ {
+		if i == insertIdx {
+			elems = append(elems, newBj)
+		}
+		elems = append(elems, parent.getArrayElem(i))
+	}
+	if insertIdx == elemCnt {
+		elems = append(elems, newBj)
+	}
+
+	bm.modifyPtr = &parent.Data[0]
+	bm.modifyVal = buildBinaryJSONArray(elems)
+	result := bm.rebuild()
+	if uint64(len(result.Data)) > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
+	if err := ValidateJSONDocumentDepth(result); err != nil {
+		return Null, err
+	}
+	return result, nil
+}
+
+func arrayAppendSize(selected, appended ByteJson) uint64 {
+	size := uint64(headerSize + 2*valEntrySize)
+	if selected.Type == TpCodeArray {
+		size = uint64(len(selected.Data)) + uint64(valEntrySize)
+	} else if selected.Type != TpCodeLiteral {
+		size += uint64(len(selected.Data))
+	}
+	if appended.Type != TpCodeLiteral {
+		size += uint64(len(appended.Data))
+	}
+	return size
+}
+
+func arrayAppendDocumentSize(document, selected ByteJson, arraySize uint64) uint64 {
+	if &selected.Data[0] == &document.Data[0] {
+		return arraySize
+	}
+	size := uint64(len(document.Data)) + arraySize
+	if selected.Type != TpCodeLiteral {
+		size -= uint64(len(selected.Data))
+	}
+	return size
 }
 
 func (bm *bytejsonModifier) remove(path *Path) (ByteJson, error) {

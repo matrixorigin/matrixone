@@ -14,6 +14,12 @@ a    b
 create role sub_reader_role;
 create user if not exists sub_reader identified by '111' default role sub_reader_role;
 grant connect on account * to sub_reader_role;
+select count(*) from information_schema.tables where table_schema = 'sub_db';
+count(*)
+0
+select count(*) from information_schema.columns where table_schema = 'sub_db';
+count(*)
+0
 grant show databases on account * to sub_reader_role;
 grant show tables on database sub_db to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
@@ -31,6 +37,15 @@ a    b
 show tables;
 Tables_in_sub_db
 t1
+select table_schema, table_name from information_schema.tables
+where table_schema = 'sub_db' order by table_name;
+table_schema    table_name
+sub_db    t1
+select table_schema, table_name, column_name, ordinal_position from information_schema.columns
+where table_schema = 'sub_db' order by table_name, ordinal_position;
+table_schema    table_name    column_name    ordinal_position
+sub_db    t1    a    1
+sub_db    t1    b    2
 drop user sub_reader;
 drop role sub_reader_role;
 drop database sub_db;

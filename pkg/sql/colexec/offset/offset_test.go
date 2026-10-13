@@ -44,56 +44,18 @@ type offsetTestCase struct {
 }
 
 func makeTestCases(t *testing.T) []offsetTestCase {
-	return []offsetTestCase{
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
+	cases := make([]offsetTestCase, 0, 3)
+	for _, offset := range []uint64{8, 10, 12} {
+		cases = append(cases, offsetTestCase{
+			proc:  testutil.NewProcess(t),
+			types: []types.Type{types.T_int8.ToType()},
 			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
+				OffsetExpr:   plan2.MakePlan2Uint64ConstExprWithType(offset),
+				OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 1}},
 			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
+		})
 	}
+	return cases
 }
 
 func TestString(t *testing.T) {
@@ -113,36 +75,30 @@ func TestPrepare(t *testing.T) {
 
 func TestOffset(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, Rows),
+					newBatch(tc.types, tc.proc, Rows),
+					batch.EmptyBatch,
+				}
+				child := resetChildren(tc.arg, bats)
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				_, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+			}()
 		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -181,43 +137,99 @@ func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func BenchmarkOffset(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []offsetTestCase{
-			{
-				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
-				types: []types.Type{
-					types.T_int8.ToType(),
-				},
-				arg: &Offset{
-					ctr: container{
-						seen: 0,
-					},
-					OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-					OperatorBase: vm.OperatorBase{
-						OperatorInfo: vm.OperatorInfo{
-							Idx:     1,
-							IsFirst: false,
-							IsLast:  false,
-						},
-					},
-				},
+func TestSQLCalcFoundRowsRecordsInputAtEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		batches func(proc *process.Process, input *batch.Batch) []*batch.Batch
+	}{
+		{
+			name: "nil batch",
+			batches: func(_ *process.Process, input *batch.Batch) []*batch.Batch {
+				return []*batch.Batch{input}
 			},
-		}
+		},
+		{
+			name: "last batch after empty batch",
+			batches: func(_ *process.Process, input *batch.Batch) []*batch.Batch {
+				last := batch.NewWithSize(0)
+				last.SetLast()
+				return []*batch.Batch{batch.EmptyBatch, input, last}
+			},
+		},
+	}
 
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			proc.BeginFoundRowsStatement(true)
+
+			input := colexec.MakeMockBatchs(proc.Mp())
+			arg := NewArgument().WithOffset(plan2.MakePlan2Uint64ConstExprWithType(0)).WithFoundRows(true)
+			child := colexec.NewMockOperator().WithBatchs(tt.batches(proc, input))
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+
+			result, err := arg.Call(proc)
 			require.NoError(t, err)
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				batch.EmptyBatch,
-			}
-			resetChildren(tc.arg, bats)
-			_, _ = vm.Exec(tc.arg, tc.proc)
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.Free()
-		}
+			require.NotNil(t, result.Batch)
+			require.Equal(t, input.RowCount(), result.Batch.RowCount())
+
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, uint64(input.RowCount()), proc.GetFoundRows())
+			require.True(t, proc.FoundRowsRecorded())
+			arg.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			arg.Release()
+		})
+	}
+}
+
+func TestNestedOffsetDoesNotPublishFoundRows(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	input := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().WithOffset(plan2.MakePlan2Uint64ConstExprWithType(0))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.False(t, proc.FoundRowsRecorded())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func BenchmarkOffset(b *testing.B) {
+	mp := mpool.MustNewZero()
+	b.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := testutil.NewProcessWithMPool(b, "", mp)
+	arg := &Offset{OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8), OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 1}}}
+	b.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		require.Zero(b, proc.Mp().CurrNB())
+	})
+	for i := 0; i < b.N; i++ {
+		func() {
+			child := resetChildren(arg, []*batch.Batch{newBatch([]types.Type{types.T_int8.ToType()}, proc, BenchmarkRows), batch.EmptyBatch})
+			defer child.Free(proc, false, nil)
+			defer arg.Reset(proc, false, nil)
+			require.NoError(b, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(b, err)
+			require.NotNil(b, result.Batch)
+			require.Equal(b, BenchmarkRows-8, result.Batch.RowCount())
+		}()
 	}
 }
 
@@ -226,8 +238,9 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Offset, bats []*batch.Batch) {
+func resetChildren(arg *Offset, bats []*batch.Batch) *colexec.MockOperator {
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }

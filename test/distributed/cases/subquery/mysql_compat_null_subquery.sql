@@ -48,6 +48,18 @@ select id, if(k is null, 'NULL', cast(k as char)) as k_label,
 from t_outer
 order by id;
 
+-- issue #26797: filtering a nullable correlated equality lowers the MARK join
+-- to SEMI/ANTI without changing EXISTS/NOT EXISTS NULL semantics.
+select id, if(k is null, 'NULL', cast(k as char)) as k_label
+from t_outer
+where exists (select 1 from t_inner i where i.val = t_outer.k)
+order by id;
+
+select id, if(k is null, 'NULL', cast(k as char)) as k_label
+from t_outer
+where not exists (select 1 from t_inner i where i.val = t_outer.k)
+order by id;
+
 select id, if(k is null, 'NULL', cast(k as char)) as k_label,
        k = (select max(val) from t_inner where grp = 3) as eq_scalar_nonnull,
        k = (select max(val) from t_inner where grp = 2) as eq_scalar_all_null,

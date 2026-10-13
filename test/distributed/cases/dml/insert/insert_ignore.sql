@@ -194,3 +194,49 @@ from insert_ignore_special_types order by id;
 drop table insert_ignore_special_source;
 drop table insert_ignore_special_types;
 set session sql_mode = @insert_ignore_sql_mode;
+
+drop table if exists insert_ignore_multi_key;
+create table insert_ignore_multi_key (id int primary key, u int unique);
+insert into insert_ignore_multi_key values (1, 10), (2, 20);
+insert ignore into insert_ignore_multi_key values (3, 20), (3, 30);
+select * from insert_ignore_multi_key order by id;
+truncate table insert_ignore_multi_key;
+insert ignore into insert_ignore_multi_key values (1, 10), (1, 20), (2, 20);
+select * from insert_ignore_multi_key order by id;
+truncate table insert_ignore_multi_key;
+insert ignore into insert_ignore_multi_key values (1, 10), (2, 10), (2, 20);
+select * from insert_ignore_multi_key order by id;
+truncate table insert_ignore_multi_key;
+insert ignore into insert_ignore_multi_key values (1, null), (2, null), (2, 20);
+select * from insert_ignore_multi_key order by id;
+drop table insert_ignore_multi_key;
+
+drop table if exists insert_ignore_composite_key;
+create table insert_ignore_composite_key (
+    id int primary key,
+    a int,
+    b int,
+    unique key uk_ab (a, b)
+);
+insert into insert_ignore_composite_key values (1, 10, 10);
+insert ignore into insert_ignore_composite_key values (2, 10, 10), (2, 20, 20);
+insert ignore into insert_ignore_composite_key values (3, null, 10), (4, null, 10);
+select * from insert_ignore_composite_key order by id;
+drop table insert_ignore_composite_key;
+
+drop table if exists insert_ignore_unique_only;
+create table insert_ignore_unique_only (u int unique, v int unique);
+insert ignore into insert_ignore_unique_only values (10, 100), (10, 200), (20, 200);
+select * from insert_ignore_unique_only order by u;
+drop table insert_ignore_unique_only;
+
+drop table if exists insert_ignore_three_keys;
+create table insert_ignore_three_keys (
+    id int primary key,
+    u int unique,
+    v int unique
+);
+insert ignore into insert_ignore_three_keys values
+    (1, 10, 100), (1, 20, 200), (2, 20, 300), (3, 30, 300), (4, 40, 400);
+select * from insert_ignore_three_keys order by id;
+drop table insert_ignore_three_keys;

@@ -15,75 +15,124 @@
 package async
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-func sleepMs(ms int) (int, error) {
-	d, _ := time.ParseDuration(fmt.Sprintf("%dms", ms))
-	time.Sleep(d)
-	return ms, nil
-}
-
-func sleepMany(args ...interface{}) (interface{}, error) {
-	var ret int
-	for _, ms := range args {
-		x, e := sleepMs(ms.(int))
-		if e != nil {
-			return ret, e
-		}
-		ret += x
-	}
-	return ret, nil
-}
-
 func TestFuture(t *testing.T) {
-	f1 := AsyncCall(sleepMany, 100)
-	r1 := f1.MustGet().(int)
-	if r1 != 100 {
-		t.Errorf("Should slept 100, get %d", r1)
-	}
-
-	f2 := AsyncCall(sleepMany, 100, 200, 300)
-	r2 := f2.MustGet().(int)
-	if r2 != 600 {
-		t.Errorf("Should slept 600, get %d", r2)
-	}
-
-	fs := make([]*Future, 100)
-	var totExp int
-	for i := 0; i < 100; i++ {
-		i2 := i % 2
-		i3 := i % 3
-		totExp += i2 + i3
-		fs[i] = AsyncCall(sleepMany, i2*100, i3*100)
-	}
-
-	var nReady int
-	var tot int
-	for i := 0; i < 100; i++ {
-		if fs[i].IsReady() {
-			nReady += 1
+	t.Run("forwards arguments", func(t *testing.T) {
+		sentinel := new(int)
+		for _, tc := range []struct {
+			name string
+			args []interface{}
+		}{
+			{name: "zero"},
+			{name: "single", args: []interface{}{42}},
+			{name: "multiple", args: []interface{}{42, nil, sentinel, "last"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					future := AsyncCall(func(args ...interface{}) (interface{}, error) {
+						return append([]interface{}(nil), args...), nil
+					}, tc.args...)
+					got := future.MustGet().([]interface{})
+					require.Equal(t, tc.args, got)
+					if tc.name == "multiple" {
+						require.Same(t, sentinel, got[2])
+					}
+				})
+			})
 		}
-	}
-	t.Logf("Num ready %d.\n", nReady)
+	})
 
-	ms, _ := time.ParseDuration("200ms")
-	time.Sleep(ms)
-	nReady = 0
-	for i := 0; i < 100; i++ {
-		if fs[i].IsReady() {
-			nReady += 1
-		}
-	}
-	t.Logf("Num ready %d.\n", nReady)
+	t.Run("waits for operation and reports readiness", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			started := make(chan struct{})
+			release := make(chan struct{})
+			releaseOperation := sync.OnceFunc(func() { close(release) })
+			defer releaseOperation()
+			future := AsyncCall(func(...interface{}) (interface{}, error) {
+				close(started)
+				<-release
+				return 42, nil
+			})
 
-	for i := 0; i < 100; i++ {
-		tot += fs[i].MustGet().(int)
-	}
-	if tot != totExp*100 {
-		t.Errorf("Should slept %d, get %d", totExp*100, tot)
-	}
-	t.Logf("Look, mo, I slept %d*100 ms in no time", totExp)
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("operation did not start")
+			}
+			require.False(t, future.IsReady())
+			releaseOperation()
+			synctest.Wait()
+			require.True(t, future.IsReady(), "completed result must be observable before Get")
+			require.Equal(t, 42, future.MustGet())
+			require.True(t, future.IsReady())
+		})
+	})
+
+	t.Run("preserves operation errors", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			wantErr := errors.New("expected failure")
+			future := AsyncCall(func(...interface{}) (interface{}, error) {
+				return nil, wantErr
+			})
+
+			synctest.Wait()
+			require.True(t, future.IsReady())
+			value, err := future.Get()
+			require.Nil(t, value)
+			require.ErrorIs(t, err, wantErr)
+			require.True(t, future.IsReady())
+		})
+	})
+
+	t.Run("keeps concurrent futures independent", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			const count = 3
+			started := make(chan struct{}, count)
+			release := make(chan struct{})
+			releaseOperations := sync.OnceFunc(func() { close(release) })
+			defer releaseOperations()
+			futures := make([]*Future, count)
+			for i := range futures {
+				futures[i] = AsyncCall(func(args ...interface{}) (interface{}, error) {
+					started <- struct{}{}
+					<-release
+					if len(args) != 1 {
+						return nil, errors.New("expected one argument")
+					}
+					return args[0], nil
+				}, i)
+			}
+
+			for range futures {
+				select {
+				case <-started:
+				case <-ctx.Done():
+					t.Fatal("concurrent operation did not start")
+				}
+			}
+			for _, future := range futures {
+				require.False(t, future.IsReady())
+			}
+
+			releaseOperations()
+			synctest.Wait()
+			for i, future := range futures {
+				require.True(t, future.IsReady())
+				require.Equal(t, i, future.MustGet())
+			}
+		})
+	})
 }

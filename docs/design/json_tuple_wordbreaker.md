@@ -1,0 +1,739 @@
+# A tuple-encoded JSON word breaker (issue #27704)
+
+Status: **implemented end to end** — tuple encoder on both build paths, term
+ranges, probe dispatch, and the optimizer rule wired into `applyIndices`
+(`addJSONFulltextProbes`). Covered by BVT `fulltext2_json_probe.sql` and the
+rewritten json section of `fulltext2_parser.sql`. §7 lists what remains.
+
+Revision (this PR): self-completing json probe — probe dispatch, coverage/`build_ts`
+gating, the `applyIndices` rewrite, and the rolling-upgrade runtime contract (§10.3).
+
+Design approval (revised runtime contract): **APPROVED by cpegeric, 2026-09-15.**
+This is a distinct design approval, prior to and separate from the implementation PR
+approval; it supersedes the earlier "PR approval by its reviewers" note, which
+covered revisions before the current runtime contract. It approves the revised design
+as described in this document:
+- generation binding — the probe runs against the generation actually searched, bound
+  by that generation's `build_ts` coverage of the read snapshot (§10, §10.1–§10.2);
+- self-completion fallback — the partial `table_changes` tail over `(searched, snapshot]`,
+  with a base-table fallback when the tail cannot serve a schema-version span (§5.1, §10.3);
+- mixed-version protocol fencing — decline the probe at plan time on a cluster below the
+  probe_tail protocol version, and re-check the destination's current version at the remote
+  sender boundary (`encodeRemoteScope`) before serialization (§10.3).
+
+It does not authorize operational rollout or waive release validation.
+
+## 1. Where we are today
+
+Three facts from the current tree drive the whole design.
+
+**JSON documents are indexed by leaf value only; keys are thrown away.**
+`bytejson.TokenizeValue(includeKey bool)` (`pkg/container/bytejson/fttokenizer.go`)
+already takes an `includeKey` flag, and every caller passes `false` —
+`pkg/fulltext2/query.go:150,201` and `pkg/sql/colexec/table_function/fulltext_tokenize.go:219,259`.
+So `{"a":{"b":"XXX","c":"YYY"}}` indexes as the tokens `XXX`, `YYY`.
+
+Note this differs from the issue's premise. The issue says we produce `b=XXX`.
+We do not — we produce `XXX`. Nothing today can distinguish `{"b":"XXX"}` from
+`{"c":"XXX"}`. Even with `includeKey=true` the tokenizer emits the key and the
+value as **two adjacent tokens**, not one compound token, so the key/value
+association would only be recoverable through a positional phrase query — which
+a `position_free` index cannot do at all. Either way, the association we need
+does not exist in the index.
+
+**A term is a `string` and is capped at 127 bytes.** `FullTextEntry.Word` is a
+Go `string` (`fulltext_tokenize.go:38`), `bytejson.MAX_TOKEN_SIZE = 127`, and
+classic fulltext interpolates terms into SQL text (`fulltext.go:43`,
+`where word = '%s'`). Query patterns also arrive as SQL string literals through
+`MATCH(col) AGAINST('...')` → `fulltext_match(pattern, mode, cols...)`
+(`base_binder.go:3225`). Those two text-carrying surfaces are what this design
+routes around rather than encodes for: the v1 engine is excluded and the probe
+becomes a function argument (§3.2, §5.1). The 127-byte cap still applies.
+
+**Terms are stored sorted, and prefix scans already work.**
+`Segment.PrefixRange` (`pkg/fulltext2/segment.go:755`) binary-searches a sorted
+`[]string`. A lexicographic *range* scan is a few lines away from what is
+already there. This is what makes order-preserving encoding worth doing.
+
+Two more constraints worth naming up front:
+
+- **Two build paths must agree exactly.** The CREATE path
+  (`fulltext_tokenize.go`) and the CDC path (`CdcTokenizer` + `Fulltext2SqlWriter.rowText`)
+  tokenize independently. The comment at `query.go:264` records a past bug where
+  they disagreed and CDC-inserted JSON rows became silently unsearchable. Any
+  new breaker must be implemented once and called from both.
+- **Config already has a home.** `IndexAlgoParams` is a JSON blob
+  (`parser`, `position_free`, …) in `pkg/catalog/secondary_index_utils.go`,
+  surfaced by `SHOW CREATE` (`build_show_util.go:322`).
+
+## 2. Goals
+
+1. **Fix the existing JSON word breaker** rather than adding a parallel one.
+   Discarding keys is the defect; a key/value association becomes a single
+   searchable term.
+2. Encode terms with the **order-preserving tuple encoding** (`types.Packer`)
+   so numeric comparisons become lexicographic range scans.
+3. One option, persisted on the index: **`includeKeys`** (reusing the existing
+   dormant `includeKey` hook).
+4. Let the optimizer turn `json_extract_*(col, '$.path') <op> const` into an
+   index probe, keeping the original predicate for correctness.
+
+Non-goals for this design: changing classic (v1) fulltext, or full JSONPath
+wildcard support.
+
+## 3. Term encoding
+
+### 3.1 Tuple shape
+
+`types.Packer` (FDB-derived, `pkg/container/types/packer.go`) is byte-order
+preserving: `encodeFloat64` big-endians and sign-adjusts the bits, ints are
+type-code prefixed, strings are `0x00`-terminated and escaped.
+
+For a leaf at path `a.b.….y.z` with value `V`, encode the tuple:
+
+```
+( z , V )
+```
+
+The element order is the useful part, and it is the issue's proposal:
+
+| Probe | Encoding |
+|---|---|
+| `$..z = V` (any path ending in `z`) | exact prefix `(z, V)` |
+| `$.a.b.z = V` (exact path) | exact full tuple |
+| `$..z > 3.14` | prefix `(z)` + **range** on the value element |
+| `$.a.*.z = V` | prefix `(z, V)` + residual path filter |
+
+The term deliberately does NOT carry the ancestor path. A probe is therefore
+path-agnostic — it matches that key/value wherever it appears — and a predicate
+on a specific path gets a superset that the retained predicate narrows. An
+earlier draft had an `includeFullPath` mode appending the ancestor path; it was
+removed because the benefit was unclear and it added a second term shape that
+every probe had to agree with (an index built one way and probed the other way
+silently returns nothing).
+
+**The value is encoded under its JSON type**, not stringified: a JSON number
+becomes `EncodeFloat64`, a string becomes `EncodeStringType`. This is the whole
+point — it is what makes `> 3.14159` a range scan. It also has a sharp
+consequence for the rewrite (§5.2).
+
+**Every number is float64, whatever width `bytejson` parsed.** `{"b":3}` is
+`TpCodeInt64` and `{"b":3.0}` is `TpCodeFloat64`, but JSON has one number type:
+they are the same value and must produce the same term, and a probe cannot know
+which internal width a document happened to use. Encoding ints as ints leaves
+`{"b":3}` unreachable from every numeric probe — a dropped row. (Implementation
+found this: the first version encoded per width, and the int/float test failed.)
+
+Integers past 2^53 lose precision in the term. That is safe because the *same*
+normalization runs on both sides: two ints colliding as doubles share one term
+and still match each other. The loss produces false positives, never a dropped
+row.
+
+### 3.2 Raw bytes; make the term path binary-clean
+
+**Decided: no hex.** The term is the raw packed tuple, and the whole term path
+is made binary-safe instead of encoding around it. Full 127 bytes stay usable
+and there is no 2× size tax.
+
+This is a real work item, not a declaration. Packed tuples contain `0x00`,
+arbitrary type-code bytes, and bytes that are syntactically meaningful to the
+BOOLEAN-mode pattern parser (`+ - * " ( )`). Every place a term is carried as
+text has to be audited:
+
+| Surface | Today | Required |
+|---|---|---|
+| `FullTextEntry.Word` | `string` | fine — Go strings hold arbitrary bytes |
+| `Segment.sortedTerms` | `[]string` + `sort.SearchStrings` | fine — byte-lexicographic already |
+| tokenize TVF output vector | `varchar` | must be binary-clean (`varbinary`) |
+| CDC `rowText` carrier | text, `'\n'`-joined for `json_value` | needs a length-prefixed carrier; a byte separator is unsafe |
+| classic (v1) fulltext | `where word = '%s'` SQL interpolation | **cannot** be made safe — see below |
+| query pattern | SQL literal parsed as a BOOLEAN pattern | replaced by a function argument (§5.1) |
+
+The SQL-interpolating v1 engine is the one surface that cannot carry these
+bytes. The tuple-encoded `json` parser is therefore **fulltext2-only**, and DDL
+must reject it on a v1 index rather than silently producing a corrupt one.
+
+### 3.3 Truncation must be symmetric
+
+When the encoded tuple exceeds the cap, **both** the build side and the query
+side truncate to the same length. Then `T == Q ⟹ T[:n] == Q[:n]`, so the probe
+stays a *necessary* condition and degrades to a prefix match — extra rows, no
+lost rows, and the retained original predicate removes the extras. Truncating
+on only one side would silently lose rows, which is the failure mode to avoid.
+
+## 4. Configuration: fixing the existing breaker
+
+No new parser. The existing `json` parser is **fixed in place**, governed by two
+options on the index.
+
+### 4.1 `includeKeys` — default **true**
+
+This reuses the dormant `includeKey` flag already threaded through
+`bytejson.TokenizeValue` (§1), repurposed from "emit the key as its own token"
+to "emit the `(tag, value)` tuple".
+
+| Value | Behaviour |
+|---|---|
+| `true` (default) | Index the `(tag, value)` tuple term for every leaf. |
+| `false` | Do **not** index the tuple. Leaf values only — today's behaviour. |
+
+Making `true` the default means a plain `WITH PARSER json` index becomes
+structure-aware by default, which is the point of the fix.
+
+### 4.3 Surface
+
+**Implemented today** — the defaults, with no way to change them from SQL:
+
+```sql
+CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json;   -- keys on, leaf-only
+```
+
+**Proposed, NOT yet implemented.** The grammar has no `INCLUDE_KEYS` index
+option (only `POSITION_FREE` exists), so the param below can currently only be
+set by writing `IndexAlgoParams` directly. It is read end to end — build,
+incremental build, and the optimizer probe — so wiring the DDL is the only
+missing piece:
+
+```sql
+CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json, INCLUDE_KEYS = FALSE;
+```
+
+Both land in `IndexAlgoParams` beside `parser` / `position_free`
+(`IndexAlgoParamJSONIncludeKeys`, `IndexAlgoParamJSONIncludeFullPath` in
+`secondary_index_utils.go`) and must round-trip through `SHOW CREATE`
+(`build_show_util.go:322`). They are **persisted per index**, because the
+optimizer has to know which term shape an index holds before it can synthesize
+a probe (§5.2) — an index built one way and queried the other way silently
+returns nothing.
+
+`position_free` should default to **true** whenever `includeKeys = true`:
+positions are meaningless for tuple terms and it halves the footprint.
+
+### 4.4 Existing `json` indexes
+
+Settled in review: **no table currently uses the old value-only terms**, so
+there is no migration to design. The `json` parser simply becomes the tuple
+breaker, and `includeKeys = false` remains available for a value-only index.
+
+`json_value` is untouched and keeps its own whole-value tokenization.
+
+One implementation consequence worth recording: the option is carried in
+`TableConfig` as `JSONNoKeys` — **inverted**. Keys are on by default, so the
+zero value of a config must mean "keys on"; a plain `IncludeKeys bool` would
+make any construction site that forgot the field silently build an index with
+no tuple terms.
+
+## 5. The optimizer rewrite
+
+### 5.1 The contract and the probe surface
+
+Rewrite
+
+```sql
+WHERE json_extract_string(j,'$.a.b') = 'XXX'
+```
+
+into
+
+```sql
+WHERE json_extract_string(j,'$.a.b') = 'XXX'   -- retained, decides correctness
+  AND __mo_ft_json_probe(j, <lo>, <hi>, true, true)   -- index prefilter
+```
+
+The single invariant:
+
+> **The injected conjunct must be implied by the original predicate.**
+
+If it is implied, the rewrite can only remove rows the original would have
+removed anyway, and the retained original deletes any extra rows the index
+lets through. False positives are free; a false negative is a wrong answer.
+
+**The probe is a function argument, not a pattern string.** Raw tuple bytes
+cannot go through `AGAINST('...')`: they would be parsed as BOOLEAN-mode
+syntax. So the probe takes the term as a `varbinary` argument that is used
+verbatim as a term-dictionary key — no pattern parsing at any point.
+
+**The probe is a union of exact terms and INCLUSIVE ranges.** A document
+qualifies if it holds any listed term or any term inside any listed range:
+
+| Predicate | probe |
+|---|---|
+| `= V` | term `(z,V)` — plus the other encoding when V is numeric-looking |
+| `> V`, `>= V` | range `[ (z,V) , (z, +∞ of V's type) ]` |
+| `< V`, `<= V` | range `[ (z, −∞ of V's type) , (z,V) ]` |
+
+Both ends are **always inclusive**, so `>` and `>=` produce the same range.
+Including the boundary term only adds documents whose value equals the bound,
+and the retained predicate removes them — the probe owes a superset, so
+carrying exclusivity would buy one term of precision at the cost of threading a
+flag through the whole scan path.
+
+The union is what lets one comparison probe two encodings at once, which
+`json_extract_string` inequalities need (§6).
+
+This does mean the probe is a **new internal function** rather than a reuse of
+`fulltext_match`, because `fulltext_match` takes a parsed varchar pattern. It
+still resolves to the same `fulltext2_search` TVF and the same index-application
+path; only the operand form differs.
+
+### 5.2 Where implication actually fails
+
+These are the cases that make or break the feature, and each one is a rule the
+rewrite must obey.
+
+**Collation — not an issue; my earlier claim was wrong.** I previously flagged
+case-insensitive collation as a source of false negatives. It is not: MO
+compares `varchar` by bytes, with no collation-aware comparison in the eval
+path (no case-folding or collation handling in the comparison operators or
+`pkg/vectorize`). Byte equality in the index is exactly the SQL semantics, so
+no restriction is needed and none is imposed.
+
+**Type family — the one real trap left.** A JSON number `3.14` is indexed as a
+float element, but `json_extract_string(j,'$.a.b') = '3.14'` is **true** for
+that document (`json_extract_string` renders a numeric leaf, it does not return
+NULL). Probing only the string encoding would drop that row — a wrong answer,
+not a missed optimization.
+
+The fix is cheap and keeps the issue's main use case: **the probe is the `OR`
+of the plausible encodings of the constant.** For `= 'XXX'` (not numeric) that
+is one string term — an exact lookup, unchanged. For `= '3.14'` it is the
+string term OR the float term. The document must contain one of them, so the
+disjunction is still a necessary condition, and the retained predicate removes
+the extras.
+
+Accelerating a genuinely cross-type comparison (`json_extract_float64` against
+a leaf stored as a string) is out of scope for v1 and is simply left
+unrewritten — correct, just unaccelerated.
+
+**Non-scalar and wildcard paths.** `$.a[*].b`, or a path resolving to an object
+or array, extracts something that is not a single scalar. v1 rewrites only
+literal scalar paths. Documents where the same key occurs many times just
+produce extra terms → false positives → filtered.
+
+**Boolean context.** The conjunct may only be injected where the original
+predicate *must* hold: top-level `AND` operands. Never under `NOT`, and under
+`OR` only if every branch yields a probe (then inject the `OR` of the probes).
+v1: top-level conjuncts only.
+
+**Missing path / NULL.** `json_extract_*` returns NULL, `= 'XXX'` is NULL, row
+is excluded — and no term exists. Consistent, no special case.
+
+**No matching index.** Rewrite only when a `json`-parser fulltext2 index exists
+on exactly that column **and** its persisted `includeKeys` is true. The probe
+term shape must be derived from that index's recorded options, never assumed:
+probing an index that holds no tuple terms finds nothing and drops rows.
+
+### 5.3 Placement
+
+The rewrite is a filter-level pre-pass that runs *before* index application, so
+that the synthesized `fulltext_match` is picked up by the existing
+`getFullTextMatchFiltersFromScanNode` path in `apply_indices_fulltext.go`. It
+adds a conjunct and never removes one, so it cannot change results even if
+index application later declines to use it.
+
+## 6. Range queries — in v1
+
+**Decided: v1 covers `=`, `>`, `>=`, `<`, `<=`.** Ranges are not deferred.
+
+`json_extract_float64(j,'$.a.b') > 3.14159` scans all terms in
+`[ (z, 3.14159) , (z, +∞ float) ]`. `Segment.PrefixRange` (`segment.go:755`)
+already binary-searches `sortedTerms`; `TermRange(lo, hi)` is the same
+`sort.SearchStrings` with a computed upper bound instead of a prefix test, and
+because both ends are inclusive it needs no inclusivity parameters.
+
+**`json_extract_string` inequalities need TWO ranges.** That function renders
+numbers, so a leaf satisfying the comparison may be stored under either
+encoding, and the orders disagree (`"10" < "9"` as text). The probe unions the
+ordered string range with **every** numeric term under the tag. The numeric side
+is deliberately untightened: there is no order-preserving map from the text
+comparison onto the float encoding, so narrowing it risks excluding a qualifying
+leaf. Wider scan, exact answer.
+
+`json_extract_float64` needs only one range — it returns NULL for every
+non-numeric leaf, so the numeric range is exactly implied.
+
+**How the two options change the search shape:**
+
+Equality is an **exact single-term lookup** and an inequality is a range over
+the value element under a fixed `tag` prefix. Because the term carries no
+ancestor path, both are path-agnostic: they match the key/value at any depth,
+and the retained predicate narrows to the requested path.
+
+## 7. Work breakdown
+
+**Done**
+
+- `bytejson.TokenizeLeaves` — the structure-aware walk (tag + ancestor path +
+  typed value).
+- `fulltext2` tuple encoder, probe builders, the `OR`-of-encodings equality
+  probe, and the length-prefixed CDC carrier.
+- **Both build paths wired to that one encoder**: `fulltext2_create.rowTerms`
+  (CREATE) and `Fulltext2SqlWriter.rowText` + `CdcTokenizerWithJSONOptions`
+  (ISCP), with a parity test asserting byte-identical `(word, pos)` pairs.
+- `include_keys` / `include_full_path` algo params, read identically by both
+  paths.
+
+The ISCP side needed no architecture change after all: the CDC blob is already
+length-prefixed and CRC-checked (`Cdc.Encode`), so it carries raw binary terms
+safely. The writer emits finished terms into that carrier and the tokenizer
+decodes them verbatim — no text intermediate, so the keys are never discarded.
+
+**Phase 1 — encoding + exact match**
+
+1. `bytejson`: replace the value-only walk with a path-aware tuple tokenizer.
+   The existing `includeKey` bool becomes `includeKeys` and gains a companion
+   the current "key as its own adjacent token" behaviour is
+   **removed**, since it is the half-measure this change supersedes and nothing
+   in the tree calls it.
+2. `pkg/fulltext2`: fix the `json` parser path — one shared encoder called from
+   **both** `DocTokenizer`/CREATE and `CdcTokenizer`/CDC (§1), reading the two
+   options.
+3. `pkg/catalog` + DDL + `SHOW CREATE`: persist and round-trip `includeKeys` /
+   and read a missing
+   value as `includeKeys = false` for pre-existing indexes (§4.4).
+4. `pkg/sql/plan`: the predicate → probe rewrite with the §5.2 rules, keyed off
+   the index's persisted options.
+
+5. `pkg/fulltext2`: `Segment.TermRange(lo, hi)` (inclusive both ends) and the probe
+   plumbed through `fulltext2_search` — required by v1's `>`/`>=`/`<`/`<=`.
+6. Binary-clean audit of the §3.2 table: the TVF output vector, the CDC
+   carrier, and DDL rejection of the `json` parser on a v1 index.
+
+**Later**
+
+7. DDL: an `INCLUDE_KEYS` index option so §4.3's proposed surface is reachable
+   from SQL, plus its `SHOW CREATE` round-trip. Everything below the grammar
+   already reads the param.
+8. `$.a.*.z` wildcard paths via prefix + residual filter.
+8. Cross-type acceleration (`json_extract_string` against a numeric leaf gets
+   an exact probe rather than the §5.2 `OR`-of-encodings widening).
+
+## 8. Decisions
+
+Settled in review:
+
+1. **Raw binary terms, not hex.** Make the whole term path binary-safe; carry
+   the probe as a `varbinary` **function argument** rather than a parsed
+   pattern (§3.2, §5.1). Consequence: this parser is fulltext2-only, because
+   the v1 engine interpolates terms into SQL text.
+2. **Collation is irrelevant** — index matching is byte comparison, which is
+   also what MO's `varchar` `=` already does. My earlier concern was wrong and
+   the restriction it implied is dropped (§5.2).
+3. **Replace the old `json` parser in place** and keep the name `json`.
+4. **No ancestor path in the term** (§6): equality stays an exact lookup and
+   probes are path-agnostic. The `includeFullPath` mode an earlier draft
+   proposed was removed — unclear benefit, and a second term shape every probe
+   would have to agree with.
+5. **v1 scope is `=`, `>`, `>=`, `<`, `<=`** — ranges are in, not deferred.
+   Cross-type acceleration (`json_extract_string` on a numeric leaf) is a later
+   task.
+
+6. **`json_extract_string` probes the `OR` of plausible encodings.** Confirmed.
+   `= 'XXX'` (not numeric) stays a single exact string-term lookup; `= '3.14'`
+   probes the string term OR the float term, because
+   `json_extract_string` renders a numeric leaf and the predicate is genuinely
+   true for it. The disjunction is still a necessary condition, so the retained
+   predicate removes the extras. Without this the row would be dropped — a
+   wrong answer, not a missed optimization.
+
+Assumption taken from decision 3, recorded rather than asked a third time:
+**"replace" means tuple terms only** — plain leaf-value terms are no longer
+emitted when `includeKeys = true`. A rebuilt index therefore stops answering
+`MATCH(j) AGAINST('XXX')` free-text queries over JSON; `includeKeys = false`
+remains available for that. Say the word if value terms should be emitted
+alongside the tuples instead — it is a one-line change in the tokenizer, but it
+roughly doubles term count, so it should be a deliberate choice.
+
+## 9. Testing
+
+Following the counterexample discipline: the invariant is §5.1, and the
+negation to hunt is **a row the original predicate accepts but the probe
+rejects**. A generator that builds random JSON docs, indexes them, and asserts
+that `WHERE pred` and `WHERE pred AND probe` return identical row sets is the
+primary oracle — it tests implication directly rather than a plan shape.
+
+The generator must cover all five operators and values chosen to sit on range
+boundaries — `>` vs `>=` on a value that
+exists in the index is exactly where an off-by-one in the term bounds shows up
+as a dropped row.
+
+Targeted cases derived from §5.2 and §3.2: number-vs-string extraction of the
+same leaf (the `OR`-of-encodings rule); values that straddle the 127-byte
+truncation boundary; **bytes that would be BOOLEAN-mode syntax** (`+ - * "`)
+and embedded `0x00`, proving the probe is never pattern-parsed; duplicate keys
+and arrays; `NOT`/`OR` contexts; missing paths; DDL rejection of the parser on
+a v1 index; and — because §1 says it is a known failure mode — a
+**CREATE-vs-CDC parity test** asserting both build paths emit byte-identical
+terms for the same document.
+
+`EXPLAIN` assertions may confirm the index is used, but must never be the only
+oracle for correctness.
+
+The freshness gate (§10) has its own BVTs under
+`pessimistic_transaction/fulltext2/`: `fulltext2_json_probe_plan` (probe fires on a
+current read once CDC has caught up), `fulltext2_json_probe_fallback` (a
+transaction-local write fails the gate closed → table scan, still exact), and
+`fulltext2_json_probe_snapshot` (a `{snapshot=...}` read returns the historical rows
+only, whichever plan is chosen). A snapshot read pins **results, not the plan** —
+whether its probe fires is timing-dependent, but the result is exact either way, so
+it also guards against the gate probing a snapshot generation missing the snapshot
+rows. The partial plan (§10.3) adds cases where the index is behind: the union of
+the bulk probe and the `table_changes` tail must equal the full scan, including a
+**delete inside the gap** (removed via MVCC, not left as a phantom) and
+**gap-larger-than-table / DDL-in-gap** falling back to the full scan.
+
+## 10. Index freshness (the coverage gate)
+
+The probe is ANDed into an ordinary predicate, so it is a **mandatory** filter,
+not a search. That is a stronger contract than `MATCH … AGAINST`, which is
+allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
+row written inside the maintenance lag satisfies the predicate but has no
+posting yet, so an unconditional probe would silently drop it.
+
+The decision is split across two layers because only the operator knows the generation the
+query **actually** searched (a warm cache may hand it a generation older or newer than the
+planner measured — §10.4). So the plan makes only the read-stable, generation-independent
+choice, and the operator makes every generation-dependent one:
+
+- **plan** (`decideJSONProbe`) chooses **skip** vs **self-complete**:
+  - **skip**: fail closed to a full scan when the probe would be unsound or unusable —
+    a transaction-local write to the source (the index and tail see only committed rows, so
+    an uncommitted write would be dropped — the `SourceCommitTS` guard surfaces this); or
+    `table_changes` cannot serve the table (partitioned/temporary, no explicit non-hidden pk,
+    reserved-name column collision). A synchronous (non-async) index is **covered** with no
+    tail — it is current by construction.
+  - **self-complete**: an always-async index emits a mandatory probe the operator completes.
+    The plan carries only `bar` (§10.2, the max source commit as of the read, which is also
+    the transaction-local-write guard) — a value stable for the statement.
+- **operator** (`fulltext2_search`, §10.3–§10.4) decides, against the generation it ACTUALLY
+  searched (`searched`, §10.1):
+  - **caught up** (`searched >= bar`): the bulk already reflects every row the read sees —
+    **no tail**. This includes the common `CREATE INDEX`-on-existing-data case.
+  - **behind, single schema version** (`searched < bar`, no DDL in `(searched, S]`): union a
+    `table_changes(searched, S]` tail up to the read point.
+  - **incompatible** — the searched generation is NEWER than the read (`searched > S`, it may
+    have removed a posting a long-running txn must still see), or a schema-version change sits
+    in `(searched, S]` (`table_changes` cannot span it): **fall back** to a full pk scan of the
+    source (`SELECT <pk> FROM <db>.<src>`). The INNER JOIN + base re-check turn that into the
+    correct answer, i.e. the query degrades to a full scan.
+
+Moving these into the operator is what makes them sound: the plan cannot know whether the
+searched generation will be caught up, behind, newer, or DDL-separated from the read, because
+the cache picks it at execution. `CoversSnapshot` / `pkg/indexplugin/coverage` still exist and
+are used by ISCP, but the json-probe decision no longer consults them — the operator binds the
+generation directly (§10.4), which is strictly stronger than a plan-time coverage verdict.
+
+### 10.1 `searched`: the generation actually searched
+
+The freshness signal is `build_ts` = `MAX(metadata.build_ts)` over the index's
+base segments **and** cdc_tail frames — the greatest source-table commit the index
+reflects. `build_ts` is the base-table version each flush covered (`GetToTS`),
+written per segment/frame; a **MERGE preserves `max(build_ts)`** of the inputs it
+folds (base + cdc_tail) so coverage survives compaction. An index predating the
+`build_ts` column reads `0` — a safe under-report (the tail then spans from genesis,
+wider but never a dropped gap).
+
+The operator uses the `build_ts` of the generation it **actually searched**, captured
+atomically with the search: `RuntimeConfig.SearchedBuildTS` is an out-param the cache
+populates under the entry read-lock inside `VectorIndexSearch.Search`/`SearchInto`, so the
+value is exactly the generation that answered the query — immune to a concurrent evict/reload
+and to a warm hit that reuses an older in-flight generation than the one just published. This
+is `searched`; every §10.3–§10.4 decision is made against it, never against a plan-time guess
+or a global watermark. `VectorIndexSearchIf.BuildTS()` exposes it per algo; fulltext2/hnsw/
+cagra/ivfpq return the real value, ivfflat/brute-force return 0.
+
+### 10.2 The bar
+
+The **bar** is the max source commit the read must see. The plan computes it once
+(`decideJSONProbe`) and carries it to the operator as `TableConfig.ProbeTailBar`; the operator
+compares `searched >= bar` to decide caught-up vs behind (§10.3). Computing the bar is also how
+the **transaction-local-write guard** fires (it fails closed on an uncommitted write to the
+source). The bar is the read snapshot's coverage requirement:
+
+- **current read** — `bar = SourceCommitTS`: the greatest source DML commit the
+  query CN observes at the read snapshot, computed from the base relation's
+  partition state (`engine.SourceCommitTSProvider`), failing closed on a
+  transaction-local write to the source. This is the value an idle table's
+  `build_ts` catches up to and stays at, so the fast path fires once CDC drains —
+  a strict `build_ts >= now` never holds because CDC always lags the present.
+- **historical (`{snapshot=...}` / AS OF) read** — `bar = SourceCommitTS as of the
+  snapshot`: the same source-commit bar as a current read, but computed on a txn
+  cloned at the snapshot, so it is the greatest source DML commit visible AT the
+  snapshot `S`. `searched` is read from the same snapshot-bound generation (cache key
+  `index_table@snapshot`), so `searched` and the bar are measured at one read point: a
+  snapshot whose index had caught up as of `S` runs no tail, one that was behind is completed
+  with a tail up to `S` — exactly like a current read. Binding the bar to `S` itself is unsound
+  the same way `build_ts >= now` is: the index build lags `S`, so `searched >= S` rarely holds
+  and nearly every snapshot would needlessly fall back.
+
+The original json_extract predicate is retained and re-evaluated on every row the
+probe returns.
+
+### 10.3 Self-completing probe: bulk + gap tail (json_extract only)
+
+An async index reflects the source only up to the generation the operator searches, so
+the `fulltext2_search` operator **self-completes**: after the bulk search it runs the
+gap query itself and emits the recovered pks alongside the bulk. There is no separate
+UNION arm in the plan — one node produces both:
+
+- **bulk** — the rows the searched generation reflects (`<= searched`), matched through
+  the index;
+- **tail** — `table_changes(db, t, searched, S] WHERE change_type='insert' AND
+  <json_extract predicate>`, projected to the pk, emitted as `(doc_id=pk, score=0)`. `S`
+  is the read point (`now`, or the snapshot for a historical read). The tail rows are not
+  in the index (that is the whole point of the gap), so the json predicate is evaluated
+  **directly on the changed rows, no index** — the same predicate the base scan uses,
+  rebuilt against the source columns table_changes exposes. Pushing it only shrinks the
+  candidate set; the base scan re-checks regardless, so if the predicate cannot be
+  rendered the tail is left unfiltered (a wider superset, still correct).
+
+When the searched generation is **incompatible** with the read — newer than it (`searched > S`,
+a forward tail cannot recover a posting removed after `S`) or a schema-version change sits in
+`(searched, S]` (`table_changes` cannot span it) — the operator instead runs a **fallback**:
+`SELECT <pk> FROM <db>.<src> WHERE <json predicate>` as of `S`, a **selective** full scan of the
+base table that projects only the *matching* pks. The query degrades to a full scan (the fallback
+reads the whole base once), but only matching pks flow into the mandatory join — so the join stays a
+cheap pk-lookup, never a `base(N) ⋈ all-pks(N)` self-join that would OOM on a large table.
+
+The pushed predicate uses the **public `json_extract_string` / `json_extract_float64`** in both the
+tail and the fallback. The fallback scans the base table, which carries the json index, so that
+predicate would normally re-trigger the mandatory-filter rewrite and recurse. It is prevented instead
+by running the fallback/tail SQL with **`applyIndices=1`**: the operator passes it per-statement via
+`StatementOption.WithOptimizerHints("applyIndices=1")` (the internal SQL executor bridges it onto the
+execution context; `parseOptimizeHints` applies it on top of the global variable), so `applyIndices`
+short-circuits and the internal plan skips index application entirely — no probe, no recursion. If the
+predicate cannot be rendered to SQL, the planner declines the probe entirely (`recordJSONProbeTail`
+returns false) and the query runs as a plain **Table Scan** — a real full scan, still cheaper than an
+all-pks self-join.
+
+**Rolling-upgrade invariant (runtime contract).** Two distinct mixed-version hazards, kept separate.
+
+*Overload resolution.* The pushed predicate is the **public** `json_extract_*`, present on every
+version, so a mixed-version cluster has no version-specific overload to resolve — no `function
+overload id not found` on an older CN. (An earlier revision used byte-identical
+`json_extract_*_internal` twins as new overloads; they were removed precisely because a new overload
+id is unresolvable on a CN that predates it.) The recursion guard is likewise a *coordinator-side
+plan decision*, not a new symbol: `applyIndices=1` is applied only where the plan is built, and the
+resulting plan (rewrite skipped) ships to remote CNs, which execute it without re-planning.
+
+*Config compatibility — the real fence.* The public function names do **not** make the probe wire-
+compatible. The self-completing probe is carried in the `fulltext2_search` TVF config as `probe_tail*`
+fields; an older CN that receives this TVF **silently drops those unknown JSON fields** (its decode
+ignores fields it does not know) and runs **only the stale bulk generation**, returning an incomplete
+mandatory-filter result that omits any source row committed in `(searched, snapshot]`. Correctness
+therefore rests on two **normative** fences, both required — removing or bypassing either recreates
+that silent incomplete result:
+
+1. **Plan-time gate.** The coordinator injects the probe only when the cluster's negotiated protocol
+   version is at least the one that introduced the probe_tail contract; below it, the query runs as a
+   plain Table Scan on the retained predicate.
+2. **Sender-boundary recheck.** The negotiated version can drop between plan build and serialization,
+   so the point that serializes a fragment to another node re-checks the destination's *current*
+   version and **fails closed** (rejects the query) when it predates the contract — it never ships a
+   probe_tail config an older CN would mishandle.
+
+`base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail-or-fallback pks)`. The group-by dedup (`AGG`)
+is still required: bulk and tail overlap when a row is updated inside the gap (old value in
+the index, new insert row in the tail), and a probe repeats a pk per matched term.
+Deletes inside the gap need no handling: the tail is insert-only and the base fetch is
+at the read point, so MVCC drops a pk deleted after `searched`. This is **json_extract
+only** — `MATCH … AGAINST` keeps search semantics and never self-completes.
+
+There is **no cost gate**. The base table carries large per-row content (avoiding the
+bulk-load of that content is the whole reason to use the index), so even a large tail
+costs no more than the full scan it replaces. The tail SQL runs through the internal SQL
+executor **inside the TVF** (`pkg/sql/colexec/table_function`), never inside `pkg/fulltext2`.
+The plan decision lives in `decideJSONProbe` (`recordJSONProbeTail`); `buildFulltext2SearchCfg`
+flips `TableConfig.ProbeTail` and carries the source table, pk, and `bar` the operator needs.
+
+### 10.4 Generation binding: every generation-dependent choice is the operator's
+
+The generation the operator searches is chosen at EXECUTION (a warm cache may reuse a
+generation older OR newer than the planner measured). The plan therefore makes **no**
+generation-dependent choice — it carries only `bar` (§10.2) — and the operator makes them all,
+against `searched` (§10.1, the `build_ts` captured atomically with the search via
+`RuntimeConfig.SearchedBuildTS`). This is what closes three distinct plan/execution holes a
+plan-time decision leaves open:
+
+- **older-in-flight (behind)** — an index is mid-load of an old generation `W0`; a row commits
+  and CDC publishes `W1`; a second query plans against durable `W1` but executes against the
+  still-loading `W0`. A plan-time lower bound of `W1` would bound the tail *above* what was
+  searched and lose the row in `(W0, W1]`. The operator instead tails `(searched=W0, S]`.
+- **newer-than-read** — a warm entry has advanced to a generation that reflects commits AFTER
+  the read snapshot (e.g. a deletion a long-running txn must not see). A forward tail cannot
+  recover a removed posting, and the bulk is already unsound. The operator detects `searched > S`
+  and **falls back** to the selective base-table scan (§10.3).
+- **DDL in the gap** — a schema-version change sits in `(searched, S]`, which `table_changes`
+  refuses to span. Resolved at runtime against `searched` (`tableChangesTableDefAt` +
+  `sameTableChangesSchema`, fail-closed): the operator **falls back** rather than emit a tail
+  that would error. (A caught-up `CREATE INDEX`-on-existing-data index does NOT hit this — it is
+  caught up, `searched >= bar`, so it runs no tail at all, never a tail spanning the create.)
+
+A generation already caught up to `S` (`searched >= bar`) runs no tail. Snapshot reads work
+identically: `searched` is the as-of-snapshot generation's bound and `S` is the snapshot TS.
+
+Because the tail is internal to the operator rather than a visible plan node, the planner
+publishes the reconstructed SQL on the scan node's `Stats.Sql` (`jsonProbeTail`), which
+`EXPLAIN (VERBOSE)` renders as `Sql: SELECT … FROM table_changes(…) WHERE change_type =
+'insert' AND (…) /* self-completes vs searched generation: caught up => no tail; behind => this
+tail; newer-than-read or DDL-in-gap => SELECT pk FROM src WHERE … */`. No single SQL is literally
+"the" query — the operator picks one of the three at runtime — so the display shows the
+representative behind tail (its lower bound **symbolic**, `<searched generation>`, because it is
+bound at execution) and spells out the other two branches in the trailing comment. `Stats.Sql` is
+display-only; the executable forms are built by the operator, never read back from it.
+
+This closes the reuse race with no UNION arm and no plan-time generation carrier: every
+choice that depends on the generation is made where the generation is known.
+
+## 11. Range probes
+
+An inequality (`>`, `>=`, `<`, `<=`) becomes a single inclusive term RANGE
+rather than a set of terms. It works because the tuple encoding is
+order-preserving: types.Packer writes a type code then an order-preserving body,
+so terms under one tag sort by value and the two leaf types occupy disjoint
+stretches — a numeric range can never sweep up a string term. The open end of
+the range is the tag's own type bound, not the whole dictionary.
+
+Both ends are inclusive, so a STRICT inequality is a superset by exactly the
+boundary value. That is deliberate: a probe only has to be a NECESSARY
+condition, the original predicate is retained, and it removes a whole class of
+off-by-one. Truncation is superset-safe for the same reason it is for equality —
+truncation is monotone, so a bound longer than the value cap can only widen the
+range.
+
+### 11.1 Why an unranked walk, not a merge
+
+The first cut of this design declined inequalities outright, on the grounds that
+a range over a high-cardinality key IS most of that key's vocabulary, and the
+ranked walk holds a posting cursor plus a block-sized decode buffer for EVERY
+term at once — O(vocabulary x segments) live.
+
+That reasoning was wrong about what a probe needs. The merge exists to compute a
+SCORE across terms; a probe is a prefilter that only needs doc ids, and nothing
+above it ranks by relevance. So the terms never have to be merged: the walk
+visits one term at a time, streamed from the term dictionary (never
+materialized), drains its postings a block at a time, and drops it. Peak cost is
+one term and one block buffer, whatever the range covers.
+
+### 11.2 Duplicates belong to the GROUP BY
+
+Not merging means a document holding several terms of the range is emitted once
+per term, and the probe feeds an INNER JOIN on the pk where a repeated pk
+multiplies base-table rows. The planner therefore puts an aggregate over the
+probe's index scan — `Node_AGG` grouping on the doc id, built by
+`QueryBuilder.dedupFulltextDocIDs` — instead of the index carrying a second,
+bespoke de-duplication of its own. The aggregate already spills and is already
+tested; an in-index structure would have to bound its own memory by hand.
+
+The same fact removes the score sort. The generic fulltext path adds an implicit
+`ORDER BY score DESC` for every stream, but an injected prefilter has no
+relevance to rank on and its score is a constant, so probe streams are skipped
+in that pass and a probe-only query builds no SORT node at all. The resulting
+plan is just:
+
+```
+Join (INNER, on pk)
+  ->  Table Scan            (the retained predicate)
+  ->  Aggregate             (Group Key: __mo_ft_doc_id)
+        ->  Table Function on fulltext2_search
+```

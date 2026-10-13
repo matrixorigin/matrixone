@@ -302,6 +302,22 @@ SELECT
   (SELECT COUNT(*) FROM big_a RIGHT JOIN big_b ON big_a.k = big_b.k WHERE big_a.k IS NULL) AS right_only;
 
 -- -------------------------------------------------------------
+-- 21. Preserved join order must still track matched build rows
+-- -------------------------------------------------------------
+-- Regression for MatrixOne issue #26896.
+drop table if exists orientation_a;
+drop table if exists orientation_b;
+create table orientation_a(id int, k int);
+create table orientation_b(id int, k int);
+insert into orientation_a values (1,1),(2,2),(4,4);
+insert into orientation_b values (20,2),(30,3);
+set session optimizer_hints = 'joinOrdering=1';
+select orientation_a.id as aid, orientation_b.id as bid
+from orientation_a full outer join orientation_b on orientation_a.k = orientation_b.k
+order by coalesce(orientation_a.id, 0), coalesce(orientation_b.id, 0);
+set session optimizer_hints = '';
+
+-- -------------------------------------------------------------
 -- Cleanup
 -- -------------------------------------------------------------
 drop database if exists fulljoin_db;

@@ -323,6 +323,16 @@ func TestGetBackupData(t *testing.T) {
 	assert.Equal(t, nextIDByKey, restore.NextIDByKey)
 }
 
+func TestHAKeeperBootstrapRetryHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	started := time.Now()
+	err := waitHAKeeperBootstrapRetry(ctx, time.Second)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
 func TestGetBackupDataForBootstrap(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

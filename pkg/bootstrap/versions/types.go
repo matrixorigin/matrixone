@@ -87,6 +87,9 @@ type Version struct {
 	UpgradeTenant int32
 	// Tenant upgrade version upgrade Offset location
 	VersionOffset uint32
+	// RequiredProtocolVersion is the writer protocol that must be active on all
+	// services before tenant IDs are snapshotted for this version's upgrades.
+	RequiredProtocolVersion int64
 }
 
 type VersionUpgrade struct {

@@ -1,0 +1,43 @@
+drop database if exists issue28244;
+create database issue28244;
+use issue28244;
+create table fake_seq(
+last_seq_num smallint,
+min_value smallint,
+max_value smallint,
+start_value smallint,
+increment_value bigint,
+cycle bool,
+is_called bool
+);
+insert into fake_seq values (10, 1, 100, 10, 1, false, false);
+select setval('fake_seq', 20, true);
+internal error: Table input is not a sequence
+select * from fake_seq;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+10    1    100    10    1    0    0
+select nextval('fake_seq');
+internal error: Table input is not a sequence
+create table fake_varchar(
+first_value varchar(20),
+min_value int,
+max_value int,
+start_value int,
+increment_value bigint,
+cycle bool,
+is_called bool
+);
+insert into fake_varchar values ('not-a-sequence', 1, 100, 10, 1, false, false);
+select setval('fake_varchar', 20, true);
+internal error: Table input is not a sequence
+select * from fake_varchar;
+first_value    min_value    max_value    start_value    increment_value    cycle    is_called
+not-a-sequence    1    100    10    1    0    0
+create sequence real_seq as int start with 10;
+select setval('real_seq', 20, true);
+setval(real_seq, 20, true)
+20
+select nextval('real_seq');
+nextval(real_seq)
+20
+drop database issue28244;

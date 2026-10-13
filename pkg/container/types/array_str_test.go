@@ -140,3 +140,61 @@ func BenchmarkStringToArray(b *testing.B) {
 		# mo       macos   insert/second=320.189254686237	ForLoop-WithUnsafe 	 (v3)
 	*/
 }
+
+// TestStringToArrayRejectsNonFinite covers #28688: a vector string literal with a NaN or
+// ±Inf element must error at the cast boundary (for every float element type) rather than
+// being stored, since non-finite components poison IVFFLAT kmeans/assignment. Finite
+// literals and integer narrow vectors are unaffected.
+func TestStringToArrayRejectsNonFinite(t *testing.T) {
+	nonFinite := []string{"[NaN,0,0]", "[nan,0,0]", "[Inf,0,0]", "[+Inf,0,0]", "[-Inf,0,0]", "[0,inf,0]", "[0,0,-inf]"}
+	for _, s := range nonFinite {
+		if _, err := StringToArray[float32](s); err == nil {
+			t.Errorf("float32 %q: expected non-finite error, got nil", s)
+		}
+		if _, err := StringToArray[float64](s); err == nil {
+			t.Errorf("float64 %q: expected non-finite error, got nil", s)
+		}
+		if _, err := StringToArray[BF16](s); err == nil {
+			t.Errorf("bf16 %q: expected non-finite error, got nil", s)
+		}
+		if _, err := StringToArray[Float16](s); err == nil {
+			t.Errorf("f16 %q: expected non-finite error, got nil", s)
+		}
+	}
+
+	for _, s := range []string{"[1,2,3]", "[0,0,0]", "[-1.5,2.5,3]"} {
+		if _, err := StringToArray[float32](s); err != nil {
+			t.Errorf("float32 %q: unexpected error %v", s, err)
+		}
+		if _, err := StringToArray[float64](s); err != nil {
+			t.Errorf("float64 %q: unexpected error %v", s, err)
+		}
+	}
+
+	// Integer narrow vectors cannot be non-finite; a finite literal still parses.
+	if _, err := StringToArray[int8]("[1,2,3]"); err != nil {
+		t.Errorf("int8 finite: unexpected error %v", err)
+	}
+	if _, err := StringToArray[uint8]("[1,2,3]"); err != nil {
+		t.Errorf("uint8 finite: unexpected error %v", err)
+	}
+}
+
+// TestStringToArrayRejectsNarrowOverflow covers the #28688 narrow-type overflow case: a finite
+// literal that overflows the 16-bit range narrows to ±Inf, which must be rejected (the finite
+// check runs on the narrowed value, not the pre-narrowing float). f16 max ≈ 65504; bf16 ≈ f32.
+func TestStringToArrayRejectsNarrowOverflow(t *testing.T) {
+	if _, err := StringToArray[Float16]("[70000,0,0]"); err == nil {
+		t.Errorf("f16 [70000,...]: expected overflow-to-Inf rejection, got nil")
+	}
+	if _, err := StringToArray[BF16]("[3.4e38,0,0]"); err == nil {
+		t.Errorf("bf16 [3.4e38,...]: expected overflow-to-Inf rejection, got nil")
+	}
+	// in-range narrow values still parse
+	if _, err := StringToArray[Float16]("[65000,0,0]"); err != nil {
+		t.Errorf("f16 [65000,...]: unexpected error %v", err)
+	}
+	if _, err := StringToArray[BF16]("[70000,0,0]"); err != nil {
+		t.Errorf("bf16 [70000,...]: unexpected error %v", err)
+	}
+}

@@ -40,6 +40,8 @@ func TestEventTypeDesc(t *testing.T) {
 	assert.Equal(t, "Quit", e1.String())
 	e1 = TypeUpgrade
 	assert.Equal(t, "Upgrade", e1.String())
+	e1 = TypeIdentityChange
+	assert.Equal(t, "IdentityChange", e1.String())
 }
 
 func TestMakeEvent(t *testing.T) {
@@ -116,6 +118,30 @@ func TestMakeEvent(t *testing.T) {
 			require.Nil(t, e)
 			require.False(t, r)
 		}
+
+		mixed := "set @seed = rand(), @@session.time_zone = @seed"
+		e, r = makeEvent(makeSimplePacket(mixed), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		setEvent := e.(*setVarEvent)
+		require.Equal(t, mixed, setEvent.stmt)
+		require.Equal(t, "set time_zone = @seed", setEvent.systemStmt)
+
+		e, r = makeEvent(makeSimplePacket("set names 'utf8mb4' collate 'utf8mb4_bin'"), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Equal(t, "set names utf8mb4 collate utf8mb4_bin", e.(*setVarEvent).systemStmt)
+
+		e, r = makeEvent(makeSimplePacket("set @@transaction_isolation = 'READ-COMMITTED'"), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Equal(t, "set @@transaction_isolation = READ-COMMITTED", e.(*setVarEvent).systemStmt)
+
+		userOnly := "set @ts0 = (select updated_at from src limit 1)"
+		e, r = makeEvent(makeSimplePacket(userOnly), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Empty(t, e.(*setVarEvent).systemStmt)
 	})
 
 	t.Run("upgrade", func(t *testing.T) {
@@ -123,6 +149,24 @@ func TestMakeEvent(t *testing.T) {
 		e, r = makeEvent(makeSimplePacket(stmt), nil)
 		require.NotNil(t, e)
 		require.True(t, r)
+	})
+
+	t.Run("set role", func(t *testing.T) {
+		e, r = makeEvent(makeSimplePacket("set role analyst"), nil)
+		require.IsType(t, &identityChangeEvent{}, e)
+		require.False(t, r)
+	})
+
+	t.Run("multi statement identity change", func(t *testing.T) {
+		for _, sql := range []string{
+			"set role analyst; select 1",
+			"select 1; set role analyst",
+			"set role analyst; select invalid",
+		} {
+			e, r = makeEvent(makeSimplePacket(sql), nil)
+			require.IsType(t, &identityChangeEvent{}, e, sql)
+			require.False(t, r, sql)
+		}
 	})
 }
 

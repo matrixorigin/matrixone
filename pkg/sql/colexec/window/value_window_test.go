@@ -117,13 +117,6 @@ func runValueWindowTest(t *testing.T, winSpec *plan.Expr, bat *batch.Batch, mp *
 	arg := &Window{
 		WinSpecList: []*plan.Expr{winSpec},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
@@ -229,7 +222,7 @@ func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			bat := makeInt32Batch(mp, []int32{10, 20})
 			ctr := &container{bat: bat}
 			ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
@@ -249,6 +242,26 @@ func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 			require.Equal(t, int64(0), mp.CurrNB())
 		})
 	}
+}
+
+func TestValidateLagLeadOffsetsHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	bat := makeInt32Batch(mp, []int32{10, 20})
+	offsetVec := testutil.MakeInt64Vector([]int64{0, 1}, nil, mp)
+	ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+	arg := &Window{WinSpecList: []*plan.Expr{makeLagWindowSpec()}}
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+	require.ErrorIs(t, ctr.validateLagLeadOffsets(0, arg, proc), context.Canceled)
+
+	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestProcessValueFunc_ErrorPathFreesLocalResult(t *testing.T) {
@@ -479,7 +492,7 @@ func TestProcessValueFunc_UnsupportedErrorPathFreesLocalResult(t *testing.T) {
 // TestProcessValueFunc_NthValueWithN tests nth_value(expr, 3) with unbounded frame.
 func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -511,7 +524,7 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 // TestProcessValueFunc_NthValueOutOfBounds tests nth_value with n exceeding frame size.
 func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20})
 	spec := makeNthValueWindowSpec()
@@ -540,7 +553,7 @@ func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 // TestProcessValueFunc_LeadWithOffset tests lead with offset=2.
 func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLeadWindowSpec()
@@ -571,7 +584,7 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 
 func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeLeadWindowSpec()
@@ -583,6 +596,7 @@ func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+	require.NoError(t, ctr.validateLagLeadOffsets(0, ap, proc))
 	result, err := ctr.processValueFunc(0, ap, proc)
 	require.NoError(t, err)
 	require.Equal(t, 3, result.Length())
@@ -599,7 +613,7 @@ func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 
 func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -637,7 +651,7 @@ func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 
 func TestProcessValueFunc_NthValueWithOverflowingRowsFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeNthValueWindowSpec()
@@ -679,7 +693,7 @@ func TestProcessValueFunc_NthValueWithOverflowingRowsFrame(t *testing.T) {
 // TestProcessValueFunc_NthValueWithFrame tests nth_value with explicit frame.
 func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -757,6 +771,39 @@ func TestGetInt64FromVec(t *testing.T) {
 	v12.Free(mp)
 }
 
+func TestGetNthValueOffsetFromPreparedParam(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	valid := testutil.MakeVarcharVector([]string{"2"}, nil, mp)
+	valid.SetPrepareParamKind(vector.PrepareParamInteger)
+	value, ok, err := getNthValueOffsetFromVec(context.Background(), valid, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(2), value)
+	valid.Free(mp)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		kind  vector.PrepareParamKind
+		nulls []uint64
+	}{
+		{name: "zero", value: "0", kind: vector.PrepareParamInteger},
+		{name: "negative", value: "-1", kind: vector.PrepareParamInteger},
+		{name: "float", value: "2.5", kind: vector.PrepareParamFloat},
+		{name: "string", value: "2", kind: vector.PrepareParamNone},
+		{name: "null", kind: vector.PrepareParamInteger, nulls: []uint64{0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			vec := testutil.MakeVarcharVector([]string{test.value}, test.nulls, mp)
+			vec.SetPrepareParamKind(test.kind)
+			_, _, err := getNthValueOffsetFromVec(context.Background(), vec, 0)
+			require.ErrorContains(t, err, "Incorrect arguments to nth_value")
+			vec.Free(mp)
+		})
+	}
+}
+
 func TestAppendDefaultOrNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -765,7 +812,19 @@ func TestAppendDefaultOrNull(t *testing.T) {
 	err := appendDefaultOrNull(result, nil, 0, mp)
 	require.NoError(t, err)
 	require.True(t, result.IsNull(0))
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 	result.Free(mp)
+
+	// explicit const NULL default retains the selected default's source.
+	nullResult := vector.NewVec(types.T_int32.ToType())
+	nullDefault := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
+	require.NoError(t, nullDefault.SetStringSource(types.StringSourceCOMStmt))
+	err = appendDefaultOrNull(nullResult, nullDefault, 0, mp)
+	require.NoError(t, err)
+	require.True(t, nullResult.IsNull(0))
+	require.Equal(t, types.StringSourceCOMStmt, nullResult.GetStringSourceAt(0))
+	nullResult.Free(mp)
+	nullDefault.Free(mp)
 
 	// const default
 	result2 := vector.NewVec(types.T_int32.ToType())
@@ -783,7 +842,7 @@ func TestAppendDefaultOrNull(t *testing.T) {
 // Simulates two partitions by manually setting ctr.ps.
 func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// Data: partition1=[10,20,30], partition2=[40,50] (already sorted)
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
@@ -820,7 +879,7 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 // TestProcessValueFunc_LeadWithPartition tests lead across partition boundaries.
 func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeLeadWindowSpec()
@@ -854,7 +913,7 @@ func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 // TestProcessValueFunc_LagWithOffset tests lag with offset=2.
 func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLagWindowSpec()
@@ -887,7 +946,7 @@ func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 // TestProcessValueFunc_LagWithDefault tests lag with offset=1 and default value.
 func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeLagWindowSpec()
@@ -920,7 +979,7 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 // TestProcessValueFunc_FirstValueWithFrame tests first_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
 func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeValueWindowSpecWithName("first_value", int32(types.T_int32))
@@ -971,7 +1030,7 @@ func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 // TestProcessValueFunc_LastValueWithFrame tests last_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
 func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeValueWindowSpecWithName("last_value", int32(types.T_int32))
@@ -1021,14 +1080,14 @@ func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 // TestProcessValueFunc_LagNonConstOffset tests lag with a non-const offset vector.
 func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLagWindowSpec()
 
 	ctr := &container{bat: bat}
-	// Non-const offset vector: [1, 2, 0, -1]
-	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, -1}, nil, mp)
+	// Non-const offset vector: [1, 2, 0, 1]
+	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, 1}, nil, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -1042,7 +1101,7 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 	require.True(t, result.IsNull(0))    // lag(10, 1) → NULL (no prev)
 	require.True(t, result.IsNull(1))    // lag(20, 2) → NULL (not enough rows)
 	require.Equal(t, int32(30), vals[2]) // lag(30, 0) → 30 (self)
-	require.True(t, result.IsNull(3))    // lag(40, -1) → NULL (negative offset)
+	require.Equal(t, int32(30), vals[3]) // lag(40, 1) → 30
 
 	result.Free(mp)
 	offsetVec.Free(mp)
@@ -1054,13 +1113,13 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 // TestProcessValueFunc_LeadNonConstOffset tests lead with a non-const offset vector.
 func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLeadWindowSpec()
 
 	ctr := &container{bat: bat}
-	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, -1}, nil, mp)
+	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, 1}, nil, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -1074,7 +1133,7 @@ func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	require.Equal(t, int32(30), vals[0]) // lead(10, 2) → 30
 	require.Equal(t, int32(30), vals[1]) // lead(20, 1) → 30
 	require.Equal(t, int32(30), vals[2]) // lead(30, 0) → 30 (self)
-	require.True(t, result.IsNull(3))    // lead(40, -1) → NULL (negative offset)
+	require.True(t, result.IsNull(3))    // lead(40, 1) → NULL (no next)
 
 	result.Free(mp)
 	offsetVec.Free(mp)
@@ -1083,10 +1142,131 @@ func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestProcessValueFunc_RejectsNegativeLagLeadOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		makeSpec    func() *plan.Expr
+		offsets     []int64
+		constOffset bool
+		withDefault bool
+	}{
+		{name: "lag constant", makeSpec: makeLagWindowSpec, offsets: []int64{-1}, constOffset: true},
+		{name: "lead constant with default", makeSpec: makeLeadWindowSpec, offsets: []int64{-2}, constOffset: true, withDefault: true},
+		{name: "lag expression", makeSpec: makeLagWindowSpec, offsets: []int64{1, -1, 0, 1}},
+		{name: "lead expression with default", makeSpec: makeLeadWindowSpec, offsets: []int64{2, 1, -1, 0}, withDefault: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+
+			var offsetVec *vector.Vector
+			var err error
+			if test.constOffset {
+				offsetVec, err = vector.NewConstFixed(types.T_int64.ToType(), test.offsets[0], bat.RowCount(), mp)
+				require.NoError(t, err)
+			} else {
+				offsetVec = testutil.MakeInt64Vector(test.offsets, nil, mp)
+			}
+
+			args := []*vector.Vector{bat.Vecs[0], offsetVec}
+			var defaultVec *vector.Vector
+			if test.withDefault {
+				defaultVec, err = vector.NewConstFixed(types.T_int32.ToType(), int32(99), bat.RowCount(), mp)
+				require.NoError(t, err)
+				args = append(args, defaultVec)
+			}
+
+			ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+			ctr.aggVecs[0].Vec = args
+			ap := &Window{WinSpecList: []*plan.Expr{test.makeSpec()}}
+
+			require.ErrorContains(t, ctr.validateLagLeadOffsets(0, ap, proc), "Incorrect arguments to")
+			result, err := ctr.processValueFunc(0, ap, proc)
+			require.Nil(t, result)
+			require.ErrorContains(t, err, "Incorrect arguments to")
+
+			if defaultVec != nil {
+				defaultVec.Free(mp)
+			}
+			offsetVec.Free(mp)
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
+}
+
+func TestProcessValueFunc_RejectsNonIntegralOrNullLagLeadOffset(t *testing.T) {
+	tests := []struct {
+		name       string
+		makeSpec   func() *plan.Expr
+		makeOffset func(*mpool.MPool, int) (*vector.Vector, error)
+	}{
+		{
+			name:     "lag float",
+			makeSpec: makeLagWindowSpec,
+			makeOffset: func(mp *mpool.MPool, _ int) (*vector.Vector, error) {
+				return testutil.MakeFloat64Vector([]float64{-1.5, -0.5, -1.5, -0.5}, nil, mp), nil
+			},
+		},
+		{
+			name:     "lead decimal",
+			makeSpec: makeLeadWindowSpec,
+			makeOffset: func(mp *mpool.MPool, rows int) (*vector.Vector, error) {
+				typ := types.T_decimal64.ToType()
+				typ.Width = 18
+				typ.Scale = 1
+				value, err := types.ParseDecimal64("-1.5", typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				return vector.NewConstFixed(typ, value, rows, mp)
+			},
+		},
+		{
+			name:     "lag row-dependent null",
+			makeSpec: makeLagWindowSpec,
+			makeOffset: func(mp *mpool.MPool, _ int) (*vector.Vector, error) {
+				return testutil.MakeInt64Vector([]int64{1, 0, 1, 1}, []uint64{1}, mp), nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+			offsetVec, err := test.makeOffset(mp, bat.RowCount())
+			require.NoError(t, err)
+			defaultVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(99), bat.RowCount(), mp)
+			require.NoError(t, err)
+
+			ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+			ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec, defaultVec}
+			ap := &Window{WinSpecList: []*plan.Expr{test.makeSpec()}}
+
+			require.ErrorContains(t, ctr.validateLagLeadOffsets(0, ap, proc), "Incorrect arguments to")
+			result, err := ctr.processValueFunc(0, ap, proc)
+			require.Nil(t, result)
+			require.ErrorContains(t, err, "Incorrect arguments to")
+
+			defaultVec.Free(mp)
+			offsetVec.Free(mp)
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
+}
+
 // TestProcessValueFunc_NthValueNonConst tests nth_value with a non-const n vector.
 func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -1119,7 +1299,7 @@ func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
 // TestProcessValueFunc_FirstValueWithPartition tests first_value with partitions.
 func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeFirstValueWindowSpec()
@@ -1153,7 +1333,7 @@ func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
 // TestProcessValueFunc_LastValueWithPartition tests last_value with partitions.
 func TestProcessValueFunc_LastValueWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeLastValueWindowSpec()
@@ -1190,18 +1370,11 @@ func TestProcessValueFunc_Varchar(t *testing.T) {
 	bat := makeVarcharBatch(mp, []string{"aaa", "bbb", "ccc"})
 
 	spec := makeValueWindowSpecWithName("lag", int32(types.T_varchar))
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

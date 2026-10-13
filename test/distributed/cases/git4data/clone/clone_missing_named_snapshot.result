@@ -1,0 +1,54 @@
+drop snapshot if exists issue28049_valid_snapshot;
+drop database if exists issue28049_clone_missing_snapshot;
+create database issue28049_clone_missing_snapshot;
+create table issue28049_clone_missing_snapshot.src (
+id int primary key,
+doc json
+);
+insert into issue28049_clone_missing_snapshot.src values (1, '{"score":10}');
+create table issue28049_clone_missing_snapshot.missing_snapshot_clone
+clone issue28049_clone_missing_snapshot.src
+{snapshot = 'issue28049_missing_snapshot'};
+invalid input: snapshot 'issue28049_missing_snapshot' not found
+create table issue28049_clone_missing_snapshot.missing_snapshot_clone
+clone issue28049_clone_missing_snapshot.src
+{snapshot = 'issue28049_missing_snapshot'};
+invalid input: snapshot 'issue28049_missing_snapshot' not found
+create table issue28049_clone_missing_snapshot.missing_snapshot_clone
+clone issue28049_clone_missing_snapshot.src
+{snapshot = 'issue28049_missing_snapshot'};
+invalid input: snapshot 'issue28049_missing_snapshot' not found
+create table issue28049_clone_missing_snapshot.missing_snapshot_identifier_clone
+clone issue28049_clone_missing_snapshot.src
+{snapshot = issue28049_missing_snapshot};
+invalid input: snapshot 'issue28049_missing_snapshot' not found
+select count(*) as failed_clone_tables
+from mo_catalog.mo_tables
+where reldatabase = 'issue28049_clone_missing_snapshot'
+and relname in ('missing_snapshot_clone', 'missing_snapshot_identifier_clone');
+➤ failed_clone_tables[-5,64,0]  𝄀
+0
+select count(*) as failed_clone_columns
+from mo_catalog.mo_columns
+where att_database = 'issue28049_clone_missing_snapshot'
+and att_relname in ('missing_snapshot_clone', 'missing_snapshot_identifier_clone');
+➤ failed_clone_columns[-5,64,0]  𝄀
+0
+create snapshot issue28049_valid_snapshot
+for table issue28049_clone_missing_snapshot src;
+create table issue28049_clone_missing_snapshot.valid_snapshot_clone
+clone issue28049_clone_missing_snapshot.src
+{snapshot = 'issue28049_valid_snapshot'};
+select id, doc
+from issue28049_clone_missing_snapshot.valid_snapshot_clone
+order by id;
+➤ id[4,32,0]  ¦  doc[-1,2147483647,0]  𝄀
+1  ¦  {"score": 10}
+select count(*) as valid_clone_tables
+from mo_catalog.mo_tables
+where reldatabase = 'issue28049_clone_missing_snapshot'
+and relname = 'valid_snapshot_clone';
+➤ valid_clone_tables[-5,64,0]  𝄀
+1
+drop snapshot issue28049_valid_snapshot;
+drop database issue28049_clone_missing_snapshot;

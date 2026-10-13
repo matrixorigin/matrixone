@@ -15,6 +15,9 @@ header:
     - 'optools/'
     - 'cgo/external/'
     - 'thirdparties/'
+    # Sirius is an external Git submodule with its own source headers and license.
+    - 'third_party/sirius/'
+    - '.sca-go-module-cache/'
     - 'pkg/frontend/test/'
     - 'pkg/vm/engine/tae/mergesort/sort.go'
     - 'pkg/vm/engine/tae/mergesort/heap.go'
@@ -34,3 +37,7 @@ dependency:
   licenses:
     - name: github.com/mattn/go-localereader
       license: MIT
+    # The generated Go submodule carries Apache-2.0 SPDX headers but omits
+    # the repository-level LICENSE file from its module zip.
+    - name: github.com/substrait-io/substrait-protobuf/go
+      license: Apache-2.0

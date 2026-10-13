@@ -23,8 +23,169 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.SelectExprs) *GroupBinder {
-	b := &GroupBinder{}
+func normalizeGroupByName(name *tree.UnresolvedName) {
+	for i := 0; i < name.NumParts; i++ {
+		if name.CStrParts[i] != nil {
+			name.CStrParts[i] = tree.NewCStr(name.CStrParts[i].Compare(), 0)
+		}
+	}
+}
+
+// canonicalGroupByAstKey folds identifiers and function names through their
+// comparison form. Resolved columns are represented by relation tag and column
+// position, so col, tbl.col, and db.tbl.col match only when they resolve to the
+// same source column. String literals and all other case-sensitive values retain
+// their original spelling.
+func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
+	normalized := cloneTreeExpr(astExpr)
+	var resolvedColumns strings.Builder
+	functionNames := make(map[*tree.UnresolvedName]struct{})
+	walkGroupingSetOrderByExpr(normalized, func(expr tree.Expr) bool {
+		switch node := expr.(type) {
+		case *tree.UnresolvedName:
+			normalizeGroupByName(node)
+			if _, isFunctionName := functionNames[node]; isFunctionName {
+				return true
+			}
+			if binding, colPos, ok := resolveColumnIdentity(ctx, node); ok {
+				node.NumParts = 1
+				node.CStrParts = tree.CStrParts{}
+				node.CStrParts[0] = tree.NewCStr("__mo_resolved_group_by_column", 0)
+				resolvedColumns.WriteByte('#')
+				resolvedColumns.WriteString(strconv.FormatInt(int64(binding.tag), 10))
+				resolvedColumns.WriteByte(':')
+				resolvedColumns.WriteString(strconv.FormatInt(int64(colPos), 10))
+				resolvedColumns.WriteByte(';')
+			}
+		case *tree.FuncExpr:
+			if node.FuncName != nil {
+				node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
+			}
+			if name, ok := node.Func.FunctionReference.(*tree.UnresolvedName); ok {
+				normalizeGroupByName(name)
+				functionNames[name] = struct{}{}
+			}
+		}
+		return true
+	})
+	return semanticAstKey(normalized) + "\x00resolved-columns" + resolvedColumns.String()
+}
+
+func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {
+	if pos, ok := ctx.groupByAst[astKey]; ok {
+		return pos, true
+	}
+	if len(ctx.groupByCanonicalAst) == 0 {
+		return 0, false
+	}
+	pos, ok := ctx.groupByCanonicalAst[canonicalGroupByAstKey(ctx, astExpr)]
+	return pos, ok
+}
+
+// elideStableLiteralGroupBy removes direct, plan-stable literals when another
+// grouping expression remains. Such a literal cannot split an input equivalence
+// class, and leaving it registered as a group result forces every aggregate
+// stage to materialize the same value once per group. Removing its registry
+// entries makes HAVING/projection bind the original literal directly instead.
+//
+// Keep all-literal grouping intact: on empty input GROUP BY constants returns no
+// rows, while a scalar aggregate returns one row. Literal.Src is also retained
+// because prepared/runtime specialization can restore a dynamic expression.
+func elideStableLiteralGroupBy(ctx *BindContext) {
+	if ctx == nil || len(ctx.groups) < 2 ||
+		(len(ctx.groupingFlag) != 0 && len(ctx.groupingFlag) != len(ctx.groups)) {
+		return
+	}
+
+	stableLiteralCount := 0
+	for _, expr := range ctx.groups {
+		if expr == nil {
+			return
+		}
+		literal := expr.GetLit()
+		if literal != nil && literal.Src == nil {
+			stableLiteralCount++
+		}
+	}
+	if stableLiteralCount == 0 || stableLiteralCount == len(ctx.groups) ||
+		!validGroupByPositions(ctx.groupByAst, len(ctx.groups)) ||
+		!validGroupByPositions(ctx.groupByCanonicalAst, len(ctx.groups)) ||
+		!validGroupByPositions(ctx.groupByParamAst, len(ctx.groups)) {
+		return
+	}
+
+	oldToNew := make([]int32, len(ctx.groups))
+	groups := make([]*plan.Expr, 0, len(ctx.groups)-stableLiteralCount)
+	for i, expr := range ctx.groups {
+		literal := expr.GetLit()
+		if literal != nil && literal.Src == nil {
+			oldToNew[i] = -1
+			continue
+		}
+		oldToNew[i] = int32(len(groups))
+		groups = append(groups, expr)
+	}
+
+	ctx.groups = groups
+	if len(ctx.groupingFlag) > 0 {
+		flags := make([]bool, 0, len(groups))
+		for i, flag := range ctx.groupingFlag {
+			if oldToNew[i] >= 0 {
+				flags = append(flags, flag)
+			}
+		}
+		ctx.groupingFlag = flags
+	}
+	remapElidedGroupByPositions(ctx.groupByAst, oldToNew)
+	remapElidedGroupByPositions(ctx.groupByCanonicalAst, oldToNew)
+	remapElidedGroupByPositions(ctx.groupByParamAst, oldToNew)
+}
+
+// preserveElidedGroupByForSample remembers only logical GROUP BY identities
+// removed from the physical key. The ordinary bind registries must stay
+// reduced so projection, HAVING, and ORDER BY bind stable literals directly;
+// SAMPLE has the stricter rule that it cannot consume any logical group key.
+func preserveElidedGroupByForSample(ctx *BindContext, logicalGroupByAst map[string]int32) {
+	if ctx == nil {
+		return
+	}
+	for key := range logicalGroupByAst {
+		if _, retained := ctx.groupByAst[key]; retained {
+			continue
+		}
+		if ctx.sampleGroupByAst == nil {
+			ctx.sampleGroupByAst = make(map[string]struct{})
+		}
+		ctx.sampleGroupByAst[key] = struct{}{}
+	}
+}
+
+func validGroupByPositions(positions map[string]int32, groupCount int) bool {
+	for _, position := range positions {
+		if position < 0 || int(position) >= groupCount {
+			return false
+		}
+	}
+	return true
+}
+
+func remapElidedGroupByPositions(positions map[string]int32, oldToNew []int32) {
+	for key, old := range positions {
+		if old < 0 || int(old) >= len(oldToNew) || oldToNew[old] < 0 {
+			delete(positions, key)
+			continue
+		}
+		positions[key] = oldToNew[old]
+	}
+}
+
+func NewGroupBinder(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectList tree.SelectExprs,
+	allowScalarSubquery bool,
+) *GroupBinder {
+	b := &GroupBinder{allowScalarSubquery: allowScalarSubquery}
 	b.sysCtx = builder.GetContext()
 	b.builder = builder
 	b.ctx = ctx
@@ -44,12 +205,15 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		reusesProjection = true
 		if int(pos) < len(b.ctx.numericProjectionTypes) {
 			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id != 0 {
+			if isNumericAssignmentTarget(target) {
 				numericTarget = &target
 			}
 		}
 	}
-	if isRoot {
+	// An alias has already selected and substituted its projection expression.
+	// Do not interpret a numeric literal inside that expression as an ordinal a
+	// second time.
+	if isRoot && !reusesProjection {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:
@@ -62,7 +226,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				astExpr = b.selectList[colPos-1].Expr
 				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
 					target := b.ctx.numericProjectionTypes[colPos-1]
-					if target.Id != 0 {
+					if isNumericAssignmentTarget(target) {
 						numericTarget = &target
 					}
 				}
@@ -88,6 +252,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
+	if isRoot {
+		if err = rejectStandaloneIntervalExpr(b.GetContext(), expr, "GROUP BY"); err != nil {
+			return nil, err
+		}
+	}
 
 	if isRoot && !b.ctx.isGroupingSet {
 		astStr := semanticAstKey(astExpr)
@@ -100,7 +269,12 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			if _, ok := b.ctx.groupByAst[astStr]; ok {
 				return nil, nil
 			}
-			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+			pos := int32(len(b.ctx.groups))
+			b.ctx.groupByAst[astStr] = pos
+			canonicalKey := canonicalGroupByAstKey(b.ctx, astExpr)
+			if _, ok := b.ctx.groupByCanonicalAst[canonicalKey]; !ok {
+				b.ctx.groupByCanonicalAst[canonicalKey] = pos
+			}
 		}
 		if hasParam {
 			key := parameterizedGroupByKey(astStr, expr)
@@ -118,7 +292,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 	if isRoot && b.ctx.isGroupingSet {
 		astStr := semanticAstKey(astExpr)
-		pos, ok := b.ctx.groupByAst[astStr]
+		pos, ok := lookupGroupByAst(b.ctx, astExpr, astStr)
 		if containsDynamicParam(expr) {
 			pos, ok = b.ctx.groupByParamAst[parameterizedGroupByKey(astStr, expr)]
 		}
@@ -185,7 +359,28 @@ func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 }
 
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
+	if !b.allowScalarSubquery || astExpr.Exists {
+		return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
+	}
+	expr, err := b.baseBindSubquery(astExpr, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	subquery := expr.GetSub()
+	if subquery == nil {
+		return nil, moerr.NewInternalError(b.GetContext(), "GROUP BY scalar subquery has no expression")
+	}
+	if subquery.RowSize != 1 {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "subquery returns more than 1 column")
+	}
+	if subquery.NodeId < 0 || int(subquery.NodeId) >= len(b.builder.ctxByNode) ||
+		b.builder.ctxByNode[subquery.NodeId] == nil {
+		return nil, moerr.NewInternalError(b.GetContext(), "GROUP BY scalar subquery has no bind context")
+	}
+	if b.builder.ctxByNode[subquery.NodeId].isCorrelated {
+		return nil, moerr.NewNYI(b.GetContext(), "correlated subquery in GROUP BY clause")
+	}
+	return expr, nil
 }
 
 func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

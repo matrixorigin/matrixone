@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -66,6 +67,12 @@ const (
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
 	ErrMPoolCapacity               uint16 = 20107
+	ErrQueryTimeout                uint16 = 20108
+	// ErrContextCanceled and ErrDeadlineExceeded are made only by
+	// ConvertGoError from a context cancellation or deadline; Error.Is keeps
+	// them matching context.Canceled and context.DeadlineExceeded.
+	ErrContextCanceled  uint16 = 20109
+	ErrDeadlineExceeded uint16 = 20110
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -75,6 +82,9 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
+	ErrPreparedParamOutOfRange     uint16 = 20207
+	ErrTruncatedWrongValue         uint16 = 20208
+	ErrGroupConcatCut              uint16 = 20209
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -102,6 +112,39 @@ const (
 	ErrUpdateTableUsed      uint16 = 20322
 	ErrWindowInvalidUse     uint16 = 20323
 	ErrViewSelectTmpTable   uint16 = 20324
+	ErrCantChangeTxn        uint16 = 20325
+	ErrInvalidGroupFuncUse  uint16 = 20326
+	// ErrFtMatchingKeyNotFound: a MATCH() AGAINST() that no FULLTEXT index can serve.
+	// Its own code, not a bare ErrInvalidInput, so callers can identify it precisely --
+	// snapshot restore / PITR / CLONE must skip a view refused for this reason instead of
+	// aborting, and matching on message text there would be fragile.
+	ErrFtMatchingKeyNotFound uint16 = 20327
+	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
+	// allocated separately for SELECT ... INTO statements returning multiple rows.
+	ErrTooManyRows            uint16 = 20328
+	ErrMultiUpdateKeyConflict uint16 = 20329
+	// ErrInvalidJSONCharset reports a string charset that cannot be converted
+	// to a JSON value. Keep this separate from the regexp charset mismatch code.
+	ErrInvalidJSONCharset uint16 = 20331
+	// ErrCharacterSetMismatch reports MySQL's binary/nonbinary regexp
+	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
+	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
+	ErrCharacterSetMismatch uint16 = 20330
+	// Keep this distinct from ErrInvalidJSONCharset and ErrCharacterSetMismatch
+	// because all three errors are serialized through the internal error code.
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20332
+	// These function errors preserve the native MySQL error contract when the
+	// required argument depends on a runtime system variable.
+	ErrWrongParamCountToNativeFct uint16 = 20333
+	ErrAESInvalidIV               uint16 = 20334
+	// ErrUserLockWrongName preserves MySQL's ER_USER_LOCK_WRONG_NAME contract.
+	ErrUserLockWrongName uint16 = 20335
+	// ErrInvalidBitwiseOperandsSize reports a scalar binary-string bitwise
+	// length mismatch as a user-input error.
+	ErrInvalidBitwiseOperandsSize uint16 = 20336
+	// ErrCannotConvertString preserves MySQL's binary-to-text conversion error
+	// when a character function receives invalid UTF-8 bytes.
+	ErrCannotConvertString uint16 = 20337
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -181,6 +224,12 @@ const (
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
+	ErrFieldSpecifiedTwice                      uint16 = 20477
+	// Keep the error code added by the variables PR distinct from the
+	// field-duplicate code introduced on main.
+	ErrWrongNumberOfColumnsInSelect uint16 = 20478
+	ErrTooLongIdent                 uint16 = 20479
+	ErrTooBigFieldLength            uint16 = 20480
 
 	// Group 5: rpc errors
 	//
@@ -324,6 +373,13 @@ const (
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
 	ErrCteMemoryQuotaExceeded              uint16 = 20825
+	ErrTooManyWindows                      uint16 = 20826
+	ErrWindowNoSuchWindow                  uint16 = 20827
+	ErrWindowCircularityInWindowGraph      uint16 = 20828
+	ErrWindowNoChildPartitioning           uint16 = 20829
+	ErrWindowNoInheritFrame                uint16 = 20830
+	ErrWindowNoRedefineOrderBy             uint16 = 20831
+	ErrWindowDuplicateName                 uint16 = 20832
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -395,6 +451,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
+	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
+	ErrContextCanceled:             {ER_QUERY_INTERRUPTED, []string{"70100"}, "%s"},
+	ErrDeadlineExceeded:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{"22012"}, "division by zero"},
@@ -405,6 +464,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
+	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
+	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
+	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -423,6 +485,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrInvalidJSONCharset:   {ER_INVALID_JSON_CHARSET, []string{"22032"}, "Cannot create a JSON value from a string with CHARACTER SET '%s'."},
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
 	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
@@ -431,6 +494,20 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
 	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
+	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
+	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
+	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
+	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrCharacterSetMismatch:                {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
+	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
+	ErrInvalidBitwiseOperandsSize:          {ER_INVALID_BITWISE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Binary operands of bitwise operators must be of equal length"},
+	ErrCannotConvertString:                 {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%.64s' from %s to %s"},
+	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
+	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
+	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -509,6 +586,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{"42000"}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
+	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
+	ErrTooBigFieldLength:                        {ER_TOO_BIG_FIELDLENGTH, []string{"42000"}, "Column length too big for column '%s' (max = %d); use BLOB or TEXT instead"},
+	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
+	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -612,6 +693,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
+	ErrTooManyWindows:                      {ER_TOO_MANY_WINDOWS, []string{MySQLDefaultSqlState}, "Too many windows in SELECT: %d. Maximum allowed is %d. Use named windows to share windows between window functions."},
+	ErrWindowNoSuchWindow:                  {ER_WINDOW_NO_SUCH_WINDOW, []string{MySQLDefaultSqlState}, "Window name '%s' is not defined."},
+	ErrWindowCircularityInWindowGraph:      {ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH, []string{MySQLDefaultSqlState}, "There is a circularity in the window dependency graph."},
+	ErrWindowNoChildPartitioning:           {ER_WINDOW_NO_CHILD_PARTITIONING, []string{MySQLDefaultSqlState}, "A window which depends on another cannot define partitioning."},
+	ErrWindowNoInheritFrame:                {ER_WINDOW_NO_INHERIT_FRAME, []string{MySQLDefaultSqlState}, "Window '%s' has a frame definition, so cannot be referenced by another window."},
+	ErrWindowNoRedefineOrderBy:             {ER_WINDOW_NO_REDEFINE_ORDER_BY, []string{MySQLDefaultSqlState}, "Window '%s' cannot inherit '%s' since both contain an ORDER BY clause."},
+	ErrWindowDuplicateName:                 {ER_WINDOW_DUPLICATE_NAME, []string{MySQLDefaultSqlState}, "Window '%s' is defined twice."},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -684,6 +772,22 @@ type Error struct {
 
 func (e *Error) Error() string {
 	return e.Display()
+}
+
+// Is lets errors.Is see through ConvertGoError: an error it converted from a
+// cancellation or deadline still matches context.Canceled or
+// context.DeadlineExceeded, also after crossing RPC, because the code is what
+// is serialized.  Only the two codes ConvertGoError mints match, so errors
+// that never were context errors (a killed query, a statement timeout) are
+// unaffected.
+func (e *Error) Is(target error) bool {
+	switch e.code {
+	case ErrContextCanceled:
+		return target == context.Canceled //nolint:errorlint // matching the sentinel itself
+	case ErrDeadlineExceeded:
+		return target == context.DeadlineExceeded //nolint:errorlint // matching the sentinel itself
+	}
+	return false
 }
 
 func (e *Error) Detail() string {
@@ -831,6 +935,20 @@ func ConvertGoError(ctx context.Context, err error) error {
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// if io.EOF reaches here, we believe it is not expected.
 		return NewUnexpectedEOF(ctx, err.Error())
+	}
+
+	// A cancellation or deadline, even wrapped by a library (e.g. "reading
+	// magic footer of parquet file: context canceled"), keeps its identity:
+	// callers recognise those with errors.Is (see Error.Is).  A pipeline
+	// stopped because a sibling failed must report the sibling's error, not
+	// its own cancellation; the frontend treats a canceled read-only
+	// transaction specially.  A deadline wins over a cancellation joined with
+	// it, so an independent timeout is not hidden.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return newError(ctx, ErrDeadlineExceeded, err.Error())
+	}
+	if errors.Is(err, context.Canceled) {
+		return newError(ctx, ErrContextCanceled, err.Error())
 	}
 
 	return NewInternalErrorf(ctx, "convert go error to mo error %v", err)
@@ -989,6 +1107,10 @@ func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
 }
 
+func NewQueryTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrQueryTimeout)
+}
+
 func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
 }
@@ -1006,9 +1128,20 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 	return newError(ctx, ErrOutOfRange, typ, msg)
 }
 
+func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement string) *Error {
+	return newError(ctx, ErrPreparedParamOutOfRange, typ, statement)
+}
+
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+func NewGroupConcatCut(ctx context.Context, message string) *Error {
+	if message == "" {
+		message = "Row 1 was cut by GROUP_CONCAT()"
+	}
+	return newError(ctx, ErrGroupConcatCut, message)
 }
 
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
@@ -1018,6 +1151,10 @@ func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
 	return newError(ctx, ErrTruncatedWrongValueForField, t, v, c, idx)
+}
+
+func NewTruncatedWrongValue(ctx context.Context, typ, value string) *Error {
+	return newError(ctx, ErrTruncatedWrongValue, typ, value)
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
@@ -1038,8 +1175,34 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
 }
 
+// NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
+// Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
+// by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
+func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrFtMatchingKeyNotFound)
+}
+
 func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
+}
+
+func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongParamCountToNativeFct, function)
+}
+
+func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
+	return newError(ctx, ErrAESInvalidIV, function, minLength)
+}
+
+func NewUserLockWrongName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrUserLockWrongName, name)
 }
 
 func NewWrongUsage(ctx context.Context, first, second string) *Error {
@@ -1054,8 +1217,32 @@ func NewWindowInvalidUse(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWindowInvalidUse, function)
 }
 
+func NewInvalidGroupFuncUse(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidGroupFuncUse)
+}
+
+func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
+}
+
+func NewInvalidBitwiseOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseOperandsSize)
+}
+
+func NewCannotConvertString(ctx context.Context, value, from, to string) *Error {
+	return newError(ctx, ErrCannotConvertString, value, from, to)
+}
+
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewInvalidJSONCharset(ctx context.Context, charset string) *Error {
+	return newError(ctx, ErrInvalidJSONCharset, charset)
+}
+
+func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
+	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
 }
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
@@ -1092,6 +1279,10 @@ func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrUnsupportedDML, msg)
+}
+
+func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -1208,6 +1399,14 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
+}
+
+// NewNoSuchTablef preserves a caller-facing diagnostic while classifying the
+// error as ErrNoSuchTable for MySQL protocol compatibility.
+func NewNoSuchTablef(ctx context.Context, format string, args ...any) *Error {
+	err := NewNoSuchTable(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
@@ -1513,6 +1712,13 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
 }
 
+// FormatDuplicateEntry returns the duplicate-entry diagnostic text without
+// constructing or reporting an error. INSERT IGNORE uses this path because a
+// rejected row is an expected warning rather than an execution error.
+func FormatDuplicateEntry(entry string, key string) string {
+	return fmt.Sprintf(errorMsgRefer[ErrDuplicateEntry].errorMsgOrFormat, entry, key)
+}
+
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
@@ -1525,6 +1731,10 @@ func NewViewSelectTmpTable(ctx context.Context, table string) *Error {
 	return newError(ctx, ErrViewSelectTmpTable, table)
 }
 
+func NewCantChangeTxCharacteristics(ctx context.Context) *Error {
+	return newError(ctx, ErrCantChangeTxn)
+}
+
 func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
 }
@@ -1533,12 +1743,28 @@ func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
 }
 
+func NewTooManyRows(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyRows)
+}
+
+func NewWrongNumberOfColumnsInSelect(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongNumberOfColumnsInSelect)
+}
+
 func NewDerivedMustHaveAlias(ctx context.Context) *Error {
 	return newError(ctx, ErrDerivedMustHaveAlias)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
+}
+
+// NewBadFieldErrorf preserves a caller-facing diagnostic while classifying the
+// error as ErrBadFieldError for MySQL protocol compatibility.
+func NewBadFieldErrorf(ctx context.Context, format string, args ...any) *Error {
+	err := NewBadFieldError(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewWrongDatetimeSpec(ctx context.Context, val string) *Error {
@@ -1727,6 +1953,14 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
 }
 
+func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
+	return newError(ctx, ErrFieldSpecifiedTwice, column)
+}
+
+func NewTooLongIdent(ctx context.Context, identifier string) *Error {
+	return newError(ctx, ErrTooLongIdent, identifier)
+}
+
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrKeyColumnDoesNotExist, k)
 }
@@ -1749,6 +1983,10 @@ func NewErrTooManyKeys(ctx context.Context, k any) *Error {
 
 func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrTooManyKeyParts, k)
+}
+
+func NewTooBigFieldLength(ctx context.Context, column string, maxLength int32) *Error {
+	return newError(ctx, ErrTooBigFieldLength, column, maxLength)
 }
 
 func NewErrWrongColumnName(ctx context.Context, k any) *Error {
@@ -1841,6 +2079,34 @@ func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
 
 func NewErrTooManyParameter(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyParameter)
+}
+
+func NewErrTooManyWindows(ctx context.Context, count, maximum int) *Error {
+	return newError(ctx, ErrTooManyWindows, count, maximum)
+}
+
+func NewWindowNoSuchWindow(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoSuchWindow, name)
+}
+
+func NewWindowCircularityInWindowGraph(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowCircularityInWindowGraph)
+}
+
+func NewWindowNoChildPartitioning(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowNoChildPartitioning)
+}
+
+func NewWindowNoInheritFrame(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoInheritFrame, name)
+}
+
+func NewWindowNoRedefineOrderBy(ctx context.Context, childName, baseName string) *Error {
+	return newError(ctx, ErrWindowNoRedefineOrderBy, childName, baseName)
+}
+
+func NewWindowDuplicateName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowDuplicateName, name)
 }
 
 func NewErrFKRowIsReferenced(ctx context.Context) *Error {

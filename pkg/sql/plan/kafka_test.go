@@ -64,19 +64,19 @@ func TestFormatKafkaTableOptionsForShowCreate(t *testing.T) {
 	got := formatKafkaTableOptionsForShowCreate(sqlkafka.Config{
 		Brokers: "h1:9092,h2:9092", Topic: "t'1", Partition: 3, Autocommit: true,
 		Group: "g1", Format: sqlkafka.FormatCSV, Separator: "|",
-	})
+	}, "")
 	require.Equal(t, ` ENGINE = KAFKA WITH ("brokers" = 'h1:9092,h2:9092', "topic" = 't''1', "partition" = '3', "autocommit" = 'true', "group" = 'g1', "format" = 'csv', "separator" = '|')`, got)
 
 	// jsonl omits the separator
 	got = formatKafkaTableOptionsForShowCreate(sqlkafka.Config{
 		Brokers: "h:9092", Topic: "t", Group: "g", Format: sqlkafka.FormatJSONL,
-	})
+	}, "")
 	require.NotContains(t, got, "separator")
 	require.Contains(t, got, `"format" = 'jsonl'`)
 }
 
 func TestBuildCreateKafkaTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		`create external table k1 (a int, b varchar(10)) engine = kafka with ('brokers'='h:9092', 'topic'='t1')`,
 		`create external table k2 (a int) engine = kafka with ('brokers'='h:9092', 'topic'='t', 'partition'='2', 'autocommit'='true', 'group'='g', 'format'='jsonl')`,
@@ -100,7 +100,7 @@ func TestBuildCreateKafkaTable(t *testing.T) {
 // catalog and drives SELECT-side recognition (KAFKA_TB dispatch + synthetic
 // columns) and the ALTER guard.
 func TestSelectAndAlterKafkaTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mcc := mock.CurrentContext().(*MockCompilerContext)
 	env := sqlkafka.BuildCreateSQLEnvelope(sqlkafka.Config{
 		Brokers: "h:9092", Topic: "t", Group: "g", Format: sqlkafka.FormatCSV, Separator: ",",
@@ -156,7 +156,7 @@ func TestSelectAndAlterKafkaTable(t *testing.T) {
 // use one of the kafka synthetic names in a pre-existing ordinary table keeps
 // working (ColId scoping), mirroring the __mo_query compatibility rule.
 func TestPreexistingKafkaNameColumnsStayVisible(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mcc := mock.CurrentContext().(*MockCompilerContext)
 	mcc.tables["legacy_k"] = &TableDef{
 		TableType: catalog.SystemOrdinaryRel,

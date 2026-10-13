@@ -26,6 +26,12 @@ import (
 
 const unknownCommitResolveRetryInterval = 100 * time.Millisecond
 
+// Completion callbacks only release txn-client admission and are required to
+// return promptly. Keep a hard bound even when an external implementation
+// violates that contract: resolver work never creates an unbounded number of
+// detached goroutines.
+const maxUnknownCommitCallbacks = 1024
+
 // Keep a fence after the client deadline to cover bounded clock skew between
 // the CN that created the Commit and the TN that admits it. The TN rejects an
 // expired Commit before allocator.Valid, so this is a safety margin rather
@@ -44,8 +50,9 @@ var _ UnknownCommitResolver = (*service)(nil)
 // A single task deduplicates txn IDs and retries until the allocator can prove
 // that a fenced unlock is safe.
 type unknownCommitResolver struct {
-	service *service
-	wakeC   chan struct{}
+	service   *service
+	wakeC     chan struct{}
+	callbacks unknownCommitCallbacks
 
 	mu struct {
 		sync.Mutex
@@ -58,13 +65,125 @@ type unknownCommitTxn struct {
 	id         []byte
 	deadline   time.Time
 	sequence   uint64
-	onResolved func()
+	onResolved *unknownCommitCallback
+	resolution *unknownCommitResolution
+}
+
+type unknownCommitCallbacks struct {
+	mu struct {
+		sync.Mutex
+		sealed bool
+	}
+	slots chan struct{}
+}
+
+type unknownCommitCallback struct {
+	fn      func()
+	slots   chan struct{}
+	release sync.Once
+}
+
+type unknownCommitResolution struct {
+	done chan struct{}
+	once sync.Once
+}
+
+type unknownCommitCallbackNotAcceptedError struct {
+	cause      error
+	resolution *unknownCommitResolution
+}
+
+var _ UnknownCommitResolutionScheduledError = (*unknownCommitCallbackNotAcceptedError)(nil)
+
+func newUnknownCommitResolution() *unknownCommitResolution {
+	return &unknownCommitResolution{done: make(chan struct{})}
+}
+
+func (r *unknownCommitResolution) complete() {
+	if r != nil {
+		r.once.Do(func() { close(r.done) })
+	}
+}
+
+func (e *unknownCommitCallbackNotAcceptedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *unknownCommitCallbackNotAcceptedError) Unwrap() error {
+	return e.cause
+}
+
+func (e *unknownCommitCallbackNotAcceptedError) ResolutionDone() <-chan struct{} {
+	return e.resolution.done
+}
+
+func callbackNotAccepted(
+	cause error,
+	resolution *unknownCommitResolution,
+) error {
+	return &unknownCommitCallbackNotAcceptedError{
+		cause:      cause,
+		resolution: resolution,
+	}
+}
+
+func newUnknownCommitCallbacks(limit int) unknownCommitCallbacks {
+	return unknownCommitCallbacks{slots: make(chan struct{}, limit)}
+}
+
+func (c *unknownCommitCallbacks) admit(
+	callback func(),
+) (*unknownCommitCallback, error) {
+	if callback == nil {
+		return nil, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.sealed {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"unknown commit callback dispatcher is stopping")
+	}
+	select {
+	case c.slots <- struct{}{}:
+		return &unknownCommitCallback{fn: callback, slots: c.slots}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx(
+			"unknown commit callback capacity exhausted")
+	}
+}
+
+func (c *unknownCommitCallbacks) seal() {
+	c.mu.Lock()
+	c.mu.sealed = true
+	c.mu.Unlock()
+}
+
+func (c *unknownCommitCallback) drop() {
+	if c == nil {
+		return
+	}
+	c.release.Do(func() { <-c.slots })
+}
+
+// dispatch transfers execution to external callback code before invoking it.
+// Close therefore never waits for the callback that re-entered Close. The
+// reservation is retained until return, bounding a contract-violating blocked
+// callback without adding a goroutine to the resolver stopper.
+func (c *unknownCommitCallback) dispatch() {
+	if c == nil {
+		return
+	}
+	go func() {
+		defer c.drop()
+		c.fn()
+	}()
 }
 
 func newUnknownCommitResolver(s *service) *unknownCommitResolver {
 	r := &unknownCommitResolver{
-		service: s,
-		wakeC:   make(chan struct{}, 1),
+		service:   s,
+		wakeC:     make(chan struct{}, 1),
+		callbacks: newUnknownCommitCallbacks(maxUnknownCommitCallbacks),
 	}
 	r.mu.pending = make(map[string]unknownCommitTxn)
 	return r
@@ -73,6 +192,10 @@ func newUnknownCommitResolver(s *service) *unknownCommitResolver {
 // ResolveCommitUnknown transfers lock cleanup to lockservice. It returns as
 // soon as cleanup is scheduled. onResolved is called after terminal cleanup so
 // the txn client can release admission independently of the frontend request.
+// Callback ownership transfers only when this method returns nil. When cleanup
+// is scheduled without accepting the callback, the returned error implements
+// UnknownCommitResolutionScheduledError so the caller can preserve admission
+// and invoke its retained callback after terminal cleanup.
 func (s *service) ResolveCommitUnknown(
 	txnID []byte,
 	commitDeadline time.Time,
@@ -115,35 +238,69 @@ func (r *unknownCommitResolver) enqueue(
 
 	r.mu.Lock()
 	old, ok := r.mu.pending[key]
-	if !ok || old.deadline.Before(commitDeadline) || old.sequence < commitSequence {
-		if ok && old.onResolved != nil {
-			onResolved = old.onResolved
+	resolution := old.resolution
+	if resolution == nil {
+		resolution = newUnknownCommitResolution()
+	}
+	callback := old.onResolved
+	var callbackErr error
+	var admitted *unknownCommitCallback
+	if onResolved != nil {
+		if callback != nil {
+			callbackErr = callbackNotAccepted(
+				moerr.NewInternalErrorNoCtx(
+					"unknown commit callback already registered"),
+				resolution,
+			)
+		} else {
+			var err error
+			admitted, err = r.callbacks.admit(onResolved)
+			if err != nil {
+				callbackErr = callbackNotAccepted(err, resolution)
+			} else {
+				callback = admitted
+			}
 		}
+	}
+	if !ok || old.deadline.Before(commitDeadline) || old.sequence < commitSequence {
 		r.mu.pending[key] = unknownCommitTxn{
 			id:         id,
 			deadline:   commitDeadline,
 			sequence:   commitSequence,
-			onResolved: onResolved,
+			onResolved: callback,
+			resolution: resolution,
 		}
-	} else if old.onResolved == nil && onResolved != nil {
-		old.onResolved = onResolved
+	} else if (old.onResolved == nil && callback != nil) || old.resolution == nil {
+		if old.onResolved == nil {
+			old.onResolved = callback
+		}
+		old.resolution = resolution
 		r.mu.pending[key] = old
 	}
 	if r.mu.running {
 		r.mu.Unlock()
 		r.wake()
-		return nil
+		return callbackErr
 	}
 	r.mu.running = true
-	r.mu.Unlock()
-
+	// Start the first resolver task before publishing running to concurrent
+	// enqueues. RunTask only admits a goroutine; the task blocks on r.mu until
+	// this transition is complete. A startup failure can therefore restore the
+	// exact previous pending state without stranding a concurrent caller that
+	// already observed a false running owner.
 	if err := r.service.stopper.RunTask(r.run); err != nil {
-		r.mu.Lock()
 		r.mu.running = false
+		if ok {
+			r.mu.pending[key] = old
+		} else {
+			delete(r.mu.pending, key)
+		}
 		r.mu.Unlock()
+		admitted.drop()
 		return err
 	}
-	return nil
+	r.mu.Unlock()
+	return callbackErr
 }
 
 func (r *unknownCommitResolver) run(ctx context.Context) {
@@ -205,21 +362,19 @@ func (r *unknownCommitResolver) pendingActiveTxns() []unknownCommitTxn {
 	r.mu.Lock()
 
 	values := make([]unknownCommitTxn, 0, len(r.mu.pending))
-	var resolved []func()
+	var resolved []unknownCommitTxn
 	for txnKey, txn := range r.mu.pending {
 		if !r.service.activeTxnHolder.hasActiveTxn(txn.id) {
 			delete(r.mu.pending, txnKey)
-			if txn.onResolved != nil {
-				resolved = append(resolved, txn.onResolved)
-			}
+			resolved = append(resolved, txn)
 			continue
 		}
 		values = append(values, txn)
 	}
 	r.mu.Unlock()
 
-	for _, fn := range resolved {
-		dispatchUnknownCommitResolved(fn)
+	for _, txn := range resolved {
+		txn.complete()
 	}
 	return values
 }
@@ -231,21 +386,9 @@ func (r *unknownCommitResolver) remove(txnID []byte) {
 		delete(r.mu.pending, string(txnID))
 	}
 	r.mu.Unlock()
-	if ok && txn.onResolved != nil {
-		dispatchUnknownCommitResolved(txn.onResolved)
+	if ok {
+		txn.complete()
 	}
-}
-
-// dispatchUnknownCommitResolved runs external completion code outside the
-// resolver's service-stopper task. The pending entry is removed under r.mu
-// before dispatch, which is the exactly-once ownership transfer. In
-// particular, a callback may re-enter service.Close: Close can cancel and join
-// the resolver task without waiting for the callback that initiated it.
-func dispatchUnknownCommitResolved(callback func()) {
-	if callback == nil {
-		return
-	}
-	go callback()
 }
 
 func (r *unknownCommitResolver) isPending(txnID []byte) bool {
@@ -274,22 +417,27 @@ func (r *unknownCommitResolver) wake() {
 	}
 }
 
-// takeResolvedCallbacks transfers every pending completion callback to the
-// service Close owner after the resolver task and active transaction holder
-// have stopped. The Close owner invokes external code only after sync.Once has
-// completed, so a callback may safely re-enter Close.
-func (r *unknownCommitResolver) takeResolvedCallbacks() []func() {
+// takeResolvedTxns transfers every pending completion to the service Close
+// owner after the resolver task and active transaction holder have stopped.
+// Completing the internal signal is non-blocking; callback dispatch transfers
+// execution out of the Close owner before invocation.
+func (r *unknownCommitResolver) takeResolvedTxns() []unknownCommitTxn {
 	r.mu.Lock()
-	callbacks := make([]func(), 0, len(r.mu.pending))
+	txns := make([]unknownCommitTxn, 0, len(r.mu.pending))
 	for key, txn := range r.mu.pending {
 		delete(r.mu.pending, key)
-		if txn.onResolved != nil {
-			callbacks = append(callbacks, txn.onResolved)
-		}
+		txns = append(txns, txn)
 	}
 	r.mu.running = false
 	r.mu.Unlock()
-	return callbacks
+	return txns
+}
+
+func (txn unknownCommitTxn) complete() {
+	txn.resolution.complete()
+	if txn.onResolved != nil {
+		txn.onResolved.dispatch()
+	}
 }
 
 func (s *service) canUnlockUnknownCommits(

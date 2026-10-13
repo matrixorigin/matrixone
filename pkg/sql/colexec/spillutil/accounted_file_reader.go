@@ -21,11 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// accountedFileReader restores buffered sequential spill reads without
-// reintroducing the untracked Go-heap buffer removed by allocation-owned
-// admission. The buffer is optional: under allocation pressure the reader
-// releases it and continues directly from the file.
-type accountedFileReader struct {
+// AccountedFileReader restores buffered sequential spill reads without
+// reintroducing an untracked Go-heap buffer. A nil allocation or ordinary
+// account pressure selects direct file reads.
+type AccountedFileReader struct {
 	fd         *os.File
 	mp         *mpool.MPool
 	allocation *SpillAllocationAccount
@@ -38,17 +37,18 @@ type accountedFileReader struct {
 	disabled   bool
 }
 
-func newAccountedFileReader(
+func NewAccountedFileReader(
 	mp *mpool.MPool,
 	allocation *SpillAllocationAccount,
 	fd *os.File,
-) (*accountedFileReader, error) {
-	if mp == nil || allocation == nil {
+) (*AccountedFileReader, error) {
+	if allocation != nil && mp == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	reader := &accountedFileReader{
+	reader := &AccountedFileReader{
 		mp:         mp,
 		allocation: allocation,
+		disabled:   allocation == nil,
 	}
 	if err := reader.Reset(fd); err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func newAccountedFileReader(
 	return reader, nil
 }
 
-func (r *accountedFileReader) Read(value []byte) (int, error) {
+func (r *AccountedFileReader) Read(value []byte) (int, error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
@@ -89,14 +89,20 @@ func (r *accountedFileReader) Read(value []byte) (int, error) {
 	return r.Read(value)
 }
 
-func (r *accountedFileReader) Offset() int64 {
+func (r *AccountedFileReader) Offset() int64 {
 	if r == nil {
 		return 0
 	}
 	return r.offset
 }
 
-func (r *accountedFileReader) Reset(fd *os.File) error {
+// Buffered reports unread read-ahead bytes, matching bufio.Reader's
+// observability used by spill cancellation tests.
+func (r *AccountedFileReader) Buffered() int {
+	return r.buffered()
+}
+
+func (r *AccountedFileReader) Reset(fd *os.File) error {
 	if r == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -105,7 +111,7 @@ func (r *accountedFileReader) Reset(fd *os.File) error {
 	r.fdOffset = 0
 	r.bufferPos = 0
 	r.pendingErr = nil
-	r.disabled = false
+	r.disabled = r.allocation == nil
 	if r.buffer != nil {
 		r.buffer.Reset()
 	}
@@ -123,7 +129,7 @@ func (r *accountedFileReader) Reset(fd *os.File) error {
 
 // DisableBufferAt releases optional read-ahead capacity and restores the
 // physical descriptor to the unpublished record offset before a decode retry.
-func (r *accountedFileReader) DisableBufferAt(offset int64) error {
+func (r *AccountedFileReader) DisableBufferAt(offset int64) error {
 	if r == nil || r.fd == nil || offset < 0 {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -140,7 +146,7 @@ func (r *accountedFileReader) DisableBufferAt(offset int64) error {
 	return seekErr
 }
 
-func (r *accountedFileReader) Free() {
+func (r *AccountedFileReader) Free() {
 	if r == nil {
 		return
 	}
@@ -158,14 +164,14 @@ func (r *accountedFileReader) Free() {
 	r.disabled = true
 }
 
-func (r *accountedFileReader) buffered() int {
+func (r *AccountedFileReader) buffered() int {
 	if r == nil || r.buffer == nil {
 		return 0
 	}
 	return r.buffer.Len() - r.bufferPos
 }
 
-func (r *accountedFileReader) ensureBuffer() error {
+func (r *AccountedFileReader) ensureBuffer() error {
 	if r.disabled {
 		return nil
 	}
@@ -193,7 +199,7 @@ func (r *accountedFileReader) ensureBuffer() error {
 	return nil
 }
 
-func (r *accountedFileReader) fill() error {
+func (r *AccountedFileReader) fill() error {
 	if r.buffer == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -219,7 +225,7 @@ func (r *accountedFileReader) fill() error {
 	return nil
 }
 
-func (r *accountedFileReader) readDirect(value []byte) (int, error) {
+func (r *AccountedFileReader) readDirect(value []byte) (int, error) {
 	if err := r.syncFileOffset(); err != nil {
 		return 0, err
 	}
@@ -229,7 +235,7 @@ func (r *accountedFileReader) readDirect(value []byte) (int, error) {
 	return n, err
 }
 
-func (r *accountedFileReader) syncFileOffset() error {
+func (r *AccountedFileReader) syncFileOffset() error {
 	if r.fdOffset == r.offset {
 		return nil
 	}

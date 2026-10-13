@@ -71,7 +71,7 @@ SELECT 'Tweet' NOT REGEXP '^Twe*t$' AS 'Tweet';
 Tweet
 0
 SELECT 'Tweeet' NOT REGEXP '^Twe*t$' AS 'Tweeet';
-Tweet
+Tweeet
 0
 SELECT 'Twt' NOT REGEXP '^Twe*t$' AS 'Twt';
 Twt

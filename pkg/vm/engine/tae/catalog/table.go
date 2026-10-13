@@ -28,6 +28,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -412,6 +413,9 @@ func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool)
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.GetVisibleNodeLocked(txn)
+	if node == nil {
+		node = entry.sessionTemporarySchemaLocked(txn)
+	}
 	if node != nil {
 		if isTombstone {
 			return node.BaseNode.GetTombstoneSchema()
@@ -419,6 +423,24 @@ func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool)
 		return node.BaseNode.Schema
 	}
 	return nil
+}
+
+// sessionTemporarySchemaLocked allows an independently committed empty schema
+// in an older user data transaction. It never changes data visibility and never
+// substitutes another tenant, an uncommitted schema, or a dropped generation.
+// Callers hold entry.RLock.
+func (entry *TableEntry) sessionTemporarySchemaLocked(txn txnif.TxnReader) *MVCCNode[*TableMVCCNode] {
+	node := entry.GetLatestCommittedNodeLocked()
+	if node == nil || node.HasDropCommitted() {
+		return nil
+	}
+	schema := node.BaseNode.Schema
+	owner, ok := txn.(interface{ GetTenantID() uint32 })
+	if !ok || schema.Relkind != pkgcatalog.SystemTemporaryTable ||
+		!defines.IsTempTableName(schema.Name) || schema.AcInfo.TenantID != owner.GetTenantID() {
+		return nil
+	}
+	return node
 }
 
 func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
@@ -731,12 +753,35 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return
 }
 
-func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn, isTombstone bool) (deleted *ObjectEntry, err error) {
+func (entry *TableEntry) DropObjectEntry(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+) (deleted *ObjectEntry, err error) {
+	return entry.dropObjectEntry(id, txn, isTombstone, false)
+}
+
+func (entry *TableEntry) DropObjectEntryByCN(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+) (deleted *ObjectEntry, err error) {
+	// Mark provenance before publishing the D entry into the object list. A
+	// concurrent scanner must never observe a committed CN drop without it.
+	return entry.dropObjectEntry(id, txn, isTombstone, true)
+}
+
+func (entry *TableEntry) dropObjectEntry(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+	deleteByCN bool,
+) (deleted *ObjectEntry, err error) {
 	objects := entry.dataObjects
 	if isTombstone {
 		objects = entry.tombstoneObjects
 	}
-	obj, isNewNode, err := objects.DropObjectByID(id, txn)
+	obj, isNewNode, err := objects.dropObjectByID(id, txn, deleteByCN)
 	if err == nil && isNewNode {
 		deleted = obj
 	}
@@ -898,6 +943,10 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			AutoIdCache:       newSchema.Extra.AutoIdCache,
+			DefaultCharset:    newSchema.Extra.DefaultCharset,
+			CollationVersion:  newSchema.Extra.CollationVersion,
+			KeyFormat:         newSchema.Extra.KeyFormat,
 			Checks:            checks,
 		}
 

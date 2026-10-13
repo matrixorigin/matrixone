@@ -17,14 +17,42 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// indexNameKey defines the comparison contract shared by index creation,
+// duplicate detection, lookup, and sequential ALTER state. It deliberately
+// uses the parser's identifier normalization instead of strings.EqualFold:
+// Unicode simple folding can equate distinct MySQL identifiers such as Greek
+// sigma (Σ) and final sigma (ς).
+func indexNameKey(name string) string {
+	return tree.NewCStr(name, 1).Compare()
+}
+
+// IndexNamesEqual compares index identifiers using the canonical parser
+// normalization shared by index creation, duplicate detection, and lookup.
+func IndexNamesEqual(left, right string) bool {
+	return indexNameKey(left) == indexNameKey(right)
+}
+
+// resolveIndexName matches index identifiers while returning the catalog
+// spelling for later execution and metadata updates.
+func resolveIndexName(indexes []*planpb.IndexDef, name string) (string, bool) {
+	key := indexNameKey(name)
+	for _, index := range indexes {
+		if index != nil && indexNameKey(index.IndexName) == key {
+			return index.IndexName, true
+		}
+	}
+	return "", false
+}
 
 // checkConstraintNames Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
 func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {
@@ -57,14 +85,14 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	if name == "" {
 		return nil
 	}
-	nameLower := strings.ToLower(name)
-	if namesMap[nameLower] {
+	nameKey := indexNameKey(name)
+	if namesMap[nameKey] {
 		if foreign {
 			return moerr.NewInvalidInputf(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
 		return moerr.NewDuplicateKey(ctx, name)
 	}
-	namesMap[nameLower] = true
+	namesMap[nameKey] = true
 	return nil
 }
 
@@ -74,17 +102,17 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			// loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -94,17 +122,17 @@ func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -114,17 +142,17 @@ func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullT
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -139,12 +167,26 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 	return nil
 }
 
-func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
+// indexTableKeyTypeForSinglePartWithFormat describes the physical payload of
+// a hidden one-part index column.  Legacy indexes retain the source type and
+// bytes.  A future versioned collation format stores opaque comparison keys,
+// so its hidden column must be a binary varlena column; otherwise storage and
+// hash consumers could apply the source collation a second time.  Admission of
+// that format is deliberately handled elsewhere and remains fail-closed.
+func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart, keyFormat uint32) Type {
 	if col == nil {
 		return Type{}
 	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
 	if keyPart != nil && keyPart.Length > 0 {
-		if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
+		if prefixType, ok := indexTableKeyTypeForPrefixWithFormat(col.Typ, keyFormat); ok {
 			return prefixType
 		}
 	}
@@ -155,19 +197,68 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	// either fails (nil-pointer panic) or compares values in incompatible
 	// representations.
 	return Type{
-		Id:         col.Typ.Id,
-		Width:      col.Typ.Width,
-		Scale:      col.Typ.Scale,
-		Enumvalues: col.Typ.Enumvalues,
+		Id:                       col.Typ.Id,
+		Width:                    col.Typ.Width,
+		Scale:                    col.Typ.Scale,
+		Enumvalues:               col.Typ.Enumvalues,
+		Charset:                  col.Typ.Charset,
+		CollationVersion:         col.Typ.CollationVersion,
+		CollationCoercibility:    col.Typ.CollationCoercibility,
+		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
+		CollationMergeConflict:   col.Typ.CollationMergeConflict,
+	}
+}
+
+// indexTablePrimaryKeyTypeWithFormat preserves the historical primary-key
+// hidden-column projection. It intentionally does not copy auto-increment or
+// enum metadata; the regular secondary-index path has always used this
+// narrower schema than the unique-index path.
+func indexTablePrimaryKeyTypeWithFormat(col *ColDef, keyFormat uint32) Type {
+	if col == nil {
+		return Type{}
+	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
+	return Type{
+		Id:                       col.Typ.Id,
+		Width:                    col.Typ.Width,
+		Scale:                    col.Typ.Scale,
+		Charset:                  col.Typ.Charset,
+		CollationVersion:         col.Typ.CollationVersion,
+		CollationCoercibility:    col.Typ.CollationCoercibility,
+		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
+		CollationMergeConflict:   col.Typ.CollationMergeConflict,
 	}
 }
 
 func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
+	return indexTableKeyTypeForPrefixWithFormat(colType, collation.KeyFormatLegacy)
+}
+
+func indexTableKeyTypeForPrefixWithFormat(colType Type, keyFormat uint32) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
+		if keyFormat == collation.KeyFormatV1 && types.IsUnicodeCollation(uint8(colType.Charset)) {
+			return Type{
+				Id:      int32(types.T_varbinary),
+				Width:   types.MaxVarBinaryLen,
+				Charset: uint32(types.CharsetBinary),
+			}, true
+		}
 		return Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
+			Id:                       int32(types.T_varchar),
+			Width:                    types.MaxVarcharLen,
+			Charset:                  colType.Charset,
+			CollationVersion:         colType.CollationVersion,
+			CollationCoercibility:    colType.CollationCoercibility,
+			CollationCoercibilitySet: colType.CollationCoercibilitySet,
+			CollationMergeConflict:   colType.CollationMergeConflict,
 		}, true
 	case int32(types.T_blob):
 		return Type{
@@ -202,6 +293,16 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	switch indexKind {
+	case "primary":
+		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {
+			return err
+		}
+	case "unique":
+		if err := rejectNativeUnicodeUniqueKey(ctx, col.Typ, colName); err != nil {
+			return err
+		}
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):
@@ -234,9 +335,6 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))
 	}
 
-	if isEnumPlanType(&col.Typ) && indexKind == "primary" {
-		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", colName))
-	}
 	if isSetPlanType(&col.Typ) {
 		switch indexKind {
 		case "primary":
@@ -254,6 +352,27 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		default:
 			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", colName))
 		}
+	}
+	return nil
+}
+
+// Native Unicode primary-key bytes are not yet canonicalized by the storage
+// index and lock paths.  Rejecting new definitions is safer than allowing two
+// collation-equivalent values to commit as distinct keys.  Existing catalog
+// metadata is still handled conservatively by the planner's composite-key
+// rewrite guard.
+func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in primary key until collation-aware primary-key deduplication is supported", columnName))
+	}
+	return nil
+}
+
+func rejectNativeUnicodeUniqueKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in unique index until collation-aware unique-index deduplication is supported", columnName))
 	}
 	return nil
 }

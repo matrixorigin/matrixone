@@ -63,6 +63,22 @@ type wandIter struct {
 	maxImpact float32 // term-level upper bound of this term's weighted contribution
 }
 
+// newWandIter creates one block-decoding posting cursor. Scoring metadata is filled by
+// the owning search path: disjunctive WAND needs weight/maxImpact, while conjunctive
+// MUST intersection only needs idf2 and the ordered doc/tf cursor.
+func newWandIter(pl *termPostings) *wandIter {
+	b := getWandBuf()
+	it := &wandIter{
+		tp:     pl,
+		curBlk: -1,
+		bDocs:  b.docs,
+		bTfs:   b.tfs,
+		buf:    b,
+	}
+	it.refresh()
+	return it
+}
+
 func (it *wandIter) atEnd() bool { return it.idx >= it.tp.df() }
 
 // ensure decodes the block containing the cursor's current idx into bDocs/bTfs, if
@@ -232,18 +248,10 @@ func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalSta
 			continue
 		}
 		idf2 := gs.idfFor(s, c.terms[0], pl)
-		b := getWandBuf()
-		it := &wandIter{
-			tp:        pl,
-			curBlk:    -1,
-			bDocs:     b.docs,
-			bTfs:      b.tfs,
-			buf:       b,
-			idf2:      idf2,
-			weight:    c.weight,
-			maxImpact: c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen),
-		}
-		it.refresh() // prime cur for idx=0
+		it := newWandIter(pl)
+		it.idf2 = idf2
+		it.weight = c.weight
+		it.maxImpact = c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen)
 		iters = append(iters, it)
 	}
 	return iters

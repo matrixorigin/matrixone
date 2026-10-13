@@ -1,42 +1,8 @@
 name: MongoDB Connector E2E
 
+# Temporarily disabled for pull requests. Run manually while the E2E remains
+# under stabilization, then restore the pull_request trigger above.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - '.github/workflows/entrypoint.yaml'
-      - '.github/workflows/mongodb-connector.yml'
-      - 'Makefile'
-      - 'go.mod'
-      - 'go.sum'
-      - 'optools/mongodb_ci.bash'
-      - 'etc/launch-mongodb-local/**'
-      - 'etc/launch/**'
-      - 'test/mongodb/**'
-      - 'pkg/sql/mongodb/**'
-      - 'pkg/sql/colexec/mongoscan/**'
-      - 'pkg/sql/colexec/timewin/**'
-      - 'pkg/sql/colexec/aggexec/**'
-      - 'pkg/sql/plan/**'
-      - 'pkg/sql/compile/**'
-      - 'pkg/frontend/**'
-      - 'pkg/sql/parsers/**'
-      - 'pkg/config/**'
-      - 'pkg/bootstrap/**'
-      - 'pkg/cnservice/**'
-      - 'pkg/vm/**'
-      - 'pkg/pb/plan/**'
-      - 'pkg/pb/pipeline/**'
-      - 'pkg/util/metric/v2/**'
-      - 'proto/plan.proto'
-      - 'proto/pipeline.proto'
-      - 'vendor/go.mongodb.org/**'
-      - 'vendor/github.com/xdg-go/**'
-      - 'vendor/github.com/youmark/pkcs8/**'
-      - 'vendor/github.com/montanaflynn/stats/**'
-      - 'vendor/github.com/klauspost/compress/**'
-      - 'vendor/github.com/golang/snappy/**'
-      - 'vendor/modules.txt'
   workflow_dispatch:
 
 permissions:

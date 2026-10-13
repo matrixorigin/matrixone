@@ -178,11 +178,45 @@ where
             l_partkey = p_partkey
     );
 
+-- Verify that restricting the aggregate input to the filtered part-key domain
+-- preserves the scalar subquery result. Part 3 deliberately has a qualifying
+-- low-quantity line, but its outer predicates do not match.
+insert into part values
+    (1, 'part 1', 'MFGR#1', 'Brand#54', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment'),
+    (2, 'part 2', 'MFGR#1', 'Brand#54', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment'),
+    (3, 'part 3', 'MFGR#1', 'Brand#10', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment');
+
+insert into lineitem values
+    (1, 1, 1, 1, 1.00, 70.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (2, 1, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (3, 1, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (4, 2, 1, 1, 2.00, 140.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (5, 2, 1, 1, 20.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (6, 3, 1, 1, 1.00, 700.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+    (7, 3, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment');
+
+select
+    sum(l_extendedprice) / 7.0 as avg_yearly
+from
+    lineitem,
+    part
+where
+    p_partkey = l_partkey
+    and p_brand = 'Brand#54'
+    and p_container = 'LG BAG'
+    and l_quantity < (
+        select
+            0.2 * avg(l_quantity)
+        from
+            lineitem
+        where
+            l_partkey = p_partkey
+    );
+
 -- Cleanup
 drop table if exists associative.lineitem;
 drop table if exists associative.part;
 drop table if exists associative.file;
 drop table if exists associative.task;
 drop table if exists associative.connector_job;
-
 

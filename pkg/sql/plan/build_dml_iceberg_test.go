@@ -19,7 +19,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -196,6 +199,22 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 		t.Fatalf("UPDATE non-leading filter column balance uses colpos %d, want %d; filters=%+v scan cols=%+v",
 			balanceFilterPos, balanceIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
 	}
+}
+
+func TestIcebergUpdateMissingValueColumnUsesBadFieldDiagnostic(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "UPDATE gold_orders SET id = missing_col", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+	require.Equal(t, "42S22", moErr.SqlState())
+	require.Equal(t, "invalid input: column 'missing_col' does not exist", moErr.Error())
 }
 
 func TestIcebergUpdateIgnoreUsesIgnoreAssignmentCast(t *testing.T) {

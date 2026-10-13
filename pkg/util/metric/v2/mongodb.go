@@ -25,7 +25,7 @@ var (
 		Help: "Raw BSON bytes converted by MongoScan."})
 	MongoDBConversionErrorCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "mo", Subsystem: "mongodb", Name: "conversion_errors_total",
-		Help: "BSON values mapped to NULL by MongoDB try_null conversion."})
+		Help: "BSON values that failed conversion during MongoDB scans."})
 	MongoDBCursorEventCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "mo", Subsystem: "mongodb", Name: "cursor_events_total",
 		Help: "MongoDB cursor lifecycle outcomes without source-identifying labels."}, []string{"event"})

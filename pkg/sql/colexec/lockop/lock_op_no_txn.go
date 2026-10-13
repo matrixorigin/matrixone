@@ -89,7 +89,8 @@ func LockTableWithUniqueID(
 		0,
 		pkType,
 		-1,
-		opts)
+		opts,
+		0)
 	return err
 }
 

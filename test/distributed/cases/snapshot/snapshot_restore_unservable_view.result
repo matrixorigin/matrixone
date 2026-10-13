@@ -1,0 +1,33 @@
+create account acc_ftview admin_name = 'test_account' identified by '111';
+set experimental_fulltext_index = 1;
+set ft_relevancy_algorithm="TF-IDF";
+create database ftv;
+use ftv;
+create table docs(id int primary key, body text);
+insert into docs values (1,'hello a'),(2,'other'),(3,'hello b');
+create fulltext index ft on docs(body);
+create view v_ft as select id from docs where match(body) against('hello');
+select id from v_ft order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create view v_plain as select id, body from docs;
+drop index ft on docs;
+select count(*) as plain_rows_before from v_plain;
+➤ plain_rows_before[-5,64,0]  𝄀
+3
+create snapshot sp_ftview for account acc_ftview;
+insert into ftv.docs values (4,'hello d');
+select count(*) as docs_rows_before_restore from ftv.docs;
+➤ docs_rows_before_restore[-5,64,0]  𝄀
+4
+restore account acc_ftview{snapshot="sp_ftview"};
+select count(*) as plain_rows_after from ftv.v_plain;
+➤ plain_rows_after[-5,64,0]  𝄀
+3
+select count(*) as docs_rows_after from ftv.docs;
+➤ docs_rows_after[-5,64,0]  𝄀
+3
+set ft_relevancy_algorithm="TF-IDF";
+drop snapshot sp_ftview;
+drop account acc_ftview;

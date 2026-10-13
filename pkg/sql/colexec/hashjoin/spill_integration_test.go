@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,7 +45,7 @@ func newAccountedTestSpillEngine(
 ) *spillutil.SpillEngine {
 	t.Helper()
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		var err error
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
@@ -58,7 +57,7 @@ func newAccountedTestSpillEngine(
 	engine, err := spillutil.NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine
@@ -67,9 +66,9 @@ func newAccountedTestSpillEngine(
 func installHashJoinTestAllocation(
 	t *testing.T,
 	join *HashJoin,
-) (*process.HashBuildBudgetGeneration, *mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
+) (*process.ExecutionResourceGeneration, *mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
 	t.Helper()
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
@@ -86,7 +85,7 @@ func installHashJoinTestAllocation(
 // TestGetSpilledInputBatchNoBuckets verifies that getSpilledInputBatch
 // returns nil when the engine has no buckets.
 func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -96,11 +95,109 @@ func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
 	require.Nil(t, result.Batch)
 }
 
+func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t, []types.Type{keyType, keyType},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 1),
+		},
+		equality,
+	)
+	tc.proc.Base.Lim.Size = 8 << 20
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		budget, err := tc.proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	shuffleRuntimeFilter := &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 10000}
+	tc.arg.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{shuffleRuntimeFilter}
+	tc.barg.Conditions = equality[0]
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 1
+	tc.barg.NeedBatches = true
+	tc.barg.RuntimeFilterSpec = shuffleRuntimeFilter
+
+	const leftRows = 128
+	leftKeys := make([]int32, leftRows)
+	leftTimes := make([]types.Timestamp, leftRows)
+	rightKeys := make([]int32, 0, leftRows/2)
+	rightTimes := make([]types.Timestamp, 0, leftRows/2)
+	for i := range leftRows {
+		leftKeys[i] = int32(i)
+		leftTimes[i] = 100
+		if i%2 == 0 {
+			rightKeys = append(rightKeys, int32(i))
+			rightTimes = append(rightTimes, 50)
+		}
+	}
+	logicalLeft := makeAsofPayloadBatch(tc.proc, leftKeys, leftTimes, make([]string, leftRows))
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	logicalRight := makeAsofPayloadBatch(tc.proc, rightKeys, rightTimes, make([]string, len(rightKeys)))
+	logicalRight.Vecs[2].Free(tc.proc.Mp())
+	logicalRight.Vecs = logicalRight.Vecs[:2]
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	resetChildrenWithBatch(tc.arg, logicalRight)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	seen := make(map[int32]bool, leftRows)
+	for {
+		result, execErr := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, execErr)
+		if result.Batch != nil {
+			keys := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+			times := vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[1])
+			for row, key := range keys {
+				require.False(t, seen[key], "logical-left row emitted more than once")
+				seen[key] = true
+				if key%2 == 0 {
+					require.False(t, result.Batch.Vecs[1].IsNull(uint64(row)))
+					require.Equal(t, types.Timestamp(50), times[row])
+				} else {
+					require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
+				}
+			}
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Len(t, seen, leftRows)
+}
+
 // TestEmptyProbeDoesNotPanic verifies that emptyProbe handles empty build
 // (ctr.mp == nil) without panicking. This is the path taken when a spill
 // bucket returns BucketEmptyBuild for outer joins.
 func TestEmptyProbeDoesNotPanic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	hashJoin := &HashJoin{
@@ -144,9 +241,7 @@ func TestEmptyProbeDoesNotPanic(t *testing.T) {
 // consumer must repartition it before producing the exact join cardinality.
 func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
@@ -203,13 +298,155 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 
 	tc.arg.Free(tc.proc, false, nil)
 	tc.barg.Free(tc.proc, false, nil)
-	budget, err := tc.proc.GetHashBuildBudget()
+	budget, err := tc.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	require.Zero(t, budget.Used())
 	require.Zero(t, budget.SpillDiskUsed())
 	require.Zero(t, budget.SpillFDUsed())
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
+	tc := newTestCase(
+		t, []types.Type{types.T_int32.ToType()}, nil,
+		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
+	)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		budget, err := tc.proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.proc.Base.Lim.Size = 8 << 20
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+	const distinctRows = 8192
+	probeValues := make([]int32, distinctRows)
+	buildValues := make([]int32, distinctRows*2)
+	for i := range probeValues {
+		probeValues[i] = int32(i)
+		buildValues[i*2] = int32(i)
+		buildValues[i*2+1] = int32(i)
+	}
+
+	tc.arg.JoinType = plan.Node_INNER
+	tc.arg.NonEqCond = nil
+	tc.arg.EmitCompressedRowCount = true
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 50
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 50
+	tc.barg.NeedBatches = false
+	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 1100}
+	resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, probeValues))
+	resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, buildValues))
+
+	spillBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	buildResult, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, buildResult.Batch)
+
+	resultRows := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			require.Empty(t, result.Batch.Vecs)
+			resultRows += result.Batch.RowCount()
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, len(buildValues), resultRows)
+	require.Greater(t, promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
+}
+
+func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testing.T) {
+	tc := newTestCase(
+		t, []types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		budget, err := tc.proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.proc.Base.Lim.Size = 8 << 20
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+
+	const rows = 8192
+	buildValues := make([]int32, rows)
+	probeValues := make([]int32, rows)
+	for i := range rows {
+		buildValues[i] = int32(i)
+		probeValues[i] = int32(i + rows/2)
+	}
+
+	tc.arg.JoinType = plan.Node_OUTER
+	tc.arg.IsRightJoin = false
+	tc.arg.NonEqCond = nil
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 50
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 50
+	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 1200}
+	resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, probeValues))
+	resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, buildValues))
+
+	spillBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	buildResult, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, buildResult.Batch)
+
+	resultRows := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			resultRows += result.Batch.RowCount()
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	// Half of each side overlaps: left-only + matched + right-only.
+	require.Equal(t, rows+rows/2, resultRows)
+	require.Greater(t, promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
 }
 
 func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
@@ -290,9 +527,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 				}},
 			}}
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{test.typ},
+				t, []types.Type{test.typ},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{keyExpr, keyExpr},
 			)
@@ -360,9 +595,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 
 func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
@@ -400,7 +633,7 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	oldAccount := tc.arg.allocationAccount
 	require.NoError(t, tc.arg.ClearAllocationAccount(oldAccount))
 	require.NoError(t, tc.barg.ClearAllocationAccount(oldAccount))
-	budget, err := tc.proc.GetHashBuildBudget()
+	budget, err := tc.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := budget.AllocationAccountRegistry()
 	require.NoError(t, err)

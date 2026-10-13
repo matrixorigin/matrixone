@@ -95,3 +95,13 @@ result
 select json_unquote(json_extract('{"a":"1"}', '$.a')) like 1 as result;
 result
 1
+drop table if exists like_utf8_t;
+create table like_utf8_t(id int primary key, v varchar(40));
+insert into like_utf8_t values (1, '🙂'), (2, '中'), (3, 'é'), (4, 'A');
+select id from like_utf8_t where v like '_' order by id;
+id
+1
+2
+3
+4
+drop table like_utf8_t;

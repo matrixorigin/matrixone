@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -172,6 +173,13 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	// A different effective type must be rebuilt by the parameter conversion owner.
+	if f.GetType() != *v.GetType() {
+		return false
+	}
+
+	// Admit the cached shape before decoding: a NULL wrapper may retain a
+	// source type that requires conversion when values become available.
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[T])
 		if !ok {
@@ -180,12 +188,12 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		r.sourceVector = v
 		return true
 	}
-	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
 		r, ok := f.(*FunctionParameterScalar[T])
 		if !ok {
 			return false
 		}
+		cols := MustFixedColWithTypeCheck[T](v)
 		r.sourceVector = v
 		r.scalarValue = cols[0]
 		return true
@@ -195,6 +203,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		if !ok {
 			return false
 		}
+		cols := MustFixedColWithTypeCheck[T](v)
 		r.sourceVector = v
 		r.values = cols
 		r.nullMap = v.GetNulls().GetBitmap()
@@ -204,6 +213,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 	if !ok {
 		return false
 	}
+	cols := MustFixedColWithTypeCheck[T](v)
 	r.sourceVector = v
 	r.values = cols
 	return true
@@ -261,6 +271,11 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 }
 
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
+	// A different effective type must be rebuilt by the parameter conversion owner.
+	if f.GetType() != *v.GetType() {
+		return false
+	}
+
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
 		if !ok {
@@ -611,8 +626,8 @@ func newResultFunc[T types.FixedSizeT](
 }
 
 func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
-	if fr.convenientParam == nil {
-		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	if len(fr.convenientParam) < paramCount {
+		fr.convenientParam = append(fr.convenientParam, make([]reusableParameterWrapper, paramCount-len(fr.convenientParam))...)
 	}
 }
 
@@ -630,8 +645,18 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	}
 
 	oldLength := fr.vec.Length()
-
-	if more := targetSize - oldLength; more > 0 {
+	wasConst := fr.vec.IsConst()
+	if wasConst {
+		// PreExtend is intentionally a no-op for CONSTANT vectors. Reset the
+		// class first so a later non-folded evaluation can materialize every
+		// requested row instead of retaining one broadcast physical value.
+		fr.vec.ResetWithSameType()
+		if targetSize > 0 {
+			if err := fr.vec.PreExtend(targetSize, fr.mp); err != nil {
+				return err
+			}
+		}
+	} else if more := targetSize - oldLength; more > 0 {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
@@ -639,12 +664,20 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
 		return err
 	}
-	fr.vec.ResetWithSameType()
+	if !wasConst {
+		fr.vec.ResetWithSameType()
+	}
+	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
+		// Allocation-accounted storage can outlive several evaluations and be
+		// larger than this result. Publish the current row domain explicitly so
+		// NULL unions never infer it from a reused source or physical capacity.
+		nullBitmap.TryExpandWithSize(targetSize)
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
 		fr.vec.length = targetSize
-		if targetSize > oldLength {
+		if wasConst || targetSize > oldLength {
 			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
@@ -670,6 +703,13 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
+	if fr.vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("direct varlena writer does not support const result")
+	}
+	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
+}
+
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	if !fr.vec.IsConst() {
 		return AppendBytes(fr.vec, val, isnull, fr.mp)
@@ -677,6 +717,18 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 		return SetConstBytes(fr.vec, val, fr.vec.Length(), fr.mp)
 	}
 	return nil
+}
+
+// AppendMultiBytes appends cnt logical rows backed by one materialized varlena
+// payload. Non-inline descriptors intentionally share the same area range.
+func (fr *FunctionResult[T]) AppendMultiBytes(val []byte, isnull bool, cnt int) error {
+	if !fr.vec.IsConst() {
+		return AppendMultiBytes(fr.vec, val, isnull, cnt, fr.mp)
+	}
+	if isnull {
+		return SetConstNull(fr.vec, cnt, fr.mp)
+	}
+	return SetConstBytes(fr.vec, val, cnt, fr.mp)
 }
 
 func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) error {

@@ -9,7 +9,7 @@ SELECT POWER(2, 3) AS result4;
 SELECT POWER(2, 0) AS result5;
 SELECT POWER(4, 0.5) AS result6;
 
-#SELECT - Out-of-range results
+#SELECT - Invalid results return NULL (MatrixOne contract, unlike MySQL errors)
 SELECT POW(-2, 0.5);
 SELECT POWER(0, -1);
 SELECT IF(0, POW(-2, 0.5), 1);
@@ -73,6 +73,58 @@ insert into t2 values(10,100), (4,41);
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (power(t1.a, t1.b) <> power(t2.a, t2.b));
 drop table t1;
 drop table t2;
+
+# Issue #28137: row-local NULLs must survive folding, vectors, aggregates and DML.
+SELECT POWER(-1, 0.5), POWER(0, -1), EXP(1000), COT(0);
+SELECT POWER(2, 1024) IS NULL, POWER(2, 1023) IS NOT NULL,
+       POWER(2, -1075) = 0, EXP(710) IS NULL, EXP(709) IS NOT NULL, EXP(-1000) = 0;
+SELECT POWER(CAST(-2 AS DECIMAL(10,2)), CAST(0.5 AS DECIMAL(10,2))) IS NULL,
+       EXP(CAST(710 AS SIGNED)) IS NULL, COT(CAST(0 AS DOUBLE)) IS NULL;
+DROP TABLE IF EXISTS math_null_src;
+DROP TABLE IF EXISTS math_null_dst;
+DROP TABLE IF EXISTS math_null_required;
+CREATE TABLE math_null_src(id INT PRIMARY KEY, b DOUBLE, e DOUBLE, x DOUBLE, c DOUBLE);
+INSERT INTO math_null_src VALUES (1,2,3,0,1), (2,-2,0.5,710,0), (3,4,0.5,-1000,-1), (4,NULL,NULL,NULL,NULL);
+SELECT id, POWER(b,e), EXP(x), COT(c) IS NULL FROM math_null_src ORDER BY id;
+SELECT id, POWER(b,0.5) IS NULL, POWER(-2,e) IS NULL FROM math_null_src ORDER BY id;
+SELECT COUNT(*), COUNT(POWER(b,e)), SUM(POWER(b,e)), COUNT(EXP(x)), SUM(EXP(x)), COUNT(COT(c)) FROM math_null_src;
+SELECT id FROM math_null_src WHERE POWER(b,e) > 0 ORDER BY id;
+SELECT id, IF(id=2, 7, POWER(b,e)), CASE WHEN id=2 THEN 7 ELSE EXP(x) END FROM math_null_src ORDER BY id;
+CREATE TABLE math_null_dst(id INT, p DOUBLE, x DOUBLE, c DOUBLE);
+INSERT INTO math_null_dst SELECT id, POWER(b,e), EXP(x), COT(c) FROM math_null_src;
+SELECT id, p, x, c IS NULL FROM math_null_dst ORDER BY id;
+UPDATE math_null_dst SET p=POWER(0,-1), x=EXP(710), c=COT(0) WHERE id=1;
+SELECT id, p IS NULL, x IS NULL, c IS NULL FROM math_null_dst ORDER BY id;
+CREATE TABLE math_null_required(v DOUBLE NOT NULL);
+INSERT INTO math_null_required SELECT POWER(0,-1);
+INSERT INTO math_null_required SELECT EXP(710);
+INSERT INTO math_null_required SELECT COT(0);
+INSERT INTO math_null_required SELECT POWER(b,e) FROM math_null_src;
+SELECT COUNT(*) FROM math_null_required;
+PREPARE math_null_stmt FROM 'SELECT POWER(?, ?), EXP(?), COT(?)';
+SET @math_b=-2, @math_e=0.5, @math_x=710, @math_c=0;
+EXECUTE math_null_stmt USING @math_b, @math_e, @math_x, @math_c;
+SET @math_b=2, @math_e=3, @math_x=0, @math_c=1;
+EXECUTE math_null_stmt USING @math_b, @math_e, @math_x, @math_c;
+DEALLOCATE PREPARE math_null_stmt;
+DROP TABLE math_null_required;
+DROP TABLE math_null_dst;
+DROP TABLE math_null_src;
+
+# Non-NULL inputs can produce NULL: predicates and CTAS must retain that metadata.
+DROP TABLE IF EXISTS math_null_inputs;
+DROP TABLE IF EXISTS math_null_ctas;
+CREATE TABLE math_null_inputs(id INT PRIMARY KEY, b DOUBLE NOT NULL, e DOUBLE NOT NULL, x DOUBLE NOT NULL, c DOUBLE NOT NULL);
+INSERT INTO math_null_inputs VALUES (1,2,3,0,1), (2,-2,0.5,710,0);
+SELECT id FROM math_null_inputs WHERE POWER(b,e) IS NULL ORDER BY id;
+SELECT id FROM math_null_inputs WHERE EXP(x) IS NULL ORDER BY id;
+SELECT id FROM math_null_inputs WHERE COT(c) IS NULL ORDER BY id;
+CREATE TABLE math_null_ctas AS SELECT id, POWER(b,e) AS p, EXP(x) AS x, COT(c) AS c FROM math_null_inputs;
+SELECT id, p IS NULL, x IS NULL, c IS NULL FROM math_null_ctas ORDER BY id;
+SELECT column_name, is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'math_null_ctas' ORDER BY ordinal_position;
+DROP TABLE math_null_ctas;
+DROP TABLE math_null_inputs;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('math_null_src', 'math_null_dst', 'math_null_required', 'math_null_inputs', 'math_null_ctas');
 
 
 #HAVING，比较操作

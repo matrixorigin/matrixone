@@ -35,7 +35,24 @@ import (
 
 const restoredTagFile = "./RESTORED"
 
+func waitHAKeeperBootstrapRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return moerr.AttachCause(ctx, ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
+	// Maintenance resumes only durable admitted replicas in startReplicas.
+	// Bootstrap must neither replay initial membership nor restore cluster data.
+	if s.store.catalogExecutor.enabled {
+		return nil
+	}
 	replicaID, bootstrapping := cfg.Bootstrapping()
 	if !bootstrapping {
 		return nil
@@ -127,6 +144,10 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 
 	initialClusterProposed := false
 	var lastInitialClusterErr error
+	retryInterval := cfg.HAKeeperBootstrapRetryInterval.Duration
+	if retryInterval <= 0 {
+		retryInterval = defaultHAKeeperBootstrapRetryInterval
+	}
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
@@ -136,6 +157,18 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 			}
 			return nil
 		default:
+		}
+		ready, err := s.store.waitHAKeeperLeaderReady(ctx, hakeeperDefaultTimeout)
+		if err != nil {
+			// Preserve the ordinary bootstrap's cancellation/removed-shard policy,
+			// but do not report success for a failed NodeHost (for example ErrClosed).
+			if !restoreConfigured && (ctx.Err() != nil || errors.Is(err, dragonboat.ErrShardNotFound)) {
+				return nil
+			}
+			return err
+		}
+		if !ready {
+			continue
 		}
 		s.runtime.SubLogger(runtime.SystemInit).Info("before initial cluster info")
 		applied, err := s.store.setInitialClusterInfoWithRecoveryResult(
@@ -156,12 +189,19 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 				}
 				return nil
 			}
-			time.Sleep(time.Second)
+			if err := waitHAKeeperBootstrapRetry(ctx, retryInterval); err != nil {
+				s.runtime.SubLogger(runtime.SystemInit).Error("context error", zap.Error(ctx.Err()))
+				if restoreConfigured {
+					return err
+				}
+				return nil
+			}
 			continue
 		}
 		initialClusterProposed = true
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set",
 			zap.Bool("applied", applied))
+		s.requestHeartbeat()
 		break
 	}
 	if backup != nil {

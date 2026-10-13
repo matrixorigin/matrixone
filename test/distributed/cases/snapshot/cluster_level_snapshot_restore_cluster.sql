@@ -245,7 +245,7 @@ use udf_db2;
 create function `addAB`(x int, y int) returns int
     language sql as
 '$1 + $2';
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 
 drop stage if exists my_ext_stage;
@@ -395,7 +395,7 @@ use udf_db2;
 create function `add`(x int, y int) returns int
     language sql as
 '$1 + $2';
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @session
 
@@ -447,7 +447,7 @@ select * from mo_catalog.mo_stored_procedure;
 -- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:0,5
 select * from mo_catalog.mo_stages;
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @session
 

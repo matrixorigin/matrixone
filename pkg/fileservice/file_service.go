@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-// FileService is a write-once file system
+// FileService is a write-once file system. File-targeting operations require a
+// non-empty file component and return ErrFileNotFound for the root path. List
+// deliberately accepts an empty directory path to address the service root.
 type FileService interface {
 	// Name is file service's name
 	// service name is case-insensitive
@@ -142,10 +144,21 @@ type IOEntry struct {
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
 	CachedData fscache.Data
+	// admitCachedData reserves caller-owned capacity before a memory-cache hit
+	// retains its backing. releaseCachedData drops that reservation after the
+	// retained cache reference is released. Both are internal FileService
+	// ownership hooks and must move with the entry.
+	admitCachedData   fscache.DataCachePinAdmission
+	releaseCachedData func()
 	// CachedDataSize is the expected size of the final cache representation.
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.
 	CachedDataSize int64
+	// DecodeSharing is opt-in for immutable conversion results whose lifetime
+	// is scoped to this complete IOVector, including its release ticket. Its zero
+	// value disables sharing; storing it inline avoids per-read metadata allocation.
+	DecodeSharing DecodeSharing
+	decodeLease   *decodedReadLease
 	// ValidateCacheData validates a final representation received from a cache
 	// tier. The caller transfers its one input reference to a successful return;
 	// on error the caller releases the input. Implementations may return a sealed
@@ -181,6 +194,9 @@ func (i IOEntry) String() string {
 }
 
 type CacheDataAllocator interface {
+	// BackingSize returns the physical capacity reserved by a following
+	// AllocateCacheData call. It is used to evict before allocating.
+	BackingSize(size int) int
 	AllocateCacheData(ctx context.Context, size int) fscache.Data
 	AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data
 	CopyToCacheData(ctx context.Context, data []byte) fscache.Data

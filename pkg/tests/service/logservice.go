@@ -15,6 +15,7 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 
@@ -69,8 +70,10 @@ type LogService interface {
 // The main purpose of this structure is to maintain status
 type logService struct {
 	sync.Mutex
-	status ServiceStatus
-	svc    *logservice.WrappedService
+	status    ServiceStatus
+	svc       *logservice.WrappedService
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (ls *logService) Start() error {
@@ -92,15 +95,15 @@ func (ls *logService) Close() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == ServiceStarted {
-		err := ls.svc.Close()
-		if err != nil {
-			return err
+	ls.closeOnce.Do(func() {
+		if ls.svc != nil {
+			ls.closeErr = ls.svc.Close()
 		}
-		ls.status = ServiceClosed
-	}
-
-	return nil
+		if ls.closeErr == nil {
+			ls.status = ServiceClosed
+		}
+	})
+	return ls.closeErr
 }
 
 func (ls *logService) Status() ServiceStatus {
@@ -226,36 +229,27 @@ func (c *testCluster) startHAKeeperReplica() error {
 }
 
 // setInitialClusterInfo initializes cluster information.
-func (c *testCluster) setInitialClusterInfo() error {
-	errChan := make(chan error, 1)
-
-	initialize := func() {
-		var err error
-		defer func() {
-			errChan <- err
-		}()
-
+func (c *testCluster) setInitialClusterInfo(ctx context.Context) error {
+	c.log.once.Do(func() {
 		selected := c.selectHAkeeperServices()
 		assert.NotZero(c.t, len(selected))
 
 		c.logger.Info("initialize cluster information")
 
-		err = selected[0].SetInitialClusterInfo(
+		leader := c.WaitHAKeeperLeader(ctx)
+		c.log.initialClusterInfoErr = leader.SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
 			c.opt.initial.tnShardNum,
 			c.opt.initial.logReplicaNum,
 		)
-		if err != nil {
-			c.logger.Error("fail to initialize cluster", zap.Error(err))
+		if c.log.initialClusterInfoErr != nil {
+			c.logger.Error("fail to initialize cluster", zap.Error(c.log.initialClusterInfoErr))
 			return
 		}
 
 		c.logger.Info("cluster information initialized")
-	}
-
-	// initialize cluster only once
-	c.log.once.Do(initialize)
-	return <-errChan
+	})
+	return c.log.initialClusterInfoErr
 }
 
 // listHAKeeperService lists all log services that start hakeeper.

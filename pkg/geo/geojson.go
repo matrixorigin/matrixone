@@ -27,12 +27,20 @@ import (
 // >= 0 every coordinate is rounded to at most that many decimal places; a
 // negative value keeps full round-trip precision.
 func WriteGeoJSON(g Geometry, maxDec int) string {
+	return WriteGeoJSONWithMaxDecimalDigits(g, int64(maxDec))
+}
+
+// WriteGeoJSONWithMaxDecimalDigits renders g as GeoJSON using the requested
+// maximum number of fractional decimal digits. A negative value keeps full
+// round-trip precision. Large values are handled without narrowing or
+// allocating in proportion to maxDec.
+func WriteGeoJSONWithMaxDecimalDigits(g Geometry, maxDec int64) string {
 	var b strings.Builder
 	writeGeoJSON(&b, g, maxDec)
 	return b.String()
 }
 
-func writeGeoJSON(b *strings.Builder, g Geometry, maxDec int) {
+func writeGeoJSON(b *strings.Builder, g Geometry, maxDec int64) {
 	switch v := g.(type) {
 	case Point:
 		b.WriteString(`{"type":"Point","coordinates":`)
@@ -101,7 +109,7 @@ func writeGeoJSON(b *strings.Builder, g Geometry, maxDec int) {
 	}
 }
 
-func gjWriteRings(b *strings.Builder, rings [][]Coord, maxDec int) {
+func gjWriteRings(b *strings.Builder, rings [][]Coord, maxDec int64) {
 	b.WriteByte('[')
 	for i, r := range rings {
 		if i > 0 {
@@ -112,7 +120,7 @@ func gjWriteRings(b *strings.Builder, rings [][]Coord, maxDec int) {
 	b.WriteByte(']')
 }
 
-func gjWriteCoordSeq(b *strings.Builder, cs []Coord, maxDec int) {
+func gjWriteCoordSeq(b *strings.Builder, cs []Coord, maxDec int64) {
 	b.WriteByte('[')
 	for i, c := range cs {
 		if i > 0 {
@@ -123,7 +131,7 @@ func gjWriteCoordSeq(b *strings.Builder, cs []Coord, maxDec int) {
 	b.WriteByte(']')
 }
 
-func gjWriteCoord(b *strings.Builder, c Coord, maxDec int) {
+func gjWriteCoord(b *strings.Builder, c Coord, maxDec int64) {
 	b.WriteByte('[')
 	b.WriteString(fmtGeoJSONNum(c.X, maxDec))
 	b.WriteByte(',')
@@ -131,12 +139,50 @@ func gjWriteCoord(b *strings.Builder, c Coord, maxDec int) {
 	b.WriteByte(']')
 }
 
-func fmtGeoJSONNum(v float64, maxDec int) string {
-	if maxDec >= 0 {
-		p := math.Pow(10, float64(maxDec))
-		v = math.Round(v*p) / p
+func fmtGeoJSONNum(v float64, maxDec int64) string {
+	if maxDec < 0 {
+		return strconv.FormatFloat(v, 'f', -1, 64)
 	}
-	return strconv.FormatFloat(v, 'f', -1, 64)
+
+	// Preserve the existing fast path and rounding behavior whenever scaling
+	// remains finite. At maxDec=308, 10^maxDec is finite but multiplying a
+	// coordinate such as 2 by it already overflows.
+	if maxDec <= 308 {
+		p := math.Pow(10, float64(maxDec))
+		scaled := v * p
+		if !math.IsInf(p, 0) && !math.IsInf(scaled, 0) {
+			return strconv.FormatFloat(math.Round(scaled)/p, 'f', -1, 64)
+		}
+		// If a finite coordinate overflows while scaled, its floating-point
+		// spacing is already much larger than the requested decimal unit, so
+		// rounding at this precision cannot change its shortest representation.
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+
+	// Do not construct 10^maxDec or pass an arbitrary SQL precision to
+	// FormatFloat. For ordinary values the shortest fixed representation
+	// already uses fewer fractional digits than requested.
+	short := strconv.FormatFloat(v, 'f', -1, 64)
+	fractionDigits := geoJSONFractionDigits(short)
+	if maxDec >= int64(fractionDigits) {
+		return short
+	}
+
+	// This conversion is bounded by the fractional length of the shortest
+	// representation above; it cannot scale with an arbitrarily large input.
+	rounded := strconv.FormatFloat(v, 'f', int(maxDec), 64)
+	if strings.IndexByte(rounded, '.') >= 0 {
+		rounded = strings.TrimRight(rounded, "0")
+		rounded = strings.TrimSuffix(rounded, ".")
+	}
+	return rounded
+}
+
+func geoJSONFractionDigits(s string) int {
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		return len(s) - dot - 1
+	}
+	return 0
 }
 
 // ParseGeoJSON decodes an RFC 7946 GeoJSON geometry object. Feature and

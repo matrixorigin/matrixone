@@ -16,40 +16,16 @@ package v2
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// HashBuild budget metrics intentionally have only fixed-cardinality labels.
-// Statement, SQL, key, generation, and tenant identities must never be labels.
-var (
-	HashBuildBudgetEventCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "hashbuild",
-			Name:      "budget_events_total",
-			Help:      "HashBuild memory and spill budget lifecycle transitions.",
-		},
-		[]string{"component", "event", "scope"},
-	)
-	HashBuildBudgetBytesCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "hashbuild",
-			Name:      "budget_bytes_total",
-			Help:      "Bytes requested, reconciled, released, rejected, or spilled by HashBuild.",
-		},
-		[]string{"component", "event", "scope"},
-	)
-	HashBuildSpillDepthCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "hashbuild",
-			Name:      "spill_depth_total",
-			Help:      "Count of admitted HashBuild spill and re-spill transitions by bounded depth.",
-		},
-		[]string{"action", "depth"},
-	)
+var HashBuildSpillDepthCounter = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "hashbuild",
+		Name:      "spill_depth_total",
+		Help:      "Count of admitted HashBuild spill and re-spill transitions by bounded depth.",
+	},
+	[]string{"action", "depth"},
 )
 
 func initHashBuildMetrics() {
-	registry.MustRegister(HashBuildBudgetEventCounter)
-	registry.MustRegister(HashBuildBudgetBytesCounter)
 	registry.MustRegister(HashBuildSpillDepthCounter)
 }

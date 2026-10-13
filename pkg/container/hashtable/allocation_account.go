@@ -55,7 +55,7 @@ func NewAllocationAccountSelection(
 func (s *AllocationAccountSelection) validate() error {
 	if s == nil || s.account == nil || s.account.Handle() == 0 ||
 		s.owner < mpool.AllocationOwnerMin ||
-		s.owner > mpool.AllocationOwnerMax ||
+		s.owner > mpool.AllocationOwnerCatalogMax ||
 		s.cellSite < mpool.AllocationSiteMin ||
 		s.descriptorSite < mpool.AllocationSiteMin ||
 		s.cellSite == s.descriptorSite {

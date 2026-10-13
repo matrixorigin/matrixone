@@ -138,6 +138,13 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
+		if baseOid.IsArrayRelate() {
+			for _, input := range nonNull[1:] {
+				if input.Width != nonNull[0].Width {
+					return leastGreatestResolution{}, false
+				}
+			}
+		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}
@@ -149,6 +156,19 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 			}, true
 		}
 		return leastGreatestResolution{resultType: nonNull[0], overloadID: leastGreatestNormalOverload}, true
+	}
+
+	for _, input := range nonNull {
+		if input.Oid == types.T_uuid {
+			if target, _, ok := textStringCommonType(inputs); ok {
+				return leastGreatestResolution{
+					resultType: target,
+					castTypes:  leastGreatestCastTypes(inputs, target),
+					overloadID: leastGreatestNormalOverload,
+				}, true
+			}
+			break
+		}
 	}
 
 	if hasUnsupportedLeastGreatestMixedType(nonNull) {
@@ -310,6 +330,28 @@ func leastGreatestExecutorSupportsOid(oid types.T) bool {
 func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 	target := inputs[0]
 	switch target.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
+		if target.Oid == types.T_varchar && leastGreatestMetadataDiffers(inputs) {
+			// A bounded conditional expression (for example COALESCE(CHAR, VARCHAR))
+			// can arrive here as VARCHAR with the first branch's width.  Do not let
+			// that intermediate width become LEAST/GREATEST's result metadata: the
+			// established string overload contract uses the conservative VARCHAR
+			// capacity when the argument widths need promotion.
+			target = types.MergeStringCollationMetadata(types.T_varchar.ToType(), inputs)
+			return target, true
+		}
+		for i := range inputs {
+			if inputs[i].Charset != mergedCharset {
+				// Aligning collation requires casts even when the OIDs already
+				// match. Reuse the conditional-string derivation so CHAR/VARCHAR
+				// widths widen normally while unbounded TEXT is never collapsed
+				// to the T_text/Width=255 TINYTEXT marker.
+				target = commonConditionalStringType(target, inputs)
+				return target, true
+			}
+		}
+		return types.Type{}, false
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if !leastGreatestMetadataDiffers(inputs) {
 			return types.Type{}, false
@@ -437,7 +479,7 @@ func leastGreatestJSONDateTemporalType(inputs []types.Type) (types.Type, bool) {
 			}
 		}
 	}
-	return types.T_varchar.ToType(), true
+	return leastGreatestMergedStringType(inputs, types.T_varchar), true
 }
 
 func leastGreatestDateTemporalMixedType(inputs []types.Type) (types.Type, bool) {
@@ -466,22 +508,24 @@ func leastGreatestDateTemporalMixedType(inputs []types.Type) (types.Type, bool) 
 			hasNumeric = true
 		}
 	}
+	var targetOID types.T
 	switch {
 	case allTemporal:
 		target := types.T_datetime.ToType()
 		target.Scale = leastGreatestTemporalMaxScale(inputs)
 		return target, true
 	case hasText:
-		return types.T_text.ToType(), true
+		targetOID = types.T_text
 	case hasNonBinary || hasNumeric:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasBlob:
-		return types.T_blob.ToType(), true
+		targetOID = types.T_blob
 	case hasBinary:
-		return types.T_varbinary.ToType(), true
+		targetOID = types.T_varbinary
 	default:
 		return types.Type{}, false
 	}
+	return leastGreatestMergedStringType(inputs, targetOID), true
 }
 
 func leastGreatestJSONMixedType(inputs []types.Type) (types.Type, bool) {
@@ -500,9 +544,9 @@ func leastGreatestJSONMixedType(inputs []types.Type) (types.Type, bool) {
 		}
 	}
 	if hasText {
-		return types.T_text.ToType(), true
+		return leastGreatestMergedStringType(inputs, types.T_text), true
 	}
-	return types.T_varchar.ToType(), true
+	return leastGreatestMergedStringType(inputs, types.T_varchar), true
 }
 
 func leastGreatestCommonNumericOrYearType(inputs []types.Type) (types.Type, bool) {
@@ -541,22 +585,34 @@ func leastGreatestStringMixedType(inputs []types.Type) (types.Type, bool) {
 			hasNumeric = true
 		}
 	}
+	var targetOID types.T
 	switch {
 	case hasText:
-		return types.T_text.ToType(), true
+		targetOID = types.T_text
 	case hasNonBinary:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasTemporal && hasNumeric:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasBlob:
-		return types.T_blob.ToType(), true
+		targetOID = types.T_blob
 	case hasBinary:
-		return types.T_varbinary.ToType(), true
+		targetOID = types.T_varbinary
 	case hasTemporal:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	default:
 		return types.Type{}, false
 	}
+	return leastGreatestMergedStringType(inputs, targetOID), true
+}
+
+func leastGreatestMergedStringType(inputs []types.Type, targetOID types.T) types.Type {
+	target := targetOID.ToType()
+	// The common physical OID is only half of the string type. Preserve the
+	// strongest input collation before leastGreatestCastTypes copies this target
+	// to every applicable argument; the return-type callback receives the same
+	// target. Keep this derivation shared by every mixed-type resolver because
+	// JSON and date-bearing inputs dispatch before the ordinary string path.
+	return types.MergeStringCollationMetadata(target, inputs)
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set

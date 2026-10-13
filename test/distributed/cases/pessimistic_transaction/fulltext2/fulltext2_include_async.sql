@@ -23,14 +23,24 @@ insert into src_upd values
 (11, 'golden fox naps',  'active',   200),
 (12, 'bronze fox digs',  'archived', 300);
 
--- Wait for both initial CDC tails; the semantic MATCH checks stay single-shot so
+-- src_phantom is independent of src_ins/src_upd. Start its initial build now so
+-- all three CDC tails share one barrier instead of paying a later serial wait.
+create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
+  FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_phantom values
+(20, 'silver fox alpha', 'active', 500),
+(21, 'golden fox beta',  'active', 600);
+
+-- Wait for all three initial CDC tails; the semantic MATCH checks stay single-shot so
 -- an early probe cannot pin a stale per-CN search cache.
 set @src_ins_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_ins') limit 1);
 set @src_upd_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_upd') limit 1);
+set @src_phantom_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_phantom') limit 1);
 set @wait_include_initial_sql = concat(
     'select ',
     '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_ins_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_ins_ready, ',
-    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_upd_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_upd_ready'
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_upd_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_upd_ready, ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_phantom_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_phantom_ready'
 );
 prepare wait_include_initial from @wait_include_initial_sql;
 -- @wait_expect(2, 120)
@@ -46,8 +56,8 @@ select id, prio from src_ins where match(body) against('fox') and prio > 15 orde
 
 -- mutate src_upd: UPDATE an include value (LWW) + DELETE, BEFORE its first search.
 set @capture_src_upd_tail_sql = concat(
-    'set @src_upd_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_upd_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1)'
+    'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
 );
 prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
 execute capture_src_upd_tail;
@@ -63,8 +73,8 @@ prepare wait_src_upd_mutation from @wait_src_upd_mutation_sql;
 execute wait_src_upd_mutation;
 deallocate prepare wait_src_upd_mutation;
 set @capture_src_upd_tail_sql = concat(
-    'set @src_upd_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_upd_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1)'
+    'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
 );
 prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
 execute capture_src_upd_tail;
@@ -94,23 +104,9 @@ select id, prio from src_upd where match(body) against('fox') and prio > 500 ord
 -- must resolve to the DELETE. The classic 2-JOIN path masked a resurrected row via the source
 -- join; the covered 0-JOIN path has no such join, so a phantom would surface a deleted row with
 -- stale INCLUDE values. Ordered by score (never ORDER BY id) so the covered fast path is used.
-create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
-  FULLTEXT2 ftidx (body) INCLUDE (status, prio));
-insert into src_phantom values
-(20, 'silver fox alpha', 'active', 500),
-(21, 'golden fox beta',  'active', 600);
-set @src_phantom_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_phantom') limit 1);
-set @wait_phantom_initial_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 0 as src_phantom_ready from `', database(), '`.`', @src_phantom_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
-);
-prepare wait_phantom_initial from @wait_phantom_initial_sql;
--- @wait_expect(2, 120)
-execute wait_phantom_initial;
-deallocate prepare wait_phantom_initial;
 set @capture_phantom_tail_sql = concat(
-    'set @phantom_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_phantom_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1)'
+    'select coalesce(max(chunk_id), -1) into @phantom_tail_before_mutation from `', database(), '`.`', @src_phantom_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
 );
 prepare capture_phantom_tail from @capture_phantom_tail_sql;
 execute capture_phantom_tail;

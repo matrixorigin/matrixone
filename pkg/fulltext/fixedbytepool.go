@@ -16,6 +16,7 @@ package fulltext
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"sync"
@@ -352,7 +353,6 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 
 // Spill to spill the memory into disk and free up memory
 func (part *Partition) Spill() error {
-
 	if part.data == nil {
 		return nil
 	}
@@ -361,17 +361,46 @@ func (part *Partition) Spill() error {
 	if err != nil {
 		return err
 	}
+	return part.spillToFile(f)
+}
 
-	defer f.Close()
+type spillFile interface {
+	io.WriteCloser
+	Name() string
+}
 
-	if _, err := f.Write(part.data); err != nil {
+// spillToFile owns the staging file until its complete contents are closed.
+// A failed spill leaves the in-memory partition available for a later retry.
+func (part *Partition) spillToFile(f spillFile) error {
+	open := true
+	published := false
+	defer func() {
+		if open {
+			_ = f.Close()
+		}
+		if !published {
+			_ = os.Remove(f.Name())
+		}
+	}()
+
+	n, err := f.Write(part.data)
+	if err != nil {
 		return err
 	}
+	if n != len(part.data) {
+		return io.ErrShortWrite
+	}
+	if err := f.Close(); err != nil {
+		open = false
+		return err
+	}
+	open = false
 
 	part.spilled = true
 	part.spill_fpath = f.Name()
 	part.proc.Mp().Free(part.data)
 	part.data = nil
+	published = true
 	return nil
 }
 
@@ -589,6 +618,10 @@ func (pool *FixedBytePool) Close() {
 
 // spill will find LRU partitions to spill and will double the number of partitions to spill for the next time
 func (pool *FixedBytePool) Spill() error {
+	return pool.spillWith((*Partition).Spill)
+}
+
+func (pool *FixedBytePool) spillWith(spill func(*Partition) error) error {
 
 	// find spillable partitions. Skip:
 	//   - already-spilled partitions (nothing to do);
@@ -635,7 +668,7 @@ func (pool *FixedBytePool) Spill() error {
 
 		go func(tid int) {
 			defer wg.Done()
-			err := pool.partitions[lru[tid].id].Spill()
+			err := spill(pool.partitions[lru[tid].id])
 			if err != nil {
 				errchan <- err
 			}
@@ -643,12 +676,13 @@ func (pool *FixedBytePool) Spill() error {
 	}
 
 	wg.Wait()
+	// Successful partitions have already freed their resident bytes. Account
+	// for them even when another partition in the batch failed to spill.
+	pool.mem_in_use -= (nspill - uint64(len(errchan))) * pool.partition_cap
 
 	if len(errchan) > 0 {
 		return <-errchan
 	}
-
-	pool.mem_in_use -= uint64(nspill) * pool.partition_cap
 
 	//fmt.Printf("%d spilled, mem in use %d\n", nspill, pool.mem_in_use)
 	return nil

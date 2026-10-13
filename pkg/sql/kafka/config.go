@@ -56,11 +56,13 @@ type Config struct {
 	Partition int32
 	// Autocommit false (the default) means every SELECT must pin its start
 	// position with __mo_read_start_id and the read offset is committed at
-	// that position; true reads from earliest/latest/committed progress and
-	// commits as the scan completes.
+	// that position; true reads from earliest/latest controls and commits
+	// last+1 when the whole statement succeeds. Neither mode makes Kafka state
+	// atomic with a MatrixOne transaction.
 	Autocommit bool
-	// Group is the consumer group whose committed offset is the exactly-once
-	// bookmark. "" at option-parse time; build_ddl fills the default
+	// Group is the consumer group used for broker-side offset markers. It is
+	// not a MatrixOne transaction checkpoint. "" at option-parse time;
+	// build_ddl fills the default
 	// ("mo_kafka_<db>_<table>") so the envelope always carries a concrete
 	// group.
 	Group string
@@ -153,7 +155,7 @@ func ParseTableOptions(ctx context.Context, param *tree.KafkaTableParam) (Config
 }
 
 // DefaultGroup is the consumer group used when the DDL sets none: stable per
-// table so repeated sessions share one exactly-once bookmark.
+// table so repeated sessions share one broker-side offset marker.
 func DefaultGroup(db, table string) string {
 	return "mo_kafka_" + db + "_" + table
 }

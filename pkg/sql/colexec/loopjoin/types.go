@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -128,17 +127,18 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr                 container
-	LeftTypes           []types.Type
-	RightTypes          []types.Type
-	NonEqCond           *plan.Expr
-	ResultCols          []colexec.ResultPos
-	JoinMapTag          int32
-	JoinType            plan.Node_JoinType
-	MarkPos             int
-	allocationAccount   *mpool.AllocationAccount
-	resultAllocation    *vector.AllocationAccountSelection
-	conditionAllocation *vector.AllocationAccountSelection
+	ctr                           container
+	LeftTypes                     []types.Type
+	RightTypes                    []types.Type
+	NonEqCond                     *plan.Expr
+	OwnsConstantFilterDiagnostics bool
+	ResultCols                    []colexec.ResultPos
+	JoinMapTag                    int32
+	JoinType                      plan.Node_JoinType
+	MarkPos                       int
+	allocationAccount             *mpool.AllocationAccount
+	resultAllocation              *vector.AllocationAccountSelection
+	conditionAllocation           *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// INNER/SEMI build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -161,7 +161,7 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteResultData,
 		loopJoinAllocationSiteResultArea,
 		loopJoinAllocationSiteResultNulls,
@@ -172,7 +172,7 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	}
 	conditionSelection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteConditionData,
 		loopJoinAllocationSiteConditionArea,
 		loopJoinAllocationSiteConditionNulls,

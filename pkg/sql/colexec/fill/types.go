@@ -21,11 +21,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Fill)
+
+var _ interface {
+	SetAllocationAccount(*mpool.AllocationAccount) error
+	ClearAllocationAccount(*mpool.AllocationAccount) error
+} = new(Fill)
+
+const (
+	// Sites 32-43 and 60 are shared spillutil sites. Fill-specific storage uses
+	// a disjoint range under the Fill owner.
+	fillAllocationSiteRetainedData mpool.AllocationSite = iota + 64
+	fillAllocationSiteRetainedArea
+	fillAllocationSiteRetainedNulls
+	fillAllocationSiteRetainedGrouping
+	fillAllocationSiteExpressionData
+	fillAllocationSiteExpressionArea
+	fillAllocationSiteExpressionNulls
+	fillAllocationSiteExpressionGrouping
+	fillAllocationSiteOutputData
+	fillAllocationSiteOutputArea
+	fillAllocationSiteOutputNulls
+	fillAllocationSiteOutputGrouping
+	fillAllocationSiteCoordinates
+	fillAllocationSitePartitionSnapshot
+	fillAllocationSiteSpillWriteBuffer
+)
 
 // fillCoord addresses one buffered row by the batch's absolute sequence number
 // (stable across FIFO popping) and its row within that batch.
@@ -44,12 +70,10 @@ type container struct {
 	// prevValid marks which prevVecs hold a value from the current partition.
 	// A partition boundary invalidates them without freeing the vectors.
 	prevValid []bool
-	// prevPartKey / prevPartNull snapshot the partition key of the last row of
+	// prevPart snapshots the partition key of the last row of
 	// the previous batch, so the first row of the next batch can detect a
 	// boundary without keeping the old batch alive.
-	prevPartKey  [][]byte
-	prevPartNull []bool
-	prevPartSet  bool
+	prevPart spillPartitionSnapshot
 
 	// next / linear incremental engine. bats is a FIFO of still-pending child
 	// batches; baseSeq is the absolute sequence number of bats[0], so a
@@ -57,7 +81,9 @@ type container struct {
 	// head (local index = seq - baseSeq). toFree holds the batch handed to the
 	// caller on the previous Call, released at the top of the next one.
 	// flushable counts the resolved prefix of bats that may be emitted;
-	// childDone records child EOF.
+	// childDone records child EOF. bats is structurally capped at
+	// maxFillPendingBatches; an unresolved suffix spills before another child
+	// batch can be retained.
 	bats      []*batch.Batch
 	baseSeq   int
 	toFree    *batch.Batch
@@ -70,6 +96,13 @@ type container struct {
 	pendingRows    int64
 	spillThreshold int64
 	spill          *fillSpill
+
+	allocationAccount    *mpool.AllocationAccount
+	retainedAllocation   *vector.AllocationAccountSelection
+	expressionAllocation *vector.AllocationAccountSelection
+	outputAllocation     *vector.AllocationAccountSelection
+	spillAllocation      *spillutil.SpillAllocationAccount
+	budget               *process.ExecutionResourceGeneration
 	// next: per fill-column list of NULL rows still waiting for a following
 	// value of the same partition.
 	nextRun [][]fillCoord
@@ -149,22 +182,175 @@ func (fill *Fill) Release() {
 	}
 }
 
+func (fill *Fill) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if fill == nil || account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if fill.ctr.allocationAccount != nil {
+		if fill.ctr.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if fill.HasPreparedProjection() {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	return fill.ctr.setAllocationAccount(account)
+}
+
+func (fill *Fill) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if fill == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if fill.ctr.allocationAccount == nil {
+		return nil
+	}
+	if fill.ctr.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if fill.HasPreparedProjection() {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	return fill.ctr.clearAllocationAccount(account)
+}
+
+func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) error {
+	if ctr == nil || account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.allocationAccount != nil {
+		if ctr.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if ctr.buf != nil || ctr.spill != nil || ctr.toFree != nil ||
+		len(ctr.bats) != 0 || len(ctr.exes) != 0 || len(ctr.valVecs) != 0 ||
+		len(ctr.prevVecs) != 0 ||
+		len(ctr.linSeed) != 0 || len(ctr.linEntry) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	retained, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerFill,
+		fillAllocationSiteRetainedData,
+		fillAllocationSiteRetainedArea,
+		fillAllocationSiteRetainedNulls,
+		fillAllocationSiteRetainedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	expression, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerFill,
+		fillAllocationSiteExpressionData,
+		fillAllocationSiteExpressionArea,
+		fillAllocationSiteExpressionNulls,
+		fillAllocationSiteExpressionGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	output, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerFill,
+		fillAllocationSiteOutputData,
+		fillAllocationSiteOutputArea,
+		fillAllocationSiteOutputNulls,
+		fillAllocationSiteOutputGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	spill, err := spillutil.NewSpillAllocationAccount(
+		account,
+		mpool.AllocationOwnerFill,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationAccount = account
+	ctr.retainedAllocation = retained
+	ctr.expressionAllocation = expression
+	ctr.outputAllocation = output
+	ctr.spillAllocation = spill
+	return nil
+}
+
+func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) error {
+	if ctr == nil || ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if ctr.buf != nil || ctr.spill != nil || ctr.toFree != nil ||
+		len(ctr.bats) != 0 || len(ctr.exes) != 0 || len(ctr.valVecs) != 0 ||
+		len(ctr.prevVecs) != 0 ||
+		ctr.hasCoordinateCapacity() || ctr.prevPart.hasCapacity() ||
+		ctr.linEntryPart.hasCapacity() || ctr.budget != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	ctr.prevPart.free()
+	ctr.linEntryPart.free()
+	ctr.allocationAccount = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
+	ctr.spillAllocation = nil
+	return nil
+}
+
+func (ctr *container) hasCoordinateCapacity() bool {
+	for i := range ctr.nextRun {
+		if cap(ctr.nextRun[i]) != 0 {
+			return true
+		}
+	}
+	for i := range ctr.linRun {
+		if cap(ctr.linRun[i]) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
 	ctr.cleanupSpill(proc)
-	ctr.clearLinearSeeds(proc.Mp())
-	ctr.clearLinearEntries(proc.Mp())
-	ctr.resetCtrParma()
-	ctr.resetExes()
+	if ctr.allocationAccount != nil {
+		ctr.freeVectors(proc.Mp())
+	} else {
+		ctr.clearLinearSeeds(proc.Mp())
+		ctr.clearLinearEntries(proc.Mp())
+	}
+	ctr.resetCtrParma(proc.Mp())
+	if ctr.allocationAccount != nil {
+		ctr.freeExes()
+		ctr.valVecs = nil
+	} else {
+		ctr.resetExes()
+	}
 	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
+		if ctr.buf.HasAllocationAccount() {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
 	}
 	for _, b := range ctr.bats {
 		if b != nil {
 			b.Clean(proc.GetMPool())
 		}
 	}
-	ctr.bats = ctr.bats[:0]
+	clear(ctr.bats)
+	if ctr.allocationAccount != nil {
+		ctr.bats = nil
+	} else {
+		ctr.bats = ctr.bats[:0]
+	}
 	// toFree was popped out of bats, so the loop above does not cover it.
 	if ctr.toFree != nil {
 		ctr.toFree.Clean(proc.GetMPool())
@@ -172,11 +358,16 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	}
 
 	if fill.ProjectList != nil {
-		if fill.OpAnalyzer != nil {
-			fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
+		if ctr.allocationAccount != nil {
+			fill.FreeProjection(proc)
+		} else {
+			if fill.OpAnalyzer != nil {
+				fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
+			}
+			fill.ResetProjection(proc)
 		}
-		fill.ResetProjection(proc)
 	}
+	ctr.budget = nil
 }
 
 func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -184,7 +375,12 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.cleanupSpill(proc)
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
+	ctr.valVecs = nil
 	ctr.freeVectors(proc.Mp())
+	ctr.freeCoordRuns(proc.Mp())
+	ctr.prevPart.free()
+	ctr.linEntryPart.free()
+	ctr.budget = nil
 
 	fill.FreeProjection(proc)
 }
@@ -204,6 +400,7 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 			b.Clean(mp)
 		}
 	}
+	ctr.bats = nil
 	if ctr.toFree != nil {
 		ctr.toFree.Clean(mp)
 		ctr.toFree = nil
@@ -221,8 +418,13 @@ func (ctr *container) freeVectors(mp *mpool.MPool) {
 		}
 	}
 	ctr.prevVecs = nil
+	ctr.prevValid = nil
 	ctr.clearLinearSeeds(mp)
 	ctr.clearLinearEntries(mp)
+	ctr.linSeed = nil
+	ctr.linSeedValid = nil
+	ctr.linEntry = nil
+	ctr.linEntryValid = nil
 }
 
 func (ctr *container) clearLinearSeeds(mp *mpool.MPool) {
@@ -247,7 +449,7 @@ func (ctr *container) clearLinearEntries(mp *mpool.MPool) {
 	for i := range ctr.linEntryValid {
 		ctr.linEntryValid[i] = false
 	}
-	ctr.linEntryPart = spillPartitionSnapshot{}
+	ctr.linEntryPart.free()
 }
 
 func (ctr *container) freeExes() {
@@ -267,7 +469,7 @@ func (ctr *container) resetExes() {
 	}
 }
 
-func (ctr *container) resetCtrParma() {
+func (ctr *container) resetCtrParma(mp *mpool.MPool) {
 	ctr.baseSeq = 0
 	ctr.flushable = 0
 	ctr.childDone = false
@@ -276,16 +478,38 @@ func (ctr *container) resetCtrParma() {
 	for i := range ctr.prevValid {
 		ctr.prevValid[i] = false
 	}
-	ctr.prevPartKey = nil
-	ctr.prevPartNull = nil
-	ctr.prevPartSet = false
-	for i := range ctr.nextRun {
-		ctr.nextRun[i] = ctr.nextRun[i][:0]
-	}
-	for i := range ctr.linRun {
-		ctr.linRun[i] = ctr.linRun[i][:0]
+	ctr.prevPart.free()
+	if ctr.allocationAccount != nil {
+		ctr.freeCoordRuns(mp)
+	} else {
+		for i := range ctr.nextRun {
+			ctr.nextRun[i] = ctr.nextRun[i][:0]
+		}
+		for i := range ctr.linRun {
+			ctr.linRun[i] = ctr.linRun[i][:0]
+		}
 	}
 	for i := range ctr.linPre {
 		ctr.linPre[i] = fillCoord{seq: -1, row: -1}
+	}
+}
+
+func (ctr *container) freeCoordRuns(mp *mpool.MPool) {
+	if ctr.allocationAccount != nil {
+		for i := range ctr.nextRun {
+			spillutil.FreeAccountedSlice(ctr.nextRun[i], mp)
+			ctr.nextRun[i] = nil
+		}
+		for i := range ctr.linRun {
+			spillutil.FreeAccountedSlice(ctr.linRun[i], mp)
+			ctr.linRun[i] = nil
+		}
+		return
+	}
+	for i := range ctr.nextRun {
+		ctr.nextRun[i] = nil
+	}
+	for i := range ctr.linRun {
+		ctr.linRun[i] = nil
 	}
 }

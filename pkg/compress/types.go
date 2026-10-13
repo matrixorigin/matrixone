@@ -19,6 +19,7 @@ import "fmt"
 const (
 	None = iota
 	Lz4
+	Lz4Chunked
 )
 
 type T uint8
@@ -29,6 +30,8 @@ func (t T) String() string {
 		return "None"
 	case Lz4:
 		return "LZ4"
+	case Lz4Chunked:
+		return "LZ4Chunked"
 	}
 	return fmt.Sprintf("unexpected compress type: %d", t)
 }

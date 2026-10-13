@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,6 +39,47 @@ func testMutableFileService(
 		},
 	})
 	assert.Nil(t, err)
+
+	assertFileNotFound := func(operation string, err error) {
+		t.Helper()
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+			"%s returned %v", operation, err)
+	}
+	assert.NoError(t, fs.EnsureDir(ctx, ""), "EnsureDir must keep accepting the root path")
+	emptyMutator, err := fs.NewMutator(ctx, "")
+	if emptyMutator != nil {
+		_ = emptyMutator.Close()
+	}
+	assertFileNotFound("NewMutator", err)
+	emptyFile, err := fs.OpenFile(ctx, "")
+	if emptyFile != nil {
+		_ = emptyFile.Close()
+	}
+	assertFileNotFound("OpenFile", err)
+	emptyFile, err = fs.CreateFile(ctx, "")
+	if emptyFile != nil {
+		_ = emptyFile.Close()
+	}
+	assertFileNotFound("CreateFile", err)
+	assertFileNotFound("RemoveFile", fs.RemoveFile(ctx, ""))
+	emptyFile, err = fs.CreateAndRemoveFile(ctx, "")
+	if emptyFile != nil {
+		_ = emptyFile.Close()
+	}
+	assertFileNotFound("CreateAndRemoveFile", err)
+
+	canceledCtx, cancelEmpty := context.WithCancel(context.Background())
+	cancelEmpty()
+	_, err = fs.NewMutator(canceledCtx, "")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, fs.EnsureDir(canceledCtx, ""), context.Canceled)
+	_, err = fs.OpenFile(canceledCtx, "")
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = fs.CreateFile(canceledCtx, "")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, fs.RemoveFile(canceledCtx, ""), context.Canceled)
+	_, err = fs.CreateAndRemoveFile(canceledCtx, "")
+	assert.ErrorIs(t, err, context.Canceled)
 
 	mutator, err := fs.NewMutator(ctx, "foo")
 	assert.Nil(t, err)

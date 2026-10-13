@@ -31,11 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	Rows          = 10      // default rows
-	BenchmarkRows = 1000000 // default rows for benchmark
-)
-
 // add unit tests for cases
 type limitTestCase struct {
 	arg         *Limit
@@ -44,53 +39,18 @@ type limitTestCase struct {
 }
 
 func makeTestCases(t *testing.T) []limitTestCase {
-	return []limitTestCase{
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(0),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 0,
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(1),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 1,
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				ctr: container{
-					seen: 0,
-				},
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(5),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 2, //if colexec.MakeMockBatchs return more rows, you need to change it
-		},
+	cases := make([]limitTestCase, 0, 3)
+	for _, tc := range []struct {
+		limit uint64
+		rows  int
+	}{{0, 0}, {1, 1}, {5, 2}} {
+		cases = append(cases, limitTestCase{
+			proc:        testutil.NewProcess(t),
+			arg:         &Limit{LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(tc.limit)},
+			getRowCount: tc.rows,
+		})
 	}
+	return cases
 }
 
 func TestString(t *testing.T) {
@@ -110,35 +70,31 @@ func TestPrepare(t *testing.T) {
 
 func TestLimit(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		res, _ := vm.Exec(tc.arg, tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				child := resetChildren(tc.arg, tc.proc.Mp())
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				res, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				if tc.getRowCount > 0 {
+					require.NotNil(t, res.Batch)
+					require.Equal(t, tc.getRowCount, res.Batch.RowCount())
+				} else {
+					require.Nil(t, res.Batch)
+				}
+			}()
 		}
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		res, _ = vm.Exec(tc.arg, tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
-		}
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func TestLimitDoesNotMutateInputBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := colexec.MakeMockBatchs(proc.Mp())
 	input.ShuffleIDX = 3
 	inputRows := input.RowCount()
@@ -147,7 +103,7 @@ func TestLimitDoesNotMutateInputBatch(t *testing.T) {
 		inputLengths[i] = input.Vecs[i].Length()
 	}
 
-	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).WithFoundRows(true)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
@@ -186,8 +142,148 @@ func TestLimitDoesNotMutateInputBatch(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestSQLCalcFoundRowsDrainsInput(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).WithFoundRows(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, vm.ExecNext, result.Status)
+
+	for result.Batch != nil {
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+	}
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, uint64(first.RowCount()+second.RowCount()), proc.GetFoundRows())
+	require.True(t, proc.FoundRowsRecorded())
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func TestNestedLimitDoesNotPublishFoundRows(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.False(t, proc.FoundRowsRecorded())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func TestFoundRowsDrainOnlyConsumesInputWithoutPublishing(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).
+		WithFoundRowsDrain(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, vm.ExecNext, result.Status)
+
+	for result.Batch != nil {
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+	}
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.False(t, proc.FoundRowsRecorded())
+	require.False(t, arg.IsFoundRowsOwner())
+	require.True(t, arg.DrainsForFoundRows())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func TestSQLCalcFoundRowsZeroLimitStillDrainsInput(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(0)).
+		WithFoundRows(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, uint64(first.RowCount()+second.RowCount()), proc.GetFoundRows())
+	require.True(t, proc.FoundRowsRecorded())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func TestSQLCalcFoundRowsDrainsEmptyAndLastBatch(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	last := batch.NewWithSize(0)
+	last.SetLast()
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).WithFoundRows(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, batch.EmptyBatch, last})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 1, result.Batch.RowCount())
+
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.Last())
+	require.Equal(t, uint64(first.RowCount()), proc.GetFoundRows())
+	require.True(t, proc.FoundRowsRecorded())
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
 func TestLimitResetReleasesCopiedAllocationAccountData(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -229,30 +325,32 @@ func TestLimitResetReleasesCopiedAllocationAccountData(t *testing.T) {
 }
 
 func BenchmarkLimit(b *testing.B) {
+	mp := mpool.MustNewZero()
+	b.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := testutil.NewProcessWithMPool(b, "", mp)
+	arg := &Limit{LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8)}
+	b.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		require.Zero(b, proc.Mp().CurrNB())
+	})
 	for i := 0; i < b.N; i++ {
-		tcs := []limitTestCase{
-			{
-				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
-				arg: &Limit{
-					LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-				},
-			},
-		}
-
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			resetChildren(tc.arg, tc.proc.Mp())
-			_, _ = vm.Exec(tc.arg, tc.proc)
-			tc.arg.Free(tc.proc, false, nil)
-		}
+		func() {
+			child := resetChildren(arg, proc.Mp())
+			defer child.Free(proc, false, nil)
+			defer arg.Reset(proc, false, nil)
+			require.NoError(b, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(b, err)
+			require.NotNil(b, result.Batch)
+			require.Equal(b, 2, result.Batch.RowCount())
+		}()
 	}
 }
 
-func resetChildren(arg *Limit, m *mpool.MPool) {
+func resetChildren(arg *Limit, m *mpool.MPool) *colexec.MockOperator {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }

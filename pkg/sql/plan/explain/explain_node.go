@@ -22,9 +22,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -49,6 +53,137 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 const TableScan = "Table Scan"
 const IndexTableScan = "Index Table Scan"
 const ExternalScan = "External Scan"
+
+// mongodbExplainOperation also recognizes the planner-form selector. The
+// execution compiler later removes __mo_query predicates and stores validated
+// BSON on MongoScan, but EXPLAIN renders the logical plan before that step. It
+// must still report the operation without rendering the source query text.
+func mongodbExplainOperation(ctx context.Context, node *plan.Node, scan *plan.MongoScan) (string, string) {
+	operation := "find"
+	digest := "none"
+	if scan.UserQueryKind != 0 {
+		switch scan.UserQueryKind {
+		case int32(sqlmongodb.UserQueryFilter):
+			operation = "find-filter"
+		case int32(sqlmongodb.UserQueryPipeline):
+			operation = "aggregate"
+		default:
+			operation = "invalid"
+		}
+		digest = scan.UserQueryDigest
+	} else if source, found, valid := mongodbExplainQuerySource(node); found {
+		// The compiler can evaluate constant expressions that EXPLAIN cannot
+		// reduce without a process. Keep those shapes redacted and describe them
+		// generically instead of incorrectly calling a supported constant invalid.
+		operation = "explicit"
+		if valid {
+			query, err := sqlmongodb.ParseUserQuery(ctx, source)
+			if err == nil {
+				switch query.Kind {
+				case sqlmongodb.UserQueryFilter:
+					operation = "find-filter"
+				case sqlmongodb.UserQueryPipeline:
+					operation = "aggregate"
+				}
+				digest = query.Digest
+			}
+		}
+	}
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	return operation, digest
+}
+
+// mongodbExplainQuerySource extracts the one simple constant equality form
+// accepted by the MongoDB MVP. Any expression that references the synthetic
+// column remains sensitive even when its shape is invalid, so callers redact
+// it independently of this return value.
+func mongodbExplainQuerySource(node *plan.Node) (source string, found, valid bool) {
+	count := 0
+	for _, filter := range node.FilterList {
+		if !mongodbExplainExprUsesQueryColumn(node, filter) {
+			continue
+		}
+		found = true
+		function := filter.GetF()
+		if function == nil || function.Func == nil || function.Func.ObjName != "=" || len(function.Args) != 2 {
+			continue
+		}
+		for index := range 2 {
+			if !mongodbExplainExprUsesQueryColumn(node, function.Args[index]) {
+				continue
+			}
+			literal := function.Args[1-index].GetLit()
+			if literal == nil {
+				continue
+			}
+			if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+				continue
+			}
+			count++
+			source = literal.GetSval()
+			break
+		}
+	}
+	return source, found, count == 1
+}
+
+func mongodbExplainExprUsesQueryColumn(node *plan.Node, expr *plan.Expr) bool {
+	if node == nil || expr == nil {
+		return false
+	}
+	switch typed := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if typed.Col == nil {
+			return false
+		}
+		position := int(typed.Col.ColPos)
+		if node.TableDef != nil && position >= 0 && position < len(node.TableDef.Cols) {
+			return catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+		}
+		// Planner expressions normally retain a valid ColPos. Preserve the
+		// conservative name-only fallback for incomplete diagnostic-only nodes,
+		// but never mistake a valid legacy column with this name for the
+		// synthetic carrier.
+		return strings.EqualFold(typed.Col.Name, catalog.ExternalQuery)
+	case *plan.Expr_F:
+		if typed.F == nil {
+			return false
+		}
+		for _, argument := range typed.F.Args {
+			if mongodbExplainExprUsesQueryColumn(node, argument) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if typed.List == nil {
+			return false
+		}
+		for _, item := range typed.List.List {
+			if mongodbExplainExprUsesQueryColumn(node, item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func explainFilterList(node *plan.Node) []*plan.Expr {
+	if node == nil {
+		return nil
+	}
+	if node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return node.FilterList
+	}
+	filters := make([]*plan.Expr, 0, len(node.FilterList))
+	for _, filter := range node.FilterList {
+		if !mongodbExplainExprUsesQueryColumn(node, filter) {
+			filters = append(filters, filter)
+		}
+	}
+	return filters
+}
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
@@ -95,8 +230,19 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_ADAPTIVE_TOP:
+		pname = "Adaptive Top"
+	case plan.Node_VECTOR_QUERY_TOP:
+		pname = "Scalar Vector Query"
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		pname = "Scalar Vector Source"
 	case plan.Node_PARTITION:
 		pname = "Partition"
+		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {
+			pname = "Partition Top N"
+		} else if ndesc.Node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+			pname = "Hash Partition"
+		}
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -131,6 +277,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Table Function"
+	case plan.Node_INDEX_SEARCH_SCAN:
+		pname = IndexSearchScanLabel(ndesc.Node.IndexSearchScan)
 	case plan.Node_PRE_INSERT:
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
@@ -142,7 +290,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	case plan.Node_APPLY:
-		pname = "CROSS APPLY"
+		if ndesc.Node.ApplyType == plan.Node_OUTERAPPLY {
+			pname = "OUTER APPLY"
+		} else {
+			pname = "CROSS APPLY"
+		}
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
 	case plan.Node_POSTDML:
@@ -180,6 +332,20 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
 				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
+			}
+		case plan.Node_INDEX_SEARCH_SCAN:
+			buf.WriteString(" on ")
+			if spec := ndesc.Node.IndexSearchScan; spec != nil && spec.Index != nil {
+				buf.WriteString(spec.Index.IndexName)
+				if spec.DistanceFunction != "" {
+					buf.WriteString(" [")
+					buf.WriteString(spec.DistanceFunction)
+					buf.WriteString("]")
+				}
+				if work := spec.ScanWork; work != nil {
+					fmt.Fprintf(buf, " [Estimated Scan Rows: %.0f, Blocks: %d, Vector Bytes/Row: %.0f, Objects: %d, Planned DOP: %d]",
+						work.Rows, work.Blocks, work.VectorBytesPerRow, work.Objects, ndesc.Node.Stats.GetDop())
+				}
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")
@@ -318,17 +484,39 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			}
 		}
 		countPredicate(scan.PushedPredicate)
-		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
-			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+		operation, queryDigest := mongodbExplainOperation(ctx, ndesc.Node, scan)
+		if scan.EmptyResult {
+			operation = "empty"
+		}
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s operation=%s query_digest=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest, operation, queryDigest))
 	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
-		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
-		if err != nil {
-			return nil, err
+		if ndesc.Node.NodeType == plan.Node_PARTITION && ndesc.Node.Limit != nil &&
+			ndesc.Node.PartitionByCount > 0 && int(ndesc.Node.PartitionByCount) < len(ndesc.Node.OrderBy) {
+			for _, item := range []struct {
+				label string
+				specs []*plan.OrderBySpec
+			}{
+				{label: "Partition Key: ", specs: ndesc.Node.OrderBy[:ndesc.Node.PartitionByCount]},
+				{label: "Sort Key: ", specs: ndesc.Node.OrderBy[ndesc.Node.PartitionByCount:]},
+			} {
+				buf := bytes.NewBuffer(make([]byte, 0, 300))
+				buf.WriteString(item.label)
+				if err := NewOrderByDescribeImpl(item.specs).GetDescription(ctx, options, buf); err != nil {
+					return nil, err
+				}
+				lines = append(lines, buf.String())
+			}
+		} else {
+			orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, orderByInfo)
 		}
-		lines = append(lines, orderByInfo)
 	}
 
 	// Get Sort list info
@@ -365,6 +553,13 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+		if len(ndesc.Node.GroupByHashKey) > 0 {
+			hashKeyInfo, err := ndesc.getGroupByHashKeyInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, hashKeyInfo)
+		}
 	}
 	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
 		lines = append(lines, "Gap Fill: Partition")
@@ -413,7 +608,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if filterInfo != "" {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	// Get Block Filter list info
@@ -494,7 +691,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 
-	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN {
+	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN || ndesc.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 		msg, err := ndesc.GetFullTextSql(ctx, options)
 		if err != nil {
 			return nil, err
@@ -502,15 +699,56 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if len(msg) > 0 {
 			lines = append(lines, msg)
 		}
-		msg, err = ndesc.GetIvfSearchInfo(ctx, options)
+	}
+	if ndesc.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		msg, err := ndesc.GetIndexSearchScanInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
-		if len(msg) > 0 {
+		if msg != "" {
 			lines = append(lines, msg)
 		}
 	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	spec := ndesc.Node.GetIndexSearchScan()
+	if spec == nil || spec.GetIndex() == nil {
+		return "", nil
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 192))
+	if !isFulltextIndexSearchScan(spec) {
+		buf.WriteString("Vector Index: ")
+		buf.WriteString(spec.GetIndex().GetIndexName())
+		buf.WriteString(", Metric: ")
+		buf.WriteString(spec.GetDistanceFunction())
+	} else {
+		buf.WriteString("Fulltext Index: ")
+		buf.WriteString(spec.GetIndex().GetIndexName())
+	}
+	if spec.GetCandidateLimit() != nil {
+		buf.WriteString(", Candidate Limit: ")
+		if err := describeExpr(ctx, spec.GetCandidateLimit(), options, buf); err != nil {
+			return "", err
+		}
+	}
+	settings, err := indexSearchScanSettings(spec)
+	if err != nil {
+		return "", err
+	}
+	for _, setting := range settings {
+		buf.WriteString(", ")
+		buf.WriteString(setting)
+	}
+	if len(spec.GetPreFilters()) > 0 {
+		buf.WriteString(", Index Filter: ")
+		filters := NewExprListDescribeImpl(spec.GetPreFilters())
+		if err := filters.GetDescription(ctx, options, buf); err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetIcebergScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -560,27 +798,6 @@ func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *Expl
 		return result, nil
 	}
 	return "", nil
-}
-
-func (ndesc *NodeDescribeImpl) GetIvfSearchInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType != plan.Node_FUNCTION_SCAN ||
-		ndesc.Node.TableDef == nil ||
-		ndesc.Node.TableDef.TblFunc == nil ||
-		ndesc.Node.TableDef.TblFunc.Name != "ivf_search" ||
-		len(ndesc.Node.TblFuncExprList) < 3 {
-		return "", nil
-	}
-
-	filterExpr := ndesc.Node.TblFuncExprList[2]
-	litExpr, ok := filterExpr.Expr.(*plan.Expr_Lit)
-	if !ok || litExpr.Lit == nil {
-		return "", nil
-	}
-	rawFilter := litExpr.Lit.GetSval()
-	if strings.TrimSpace(rawFilter) == "" {
-		return "", nil
-	}
-	return "Filter Cond: " + rawFilter, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -756,11 +973,19 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 	return lines, nil
 }
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	filters := explainFilterList(ndesc.Node)
+	if len(filters) == 0 {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
-	buf.WriteString("Filter Cond: ")
+	if ndesc.Node.NodeType == plan.Node_ASSERT {
+		buf.WriteString("Assert Cond: ")
+	} else {
+		buf.WriteString("Filter Cond: ")
+	}
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
-		for _, v := range ndesc.Node.FilterList {
+		for _, v := range filters {
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -772,7 +997,7 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 		}
 
 		// Add optimization hints for cast expressions
-		hint := getDecimalCastOptimizationHint(ndesc.Node.FilterList)
+		hint := getDecimalCastOptimizationHint(filters)
 		if hint != "" {
 			buf.WriteString("\n              ")
 			buf.WriteString(hint)
@@ -997,6 +1222,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) getGroupByHashKeyInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 100))
+	buf.WriteString("Hash Key: ")
+	for i, idx := range ndesc.Node.GroupByHashKey {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if idx < 0 || int(idx) >= len(ndesc.Node.GroupBy) {
+			return "", moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+		}
+		if err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf); err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Aggregate Functions: ")
@@ -1173,6 +1415,15 @@ func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, opti
 			}
 		}
 
+		// OverFetchLimit is the plan-time over-fetched candidate budget for a
+		// literal LIMIT (the TVF fetches this many so k rows survive the
+		// post-filter). It is 0 for a prepared LIMIT ? (over-fetch computed at
+		// EXECUTE); shown only when known so EXPLAIN reflects the real budget
+		// rather than the raw k on Limit.
+		if param.OverFetchLimit != 0 {
+			fmt.Fprintf(buf, "  OverFetchLimit: %d", param.OverFetchLimit)
+		}
+
 		if param.DistRange != nil {
 			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
 				buf.WriteString("  DistRange: ")
@@ -1251,7 +1502,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	case plan.Node_SORT:
 		majorStr = "sort"
 		minorStr = "mergesort"
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		majorStr = ""
 		minorStr = "filter"
 	}
@@ -1575,4 +1826,38 @@ func isLiteral(expr *plan.Expr) bool {
 	}
 	_, ok := expr.Expr.(*plan.Expr_Lit)
 	return ok
+}
+
+// IndexSearchScanLabel is the EXPLAIN name of an index search scan: "Fulltext
+// Index Scan" for a registered non-vector index, "Vector Index Scan" otherwise.
+func IndexSearchScanLabel(spec *plan.IndexSearchScan) string {
+	if isFulltextIndexSearchScan(spec) {
+		return "Fulltext Index Scan"
+	}
+	return "Vector Index Scan"
+}
+
+// isFulltextIndexSearchScan reports whether the index of spec is registered and
+// is not a vector index.
+func isFulltextIndexSearchScan(spec *plan.IndexSearchScan) bool {
+	p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo())
+	return ok && !p.Catalog().IsVectorIndex()
+}
+
+// indexSearchScanSettings returns the EXPLAIN fragments the search plugin of
+// spec describes for its algorithm settings.
+func indexSearchScanSettings(spec *plan.IndexSearchScan) ([]string, error) {
+	p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo())
+	if !ok {
+		return nil, nil
+	}
+	searcher, ok := p.(indexplugin.SearchPlugin)
+	if !ok {
+		return nil, nil
+	}
+	explainer, ok := searcher.Search().(searchplugin.ExplainHooks)
+	if !ok {
+		return nil, nil
+	}
+	return explainer.ExplainSettings(spec)
 }

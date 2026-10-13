@@ -49,6 +49,94 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
 
+func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
+	ses := &Session{
+		seqLastValue:  new(string),
+		feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}},
+	}
+	ses.SetLastInsertID(7)
+	proc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+	}}
+	proc.SetLastInsertID(7)
+	proc.SetStatementLastInsertID(0)
+	proc.InitSeq()
+	writer := &countingMysqlWriter{
+		testMysqlWriter: &testMysqlWriter{},
+		responses:       make([]*Response, 0, 1),
+	}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:    context.Background(),
+		stmt:      &tree.Insert{},
+		proc:      proc,
+		runResult: &util.RunResult{AffectRows: 1},
+	}
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(7), ses.GetLastInsertID())
+
+	proc.SetStatementLastInsertID(11)
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.Equal(t, uint64(11), writer.responses[1].lastInsertId)
+	require.Equal(t, uint64(11), ses.GetLastInsertID())
+}
+
+func TestSessionLastFoundRows(t *testing.T) {
+	ses := &Session{}
+	require.Equal(t, uint64(0), ses.GetLastFoundRows())
+
+	ses.SetLastFoundRows(3)
+	require.Equal(t, uint64(3), ses.GetLastFoundRows())
+}
+
+func TestRecordLastFoundRows(t *testing.T) {
+	newProc := func(previous, returned uint64) *process.Process {
+		proc := &process.Process{Base: &process.BaseProcess{}}
+		proc.Base.SessionInfo.FoundRows = previous
+		proc.Base.SessionInfo.ResultRows = returned
+		return proc
+	}
+
+	t.Run("plain result set records returned rows", func(t *testing.T) {
+		ses := &Session{lastFoundRows: 9}
+		proc := newProc(9, 2)
+		recordLastFoundRows(ses, &ExecCtx{stmt: &tree.Select{}, proc: proc})
+		require.Equal(t, uint64(2), proc.GetFoundRows())
+		require.Equal(t, uint64(2), ses.GetLastFoundRows())
+	})
+
+	t.Run("sql calc count is not overwritten by limited output", func(t *testing.T) {
+		ses := &Session{lastFoundRows: 9}
+		proc := newProc(9, 1)
+		proc.SetFoundRows(100)
+		recordLastFoundRows(ses, &ExecCtx{stmt: &tree.Select{}, proc: proc})
+		require.Equal(t, uint64(100), proc.GetFoundRows())
+		require.Equal(t, uint64(100), ses.GetLastFoundRows())
+	})
+
+	t.Run("status statement preserves preceding count", func(t *testing.T) {
+		ses := &Session{lastFoundRows: 7}
+		proc := newProc(7, 0)
+		recordLastFoundRows(ses, &ExecCtx{stmt: &tree.CreateTable{}, proc: proc})
+		require.Equal(t, uint64(7), proc.GetFoundRows())
+		require.Equal(t, uint64(7), ses.GetLastFoundRows())
+	})
+
+	t.Run("derived result set preserves preceding count", func(t *testing.T) {
+		ses := &Session{lastFoundRows: 7}
+		ses.ReplaceDerivedStmt(true)
+		proc := newProc(7, 0)
+		recordLastFoundRows(ses, &ExecCtx{stmt: &tree.Select{}, proc: proc})
+		require.Equal(t, uint64(7), proc.GetFoundRows())
+		require.Equal(t, uint64(7), ses.GetLastFoundRows())
+	})
+}
+
 func TestMarkRowCountFailed(t *testing.T) {
 	// session + proc both reset to -1
 	ses := &Session{}

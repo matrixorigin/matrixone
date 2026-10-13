@@ -16,7 +16,6 @@ package productl2
 
 import (
 	"bytes"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -365,7 +364,9 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	centroidVec := ctr.bat.Vecs[centroidColPos]
 	dim := int(centroidVec.GetType().Width)
 
-	ncpu := runtime.NumCPU()
+	// Keep centroid assignment within the CN's effective scheduler
+	// parallelism. NumCPU reports the host count and ignores container quotas.
+	ncpu := int(vectorindex.GetConcurrency(0))
 	if probeCount < ncpu {
 		ncpu = probeCount
 	}
@@ -429,6 +430,16 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 		if tblColVec.IsNull(uint64(j)) {
 			leastClusterIndex[j] = 0
+		}
+		// The key is about to index ctr.bat, which has no row -1. The Go index refuses to emit
+		// one -- an all-out-of-domain query leaves its minIdx at -1 and it fails there -- but the
+		// device index has no such guard: cuVS marks a slot it could not fill with -1 and pairs
+		// it with an ordinary finite distance, so checking the scores does not catch it. A VECF32
+		// table whose squares overflow float32 reached "index out of range [-8]" here (#29090);
+		// -8 is the byte offset of row -1 on an 8-byte column. Checked after the null override,
+		// which supplies its own key.
+		if leastClusterIndex[j] < 0 {
+			return moerr.NewInternalErrorNoCtx("product_l2: no nearest centroid for query; every candidate distance is out of range")
 		}
 		for k, rp := range ap.Result {
 			if rp.Rel == 0 {

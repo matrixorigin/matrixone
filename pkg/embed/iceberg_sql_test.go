@@ -27,12 +27,14 @@ import (
 )
 
 func TestIcebergSQLEngineEmbeddedDDLAndRedaction(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		db := openIcebergTestDB(t, c)
 		defer db.Close()
 
 		suffix := time.Now().UnixNano()
 		catalogName := fmt.Sprintf("icecat_%d", suffix)
+		badCatalogName := fmt.Sprintf("bad_http_%d", suffix)
 		databaseName := fmt.Sprintf("iceberg_it_%d", suffix)
 		tableName := fmt.Sprintf("gold_orders_%d", suffix)
 
@@ -40,11 +42,53 @@ func TestIcebergSQLEngineEmbeddedDDLAndRedaction(t *testing.T) {
 		defer db.Exec(fmt.Sprintf("drop database if exists %s", databaseName))
 		defer db.Exec(fmt.Sprintf("drop iceberg catalog if exists %s", catalogName))
 
+		_, err := db.Exec(fmt.Sprintf(
+			"create iceberg catalog %s with ('type'='rest','uri'='http://127.0.0.1:65530/iceberg','warehouse'='s3://warehouse/bad','auth_mode'='none')",
+			badCatalogName,
+		))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+		var badCatalogCount int
+		require.NoError(t, db.QueryRow(fmt.Sprintf(
+			"select count(*) from mo_catalog.mo_iceberg_catalogs where name = '%s'",
+			badCatalogName,
+		)).Scan(&badCatalogCount))
+		require.Zero(t, badCatalogCount)
+
 		mustExec(t, db, fmt.Sprintf(
 			"create iceberg catalog %s with ('type'='rest','uri'='https://catalog.example/v1','warehouse'='s3://warehouse/gold','token_secret'='secret://catalog/token')",
 			catalogName,
 		))
 		require.True(t, queryContains(t, db, "show iceberg catalogs", catalogName))
+
+		_, err = db.Exec(fmt.Sprintf(
+			"alter iceberg catalog %s set ('uri'='http://127.0.0.1:65530/iceberg')",
+			catalogName,
+		))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+		require.True(t, queryContains(t, db, "show iceberg catalogs", "https://catalog.example/v1"))
+
+		mustExec(t, db, fmt.Sprintf(
+			"alter iceberg catalog %s set ('type'='iceberg-go','uri'='http://127.0.0.1:65530/iceberg')",
+			catalogName,
+		))
+		mustExec(t, db, fmt.Sprintf(
+			"alter iceberg catalog %s set ('uri'='http://127.0.0.1:65531/iceberg')",
+			catalogName,
+		))
+		_, err = db.Exec(fmt.Sprintf(
+			"alter iceberg catalog %s set ('type'='rest')",
+			catalogName,
+		))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+		require.True(t, queryContains(t, db, "show iceberg catalogs", "iceberg-go"))
+
+		mustExec(t, db, fmt.Sprintf(
+			"alter iceberg catalog %s set ('type'='rest','uri'='https://catalog.example/v1')",
+			catalogName,
+		))
 
 		mustExec(t, db, fmt.Sprintf(
 			"alter iceberg catalog %s set ('uri'='https://catalog2.example/v1','token_secret'='secret://catalog/token2')",
@@ -75,7 +119,7 @@ func TestIcebergSQLEngineEmbeddedDDLAndRedaction(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedRejectsInlineCatalogSecret(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		db := openIcebergTestDB(t, c)
 		defer db.Close()
 

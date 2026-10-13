@@ -27,17 +27,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
 // defaultLockWaitTimeoutSeconds is the transitional frontend fallback. Long
 // internal jobs should supply a task-owned deadline instead of relying on it.
 const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
+
+const (
+	groupConcatMaxLenVariable = "group_concat_max_len"
+	groupConcatMaxLenMinimum  = 4
+)
 
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
@@ -83,6 +90,96 @@ func getErrorConvertFromStringToSetFailed(str string) error {
 
 func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+}
+
+// normalizeGroupConcatMaxLenValue implements the assignment-specific part of
+// MySQL's group_concat_max_len contract. The registered type is unsigned so
+// values above math.MaxInt64 remain representable; values below the MySQL
+// minimum are clamped here so the setter can publish the corresponding
+// ER_TRUNCATED_WRONG_VALUE warning only after the assignment succeeds.
+func normalizeGroupConcatMaxLenValue(value interface{}) (interface{}, bool) {
+	switch v := value.(type) {
+	case int:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) && f < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) && v < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case string:
+		unsignedValue := strings.TrimPrefix(v, "+")
+		if parsed, err := strconv.ParseUint(unsignedValue, 10, 64); err == nil {
+			if parsed < groupConcatMaxLenMinimum {
+				return uint64(groupConcatMaxLenMinimum), true
+			}
+			// SystemVariableUintType.Convert intentionally accepts numeric
+			// values, not strings. Preserve the existing SET '5' behavior by
+			// converting a valid string before it reaches that type.
+			return parsed, false
+		}
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed < int64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	}
+	return value, false
+}
+
+func groupConcatMaxLenAsUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case uint64:
+		return v, true
+	case int64:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	}
+	return 0, false
+}
+
+func groupConcatMaxLenTruncationWarning(value interface{}) string {
+	return fmt.Sprintf("Truncated incorrect %s value: '%v'", groupConcatMaxLenVariable, value)
 }
 
 func errorConfigDoesNotExist() string { return "the config variable does not exist" }
@@ -144,6 +241,7 @@ var _ SystemVariableType = SystemVariableDoubleType{}
 var _ SystemVariableType = SystemVariableEnumType{}
 var _ SystemVariableType = SystemVariableSetType{}
 var _ SystemVariableType = SystemVariableStringType{}
+var _ SystemVariableType = SystemVariableLocaleType{}
 var _ SystemVariableType = SystemVariableNullType{}
 
 type SystemVariableNullType struct {
@@ -736,18 +834,15 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if bld.Len() > 0 {
 				bld.WriteByte(',')
 			}
+			bld.WriteString(v)
 		}
 	}
 
 	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bldString, nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -883,6 +978,43 @@ func InitSystemVariableSetType(name string, values ...string) SystemVariableSetT
 
 type SystemVariableStringType struct {
 	name string
+}
+
+// SystemVariableLocaleType validates lc_time_names at SET time. Keep the
+// canonical spelling returned by MySQL while accepting case-insensitive input.
+type SystemVariableLocaleType struct{}
+
+func (SystemVariableLocaleType) String() string { return "STRING" }
+
+func (SystemVariableLocaleType) Convert(value interface{}) (interface{}, error) {
+	if value == nil {
+		return "en_US", nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return nil, errorConvertToStringFailed
+	}
+	return normalizeTimeLocale(s)
+}
+
+func (SystemVariableLocaleType) Type() types.T { return types.T_varchar }
+
+func (SystemVariableLocaleType) MysqlType() defines.MysqlType { return defines.MYSQL_TYPE_VARCHAR }
+
+func (SystemVariableLocaleType) Zero() interface{} { return "en_US" }
+
+func (SystemVariableLocaleType) ConvertFromString(value string) (interface{}, error) {
+	return normalizeTimeLocale(value)
+}
+
+func normalizeTimeLocale(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	for _, locale := range []string{"en_US", "fr_FR", "de_DE", "ja_JP"} {
+		if strings.EqualFold(value, locale) {
+			return locale, nil
+		}
+	}
+	return "", moerr.NewInvalidInputf(context.Background(), "Unknown locale: '%s'", value)
 }
 
 func InitSystemVariableStringType(name string) SystemVariableStringType {
@@ -1047,6 +1179,53 @@ type SystemVariables struct {
 	mutationGeneration uint64
 }
 
+const (
+	transactionIsolationSystemVariable      = "transaction_isolation"
+	transactionIsolationSystemVariableAlias = "tx_isolation"
+	transactionReadOnlySystemVariable       = "transaction_read_only"
+	transactionReadOnlySystemVariableAlias  = "tx_read_only"
+)
+
+func canonicalSystemVariableName(name string) string {
+	name = strings.ToLower(name)
+	switch name {
+	case transactionIsolationSystemVariableAlias:
+		return transactionIsolationSystemVariable
+	case transactionReadOnlySystemVariableAlias:
+		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
+	}
+	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
+}
+
+func isTransactionIsolationSystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
+func isTransactionReadOnlySystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionReadOnlySystemVariable
+}
+
+func transactionSystemVariableAlias(name string) string {
+	switch canonicalName := canonicalSystemVariableName(name); canonicalName {
+	case transactionIsolationSystemVariable:
+		return transactionIsolationSystemVariableAlias
+	case transactionReadOnlySystemVariable:
+		return transactionReadOnlySystemVariableAlias
+	default:
+		return ""
+	}
+}
+
 func (sv *SystemVariables) getMutationGeneration() uint64 {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -1078,15 +1257,30 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
-	return sv.mp[name]
+	name = canonicalSystemVariableName(name)
+	value, ok := sv.mp[name]
+	if !ok {
+		// Accept an in-memory snapshot produced by an older node that only
+		// populated a legacy transaction-variable alias. Catalog loading
+		// normalizes this state, but the fallback keeps rolling upgrades and
+		// tests deterministic.
+		if alias := transactionSystemVariableAlias(name); alias != "" {
+			value = sv.mp[alias]
+		}
+	}
+	return value
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
+	if alias := transactionSystemVariableAlias(name); alias != "" {
+		// Keep SHOW-style map iteration and any legacy direct lookup coherent
+		// while all semantic reads resolve through the canonical name.
+		sv.mp[alias] = value
+	}
 	sv.mutationGeneration++
 }
 
@@ -1275,7 +1469,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("collation_server"),
-		Default:           "utf8mb4_bin",
+		// This is also the fallback inherited by an unqualified CREATE TABLE.
+		Default: "utf8mb4_general_ci",
 	},
 	"license": {
 		Name:              "license",
@@ -1298,8 +1493,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
-		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
+		// A new value is appended, never inserted: SET bit indexes are
+		// positional, so inserting mid-list would change the bit of every value
+		// after it. A token the planner reads at bind time must also be wired
+		// into updateSqlModeCaches and PrepareStmt, as ONLY_FULL_GROUP_BY is.
+		Type:    InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL", "ENABLE_BOOL_SUMAVG"),
+		Default: "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG",
 	},
 	"completion_type": {
 		Name:              "completion_type",
@@ -1389,6 +1588,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
 		Default:           int64(86400),
+	},
+	warningCountSystemVariable: {
+		Name:              warningCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(warningCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
+	errorCountSystemVariable: {
+		Name:              errorCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(errorCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
 	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
@@ -1946,6 +2161,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("explicit_defaults_for_timestamp"),
 		Default:           int64(1),
 	},
+	"timestamp": {
+		Name:              "timestamp",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("timestamp", 0, float64(math.MaxInt64)/1e9),
+		Default:           float64(0),
+	},
 	"external_user": {
 		Name:              "external_user",
 		Scope:             ScopeSession,
@@ -2055,8 +2278,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           int64(1024),
+		Type:              InitSystemVariableUintType(groupConcatMaxLenVariable, groupConcatMaxLenMinimum, math.MaxUint64),
+		Default:           uint64(1024),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
@@ -2223,8 +2446,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("lc_time_names"),
-		Default:           "",
+		Type:              SystemVariableLocaleType{},
+		Default:           "en_US",
 	},
 	"local_infile": {
 		Name:              "local_infile",
@@ -3644,6 +3867,19 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
+	// Inert setting retained for stopped-version rollback; transaction tracing is retired.
+	// SET/SHOW use generic variable storage only; there is no tracing consumer.
+	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
+	// tests once the rollback window excludes collector-bearing versions and
+	// client/session initialization no longer sends this setting.
+	"mo_sirius_campaign_evidence": {
+		Name:              "mo_sirius_campaign_evidence",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_sirius_campaign_evidence"),
+		Default:           int64(0),
+	},
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
@@ -3711,6 +3947,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel": {
+		Name:              "experimental_parquet_load_parallel",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_parquet_load_parallel"),
+		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel_min_size": {
+		Name:              "experimental_parquet_load_parallel_min_size",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("experimental_parquet_load_parallel_min_size", 1, 128*1024*1024, false),
+		Default:           int64(128 * 1024 * 1024),
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
@@ -3791,6 +4043,43 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
+	},
+	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
+	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
+	// together; the value on a tenant caps that tenant alone. 0 -- the default -- means "not
+	// set by an operator", and the governor then DERIVES the budget from this machine: a
+	// share of total RAM, read from /proc/meminfo and any cgroup limit. So the cache is
+	// always accounted and always evictable, without an operator having to pick a number.
+	//
+	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
+	// VRAM, so one number cannot express both.
+	"max_index_cache_size": {
+		Name:              "max_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset. The advertised default used to be a fixed 64 TiB ceiling, which
+		// said nothing true about any particular machine and, being non-zero, took priority
+		// over the derived budget -- so on a bootstrapped cluster the machine-derived sizing
+		// never applied. Defaulting to 0 makes the variable say what the governor does: no
+		// operator limit, budget derived from this host.
+		Default: int64(0),
+	},
+	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
+	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
+	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
+	// 0 -- the default -- means "not set by an operator", and the governor derives the budget
+	// from the GPUs actually present. A CN with no GPU derives 0 and charges nothing here.
+	"max_gpu_index_cache_size": {
+		Name:              "max_gpu_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset: the budget comes from a CUDA query of the devices on this CN, not
+		// from a constant that guesses at somebody's GPU count. See max_index_cache_size.
+		Default: int64(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",
@@ -4298,10 +4587,97 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value            interface{}
-	Sql              string
-	IsBin            bool
-	PrepareParamKind vector.PrepareParamKind
+	Value interface{}
+	Sql   string
+	IsBin bool
+	// Type is the type of the value at the time the variable was assigned.
+	// User variables are exposed to the planner as text values for wire
+	// compatibility, but MySQL fixes their effective type at statement start.
+	// Keeping the assignment type here prevents a numeric sibling operand from
+	// silently narrowing a decimal or floating-point variable.
+	Type planpb.Type
+	// RegexpStringResult retains only the assignment result-category history
+	// needed by unsized binary CAST compatibility. It never supplies the
+	// ordinary SQL or prepared-parameter conversion type of a NULL value.
+	RegexpStringResult  bool
+	PrepareParamKind    vector.PrepareParamKind
+	RuntimeStringDomain types.RuntimeStringDomain
+	// Replayable is true only when the proxy can replay the assignment as a
+	// captured raw COM_QUERY SET statement during legacy migration.
+	Replayable bool
+}
+
+// userVariableRegexpStringResult models MySQL's user-variable result category,
+// not its physical SQL type. JSON and temporal values are string results too;
+// numeric, Boolean, BIT and YEAR values are not.
+func userVariableRegexpStringResult(typ planpb.Type) bool {
+	oid := types.T(typ.Id)
+	return oid != types.T_any && oid != types.T_bool && oid != types.T_year && !oid.ToType().IsNumeric()
+}
+
+// inferUserDefinedVarType supplies a conservative type for callers which set
+// a variable without an explicit expression type (for example tests and
+// stored-procedure helpers). Expression evaluation records the exact plan
+// type separately when it is available.
+func inferUserDefinedVarType(value interface{}) planpb.Type {
+	var oid types.T
+	switch v := value.(type) {
+	case bool:
+		oid = types.T_bool
+	case int, int8, int16, int32, int64:
+		oid = types.T_int64
+	case uint, uint8, uint16, uint32, uint64:
+		oid = types.T_uint64
+	case float32:
+		oid = types.T_float32
+	case float64:
+		oid = types.T_float64
+	case types.Date:
+		oid = types.T_date
+	case types.Time:
+		oid = types.T_time
+	case types.Datetime:
+		oid = types.T_datetime
+	case types.Timestamp:
+		oid = types.T_timestamp
+	case bytejson.ByteJson:
+		oid = types.T_json
+	case types.Decimal64:
+		oid = types.T_decimal64
+	case types.Decimal128:
+		oid = types.T_decimal128
+	case types.Decimal256:
+		oid = types.T_decimal256
+	case types.Enum:
+		oid = types.T_enum
+	case types.MoYear:
+		oid = types.T_year
+	case types.Uuid:
+		oid = types.T_uuid
+	case types.TS:
+		oid = types.T_TS
+	case types.Rowid:
+		oid = types.T_Rowid
+	case types.Blockid:
+		oid = types.T_Blockid
+	case []byte:
+		oid = types.T_varbinary
+	case []float32:
+		return planpb.Type{Id: int32(types.T_array_float32), Width: int32(len(v))}
+	case []float64:
+		return planpb.Type{Id: int32(types.T_array_float64), Width: int32(len(v))}
+	case []types.BF16:
+		return planpb.Type{Id: int32(types.T_array_bf16), Width: int32(len(v))}
+	case []types.Float16:
+		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
+	case []int8:
+		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case nil:
+		oid = types.T_any
+	default:
+		oid = types.T_text
+	}
+	return planpb.Type{Id: int32(oid)}
 }
 
 func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {

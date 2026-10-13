@@ -16,7 +16,6 @@ package rightdedupjoin
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"testing"
 
@@ -40,21 +39,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
-// add unit tests for cases
-type joinTestCase struct {
-	arg    *RightDedupJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-	barg   *hashbuild.HashBuild
-}
-
 func newRightDedupTestProcess(t *testing.T, pessimistic bool) (*process.Process, *gomock.Controller) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
@@ -64,7 +48,7 @@ func newRightDedupTestProcess(t *testing.T, pessimistic bool) (*process.Process,
 	}
 	txnOp.EXPECT().Txn().Return(meta).AnyTimes()
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.TxnOperator = txnOp
 	return proc, ctrl
@@ -151,10 +135,90 @@ func TestRightDedupDuplicateTracking(t *testing.T) {
 	}
 }
 
-func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches bool) {
+func TestRightDedupInputKeysUniqueLookupOnly(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unique_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupInputUniqueCase(t, pessimistic, false)
+		})
+		t.Run(fmt.Sprintf("target_conflict_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupInputUniqueCase(t, pessimistic, true)
+		})
+	}
+}
+
+func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool) {
 	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
 	defer ctrl.Finish()
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	buildBat.SetRowCount(1)
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:   true,
+		Conditions:    conditions[1],
+		JoinMapTag:    curTag,
+		JoinMapRefCnt: 1,
+	}
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+
+	probeValues := []int32{2, 3}
+	if targetConflict {
+		probeValues = []int32{1}
+	}
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector(probeValues, nil, proc.Mp())
+	probeBat.SetRowCount(len(probeValues))
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   true,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+	installTestAllocation(t, arg, buildArg)
+	defer func() {
+		arg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
+		buildBat.Clean(proc.Mp())
+		probeBat.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+	_, err := vm.Exec(buildArg, proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(arg, proc)
+	if targetConflict {
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Duplicate entry")
+	} else {
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, uint64(1), arg.ctr.mp.GetGroupCount(), "lookup-only probes must not grow the target map")
+		extra := arg.OpAnalyzer.GetOpStats().ExtraStats
+		require.Equal(t, int64(len(probeValues)), extra["RightDedupInputUniqueRows"])
+		res, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, res.Status)
+	}
+
+}
+
+func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches, inputKeysUnique bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
@@ -173,6 +237,7 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 		IsShuffle:         true,
 		ShuffleIdx:        0,
 		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   inputKeysUnique,
 		DedupColName:      "pk",
 		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
 		JoinMapTag:        curTag,
@@ -238,16 +303,105 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 func TestRightDedupSpilledEmptyBuild(t *testing.T) {
 	for _, pessimistic := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unique_pessimistic_%t", pessimistic), func(t *testing.T) {
-			runRightDedupSpilledEmptyBuild(t, pessimistic, false)
+			runRightDedupSpilledEmptyBuild(t, pessimistic, false, false)
 		})
 		t.Run(fmt.Sprintf("duplicate_pessimistic_%t", pessimistic), func(t *testing.T) {
-			runRightDedupSpilledEmptyBuild(t, pessimistic, true)
+			runRightDedupSpilledEmptyBuild(t, pessimistic, true, false)
 		})
 	}
 }
 
+func TestRightDedupSpilledInputKeysUnique(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty_target_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledEmptyBuild(t, pessimistic, false, true)
+		})
+		t.Run(fmt.Sprintf("nonempty_target_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledInputKeysUniqueWithBuild(t, pessimistic)
+		})
+	}
+}
+
+func runRightDedupSpilledInputKeysUniqueWithBuild(t *testing.T, pessimistic bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	proc.Base.Lim.Size = 8 << 20
+	proc.Base.Lim.SpillSize = 64 << 20
+
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	buildBat.SetRowCount(2)
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	probeBat.SetRowCount(1)
+
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:       true,
+		Conditions:        conditions[1],
+		IsShuffle:         true,
+		ShuffleIdx:        0,
+		SpillThreshold:    2,
+		JoinMapTag:        curTag,
+		JoinMapRefCnt:     1,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: curTag + 9000},
+	}
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+	rightDedupArg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		IsShuffle:         true,
+		ShuffleIdx:        0,
+		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   true,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+		SpillThreshold:    2,
+	}
+	rightDedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+	installTestAllocation(t, rightDedupArg, buildArg)
+
+	var execErr error
+	defer func() {
+		failed := execErr != nil
+		rightDedupArg.Free(proc, failed, execErr)
+		buildArg.Free(proc, failed, execErr)
+		buildBat.Clean(proc.Mp())
+		probeBat.Clean(proc.Mp())
+		budget, budgetErr := proc.GetExecutionResourceBudget()
+		var used, diskUsed, fdUsed uint64
+		if budgetErr == nil {
+			used = budget.Used()
+			diskUsed = budget.SpillDiskUsed()
+			fdUsed = budget.SpillFDUsed()
+		}
+		proc.Free()
+		require.NoError(t, budgetErr)
+		require.Zero(t, used)
+		require.Zero(t, diskUsed)
+		require.Zero(t, fdUsed)
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, rightDedupArg.Prepare(proc))
+	_, execErr = vm.Exec(buildArg, proc)
+	require.NoError(t, execErr)
+	require.Positive(t, buildArg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"],
+		"the regression must exercise a nonempty spilled target payload")
+	_, execErr = vm.Exec(rightDedupArg, proc)
+	require.Error(t, execErr)
+	require.Contains(t, execErr.Error(), "Duplicate entry")
+}
+
 func TestRightDedupResetAndPrepareRetry(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
@@ -274,7 +428,7 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 }
 
 func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	varcharTyp := types.T_varchar.ToType()
 	arg := &RightDedupJoin{
 		LeftTypes:  []types.Type{types.T_int32.ToType()},
@@ -293,13 +447,13 @@ func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
 	proc.Free()
 }
 
-func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
+func TestRightDedupEmptyBuildProbeMapHonorsExecutionResourceBudget(t *testing.T) {
 	proc, ctrl := newRightDedupTestProcess(t, false)
 	defer ctrl.Finish()
 
 	initialBytes := hashtable.Int64HashMapInitialAllocationBytes()
 	proc.Base.Lim.Size = int64(initialBytes)
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	const rows = 2_048
@@ -352,9 +506,9 @@ func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
 	_, callErr = arg.Call(proc)
 	require.Error(t, callErr)
 	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
-	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, callErr, process.ErrExecutionResourceAdmission)
 	require.NotContains(t, callErr.Error(), "convert go error")
-	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.NotContains(t, callErr.Error(), process.ErrExecutionResourceAdmission.Error())
 	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
 	require.Zero(t, budget.Used(),
 		"failed probe-map construction must roll back its physical allocation")
@@ -364,154 +518,104 @@ var (
 	tag int32
 )
 
-func makeTestCases(t *testing.T) []joinTestCase {
-	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []int32{1},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-			}),
-	}
-}
-
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &RightDedupJoin{}
+	arg.String(&buf)
+	require.Equal(t, "right_dedup_join: right dedup join ", buf.String())
 }
 
 func TestRightDedupJoin(t *testing.T) {
-	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = false
-		tc.barg.DelColIdx = -1
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err := vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		tc.proc.GetMessageBoard().Reset()
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = false
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		tc.proc.GetMessageBoard().Reset()
-		tc.arg.OnDuplicateAction = plan.Node_IGNORE
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = false
-		tc.barg.OnDuplicateAction = plan.Node_IGNORE
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
-
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	proc, _ := newRightDedupTestProcess(t, false)
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	tag++
+	curTag := tag
+	arg := &RightDedupJoin{
+		LeftTypes:  []types.Type{typ},
+		RightTypes: []types.Type{typ},
+		Conditions: conditions,
+		Result:     []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		JoinMapTag: curTag,
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:      true,
+		NeedBatches:      false,
+		NeedAllocateSels: false,
+		IsDedup:          false,
+		DelColIdx:        -1,
+		Conditions:       conditions[1],
+		JoinMapTag:       curTag,
+		JoinMapRefCnt:    1,
+	}
+	installTestAllocation(t, arg, buildArg)
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
+		require.Zero(t, proc.Mp().CurrNB())
+		require.Zero(t, proc.Mp().OnHeapCurrNB())
+	})
+	for generation, action := range []plan.Node_OnDuplicateAction{plan.Node_FAIL, plan.Node_FAIL, plan.Node_IGNORE} {
+		if generation == 2 {
+			arg.Free(proc, false, nil)
+			buildArg.Free(proc, false, nil)
+		}
+		arg.OnDuplicateAction = action
+		buildArg.OnDuplicateAction = action
+		func() {
+			inputs := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1)}
+			defer func() {
+				arg.Reset(proc, false, nil)
+				buildArg.Reset(proc, false, nil)
+				usedAfterReset := arg.allocationAccount.Snapshot().Used
+				for _, input := range inputs {
+					input.Clean(proc.Mp())
+				}
+				proc.GetMessageBoard().Reset()
+				require.Zero(t, usedAfterReset)
+				require.Zero(t, proc.Mp().CurrNB())
+				require.Zero(t, proc.Mp().OnHeapCurrNB())
+			}()
+			for _, input := range inputs {
+				input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil, proc.Mp())
+				input.SetRowCount(2)
+			}
+			arg.SetChildren([]vm.Operator{colexec.NewMockOperator().WithBatchs(inputs[:1])})
+			buildArg.SetChildren([]vm.Operator{colexec.NewMockOperator().WithBatchs(inputs[1:])})
+			require.NoError(t, arg.Prepare(proc))
+			require.NoError(t, buildArg.Prepare(proc))
+			res, err := vm.Exec(buildArg, proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+			require.Nil(t, res.Batch)
+			if action == plan.Node_IGNORE {
+				res, err = vm.Exec(arg, proc)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, res.Batch)
+				return
+			}
+			var values []int32
+			stopped := false
+			for calls := 0; calls < 4; calls++ {
+				res, err = vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if res.Batch != nil && res.Batch.RowCount() > 0 {
+					require.Len(t, res.Batch.Vecs, 1)
+					require.Equal(t, types.T_int32, res.Batch.Vecs[0].GetType().Oid)
+					require.Zero(t, res.Batch.Vecs[0].GetNulls().Count())
+					values = append(values, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])...)
+				}
+				if res.Status == vm.ExecStop {
+					stopped = true
+					break
+				}
+			}
+			require.True(t, stopped, "join must reach its terminal state")
+			require.Equal(t, []int32{1, 1000}, values)
+		}()
 	}
 }
 
-/*
-	func BenchmarkJoin(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tcs = []joinTestCase{
-				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int32{0},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []int32{0},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-			}
-			t := new(testing.T)
-			for _, tc := range tcs {
-				bats := hashBuild(t, tc)
-				err := tc.arg.Prepare(tc.proc)
-				require.NoError(t, err)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-				for {
-					ok, err := tc.arg.Call(tc.proc)
-					if ok.Status == vm.ExecStop || err != nil {
-						break
-					}
-				}
-			}
-		}
-	}
-*/
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
@@ -525,82 +629,4 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 			},
 		},
 	}
-}
-
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
-	_, cancel := context.WithCancel(context.Background())
-	//args := make([]*plan.Expr, 0, 2)
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 0,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 1,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
-	tag++
-	tc := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
-		arg: &RightDedupJoin{
-			RightTypes: ts,
-			Conditions: cs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-			JoinMapTag: tag,
-		},
-		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-			NeedAllocateSels: false,
-			JoinMapTag:       tag,
-			JoinMapRefCnt:    1,
-		},
-	}
-	installTestAllocation(t, tc.arg, tc.barg)
-	return tc
-}
-
-func resetChildren(arg *RightDedupJoin, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
-}
-
-func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
 }

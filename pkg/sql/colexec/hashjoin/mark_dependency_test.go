@@ -62,6 +62,40 @@ func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+// TestHashMarkJoinBuildCancellationPreservesIdentity verifies that a sibling
+// cancellation published through the JoinMap dependency remains recognizable
+// by scope error arbitration. It must also stop before probe input, just like a
+// substantive build failure.
+func TestHashMarkJoinBuildCancellationPreservesIdentity(t *testing.T) {
+	tc := newMarkSpillTestCase(t)
+	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	require.NoError(t, probe.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	message.SendJoinMapResult(
+		message.NewJoinMapBuildErrorResult(context.Canceled),
+		tc.arg.JoinMapTag,
+		tc.arg.IsShuffle,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+	)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Zero(t, probe.calls.Load())
+
+	tc.arg.Reset(tc.proc, true, err)
+	probe.Reset(tc.proc, true, err)
+	tc.arg.Free(tc.proc, true, err)
+	probe.Free(tc.proc, true, err)
+	tc.barg.Free(tc.proc, true, err)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 // TestHashMarkJoinWaitForBuildHonorsCancellation verifies the unhappy path in
 // which the build never publishes a terminal JoinMap. Cancellation must abort
 // the dependency wait without reading or emitting any probe row.

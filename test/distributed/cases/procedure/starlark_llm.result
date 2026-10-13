@@ -24,4 +24,37 @@ call llm_ask('2+2=?', @result);
 select @result;
 @result
 2+2=?
+set @saved_llm_model = @llm_model;
+create procedure llm_failure_sequence(in mode varchar, out first_error varchar, out second_error varchar) language 'starlark'
+$$
+prompt = '[{"role":"user","content":"ok"}]'
+_, err1 = mo.llm_connect("", "", "", "") if mode == "connect" else mo.llm_chat(prompt)
+_, err2 = mo.llm_chat(prompt)
+out_first_error = str(err1)
+out_second_error = str(err2)
+$$;
+set @llm_model = NULL;
+call llm_failure_sequence('connect', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+➤ first_error[-7,1,0]  ¦  second_error[-7,1,0]  𝄀
+1  ¦  1
+call llm_failure_sequence('implicit', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+➤ first_error[-7,1,0]  ¦  second_error[-7,1,0]  𝄀
+1  ¦  1
+set @llm_model = 1;
+call llm_failure_sequence('connect', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+➤ first_error[-7,1,0]  ¦  second_error[-7,1,0]  𝄀
+1  ¦  1
+call llm_chat('[{"role":"user","content":"ok"}]', @result);
+select @result;
+➤ @result[-1,21845,0]  𝄀
+ok
+set @llm_model = x'6563686f';
+call llm_ask('ok', @result);
+select @result;
+➤ @result[-1,21845,0]  𝄀
+ok
+set @llm_model = @saved_llm_model;
 drop database if exists procedure_test;

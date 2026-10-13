@@ -18,6 +18,7 @@ the column/expression type.
 | `geo_geometry32.sql` | `GEOMETRY32` (float32-coordinate) DDL, storage round-trips (float32 WKB), spatial functions, and `geometry`↔`geometry32` casts. |
 | `geo_load.sql` | Loading GEOMETRY from CSV via all three paths — external table, `LOAD DATA INFILE`, and `LOAD DATA INLINE`; WKT fields parse to WKB, generic `GEOMETRY` accepts any subtype, subtype-constrained columns enforce their subtype, and the `GEOMETRY32`/`GEOGRAPHY` aliases work. |
 | `geo_geodetic.sql` | SRID 4326 measures (`ST_Length`, `ST_Distance`, `ST_Area`) return meters / m² (geodesic) vs Cartesian for SRID 0, incl. a `GEOGRAPHY` column. |
+| `geo_antimeridian.sql` | SRID 4326 local topology/overlay across the antimeridian, operand-order and high-latitude controls, `GEOMETRY32`, masked execution, and the safe spatial-index fallback. |
 | `geo_geohash.sql` | `ST_GeoHash` (point and lon/lat forms), `ST_LatFromGeoHash`, `ST_LongFromGeoHash`, `ST_PointFromGeoHash`. |
 | `geo_mbr.sql` | MBR bounding-box predicates: `MBRContains`, `MBRCoveredBy`, `MBRCovers`, `MBRDisjoint`, `MBREquals`, `MBRIntersects`, `MBROverlaps`, `MBRTouches`, `MBRWithin`. |
 | `geo_geojson.sql` | `ST_AsGeoJSON` (with `maxdecimaldigits`) and `ST_GeomFromGeoJSON` (default SRID 4326, explicit SRID), round-trips, invalid-input rejection. |
@@ -53,6 +54,8 @@ Then run them normally:
 ## Scope notes
 
 Tests intentionally cover only what is implemented today. SRID 4326 geodetic
-computation is wired into the measures (`ST_Length`/`ST_Distance`/`ST_Area`);
-the relationship predicates (`ST_Contains`, `ST_Intersects`, …) are still
-evaluated in the Cartesian plane (geodetic predicates are a follow-up).
+computation is wired into the measures (`ST_Length`/`ST_Distance`/`ST_Area`)
+and into local-window topology/overlay evaluation across the antimeridian.
+Ambiguous windows spanning 180 degrees or containing pole vertices are
+rejected explicitly; the existing Cartesian relationship path remains
+unchanged for SRID 0.

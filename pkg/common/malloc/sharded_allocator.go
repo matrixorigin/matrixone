@@ -14,24 +14,45 @@
 
 package malloc
 
-import "golang.org/x/sys/cpu"
+import (
+	"sync"
 
-type ShardedAllocator[T Allocator] []allocatorShard[T]
+	"golang.org/x/sys/cpu"
+)
 
 type allocatorShard[T Allocator] struct {
-	Allocator T
+	allocator T
 	_         cpu.CacheLinePad
+}
+
+// ShardedAllocator directs allocations to CPU-local allocators. Its shard
+// configuration is private so the backing-size contract, once validated,
+// cannot be invalidated through slicing, reordering, or mixing shard views.
+type ShardedAllocator[T Allocator] struct {
+	shards                   []allocatorShard[T]
+	backingSizeContractState *shardedBackingSizeContractState
+}
+
+type shardedBackingSizeContractState struct {
+	once     sync.Once
+	contract BackingSizeContract
+	err      error
 }
 
 func NewShardedAllocator[T Allocator](
 	numShards int,
 	newShard func() T,
 ) ShardedAllocator[T] {
-	var ret ShardedAllocator[T]
-	for i := 0; i < numShards; i++ {
-		ret = append(ret, allocatorShard[T]{
-			Allocator: newShard(),
-		})
+	if numShards <= 0 {
+		return ShardedAllocator[T]{}
+	}
+
+	ret := ShardedAllocator[T]{
+		shards:                   make([]allocatorShard[T], numShards),
+		backingSizeContractState: new(shardedBackingSizeContractState),
+	}
+	for i := range ret.shards {
+		ret.shards[i].allocator = newShard()
 	}
 	return ret
 }
@@ -41,5 +62,5 @@ var _ Allocator = ShardedAllocator[Allocator]{}
 func (s ShardedAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	return s[pid%len(s)].Allocator.Allocate(size, hints)
+	return s.shards[pid%len(s.shards)].allocator.Allocate(size, hints)
 }

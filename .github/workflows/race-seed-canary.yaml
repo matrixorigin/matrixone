@@ -1,0 +1,35 @@
+name: Race seed canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      matrixone_sha:
+        description: Full MatrixOne main SHA; use the same SHA for every arm
+        required: true
+        type: string
+        default: '3ac87c30625fc082391e5384a4c94e50a2916cf6'
+      image:
+        description: Trusted builder repository at an immutable sha256 digest
+        required: true
+        type: string
+        default: registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone@sha256:8137d222d3a3b29d119173639cea98931168ab7d886bf882894391f7804d5d88
+      repetitions:
+        description: One smoke pair or three measured pairs per cache state
+        type: choice
+        options: ['1', '3']
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
+    # CI #456: update these two immutable pins together.
+    uses: matrixorigin/CI/.github/workflows/race-seed-canary.yaml@c76c48c66de9e4684696a02510835a21d4a0aad9
+    with:
+      ci_sha: 'c76c48c66de9e4684696a02510835a21d4a0aad9'
+      matrixone_sha: ${{ inputs.matrixone_sha }}
+      image: ${{ inputs.image }}
+      repetitions: ${{ inputs.repetitions }}
+    secrets: inherit

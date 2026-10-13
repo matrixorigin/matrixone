@@ -43,11 +43,6 @@ var dnsResolver = dns.NewCachingResolver(
 	dns.MaxCacheEntries(128),
 )
 
-func init() {
-	net.DefaultResolver = dnsResolver
-	http.DefaultTransport = httpRoundTripper
-}
-
 var httpDialer = &net.Dialer{
 	Timeout:  connectTimeout,
 	Resolver: dnsResolver,

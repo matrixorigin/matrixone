@@ -149,7 +149,7 @@ func (node *Select) StmtKind() StmtKind {
 	if node.IsPerform {
 		return defaultStatusTyp
 	}
-	if node.Ep != nil {
+	if node.Ep != nil || len(node.IntoVars) > 0 {
 		return defaultStatusTyp
 	}
 	return defaultResRowTyp
@@ -776,4 +776,27 @@ func (node *RestartCDC) StmtKind() StmtKind {
 
 func (node *SetLogserviceSettings) StmtKind() StmtKind {
 	return frontendStatusTyp
+}
+
+// IsIgnoreStatement reports the DML error policy encoded by the statement.
+// LOAD DATA IGNORE LINES is a header count, not an IGNORE error policy.
+func IsIgnoreStatement(statement Statement) bool {
+	switch stmt := statement.(type) {
+	case *Insert:
+		return stmt.IsIgnore()
+	case *Update:
+		return stmt.Ignore
+	case *Load:
+		return isLoadDataIgnore(stmt)
+	default:
+		return false
+	}
+}
+
+func isLoadDataIgnore(stmt *Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
+	return ok
 }

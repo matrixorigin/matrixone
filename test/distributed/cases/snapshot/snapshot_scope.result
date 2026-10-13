@@ -1,0 +1,100 @@
+drop snapshot if exists snapshot_scope_table;
+drop snapshot if exists snapshot_scope_table_altered;
+drop snapshot if exists snapshot_scope_database;
+drop database if exists snapshot_scope_a;
+drop database if exists snapshot_scope_b;
+create database snapshot_scope_a;
+create database snapshot_scope_b;
+create table snapshot_scope_a.t (id int primary key, v varchar(16));
+create table snapshot_scope_a.other (id int primary key, v varchar(16));
+create table snapshot_scope_a.altered (id int primary key, v varchar(16));
+create table snapshot_scope_b.t (id int primary key, v varchar(16));
+insert into snapshot_scope_a.t values (1, 'a_before');
+insert into snapshot_scope_a.other values (1, 'other_before');
+insert into snapshot_scope_a.altered values (1, 'alter_before');
+insert into snapshot_scope_b.t values (1, 'b_before');
+create snapshot snapshot_scope_table for table snapshot_scope_a t;
+create snapshot snapshot_scope_table_altered for table snapshot_scope_a altered;
+create snapshot snapshot_scope_database for database snapshot_scope_a;
+alter table snapshot_scope_a.altered add column version int default 0;
+update snapshot_scope_a.t set v = 'a_after';
+update snapshot_scope_a.other set v = 'other_after';
+update snapshot_scope_a.altered set v = 'alter_after';
+update snapshot_scope_b.t set v = 'b_after';
+select 'table_snapshot_control' as case_name, v from snapshot_scope_a.t{snapshot = 'snapshot_scope_table'};
+➤ case_name[12,16,0]  ¦  v[12,12,0]  𝄀
+table_snapshot_control  ¦  a_before
+select 'table_snapshot_copy_alter_control' as case_name, v from snapshot_scope_a.altered{snapshot = 'snapshot_scope_table_altered'};
+➤ case_name[12,24,0]  ¦  v[12,12,0]  𝄀
+table_snapshot_copy_alter_control  ¦  alter_before
+select 'table_snapshot_same_database_other_table' as case_name, v from snapshot_scope_a.other{snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
+select 'table_snapshot_other_database' as case_name, v from snapshot_scope_b.t{snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_b-t)
+select 'database_snapshot_table_control' as case_name, v from snapshot_scope_a.t{snapshot = 'snapshot_scope_database'};
+➤ case_name[12,23,0]  ¦  v[12,12,0]  𝄀
+database_snapshot_table_control  ¦  a_before
+select 'database_snapshot_other_table_control' as case_name, v from snapshot_scope_a.other{snapshot = 'snapshot_scope_database'};
+➤ case_name[12,27,0]  ¦  v[12,12,0]  𝄀
+database_snapshot_other_table_control  ¦  other_before
+select 'database_snapshot_other_database' as case_name, v from snapshot_scope_b.t{snapshot = 'snapshot_scope_database'};
+internal error: database-level snapshot(snapshot_scope_database) does not belong to the database(snapshot_scope_b)
+data branch diff snapshot_scope_a.other{snapshot = 'snapshot_scope_table'} against snapshot_scope_a.t;
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
+data branch diff snapshot_scope_a.t against snapshot_scope_a.other{snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
+show create table snapshot_scope_a.t {snapshot = 'snapshot_scope_table'};
+➤ Table[12,0,0]  ¦  Create Table[12,70,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `v` varchar(16) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show create table snapshot_scope_a.other {snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
+show create table snapshot_scope_a.t {snapshot = 'snapshot_scope_database'};
+➤ Table[12,0,0]  ¦  Create Table[12,70,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `v` varchar(16) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show create table snapshot_scope_b.t {snapshot = 'snapshot_scope_database'};
+internal error: database-level snapshot(snapshot_scope_database) does not belong to the database(snapshot_scope_b)
+show tables from snapshot_scope_a {snapshot = 'snapshot_scope_database'};
+➤ Tables_in_snapshot_scope_a[12,3750,0]  𝄀
+altered  𝄀
+other  𝄀
+t
+show tables from snapshot_scope_a {snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) cannot read database-wide metadata for database(snapshot_scope_a)
+show databases {snapshot = 'snapshot_scope_database'};
+➤ Database[12,3750,0]  𝄀
+snapshot_scope_a
+show databases {snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) cannot list databases
+show create database snapshot_scope_a {snapshot = 'snapshot_scope_database'};
+➤ Database[12,12,0]  ¦  Create Database[12,25,0]  𝄀
+snapshot_scope_a  ¦  CREATE DATABASE `snapshot_scope_a`
+show create database snapshot_scope_b {snapshot = 'snapshot_scope_database'};
+internal error: database-level snapshot(snapshot_scope_database) does not belong to the database(snapshot_scope_b)
+show create database snapshot_scope_a {snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) cannot read database-wide metadata for database(snapshot_scope_a)
+restore table snapshot_scope_a.t{snapshot = 'snapshot_scope_database'};
+select 'database_snapshot_restore_same_database' as case_name, v from snapshot_scope_a.t;
+➤ case_name[12,29,0]  ¦  v[12,12,0]  𝄀
+database_snapshot_restore_same_database  ¦  a_before
+restore table snapshot_scope_b.t{snapshot = 'snapshot_scope_database'};
+internal error: databaseName(snapshot_scope_b) does not match snapshot.databaseName(snapshot_scope_a)
+select 'database_snapshot_cross_database_restore_unchanged' as case_name, v from snapshot_scope_b.t;
+➤ case_name[12,37,0]  ¦  v[12,12,0]  𝄀
+database_snapshot_cross_database_restore_unchanged  ¦  b_after
+restore table snapshot_scope_a.t{snapshot = 'snapshot_scope_table'};
+select 'table_snapshot_restore_control' as case_name, v from snapshot_scope_a.t;
+➤ case_name[12,22,0]  ¦  v[12,12,0]  𝄀
+table_snapshot_restore_control  ¦  a_before
+drop snapshot snapshot_scope_table;
+drop snapshot snapshot_scope_table_altered;
+drop snapshot snapshot_scope_database;
+drop database snapshot_scope_a;
+drop database snapshot_scope_b;

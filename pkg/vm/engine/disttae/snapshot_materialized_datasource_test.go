@@ -268,7 +268,7 @@ func (r *recordingTombstoner) UnmarshalBinary([]byte) error {
 	return nil
 }
 
-func (r *recordingTombstoner) PrefetchTombstones(string, fileservice.FileService, []objectio.Blockid) {
+func (r *recordingTombstoner) PrefetchTombstones(context.Context, string, fileservice.FileService, []objectio.Blockid) {
 }
 
 func (r *recordingTombstoner) ApplyInMemTombstones(_ *types.Blockid, rowsOffset []int64, _ *objectio.Bitmap) []int64 {
@@ -312,7 +312,7 @@ func (t *tsFilteringTombstoner) HasBlockTombstone(context.Context, *objectio.Blo
 }
 func (t *tsFilteringTombstoner) MarshalBinaryWithBuffer(*bytes.Buffer) error { return nil }
 func (t *tsFilteringTombstoner) UnmarshalBinary([]byte) error                { return nil }
-func (t *tsFilteringTombstoner) PrefetchTombstones(string, fileservice.FileService, []objectio.Blockid) {
+func (t *tsFilteringTombstoner) PrefetchTombstones(context.Context, string, fileservice.FileService, []objectio.Blockid) {
 }
 func (t *tsFilteringTombstoner) ApplyInMemTombstones(_ *types.Blockid, rowsOffset []int64, _ *objectio.Bitmap) []int64 {
 	return rowsOffset

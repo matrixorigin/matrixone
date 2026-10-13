@@ -57,7 +57,7 @@ func NewMockServiceLogExporter(service *MockService) LogExporter {
 }
 
 func (c *MockServiceLogExporter) Export() []zap.Field {
-	var fields []zap.Field
+	fields := make([]zap.Field, 0, 2)
 
 	stats := c.service.Stats()
 

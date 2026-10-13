@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +34,7 @@ func newMailboxAccountedBitmap(
 		1024,
 		mp,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteMatchedRows,
 	)
 	require.NoError(t, err)

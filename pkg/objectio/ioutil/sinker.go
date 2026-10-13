@@ -98,11 +98,28 @@ func WithPipelineFlush() SinkerOption {
 	}
 }
 
+// WithChunkedColumnPolicy configures a live, service-specific rollout policy
+// for object writers created by this Sinker. A nil or unsupported FileSinker
+// keeps the legacy persisted-column format.
+func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.chunkedColumnPolicy = policy
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
 	Reset()
 	Close() error
+}
+
+// activeObjectNamer exposes the object name reserved by a FileSinker for its
+// current Sync attempt. A Sync error is commit-ambiguous: the object may have
+// reached storage even though valid publishable stats were not returned. The
+// enclosing Sinker captures this name before Reset or Close discards it.
+type activeObjectNamer interface {
+	ActiveObjectName() string
 }
 
 var _ FileSinker = new(FSinkerImpl)
@@ -113,12 +130,17 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
-	sortKeyPos      int
-	isPrimaryKey    bool
-	isTombstone     bool
-	seqnums         []uint16
-	schemaVersion   uint32
-	hiddenSelection objectio.HiddenColumnSelection
+	sortKeyPos          int
+	isPrimaryKey        bool
+	isTombstone         bool
+	seqnums             []uint16
+	schemaVersion       uint32
+	hiddenSelection     objectio.HiddenColumnSelection
+	chunkedColumnPolicy objectio.ChunkedColumnPolicy
+}
+
+func (s *FSinkerImpl) SetChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) {
+	s.chunkedColumnPolicy = policy
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
@@ -144,6 +166,7 @@ func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 				s.arena,
 			)
 		}
+		s.writer.SetChunkedColumnPolicy(s.chunkedColumnPolicy)
 	}
 
 	_, err := s.writer.WriteBatch(b)
@@ -175,6 +198,13 @@ func (s *FSinkerImpl) Reset() {
 	}
 }
 
+func (s *FSinkerImpl) ActiveObjectName() string {
+	if s.writer == nil {
+		return ""
+	}
+	return s.writer.GetName().String()
+}
+
 func (s *FSinkerImpl) Close() error {
 	s.writer = nil
 	if s.arena != nil {
@@ -182,12 +212,9 @@ func (s *FSinkerImpl) Close() error {
 		// to the free list so the pre-warmed backing array, serialBuf and
 		// compressBuf are reused by the next FSinkerImpl.
 		s.arena.Reset()
+		// An arena left unused for a while is freed by the pool itself.
 		objectio.PutArena(s.arena)
 		s.arena = nil
-		// Debounce the idle-drain timer so pools stay warm during
-		// active CN pipeline execution.  When CN (and TN) are both
-		// idle for arenaDrainDelay the pools will drain automatically.
-		objectio.ScheduleArenaDrain()
 	}
 	return nil
 }
@@ -314,6 +341,18 @@ func NewSinker(
 	for _, opt := range opts {
 		opt(sinker)
 	}
+	if policy := sinker.config.chunkedColumnPolicy; policy != nil {
+		factory := sinker.fSinker.factory
+		sinker.fSinker.factory = func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+			fileSinker := factory(mp, fs)
+			if setter, ok := fileSinker.(interface {
+				SetChunkedColumnPolicy(objectio.ChunkedColumnPolicy)
+			}); ok {
+				setter.SetChunkedColumnPolicy(policy)
+			}
+			return fileSinker
+		}
+	}
 
 	sinker.fillDefaults()
 	return sinker
@@ -362,10 +401,11 @@ type Sinker struct {
 		sortKeyIdx int
 	}
 	config struct {
-		allMergeSorted bool
-		dedupAll       bool
-		tailSizeCap    int
-		offHeap        bool
+		allMergeSorted      bool
+		dedupAll            bool
+		tailSizeCap         int
+		offHeap             bool
+		chunkedColumnPolicy objectio.ChunkedColumnPolicy
 	}
 	fSinker struct {
 		executor FileSinker
@@ -375,6 +415,7 @@ type Sinker struct {
 		inMemStats          sinkerStats
 		inMemory            []*batch.Batch
 		persisted           []objectio.ObjectStats
+		unpublished         []string
 		inMemorySize        int
 		memorySizeThreshold int
 	}
@@ -471,7 +512,7 @@ func DeleteUnpublishedObjects(
 		)
 		err := fs.Delete(deleteCtx, unique[start:end]...)
 		cancel()
-		if err != nil {
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return len(unique), errors.Join(
 				moerr.NewInternalErrorf(
 					ctx, "delete unpublished objects [%d:%d]", start, end),
@@ -482,11 +523,12 @@ func DeleteUnpublishedObjects(
 	return len(unique), nil
 }
 
-// DeletePersisted deletes every object that this sinker has successfully
-// persisted but has not transferred out of its lifecycle yet. Callers use it
-// when a larger operation aborts after one or more spills. The tracked object
-// references are retained when deletion fails so the caller may retry.
-func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
+// DeletePersisted deletes every object that this sinker has persisted, or may
+// have persisted after a commit-ambiguous Sync error, but has not transferred
+// out of its lifecycle yet. It returns the exact ownership snapshot on both
+// success and failure. The tracked references are retained when deletion fails
+// so the caller may retry or hand them off before closing the sinker.
+func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		// A failed pipeline may still have successful sibling writes. Wait for
 		// all of them before taking the ownership snapshot.
@@ -494,7 +536,9 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 	}
 
 	files := make([]string, 0,
-		len(sinker.staged.persisted)+len(sinker.result.persisted))
+		len(sinker.staged.persisted)+len(sinker.result.persisted)+
+			len(sinker.staged.unpublished))
+	files = append(files, sinker.staged.unpublished...)
 	appendStats := func(stats []objectio.ObjectStats) {
 		for i := range stats {
 			files = append(files, stats[i].ObjectName().String())
@@ -505,21 +549,25 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.mu.RLock()
 		appendStats(sinker.pipe.result.persisted)
+		files = append(files, sinker.pipe.result.unpublished...)
 		sinker.pipe.result.mu.RUnlock()
 	}
-	count, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
+	files = normalizeUnpublishedObjectNames(files)
+	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
-		return count, err
+		return files, err
 	}
 
 	sinker.staged.persisted = sinker.staged.persisted[:0]
 	sinker.result.persisted = sinker.result.persisted[:0]
+	sinker.staged.unpublished = sinker.staged.unpublished[:0]
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.mu.Lock()
 		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
+		sinker.pipe.result.unpublished = sinker.pipe.result.unpublished[:0]
 		sinker.pipe.result.mu.Unlock()
 	}
-	return count, nil
+	return files, nil
 }
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
@@ -747,10 +795,21 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
 	if err != nil {
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, name)
+		}
 		return err
 	}
 	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
 	return nil
+}
+
+func activeFileSinkerObjectName(sinker FileSinker) string {
+	namer, ok := sinker.(activeObjectNamer)
+	if !ok {
+		return ""
+	}
+	return namer.ActiveObjectName()
 }
 
 // trySpillMergeSortStreaming merge-sorts staged data and streams each full
@@ -994,6 +1053,19 @@ func (sinker *Sinker) WriteOwned(
 	ctx context.Context,
 	data *batch.Batch,
 ) (owned bool, err error) {
+	if data == nil {
+		return false, moerr.NewInvalidInput(ctx, "Sinker.WriteOwned requires a batch")
+	}
+	for index, vec := range data.Vecs {
+		if vec == nil {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned batch has a nil vector at column %d", index)
+		}
+		if vec.HasBorrowedBacking() || vec.NeedDup() {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned requires unique-owned vector backing at column %d", index)
+		}
+	}
 	if data.RowCount() != objectio.BlockMaxRows {
 		return false, sinker.Write(ctx, data)
 	}
@@ -1149,6 +1221,7 @@ func (sinker *Sinker) Close() error {
 	}
 	sinker.result.tail = nil
 	sinker.staged.persisted = nil
+	sinker.staged.unpublished = nil
 	if sinker.fSinker.executor != nil {
 		sinker.fSinker.executor.Close()
 		sinker.fSinker.executor = nil

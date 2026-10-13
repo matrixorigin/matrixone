@@ -95,6 +95,22 @@ drop table t1;
 create table t1(a datetime,b datetime,c varchar);
 insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+drop table t1;
+
+drop table if exists t_outer_apply_empty;
+create table t_outer_apply_empty(id int primary key, j json, start_v int, stop_v int);
+insert into t_outer_apply_empty values(1, '{"a":1}', 1, 1), (2, null, 1, 0);
+select t.id, u.`index`, u.value
+from t_outer_apply_empty t outer apply unnest(t.j, '$') u
+order by t.id, u.`index`;
+select t.id, u.`index`, u.value
+from t_outer_apply_empty t cross apply unnest(t.j, '$') u
+order by t.id, u.`index`;
+select t.id, g.result
+from t_outer_apply_empty t outer apply generate_series(t.start_v, t.stop_v, 1) g
+order by t.id, g.result;
+drop table t_outer_apply_empty;
+
 drop table if exists t_apply_prepare_fault;
 create table t_apply_prepare_fault(a int, b int);
 insert into t_apply_prepare_fault values(1,3);

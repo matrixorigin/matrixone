@@ -146,7 +146,7 @@ func deparseLiteral(expr *plan.Expr, lit *plan.Literal, loc *time.Location) (str
 		// containing one cannot be pushed to a source of unknown mode. Refuse
 		// it rather than emit text that parses differently — or breaks out —
 		// on the far side.
-		if lit.IsBin || !isPrintableText(val.Sval) ||
+		if lit.IsBin || lit.IsSerialized || !isPrintableText(val.Sval) ||
 			strings.ContainsRune(val.Sval, '\\') {
 			return "", false
 		}

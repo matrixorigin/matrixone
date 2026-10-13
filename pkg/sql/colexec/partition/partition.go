@@ -64,6 +64,12 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	} else {
 		partition.OpAnalyzer.Reset()
 	}
+	if partition.Limit != nil {
+		return partition.prepareTopN(proc)
+	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.prepareHash(proc)
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -73,18 +79,39 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	ctr.batchList = make([]*batch.Batch, 0, 16)
 	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
-	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
+	// Literal keys are equal across rows and batches; omit them from both
+	// execution and comparison without changing the operator's plan specs.
+	specs := nonLiteralOrderSpecs(partition.OrderBySpecs)
+	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(specs))
 	for i := range partition.ctr.executors {
-		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, partition.OrderBySpecs[i].Expr)
+		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, specs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	ctr.generateCompares(partition.OrderBySpecs)
+	ctr.generateCompares(specs)
 	return nil
 }
 
+// nonLiteralOrderSpecs keeps evaluator and comparator positions aligned.
+// Literals are equal across batches; runtime constant columns need not be.
+func nonLiteralOrderSpecs(specs []*plan2.OrderBySpec) []*plan2.OrderBySpec {
+	keys := make([]*plan2.OrderBySpec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Expr.GetLit() == nil {
+			keys = append(keys, spec)
+		}
+	}
+	return keys
+}
+
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
+	if partition.Limit != nil {
+		return partition.callTopN(proc)
+	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.callHash(proc)
+	}
 	analyzer := partition.OpAnalyzer
 
 	ctr := &partition.ctr
@@ -181,7 +208,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		}
 
 		exprTyp := fs[i].Expr.Typ
-		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
+		typ := types.MustTypeFromPlan(exprTyp)
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
 }
@@ -209,7 +236,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {
-			if choice, hasSame = ctr.pickSameRow(row, cols); !hasSame {
+			if choice, hasSame = ctr.pickSameRow(row, cols, choice); !hasSame {
 				break
 			}
 		}
@@ -272,10 +299,13 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 	return i
 }
 
-func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex int, hasSame bool) {
+func (ctr *container) pickSameRow(row int64, cols []*vector.Vector, first int) (batIndex int, hasSame bool) {
 	l := len(ctr.indexList)
 
-	j := 0
+	// Only the previously selected batch advanced. Earlier heads were already
+	// different from this group and cannot become equal without advancing.
+	// A new group or removal restarts through pickFirstRow in pickAndSend.
+	j := first
 	for ; j < l; j++ {
 		hasSame = true
 		for k := 0; k < len(ctr.compares); k++ {

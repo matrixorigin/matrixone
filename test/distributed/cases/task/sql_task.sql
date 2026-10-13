@@ -50,7 +50,7 @@ select count(*) from manual_events;
 alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
 execute task sql_task_cron;
 select count(*) from scheduled_events;
-select sleep(1);
+-- @wait_expect(1, 10)
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
 execute task sql_task_manual;
@@ -65,7 +65,7 @@ alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
 select count(*) from scheduled_events;
-select sleep(1);
+-- @wait_expect(1, 10)
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
 create task sql_task_gate when (exists(select 1 from gate_source where id = 1)) as begin insert into gate_sink select 'gate-ok' where not exists (select 1 from gate_sink where tag = 'gate-ok'); end;
@@ -112,8 +112,9 @@ execute task sql_task_overlap;
 
 select sleep(1);
 execute task sql_task_overlap;
-select sleep(5);
+-- @wait_expect(1, 10)
 select count(*) from overlap_sink;
+-- @wait_expect(1, 10)
 select status from mo_task.sql_task_run where task_name = 'sql_task_overlap' order by run_id desc limit 2;
 
 use sql_task_case;
@@ -189,11 +190,13 @@ select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_liter
 
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
+set @sql_task_tenant_id = (select account_id from mo_catalog.mo_account where account_name = 'sql_task_tenant');
 
 -- @session:id=2&user=sql_task_tenant:admin:accountadmin&password=111
 create database if not exists tenant_task_case;
 use tenant_task_case;
 create table tenant_sink(v int primary key);
+create task tenant_task_never_run schedule '0 0 0 1 1 *' timezone 'UTC' as begin insert into tenant_sink values (2); end;
 create task tenant_task_show schedule '0 0 0 1 1 *' timezone 'UTC' when (1) timeout '30s' as begin insert into tenant_sink select 1 where not exists (select 1 from tenant_sink where v = 1); end;
 execute task tenant_task_show;
 alter task tenant_task_show set when (0);
@@ -204,9 +207,14 @@ execute task tenant_task_show;
 -- @ignore:0,4,5,6,8
 show task runs for tenant_task_show limit 2;
 select count(*) from tenant_sink;
-drop task if exists tenant_task_show;
-drop database if exists tenant_task_case;
 -- @session
+
+set @tenant_task_never_run_id = (select task_id from mo_task.sql_task where account_id = @sql_task_tenant_id and task_name = 'tenant_task_never_run');
+set @tenant_task_show_id = (select task_id from mo_task.sql_task where account_id = @sql_task_tenant_id and task_name = 'tenant_task_show');
+drop account sql_task_tenant;
+select count(*) from mo_task.sql_task where account_id = @sql_task_tenant_id;
+select count(*) from mo_task.sql_task_run where account_id = @sql_task_tenant_id;
+select count(*) from mo_task.sys_async_task where task_parent_id in (concat('sql-task:', @tenant_task_never_run_id), concat('sql-task:', @tenant_task_show_id));
 
 drop task if exists sql_task_validate;
 drop task if exists sql_task_build_gold;

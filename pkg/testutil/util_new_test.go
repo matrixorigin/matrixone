@@ -15,10 +15,14 @@
 package testutil
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,8 +30,42 @@ const (
 	Rows = 10
 )
 
+func TestSetupAutoIncrServiceIsIdempotent(t *testing.T) {
+	const sid = "testutil-auto-increment-idempotence"
+	const workers = 16
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, sid, nil)
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+
+	results := make(chan incrservice.AutoIncrementService, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			SetupAutoIncrService(sid)
+			results <- incrservice.GetAutoIncrementService(sid)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	first := <-results
+	require.NotNil(t, first)
+	t.Cleanup(func() {
+		first.Close()
+		rt.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, first)
+	})
+	for result := range results {
+		require.Same(t, first, result)
+	}
+
+	SetupAutoIncrService(sid)
+	require.Same(t, first, incrservice.GetAutoIncrementService(sid))
+}
+
 func TestNewBatch(t *testing.T) {
 	m := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
 	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0)}, true, Rows, m)
 	bat.Clean(m)
 	require.Equal(t, int64(0), m.CurrNB())
@@ -35,6 +73,7 @@ func TestNewBatch(t *testing.T) {
 
 func TestVector(t *testing.T) {
 	m := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
 	{
 		vec := NewVector(Rows, types.New(types.T_bool, 0, 0), m, true, nil)
 		vec.Free(m)

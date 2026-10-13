@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -58,11 +59,93 @@ func Test_runSql(t *testing.T) {
 	require.Error(t, err, "internal error: no account id in context")
 }
 
+func TestGeneratedCompositeKeysUseBinaryStringDomain(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}},
+			MakeHiddenColDefByName(catalog.CPrimaryKeyColName),
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+		},
+	}
+	tableDef.Pkey.CompPkeyCol = tableDef.Cols[2]
+
+	expr := makeCompPkeyExpr(tableDef, map[string]int32{"a": 0, "b": 1})
+	require.NotNil(t, expr)
+	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+	require.Equal(t, int32(types.MaxVarcharLen), expr.Typ.Width)
+	require.Equal(t, uint32(types.CharsetBinary), expr.Typ.Charset)
+	require.Equal(t, tableDef.Pkey.CompPkeyCol.Typ, expr.Typ,
+		"generated and stored composite identities must have one canonical type")
+
+	tableDef.ClusterBy = &plan.ClusterByDef{
+		Name: planutil.BuildCompositeClusterByColumnName([]string{"a", "b"}),
+	}
+	clusterExpr := makeClusterByExpr(tableDef, map[string]int32{"a": 0, "b": 1})
+	require.NotNil(t, clusterExpr)
+	require.Equal(t, makeHiddenColTyp(), clusterExpr.Typ,
+		"generated composite cluster keys are opaque serialized bytes too")
+}
+
 func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 	sql := GetSqlForFkReferredTo("db\\name", "quote'src")
 	require.Contains(t, sql, "refer_db_name = 'db\\\\name'")
 	require.Contains(t, sql, "refer_table_name = 'quote\\'src'")
 	require.Contains(t, sql, "table_name != 'quote\\'src'")
+}
+
+func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
+	ctx := NewEmptyCompilerContext(nil)
+	ctx.tables[catalog.MOForeignKeys] = &TableDef{
+		Name: catalog.MOForeignKeys,
+		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
+	}
+	layout, err := resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogLegacy, layout)
+
+	ctx.tables[catalog.MOForeignKeys].Cols = append(ctx.tables[catalog.MOForeignKeys].Cols,
+		&ColDef{Name: "on_update_origin"})
+	layout, err = resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogExtended, layout)
+}
+
+func TestLegacyForeignKeyCatalogSQLAvoidsNewColumns(t *testing.T) {
+	readSQL := getSqlForFkReferredToWithCatalogLayout("parent_db", "parent", foreignKeyCatalogLegacy)
+	require.NotContains(t, readSQL, "referenced_index_name")
+	require.NotContains(t, readSQL, "on_delete_origin")
+	require.Contains(t, readSQL, "on_update from `mo_catalog`.`mo_foreign_keys`")
+
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:           "fk_child_parent",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"parent_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+	insertSQL := getSqlForAddFkWithCatalogLayout("child_db", "child", fkData, foreignKeyCatalogLegacy)
+	require.NotContains(t, insertSQL, "referenced_index_name")
+	require.NotContains(t, insertSQL, "on_delete_origin")
+	require.Contains(t, insertSQL, "on_delete, on_update) values")
+}
+
+func TestLegacyForeignKeyActionOriginIsConservative(t *testing.T) {
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("RESTRICT"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("NO ACTION"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT.String(),
+		legacyForeignKeyActionOrigin("CASCADE"))
 }
 
 func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
@@ -88,10 +171,57 @@ func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "'parent\\'col'")
 }
 
+func TestGetSqlForAddFkRecordsCompositeColumnOrder(t *testing.T) {
+	fkData := &FkData{
+		Def:  &plan.ForeignKeyDef{Name: "fk_child_parent"},
+		Cols: &plan.FkColName{Cols: []string{"child_first", "child_second"}},
+		ColsReferred: &plan.FkColName{Cols: []string{
+			"parent_first", "parent_second",
+		}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "('fk_child_parent','1','child_db','0','child','0','child_first'")
+	require.Contains(t, sql, "('fk_child_parent','2','child_db','0','child','0','child_second'")
+	require.Contains(t, GetSqlForFkReferredTo("parent_db", "parent"),
+		"order by db_name, table_name, constraint_name, constraint_id")
+}
+
+func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:           "fk_default_action",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"child_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"parent_id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "'NO_ACTION','NO_ACTION'")
+	require.Contains(t, sql, "'ACTION_ORIGIN_DEFAULT','ACTION_ORIGIN_DEFAULT'")
+}
+
+func TestGetSqlForUpdateFkReferencedIndexEscapesCatalogValues(t *testing.T) {
+	require.Equal(t,
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'uk\\'parent' where db_name = 'child\\'db' and table_name = 'child\\\\table' and constraint_name = 'fk\\'child'",
+		GetSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
+	)
+}
+
 func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
 	require.Contains(t, sql, "db_name != 'db\\'name'")
+	require.Contains(t, sql, "refer_table_name in (select relname from `mo_catalog`.`mo_tables`")
+	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name' and relkind != '"+catalog.SystemViewRel+"'")
 }
 
 func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
@@ -130,9 +260,9 @@ func TestGetSqlForAddFkEscapesCatalogValues(t *testing.T) {
 	}
 
 	require.Equal(t,
-		"insert into `mo_catalog`.`mo_foreign_keys`   values "+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
+		"insert into `mo_catalog`.`mo_foreign_keys` (constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update, referenced_index_name, on_delete_origin, on_update_origin) values "+
+			"('fk\\\\name\\'one','1','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT'),"+
+			"('fk\\\\name\\'one','2','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT')",
 		getSqlForAddFk(`child'db\part`, `child\table'name`, fk),
 	)
 }
@@ -164,7 +294,9 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		"update `mo_catalog`.`mo_foreign_keys` set refer_column_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'table\\'name\\\\part' and refer_column_name = 'old\\'name\\\\part' ; ",
 	}, getSqlForRenameColumn(db, table, oldName, newName))
 	require.Equal(t,
-		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part';",
+		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part' "+
+			"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
+			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part' and relkind != '"+catalog.SystemViewRel+"');",
 		getSqlForCheckHasDBRefersTo(db))
 }
 
@@ -230,6 +362,74 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
+}
+
+func TestMakeInsertValueConstExprBoolUsesNonZeroNumericSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_bool.ToType()
+	testCases := []struct {
+		name  string
+		value *tree.NumVal
+		want  bool
+	}{
+		{
+			name:  "signed positive non-one",
+			value: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "signed negative",
+			value: tree.NewNumVal(int64(-1), "-1", true, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "unsigned positive non-one",
+			value: tree.NewNumVal(uint64(2), "2", false, tree.P_uint64),
+			want:  true,
+		},
+		{
+			name:  "zero remains false",
+			value: tree.NewNumVal(int64(0), "0", false, tree.P_int64),
+			want:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := MakeInsertValueConstExpr(proc, tc.value, &colType, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_bool), expr.Typ.Id)
+			require.Equal(t, tc.want, expr.GetLit().GetBval())
+		})
+	}
+
+	nullExpr, err := MakeInsertValueConstExpr(proc,
+		tree.NewNumVal("NULL", "NULL", false, tree.P_null), &colType, false)
+	require.NoError(t, err)
+	require.True(t, nullExpr.GetLit().Isnull)
+}
+
+func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_time.ToTypeWithScale(6)
+
+	for _, value := range []string{
+		"2562047788:00:00", "-2562047788:00:00",
+		"25620477880000", "-25620477880000",
+	} {
+		t.Run(value, func(t *testing.T) {
+			numVal := tree.NewNumVal(value, value, false, tree.P_char)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_time), expr.Typ.Id)
+
+			fn := expr.GetF()
+			require.NotNil(t, fn)
+			require.Contains(t, []string{"cast_strict", "cast_assign"}, fn.Func.ObjName)
+			require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
+			require.Equal(t, value, fn.Args[0].GetLit().GetSval())
+		})
+	}
 }
 
 func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
@@ -346,7 +546,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -457,7 +657,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -511,6 +711,14 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		"tenant": 2,
 	}
 
+	extractJoinNode := func(t *testing.T, builder *QueryBuilder, nodeID int32) *plan.Node {
+		t.Helper()
+		output := builder.qry.Nodes[nodeID]
+		require.Equal(t, plan.Node_PROJECT, output.NodeType)
+		require.Len(t, output.BindingTags, 1)
+		require.Len(t, output.Children, 1)
+		return builder.qry.Nodes[output.Children[0]]
+	}
 	extractLookupExpr := func(t *testing.T, joinNode *plan.Node) *plan.Expr {
 		t.Helper()
 		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
@@ -522,7 +730,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Len(t, joinFn.Args, 2)
 		return joinFn.Args[1]
 	}
-	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64) {
+	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64, tag int32) {
 		t.Helper()
 
 		castFn := expr.GetF()
@@ -535,13 +743,14 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Equal(t, "substring", substringFn.Func.ObjName)
 		require.Len(t, substringFn.Args, 3)
 		require.Equal(t, colName, substringFn.Args[0].GetCol().Name)
-		require.Equal(t, int32(1), substringFn.Args[0].GetCol().RelPos)
+		require.Equal(t, tag, substringFn.Args[0].GetCol().RelPos)
 		require.Equal(t, int64(1), substringFn.Args[1].GetLit().GetI64Val())
 		require.Equal(t, length, substringFn.Args[2].GetLit().GetI64Val())
 	}
 
 	t.Run("single prefix part", func(t *testing.T) {
 		builder, bindCtx, lastNodeID := newBuilder(t)
+		builder.qry.HasForeignKeyAction = true
 
 		gotNodeID, err := appendDeleteIndexTablePlan(
 			builder,
@@ -555,12 +764,94 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
-		requirePrefixExpr(t, lookupExpr, "body", 8)
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		require.Len(t, joinNode.Children, 2)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		source := builder.qry.Nodes[joinNode.Children[1]]
+		require.Len(t, indexScan.BindingTags, 1)
+		require.Len(t, source.BindingTags, 1)
+		require.NotEqual(t, indexScan.BindingTags[0], source.BindingTags[0])
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		lookupExpr := extractLookupExpr(t, joinNode)
+		requirePrefixExpr(t, lookupExpr, "body", 8, source.BindingTags[0])
+	})
+
+	t.Run("foreign key action preserves source rows", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			false, true, true, false, false,
+		)
+
+		require.NoError(t, err)
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		require.Equal(t, plan.Node_LEFT, joinNode.JoinType)
+		require.False(t, joinNode.IsRightJoin)
+		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
+		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("post-createQuery FK action uses local ABI without runtime filter", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			true, false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, indexScan.BindingTags)
+		require.Empty(t, builder.qry.Nodes[joinNode.Children[1]].BindingTags)
+		require.Len(t, joinNode.OnList, 1)
+	})
+
+	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body_tenant"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body", "tenant"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			false, false, false, true, false,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Equal(t, plan.Node_INNER, joinNode.JoinType)
+		require.False(t, joinNode.IsRightJoin)
+		require.NotEmpty(t, joinNode.ProjectList)
+		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -578,17 +869,18 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false,
+			false, true, false, false, false,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial_full", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, builder.qry.Nodes[joinNode.Children[1]].BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 
@@ -607,23 +899,95 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, builder.qry.Nodes[joinNode.Children[1]].BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 }
 
+func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	builder := NewQueryBuilder(plan.Query_DELETE, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	sourceTag := builder.genNewBindTag()
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+	keyType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	sourceID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Typ: rowIDType},
+			{Name: catalog.IndexTableIndexColName, Typ: keyType},
+		}},
+		ProjectList: []*plan.Expr{
+			{Typ: rowIDType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: 0}}},
+			{Typ: keyType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: 1}}},
+		},
+		BindingTags: []int32{sourceTag},
+	}, bindCtx)
+	delInfo := &deleteNodeInfo{
+		objRef:             &plan.ObjectRef{ObjName: "idx_unique"},
+		tableDef:           &plan.TableDef{Name: "idx_unique"},
+		deleteIndex:        0,
+		pkPos:              1,
+		pkTyp:              keyType,
+		preserveProjection: true,
+	}
+
+	deleteID, err := makeOneDeletePlan(builder, bindCtx, sourceID, delInfo, true, false, false)
+	require.NoError(t, err)
+	deleteNode := builder.qry.Nodes[deleteID]
+	require.Equal(t, plan.Node_DELETE, deleteNode.NodeType)
+	require.Equal(t, int32(0), deleteNode.DeleteCtx.RowIdIdx)
+	require.Equal(t, int32(1), deleteNode.DeleteCtx.PrimaryKeyIdx)
+
+	deleteProject := builder.qry.Nodes[deleteNode.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, deleteProject.NodeType)
+	require.Len(t, deleteProject.ProjectList, 2)
+	require.Len(t, deleteProject.BindingTags, 1)
+	lockNode := builder.qry.Nodes[deleteProject.Children[0]]
+	require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+	require.Equal(t, int32(1), lockNode.LockTargets[0].PrimaryColIdxInBat)
+	filterNode := builder.qry.Nodes[lockNode.Children[0]]
+	require.Equal(t, plan.Node_FILTER, filterNode.NodeType)
+	compactProject := builder.qry.Nodes[filterNode.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, compactProject.NodeType)
+	require.Len(t, compactProject.ProjectList, 2)
+	require.Len(t, compactProject.BindingTags, 1)
+	compactTag := compactProject.BindingTags[0]
+	require.NotEqual(t, sourceTag, compactTag)
+	require.Equal(t, []int32{compactTag}, filterNode.BindingTags)
+	require.Empty(t, lockNode.BindingTags)
+	require.Equal(t, compactTag, filterNode.FilterList[0].GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, compactTag, lockNode.LockTargets[0].PrimaryColRelPos)
+
+	_, err = builder.remapAllColRefs(
+		deleteID,
+		0,
+		make(map[[2]int32]int),
+		make(map[[2]int32]bool),
+		make(map[[2]int32]int),
+	)
+	require.NoError(t, err)
+	require.Len(t, lockNode.ProjectList, 2)
+	require.Len(t, filterNode.ProjectList, 2)
+	require.Len(t, compactProject.ProjectList, 2)
+	require.Len(t, deleteProject.ProjectList, 2)
+	require.Equal(t, int32(0), deleteNode.DeleteCtx.RowIdIdx)
+	require.Equal(t, int32(1), deleteNode.DeleteCtx.PrimaryKeyIdx)
+}
+
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	emp := mock.ctxt.tables["emp"]
 	require.NotNil(t, emp)
 	require.NotEmpty(t, emp.Indexes)

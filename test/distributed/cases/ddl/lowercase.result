@@ -151,7 +151,18 @@ t3_ID
 SELECT t3.ID AS t3_ID FROM t3 LIMIT 1;
 t3_ID
 1
-SELECT * FROM t2 left join t3 ON (test.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+id    word    id    word
+INSERT INTO t3 VALUES (3, 'matched');
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+id    word    id    word
+3    c    3    matched
+SELECT * FROM t2 left join t3 ON (test.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+invalid input: missing FROM-clause entry for table 't2'
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+invalid input: missing FROM-clause entry for table 't3'
+DELETE FROM t3 WHERE id = 3;
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
 id    word    id    word
 DROP TABLE t2;
 DROP TABLE t3;
@@ -347,8 +358,8 @@ DROP VIEW IF EXISTS vie;
 CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
-View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,47,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+vie  ¦  create view `vie` as select `tab`.`field` as `field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -358,8 +369,8 @@ INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
-View    Create View    character_set_client    collation_connection
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
+➤ View[12,4,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+view01  ¦  create view `view01` as select `t13`.`a` as `a` from `t13` where `t13`.`a` = 1 or `t13`.`a` = 2  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SELECT * FROM view01;
 a
 1
@@ -483,7 +494,7 @@ id    name    age
 2    Bob    25
 show CREATE TABLE `t17`;
 Table    Create Table
-t17    CREATE TABLE `t17` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
+t17    CREATE TABLE `t17` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `Idx` (`name`)\n)
 DROP TABLE `t17`;
 DROP SEQUENCE IF EXISTS `SEQ`;
 CREATE SEQUENCE `SEQ` increment 100 start 30;
@@ -584,8 +595,8 @@ CREATE TABLE `TaB`(Field int);
 INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
-View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,47,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+vie  ¦  create view `vie` as select `tab`.`field` as `field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;

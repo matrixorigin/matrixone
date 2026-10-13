@@ -40,7 +40,7 @@ func makeCountBatch(proc *process.Process, n int64) *batch.Batch {
 }
 
 func TestFetchSrcTableRowCount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	t.Run("happy path returns count", func(t *testing.T) {
 		var capturedSQL string
@@ -108,4 +108,15 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.Error(t, err)
 	})
+}
+
+// buildSnapshotTS is the version an index build reflects, recorded as metadata.build_ts. With no
+// process or no transaction there is nothing to name, and it must report unknown rather than a
+// wall-clock stand-in -- the distinction build_ts exists to make.
+func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
+	require.EqualValues(t, 0, buildSnapshotTS(nil), "no process => unknown")
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = nil
+	require.EqualValues(t, 0, buildSnapshotTS(proc), "no transaction => unknown")
 }

@@ -154,6 +154,12 @@ func (node *AppendNode) ApplyRollback() (err error) {
 }
 
 func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
+	return node.WriteToVersion(w, IOET_WALTxnCommand_AppendNode_CurrVer)
+}
+
+func (node *AppendNode) WriteToVersion(
+	w io.Writer, version uint16,
+) (n int64, err error) {
 	cn, err := w.Write(common.EncodeID(node.mvcc.GetID()))
 	if err != nil {
 		return
@@ -178,10 +184,22 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
+	if version >= IOET_WALTxnCommand_AppendNode_V2 {
+		if sn1, err = w.Write(types.EncodeBool(&node.Aborted)); err != nil {
+			return
+		}
+		n += int64(sn1)
+	}
 	return
 }
 
 func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
+	return node.ReadFromVersion(r, IOET_WALTxnCommand_AppendNode_CurrVer)
+}
+
+func (node *AppendNode) ReadFromVersion(
+	r io.Reader, version uint16,
+) (n int64, err error) {
 	var sn int
 	if node.id == nil {
 		node.id = &common.ID{}
@@ -208,14 +226,25 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
+	if version >= IOET_WALTxnCommand_AppendNode_V2 {
+		if sn, err = r.Read(types.EncodeBool(&node.Aborted)); err != nil {
+			return
+		}
+		n += int64(sn)
+	} else {
+		node.Aborted = false
+	}
 	return
 }
 
 func (node *AppendNode) PrepareRollback() (err error) {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
-	node.mvcc.DeleteAppendNodeLocked(node)
-	return
+	// Append data and its PK index entry are installed before commit. Keep the
+	// MVCC owner for that physical range and mark it aborted; removing the node
+	// would leave the rows ownerless and makes a later flush unable to persist
+	// the rollback hole.
+	return node.TxnMVCCNode.PrepareRollback()
 }
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)

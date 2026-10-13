@@ -60,7 +60,7 @@ var (
 			Namespace: "mo",
 			Subsystem: "task",
 			Name:      "checkpoint_retry_total",
-			Help:      "Total number of forced checkpoint retries by reason.",
+			Help:      "Total number of checkpoint-related retries by reason.",
 		}, []string{"reason"})
 
 	TaskForceICKPPendingRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
@@ -71,6 +71,9 @@ var (
 	)
 	TaskForceGCKPFreshICKPRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
 		"force_gckp_fresh_ickp",
+	)
+	TaskSnapshotReadRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"snapshot_read_lag",
 	)
 )
 

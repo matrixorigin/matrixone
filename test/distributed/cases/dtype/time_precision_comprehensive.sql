@@ -86,15 +86,43 @@ INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS 
 -- Round to next hour: 59:59.999999 -> next hour
 INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
 
--- Maximum TIME boundary: 838:59:59.999999
-INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
+-- Maximum value that rounds within the TIME(0) boundary
+INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.499999' AS TIME(0)));
 
--- Expected results: 12:34:57, 12:35:00, 13:00:00, 839:00:00
+-- Expected results: 12:34:57, 12:35:00, 13:00:00, 838:59:59
 SELECT id, description, t0
 FROM t_time_boundary
 ORDER BY id;
 
 DROP TABLE t_time_boundary;
+
+-- TIME columns accept only the whole-second endpoint in strict mode.
+DROP TABLE IF EXISTS t_time_range;
+CREATE TABLE t_time_range (id INT, t6 TIME(6));
+SET @time_range_old_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO t_time_range VALUES (1, '838:59:59.000000');
+INSERT INTO t_time_range VALUES (2, '838:59:59.000001');
+INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
+-- A syntactically valid value beyond MatrixOne's internal duration range must
+-- still follow the TIME-column assignment boundary rather than fail parsing.
+INSERT INTO t_time_range VALUES (4, '2562047788:00:00');
+INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
+-- Quoted compact TIME text is invalid input, unlike an unquoted numeric
+-- coercion. Strict mode returns 1292 instead of range clipping it.
+INSERT INTO t_time_range VALUES (6, '25620477880000');
+INSERT INTO t_time_range VALUES (7, '-25620477880000');
+-- Non-strict assignment stores zero and retains warning 1265. Keep each
+-- statement separate: VALUES literals are cast independently by the insert
+-- executor, so each statement has its own row-numbering context.
+SET SESSION sql_mode = '';
+INSERT INTO t_time_range VALUES (8, '25620477880000');
+SHOW WARNINGS;
+INSERT INTO t_time_range VALUES (9, '-25620477880000');
+SHOW WARNINGS;
+SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
+SET SESSION sql_mode = @time_range_old_sql_mode;
+DROP TABLE t_time_range;
 
 -- ============================================================================
 -- Test 4: Negative TIME values
@@ -277,4 +305,3 @@ FROM t_time_dateadd;
 DROP TABLE t_time_dateadd;
 
 DROP DATABASE test_time_precision;
-

@@ -40,7 +40,7 @@ not supported: Cagra does not support 'bf16' quantization (no GPU bfloat16 stora
 create index ixbq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'bf16';
 not supported: IvfPQ does not support 'bf16' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'
 create index ixv using cagra on t (v) op_type 'vector_l2_ops' INCLUDE (lbl);
-not supported: INCLUDE column 'lbl' has unsupported type VARCHAR (supported: int32, int64, float32, float64)
+not supported: INCLUDE column 'lbl' has unsupported type VARCHAR (supported: INT, BIGINT, FLOAT, DOUBLE)
 create index ixok using cagra on t (v)
 op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
 select id from t order by l2_distance(v, '[1,2,3]') asc limit 1;

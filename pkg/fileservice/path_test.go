@@ -17,7 +17,9 @@ package fileservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseS3OrFilePath(t *testing.T) {
@@ -72,4 +74,23 @@ func TestParsePath(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "sjrq=20200504/a.parquet", path.File)
 	assert.Equal(t, "sjrq=20200504/a.parquet", path.String())
+}
+
+func TestParseFilePathAtServiceRejectsRoot(t *testing.T) {
+	for _, filePath := range []string{
+		"", "/", ".", "./", "dir/..", "dir/../",
+		"etl:", "etl:/", "etl:.", "etl:dir/..",
+	} {
+		t.Run(filePath, func(t *testing.T) {
+			_, err := parseFilePathAtService(filePath, "etl")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+		})
+	}
+
+	parsed, err := parseFilePathAtService("etl:/file", "etl")
+	require.NoError(t, err)
+	require.Equal(t, "file", parsed.File)
+
+	_, err = parseFilePathAtService("other:file", "etl")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongService), "got %v", err)
 }

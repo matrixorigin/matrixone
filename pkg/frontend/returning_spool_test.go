@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type returningProtocolRecorder struct {
@@ -176,11 +177,24 @@ func returningTestBatch(t *testing.T, ses *Session, values ...int64) *batch.Batc
 	return bat
 }
 
+func newReturningSpoolSession(t *testing.T) *Session {
+	t.Helper()
+	ses := newValidateSession(t)
+	// Spool ownership tests need a private fixed ledger. Ambient CN headroom
+	// and another fixture's shared cap must not change their failure boundary.
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+	require.NoError(t, ses.proc.SetExecutionResourceBudgetForTesting(generation))
+	return ses
+}
+
 func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	spool := &returningSpool{}
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spool.Close())
@@ -200,6 +214,12 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.Zero(t, budget.SpillFDUsed())
 
 	final := returningTestBatch(t, ses, 7, 8, 9)
+	binaryValues := vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"a", "b", "c"} {
+		require.NoError(t, vector.AppendBytes(binaryValues, []byte(value), false, ses.proc.Mp()))
+	}
+	require.NoError(t, binaryValues.SetBinaryStringRowsWithMP([]bool{true, false, true}, ses.proc.Mp()))
+	final.Vecs = append(final.Vecs, binaryValues)
 	defer final.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 1, ses.proc))
 	require.NoError(t, spool.Write(1, final, nil))
@@ -214,16 +234,19 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 		got = got[:0]
 		require.NoError(t, spool.Replay(ctx, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 			got = append(got, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
+			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(0))
+			require.False(t, bat.Vecs[1].GetBinaryStringMetadataAt(1))
+			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(2))
 			return nil
 		}))
 		require.Equal(t, []int64{7, 8, 9}, got)
-		require.Zero(t, budget.Used(), "replay must not create an estimated HashBuild charge")
+		require.Zero(t, budget.Used(), "replay must not create an estimated execution-resource charge")
 	}
 }
 
 func TestDeferredReturningResponseStartsAfterPublish(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -266,7 +289,7 @@ func TestDeferredReturningResponseStartsAfterPublish(t *testing.T) {
 
 func TestDeferredReturningReplayOutputWaitStaysRootOwned(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -309,7 +332,7 @@ func TestDeferredReturningReplayOutputWaitStaysRootOwned(t *testing.T) {
 
 func TestDeferredReturningZeroRowsStillSendsMetadata(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -340,7 +363,7 @@ func TestDeferredReturningZeroRowsStillSendsMetadata(t *testing.T) {
 
 func TestDeferredReturningPublishFailureDoesNotHideCommittedRows(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -380,7 +403,7 @@ func TestDeferredReturningPublishFailureDoesNotHideCommittedRows(t *testing.T) {
 
 func TestReturningCommitFailureAbortsStageBeforeProtocol(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	var events []string
 	state := &returningState{
 		spool:       &returningSpool{},
@@ -396,10 +419,10 @@ func TestReturningCommitFailureAbortsStageBeforeProtocol(t *testing.T) {
 
 func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	spool := &returningSpool{}
@@ -434,7 +457,7 @@ func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 
 func TestReturningQueryResultStagesPhysicalZeroRowBlock(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	installReturningAccountingFileService(t, ses)
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx = resource.ContextWithRoot(ctx, root)
@@ -464,7 +487,7 @@ func TestReturningQueryResultStagesPhysicalZeroRowBlock(t *testing.T) {
 
 func TestReturningQueryResultPublishesStageAndMetadataAccounting(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	installReturningAccountingFileService(t, ses)
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx = resource.ContextWithRoot(ctx, root)
@@ -497,7 +520,7 @@ func TestReturningQueryResultPublishesStageAndMetadataAccounting(t *testing.T) {
 
 func TestReturningQueryResultPublishFailureAccountsAbort(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	accountingFS := installReturningAccountingFileService(t, ses)
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx = resource.ContextWithRoot(ctx, root)
@@ -527,7 +550,7 @@ func TestReturningQueryResultPublishFailureAccountsAbort(t *testing.T) {
 
 func TestReturningQueryResultStageFailureAccountsAbort(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	accountingFS := installReturningAccountingFileService(t, ses)
 	accountingFS.failWrites = true
 	root := resource.NewRoot(resource.ConnExternal)
@@ -556,7 +579,7 @@ func TestReturningQueryResultStageFailureAccountsAbort(t *testing.T) {
 
 func TestReturningQueryResultAbortRetryAccountsEveryAttempt(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	accountingFS := installReturningAccountingFileService(t, ses)
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx = resource.ContextWithRoot(ctx, root)
@@ -590,7 +613,7 @@ func TestReturningQueryResultAbortRetryAccountsEveryAttempt(t *testing.T) {
 
 func TestReturningSpoolRejectsTruncatedRecord(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	spool := &returningSpool{}
 	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 1, 2)
@@ -607,7 +630,7 @@ func TestReturningSpoolRejectsTruncatedRecord(t *testing.T) {
 
 func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t)
 	spool := &returningSpool{}
 	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 1)
@@ -635,8 +658,8 @@ func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 
 func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	ses := newReturningSpoolSession(t)
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	spool := &returningSpool{}
 	bat := returningTestBatch(t, ses, 1)
@@ -655,8 +678,8 @@ func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 
 func TestReturningSpoolConcurrentTerminalTransitions(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	ses := newReturningSpoolSession(t)
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	for i := 0; i < 16; i++ {
 		spool := &returningSpool{}

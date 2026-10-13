@@ -119,6 +119,28 @@ func TestTimeColumnDirectParamComparisonUsesColumnScale(t *testing.T) {
 	}
 }
 
+func TestDateLikeColumnDirectParamComparisonUsesColumnType(t *testing.T) {
+	ctx := context.Background()
+
+	for _, temporalType := range []types.T{types.T_date, types.T_datetime, types.T_timestamp} {
+		for _, operator := range []string{"=", "<=>", "!=", "<", "<=", ">", ">="} {
+			t.Run(temporalType.String()+"/"+operator, func(t *testing.T) {
+				column := makeTemporalCompareColumn(temporalType, 3, 0)
+				param := makeTemporalCompareParam(0)
+
+				expr, err := BindFuncExprImplByPlanExpr(ctx, operator, []*planpb.Expr{column, param})
+				require.NoError(t, err)
+				requireTemporalCompareArgTypes(t, expr, temporalType, 3)
+
+				cast := expr.GetF().Args[1].GetF()
+				require.NotNil(t, cast)
+				require.Equal(t, "cast", cast.Func.GetObjName())
+				require.NotNil(t, cast.Args[0].GetP())
+			})
+		}
+	}
+}
+
 func TestTimeColumnDirectParamBetweenUsesColumnScale(t *testing.T) {
 	ctx := context.Background()
 

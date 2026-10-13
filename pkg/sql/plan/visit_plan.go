@@ -112,6 +112,47 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if scan := node.IndexSearchScan; scan != nil {
+		if scan.QueryPayload != nil {
+			scan.QueryPayload, err = rule.ApplyExpr(scan.QueryPayload)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.CandidateLimit != nil {
+			scan.CandidateLimit, err = rule.ApplyExpr(scan.CandidateLimit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range scan.AlgoExprs {
+			scan.AlgoExprs[i], err = rule.ApplyExpr(scan.AlgoExprs[i])
+			if err != nil {
+				return err
+			}
+		}
+		for i := range scan.PreFilters {
+			scan.PreFilters[i], err = rule.ApplyExpr(scan.PreFilters[i])
+			if err != nil {
+				return err
+			}
+		}
+		if scan.DistanceRange != nil {
+			if scan.DistanceRange.LowerBound != nil {
+				scan.DistanceRange.LowerBound, err = rule.ApplyExpr(scan.DistanceRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if scan.DistanceRange.UpperBound != nil {
+				scan.DistanceRange.UpperBound, err = rule.ApplyExpr(scan.DistanceRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -140,6 +181,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.PhysicalEqualityKeyList {
+		node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
 		if err != nil {
@@ -154,10 +202,55 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if node.GapFillStart != nil {
+		node.GapFillStart, err = rule.ApplyExpr(node.GapFillStart)
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillEnd != nil {
+		node.GapFillEnd, err = rule.ApplyExpr(node.GapFillEnd)
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.BlockFilterList {
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {
 			return err
+		}
+	}
+
+	// LockRows is evaluated by LOCK_OP before the writer consumes the row
+	// batch. Prepared DML predicates can place a parameter-derived primary-key
+	// expression here; it must receive the same execute-time coercion as the
+	// scan filter or the lock path can still run the stale strict cast.
+	for _, target := range node.LockTargets {
+		if target == nil {
+			continue
+		}
+		if normalizer, ok := rule.(interface {
+			NormalizePreparedLockRows(*Expr, plan.Type) (*Expr, error)
+		}); ok {
+			if target.LockRows != nil {
+				target.LockRows, err = rule.ApplyExpr(target.LockRows)
+				if err != nil {
+					return err
+				}
+				rewrittenLockRows := target.LockRows
+				target.LockRows, err = normalizer.NormalizePreparedLockRows(
+					rewrittenLockRows, target.PrimaryColTyp)
+				if err != nil {
+					return err
+				}
+			}
+		} else if target.LockRows != nil {
+			target.LockRows, err = rule.ApplyExpr(target.LockRows)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -192,10 +285,33 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
+		preserveAssignmentCast := false
+		if preserver, ok := rule.(interface {
+			PreserveAssignmentCast(*Expr) bool
+		}); ok {
+			preserveAssignmentCast = preserver.PreserveAssignmentCast(e)
+		}
 		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
+		}
+		// Some prepared DML expressions are the positional values consumed by
+		// the write operator.  A runtime specialization may replace nested
+		// parameters in those expressions, but it must not rebuild the outer
+		// assignment cast: that cast carries the target-column layout and SQL
+		// mode semantics for the write path.
+		if preserveAssignmentCast {
+			return e, nil
+		}
+		// This visitor owns type restoration, not assignment semantics.  A
+		// same-physical-type TIME or constrained TINYTEXT expression can still
+		// require an assignment cast at the writer boundary, but adding it to an
+		// unchanged intermediate projection breaks operators such as JOIN whose
+		// result list is a positional column mapping.  The binder already owns the
+		// real DML assignment cast; only restore a type changed by the visit rule.
+		if makeTypeByPlan2Expr(e).Eq(makeTypeByPlan2Type(oldType)) {
+			return e, nil
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
 			e, err = forceCastExpr2(ctx, e, typ, targetTyp)
@@ -299,6 +415,13 @@ func visitMissingNodeExprs(
 			for i := range node.GroupBy {
 				var err error
 				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.PhysicalEqualityKeyList {
+				var err error
+				node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
 				if err != nil {
 					return err
 				}

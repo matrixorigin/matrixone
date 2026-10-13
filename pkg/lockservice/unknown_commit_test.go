@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		key := []byte("key")
 		options := newTestRowExclusiveOptions()
 		var resolved atomic.Int32
+		resolvedC := make(chan struct{}, 1)
 
 		_, err := service.Lock(ctx, 1, [][]byte{key}, holderTxn, options)
 		require.NoError(t, err)
@@ -47,7 +49,10 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 			holderTxn,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			func() { resolved.Add(1) },
+			func() {
+				resolved.Add(1)
+				resolvedC <- struct{}{}
+			},
 		))
 
 		type lockResult struct {
@@ -73,21 +78,21 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		allocator.FinishCommit(service.serviceID, holderTxn)
 
 		var result lockResult
-		require.Eventually(t, func() bool {
-			select {
-			case result = <-resultC:
-				return true
-			default:
-				return false
-			}
-		}, 2*time.Second, 10*time.Millisecond)
+		select {
+		case result = <-resultC:
+		case <-ctx.Done():
+			t.Fatalf("waiter did not finish after allocator fence: %v", ctx.Err())
+		}
 		require.NoError(t, result.err)
 		require.True(t, result.result.HasConflict)
 		require.True(t, result.result.HasPrevCommit)
 		require.False(t, result.result.Timestamp.IsEmpty())
-		require.Eventually(t, func() bool {
-			return resolved.Load() == 1
-		}, time.Second, 10*time.Millisecond)
+		select {
+		case <-resolvedC:
+		case <-ctx.Done():
+			t.Fatalf("unknown-commit callback did not finish: %v", ctx.Err())
+		}
+		require.Equal(t, int32(1), resolved.Load())
 		require.Never(t, func() bool {
 			return resolved.Load() > 1
 		}, 100*time.Millisecond, 10*time.Millisecond)
@@ -100,15 +105,22 @@ func TestResolveCommitUnknownCompletesWhenTxnAlreadyUnlocked(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
 		service := services[0]
 		var resolved atomic.Int32
+		resolvedC := make(chan struct{}, 1)
 		require.NoError(t, service.ResolveCommitUnknown(
 			[]byte("already-unlocked"),
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			func() { resolved.Add(1) },
+			func() {
+				resolved.Add(1)
+				resolvedC <- struct{}{}
+			},
 		))
-		require.Eventually(t, func() bool {
-			return resolved.Load() == 1
-		}, time.Second, 10*time.Millisecond)
+		select {
+		case <-resolvedC:
+		case <-time.After(time.Second):
+			t.Fatal("unknown-commit callback did not finish")
+		}
+		require.Equal(t, int32(1), resolved.Load())
 		require.False(t, service.unknownCommitResolver.isPending([]byte("already-unlocked")))
 	})
 }
@@ -186,6 +198,276 @@ func TestUnknownCommitRemoveCallbackCanReenterClose(t *testing.T) {
 	})
 }
 
+func TestUnknownCommitCallbackAdmissionIsBoundedAndSealable(t *testing.T) {
+	callbacks := newUnknownCommitCallbacks(1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseCallback)
+	callback, err := callbacks.admit(func() {
+		close(started)
+		<-release
+	})
+	require.NoError(t, err)
+	callback.dispatch()
+	<-started
+
+	_, err = callbacks.admit(func() {})
+	require.ErrorContains(t, err, "capacity exhausted")
+	callbacks.seal()
+	_, err = callbacks.admit(func() {})
+	require.ErrorContains(t, err, "stopping")
+
+	releaseCallback()
+	require.Eventually(t, func() bool {
+		return len(callbacks.slots) == 0
+	}, time.Second, time.Millisecond)
+}
+
+func TestUnknownCommitCallbackSaturationKeepsCleanupOwned(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		service.unknownCommitResolver.callbacks = newUnknownCommitCallbacks(1)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		t.Cleanup(func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		})
+
+		require.NoError(t, service.ResolveCommitUnknown(
+			[]byte("callback-slot-owner"),
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() {
+				close(started)
+				<-release
+			},
+		))
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("first completion callback did not start")
+		}
+
+		saturatedTxn := []byte("callback-slot-saturated")
+		var unexpected atomic.Int32
+		retainedCallback := func() { unexpected.Add(1) }
+		err := service.ResolveCommitUnknown(
+			saturatedTxn,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			retainedCallback,
+		)
+		require.ErrorContains(t, err, "capacity exhausted")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
+		// Callback ownership stayed with the caller, but lock-cleanup ownership
+		// still transferred. Its terminal signal preserves the caller's admission
+		// until cleanup finishes without exceeding the callback execution bound.
+		select {
+		case <-resolutionDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("saturated callback owner did not observe terminal cleanup")
+		}
+		require.False(t, service.unknownCommitResolver.isPending(saturatedTxn))
+		require.Zero(t, unexpected.Load())
+		retainedCallback()
+		require.Equal(t, int32(1), unexpected.Load())
+
+		close(release)
+		require.Eventually(t, func() bool {
+			return len(service.unknownCommitResolver.callbacks.slots) == 0
+		}, time.Second, time.Millisecond)
+	})
+}
+
+func TestUnknownCommitDuplicateCallbackKeepsNewOwner(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		txnID := []byte("duplicate-callback")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("duplicate-callback-key")},
+			txnID,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		_, err = allocator.Valid(service.serviceID, txnID, nil)
+		require.NoError(t, err)
+
+		deadline := time.Now().Add(time.Hour)
+		var firstCalled atomic.Int32
+		var secondCalled atomic.Int32
+		require.NoError(t, service.ResolveCommitUnknown(
+			txnID,
+			deadline,
+			service.NextCommitSequence(),
+			func() { firstCalled.Add(1) },
+		))
+
+		retainedCallback := func() { secondCalled.Add(1) }
+		err = service.ResolveCommitUnknown(
+			txnID,
+			deadline.Add(time.Second),
+			service.NextCommitSequence(),
+			retainedCallback,
+		)
+		require.ErrorContains(t, err, "callback already registered")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
+		require.Len(t, service.unknownCommitResolver.callbacks.slots, 1)
+		require.True(t, service.unknownCommitResolver.isPending(txnID))
+		require.Zero(t, firstCalled.Load())
+		require.Zero(t, secondCalled.Load())
+
+		allocator.FinishCommit(service.serviceID, txnID)
+		select {
+		case <-resolutionDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("duplicate callback owner did not observe terminal cleanup")
+		}
+		require.Eventually(t, func() bool {
+			return firstCalled.Load() == 1 &&
+				len(service.unknownCommitResolver.callbacks.slots) == 0
+		}, time.Second, time.Millisecond)
+		require.Zero(t, secondCalled.Load())
+
+		// A non-nil error leaves the new callback with its caller. Invoking it after
+		// the shared terminal signal models the txn client's retained-owner path.
+		retainedCallback()
+		require.Equal(t, int32(1), secondCalled.Load())
+	})
+}
+
+func TestUnknownCommitScheduledSignalCompletesOnClose(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		service.unknownCommitResolver.callbacks = newUnknownCommitCallbacks(0)
+		txnID := []byte("scheduled-signal-close")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("scheduled-signal-close-key")},
+			txnID,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		_, err = allocator.Valid(service.serviceID, txnID, nil)
+		require.NoError(t, err)
+
+		var called atomic.Int32
+		retainedCallback := func() { called.Add(1) }
+		err = service.ResolveCommitUnknown(
+			txnID,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			retainedCallback,
+		)
+		require.ErrorContains(t, err, "capacity exhausted")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
+		require.True(t, service.unknownCommitResolver.isPending(txnID))
+
+		require.NoError(t, service.Close())
+		select {
+		case <-resolutionDone:
+		case <-time.After(time.Second):
+			t.Fatal("service Close did not publish terminal cleanup")
+		}
+		require.Zero(t, called.Load())
+		retainedCallback()
+		require.Equal(t, int32(1), called.Load())
+	})
+}
+
+func TestUnknownCommitCallbackAdmissionRollsBackWhenTaskStartFails(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		service.stopper.Stop()
+		var called atomic.Int32
+		err := service.ResolveCommitUnknown(
+			[]byte("resolver-task-start-failure"),
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() { called.Add(1) },
+		)
+		require.Error(t, err)
+		require.False(t, service.unknownCommitResolver.isPending(
+			[]byte("resolver-task-start-failure")))
+		require.Empty(t, service.unknownCommitResolver.callbacks.slots)
+		require.NoError(t, service.Close())
+		require.Zero(t, called.Load())
+	})
+}
+
+func TestUnknownCommitBlockingCallbackRacesCloseWithoutSelfWait(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+		t.Cleanup(releaseCallback)
+		callbackCloseResult := make(chan error, 1)
+
+		require.NoError(t, service.ResolveCommitUnknown(
+			[]byte("blocking-reentrant-close"),
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() {
+				close(started)
+				<-release
+				callbackCloseResult <- service.Close()
+			},
+		))
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("completion callback did not start")
+		}
+
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- service.Close() }()
+		select {
+		case err := <-closeDone:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("service close waited for external callback code")
+		}
+
+		err := service.ResolveCommitUnknown(
+			[]byte("post-close"),
+			time.Now().Add(time.Hour),
+			1,
+			func() {},
+		)
+		require.ErrorContains(t, err, "lock service is closing")
+
+		releaseCallback()
+		select {
+		case err := <-callbackCloseResult:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("completion callback deadlocked re-entering Close")
+		}
+		require.Eventually(t, func() bool {
+			return len(service.unknownCommitResolver.callbacks.slots) == 0
+		}, time.Second, time.Millisecond)
+	})
+}
+
 func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
 		service := services[0]
@@ -206,20 +488,17 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		txnID := []byte("unknown-commit-bind-fence")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, service.logger))
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{{1}},
+			newTestRowExclusiveOptions(),
+			service.logger,
+		))
 		txn.Unlock()
 		service.incRef(bind.Group, bind.Table)
 
 		holder := service.activeTxnHolder.(*mapBasedTxnHolder)
-		fenceEntered := make(chan struct{}, 1)
-		holder.beforeFenceTxnLock = func(candidate *activeTxn) {
-			if candidate == txn {
-				select {
-				case fenceEntered <- struct{}{}:
-				default:
-				}
-			}
-		}
 		service.tableGroups.set(bind.Group, bind.Table, lockTable)
 
 		unlockDone := make(chan error, 1)
@@ -238,19 +517,19 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		go func() {
 			fenceDone <- holder.fenceByBindChanged(changedBind)
 		}()
-		<-fenceEntered
+		select {
+		case count := <-fenceDone:
+			require.Zero(t, count,
+				"a closing transaction already rejects new locks and needs no bind fence")
+		case <-time.After(5 * time.Second):
+			t.Fatal("bind fencing waited on a closing unknown-commit cleanup")
+		}
 		close(lockTable.release)
-
 		select {
 		case err := <-unlockDone:
 			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
-			t.Fatal("unknown-commit cleanup deadlocked with bind fencing")
-		}
-		select {
-		case <-fenceDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("bind fencing deadlocked with unknown-commit cleanup")
+			t.Fatal("unknown-commit cleanup did not finish after unlock release")
 		}
 		require.False(t, holder.hasActiveTxn(txnID))
 	})
@@ -507,17 +786,21 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 		// Derive this after the RPC-heavy setup so its fence is still live when
 		// the resolver submits it.
 		overflowDeadline := time.Now().Add(time.Minute)
+		done := make(chan struct{})
 		require.NoError(t, service.ResolveCommitUnknown(
 			overflowTxn,
 			overflowDeadline,
 			maxPersistentFenceFrontierEntries+1,
-			nil,
+			func() { close(done) },
 		))
 
-		require.Eventually(t, func() bool {
-			return !service.activeTxnHolder.hasActiveTxn(overflowTxn) &&
-				!service.unknownCommitResolver.isPending(overflowTxn)
-		}, 2*time.Second, 10*time.Millisecond)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatalf("overflow cleanup did not finish: %v", ctx.Err())
+		}
+		require.False(t, service.activeTxnHolder.hasActiveTxn(overflowTxn))
+		require.False(t, service.unknownCommitResolver.isPending(overflowTxn))
 
 		require.Equal(t, 1, ctl.persistentFenceCount())
 	})
@@ -617,7 +900,7 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		txnID := []byte("unknown-commit-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 		resolved := make(chan struct{}, 1)
 		callbackCloseErr := make(chan error, 1)
@@ -683,7 +966,7 @@ func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
 		txnID := []byte("ordinary-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 
 		unlockDone := make(chan error, 1)

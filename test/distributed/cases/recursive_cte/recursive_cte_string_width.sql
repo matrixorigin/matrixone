@@ -12,6 +12,9 @@ with recursive r(n, s) as (
 )
 select * from r order by n;
 
+-- A truncation diagnostic must not poison the connection/session.
+select 1;
+
 -- Non-strict mode follows MySQL and truncates every recursive value to the
 -- one-character anchor width.
 set session sql_mode = '';
@@ -27,6 +30,7 @@ select * from r order by n;
 prepare recursive_cte_string_width_stmt from 'with recursive r(n, s) as (select 1, ''a'' union all select n + 1, concat(s, ''b'') from r where n < 4) select * from r order by n';
 set session sql_mode = 'STRICT_TRANS_TABLES';
 execute recursive_cte_string_width_stmt;
+select 1;
 set session sql_mode = '';
 execute recursive_cte_string_width_stmt;
 deallocate prepare recursive_cte_string_width_stmt;

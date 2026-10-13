@@ -45,6 +45,7 @@ from .connection_hooks import ConnectionAction, ConnectionHook, create_connectio
 from .load_data import AsyncLoadDataManager
 from .stage import AsyncStageManager
 from .cdc import AsyncCDCManager
+from .clone import BaseCloneManager
 from .exceptions import (
     ConnectionError,
     MoCtlError,
@@ -219,11 +220,8 @@ class AsyncSnapshotManager:
             return False
 
 
-class AsyncCloneManager:
+class AsyncCloneManager(BaseCloneManager):
     """Async clone manager"""
-
-    def __init__(self, client):
-        self.client = client
 
     async def clone_database(
         self,
@@ -233,12 +231,7 @@ class AsyncCloneManager:
         if_not_exists: bool = False,
     ) -> None:
         """Clone database asynchronously"""
-        if_not_exists_clause = "IF NOT EXISTS" if if_not_exists else ""
-
-        if snapshot_name:
-            sql = f"CREATE DATABASE {target_db} {if_not_exists_clause} CLONE {source_db} FOR SNAPSHOT '{snapshot_name}'"
-        else:
-            sql = f"CREATE DATABASE {target_db} {if_not_exists_clause} CLONE {source_db}"
+        sql = self._build_clone_database_sql(target_db, source_db, snapshot_name, if_not_exists)
 
         await self.client.execute(sql)
 
@@ -250,14 +243,7 @@ class AsyncCloneManager:
         if_not_exists: bool = False,
     ) -> None:
         """Clone table asynchronously"""
-        if_not_exists_clause = "IF NOT EXISTS" if if_not_exists else ""
-
-        if snapshot_name:
-            sql = (
-                f"CREATE TABLE {target_table} {if_not_exists_clause} " f"CLONE {source_table} FOR SNAPSHOT '{snapshot_name}'"
-            )
-        else:
-            sql = f"CREATE TABLE {target_table} {if_not_exists_clause} CLONE {source_table}"
+        sql = self._build_clone_table_sql(target_table, source_table, snapshot_name, if_not_exists)
 
         await self.client.execute(sql)
 

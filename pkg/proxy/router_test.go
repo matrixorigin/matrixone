@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -797,6 +798,14 @@ func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
 	}}
 	require.True(t, ru.CanReuseCachedCN(nil, commonClient))
 	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+	hc.Lock()
+	hc.value.CNStores[0].ViewMetadataAdmissionGeneration = 1
+	hc.Unlock()
+	mc.ForceRefresh(true)
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient),
+		"cached reuse must reject a same-UUID process replacement")
+	cn.admissionGeneration = 1
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
 	ru.health = newCNHealthChecker(withCNHealthFailThreshold(1))
 	ru.health.reportFailure(cn.uuid, "cn1-addr")
 	require.False(t, ru.CanReuseCachedCN(cn, commonClient), "unhealthy CN must not receive cached sessions")
@@ -886,10 +895,20 @@ func TestRouteConnectTripsBreakerEndToEnd(t *testing.T) {
 	hc.updateCN("cnBad", badAddr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 	})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
 	stopBad := startTestCNServer(t, ctx, badAddr, nil, withBeforeHandle(func() {
-		time.Sleep(time.Second * 2)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
 	}))
-	defer func() { require.NoError(t, stopBad()) }()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		require.NoError(t, stopBad())
+	}()
 	// cnGood is started so it is a healthy alternative.
 	goodAddr := fmt.Sprintf("%s/%d-good.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(goodAddr))
@@ -909,7 +928,7 @@ func TestRouteConnectTripsBreakerEndToEnd(t *testing.T) {
 	// the first failure to keep the test deterministic.
 	ru := newRouter(mc, re, newMockSQLWorker(), false,
 		withCNHealthCheckFailThreshold(1),
-		withAuthTimeout(time.Second),
+		withAuthTimeout(100*time.Millisecond),
 	).(*router)
 
 	li := labelInfo{Tenant: "t1"}
@@ -928,6 +947,13 @@ func TestRouteConnectTripsBreakerEndToEnd(t *testing.T) {
 	require.True(t, ok)
 	_, _, err = rr.ConnectRouteSelected(cn, testPacket, tu)
 	require.Error(t, err)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("test CN server did not enter the blocked handshake")
+	}
+	close(release)
+	released = true
 	require.True(t, isRetryableErr(err))
 	require.True(t, isTimeoutErr(err))
 

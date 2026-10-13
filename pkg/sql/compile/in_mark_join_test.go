@@ -190,7 +190,7 @@ func TestCompileJoinFallsBackForUnprovenMaterializedMarkKey(t *testing.T) {
 }
 
 func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
-	compilerCtx := plan2.NewMockCompilerContext(true)
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		compilerCtx.GetContext(),
 		`select (n.n_nationkey + 0, n.n_regionkey + 0) in (
@@ -270,6 +270,57 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 				"operator construction must not mutate the reusable plan")
 		}
 	}
+}
+
+func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
+	statements, err := mysql.Parse(
+		compilerCtx.GetContext(),
+		`select n.n_nationkey
+		from tpch.nation n
+		where not exists (
+			select 1 from tpch.region r where r.r_comment = n.n_comment
+		)`,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var anti *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
+			anti = node
+			break
+		}
+	}
+	require.NotNil(t, anti)
+	require.Len(t, anti.Children, 2)
+	require.NotNil(t, anti.Stats)
+	anti.Stats.HashmapStats.Shuffle = false
+	anti.SendMsgList = []plan.MsgHeader{{
+		MsgType: int32(message.MsgJoinMap),
+		MsgTag:  1,
+	}}
+
+	left := query.Nodes[anti.Children[0]]
+	right := query.Nodes[anti.Children[1]]
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+	result := c.compileJoin(anti, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.Len(t, result, 1)
+	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+	require.Equal(t, plan.Node_ANTI, op.JoinType)
+	require.Len(t, op.EqConds[0], 1)
+	require.Len(t, op.EqConds[1], 1)
 }
 
 func TestCompileBroadcastMarkJoinSelectsPhysicalOperator(t *testing.T) {
@@ -543,4 +594,24 @@ func makeMarkJoinTestColumn(relPos, colPos int32, notNullable bool) *plan.Expr {
 			},
 		},
 	}
+}
+
+func TestJoinKeysRejectMixedOperandAndRetainResidual(t *testing.T) {
+	mixed := makeMarkJoinTestCondition(t, "=", 0, true)
+	mixed.GetF().Args[0] = makeMarkJoinTestCondition(t, "=", 1, true)
+	residual, keys := extraJoinConditions([]*plan.Expr{mixed})
+	require.Same(t, mixed, residual)
+	require.Empty(t, keys)
+	require.False(t, plan2.IsEquiJoin2([]*plan.Expr{mixed}))
+	require.False(t, canUseHashMarkJoin(&plan.Node{JoinType: plan.Node_MARK, OnList: []*plan.Expr{mixed}}))
+
+	key := makeMarkJoinTestCondition(t, "=", 0, true)
+	key.GetF().Args[0], key.GetF().Args[1] = key.GetF().Args[1], key.GetF().Args[0]
+	residual, keys = extraJoinConditions([]*plan.Expr{key, mixed})
+	require.Same(t, mixed, residual)
+	require.Equal(t, []*plan.Expr{key}, keys)
+	left, right := constructJoinCondition(key, nil)
+	require.Equal(t, int32(0), left.GetCol().RelPos)
+	require.Equal(t, int32(1), right.GetCol().RelPos)
+	require.True(t, plan2.IsEquiJoin2([]*plan.Expr{key, mixed}))
 }

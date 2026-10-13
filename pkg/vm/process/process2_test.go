@@ -28,6 +28,74 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type childProcessSession struct{}
+
+func (*childProcessSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*childProcessSession) AddTempTable(string, string, string)        {}
+func (*childProcessSession) RemoveTempTable(string, string)             {}
+func (*childProcessSession) RemoveTempTableByRealName(string)           {}
+func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func TestChildProcessesInheritSession(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	parent.Session = &childProcessSession{}
+	parent.WarningSink = &struct{ generation int }{1}
+
+	child := parent.NewNoContextChildProc(0)
+	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	contextChild := parent.NewContextChildProc(0)
+
+	require.Same(t, parent.Session, child.Session)
+	require.Same(t, parent.Session, channelChild.Session)
+	require.Same(t, parent.Session, contextChild.Session)
+	require.Same(t, parent.WarningSink, child.GetWarningSink())
+	require.Same(t, parent.WarningSink, channelChild.GetWarningSink())
+	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
+}
+
+func TestNewTopProcessDefaultsWarningRetention(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Equal(t, WarningDiagnosticDefaultRetentionLimit, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestNewTopProcessInheritsWarningRetentionLimitContext(t *testing.T) {
+	ctx := ContextWithWarningRetentionLimit(context.Background(), 0)
+	proc := NewTopProcess(ctx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Zero(t, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestGroupConcatSourceRowProvenanceInheritedByChildren(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer parent.Free()
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(false)
+	child := parent.NewNoContextChildProc(0)
+	require.False(t, parent.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, child.GroupConcatSourceRowProvenanceTrusted())
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(true)
+	require.True(t, child.GroupConcatSourceRowProvenanceTrusted())
+}
+
+func TestGroupConcatSourceRowProvenanceIndependentProcessesAreUntrusted(t *testing.T) {
+	producerA := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	producerB := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer producerA.Free()
+	defer producerB.Free()
+
+	producerA.SetGroupConcatSourceRowProvenanceTrusted(false)
+	producerB.SetGroupConcatSourceRowProvenanceTrusted(false)
+	require.False(t, producerA.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, producerB.GroupConcatSourceRowProvenanceTrusted())
+	require.Equal(t, uint64(0), producerA.NextGroupConcatInputRowBase(7, 1))
+	require.Equal(t, uint64(0), producerB.NextGroupConcatInputRowBase(7, 1),
+		"independent CN processes start their local row namespaces at the same ordinal")
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()
@@ -114,22 +182,120 @@ func TestAffectedRows(t *testing.T) {
 	assert.Equal(t, int64(0), proc.GetAffectedRows())
 }
 
+func TestStatementLastInsertIDSemantics(t *testing.T) {
+	// Partially initialized processes are used by a few frontend unit tests;
+	// the setters must remain no-ops until a BaseProcess is attached.
+	nilBase := &Process{}
+	nilBase.SetLastInsertID(7)
+	nilBase.SetStatementLastInsertID(7)
+	require.Zero(t, nilBase.SetStatementLastInsertIDIfEarlier(0))
+	require.Equal(t, uint64(7), nilBase.SetStatementLastInsertIDIfEarlier(7))
+
+	last := uint64(3)
+	statement := uint64(0)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.SetLastInsertID(11)
+	proc.SetStatementLastInsertID(5)
+	require.Equal(t, uint64(11), proc.GetLastInsertID())
+	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
+	empty := &Process{Base: &BaseProcess{}}
+	empty.SetLastInsertID(9)
+	empty.SetStatementLastInsertID(9)
+	require.Zero(t, empty.GetLastInsertID())
+	require.Zero(t, empty.GetStatementLastInsertID())
+	require.Equal(t, uint64(6), empty.SetStatementLastInsertIDIfEarlier(6))
+
+	// The statement coordinator keeps the smallest generated key seen by
+	// parallel materialization scopes and mirrors it to the session value.
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(4))
+	require.Equal(t, uint64(4), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(9))
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(2))
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(2), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(0))
+
+	// A process with only the legacy session field still publishes the first
+	// generated key without requiring the new statement field.
+	legacy := uint64(0)
+	legacyProc := &Process{Base: &BaseProcess{LastInsertID: &legacy}}
+	require.Equal(t, uint64(8), legacyProc.SetStatementLastInsertIDIfEarlier(8))
+	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
+}
+
+func TestFoundRows(t *testing.T) {
+	var nilProc *Process
+	nilProc.BeginFoundRowsStatement(true)
+	nilProc.AddResultRows(1)
+	nilProc.SetFoundRows(1)
+	assert.Zero(t, nilProc.GetFoundRows())
+	assert.Zero(t, nilProc.GetResultRows())
+	assert.False(t, nilProc.FoundRowsRecorded())
+	assert.False(t, nilProc.IsSqlCalcFoundRows())
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.SetFoundRows(7)
+	proc.BeginFoundRowsStatement(true)
+	assert.Equal(t, uint64(7), proc.GetFoundRows())
+	assert.True(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+	proc.AddResultRows(1)
+	proc.AddResultRows(2)
+	assert.Equal(t, uint64(3), proc.GetResultRows())
+
+	proc.SetFoundRows(3)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.True(t, proc.FoundRowsRecorded())
+
+	// Statement setup preserves the previous value while clearing only the
+	// statement-local publication flags.
+	proc.BeginFoundRowsStatement(false)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.Zero(t, proc.GetResultRows())
+	assert.False(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+}
+
 func TestGetSpillFileService(t *testing.T) {
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	assert.Nil(t, err)
-	proc := &Process{
-		Base: &BaseProcess{
-			FileService: localFS,
-		},
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name    string
+		procCtx context.Context
+	}{
+		{name: "nil process context"},
+		{name: "canceled process context", procCtx: canceledCtx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localFS, err := fileservice.NewLocalFS(
+				context.Background(),
+				defines.LocalFileServiceName,
+				t.TempDir(),
+				fileservice.DisabledCacheConfig,
+				nil,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
+			proc := &Process{
+				Ctx: tc.procCtx,
+				Base: &BaseProcess{
+					FileService: localFS,
+				},
+			}
+
+			spillFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			file, err := spillFS.CreateAndRemoveFile(context.Background(), "probe")
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+		})
 	}
-	_, err = proc.GetSpillFileService()
-	assert.Nil(t, err)
 }
 
 func TestGetSpillFileServiceError(t *testing.T) {
@@ -197,26 +363,62 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	borrowed.Free(proc.Mp())
 }
 
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
+		[]types.T{types.T_int64}, nil, []bool{true})
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
+}
+
 func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+	proc.SetOwnedPrepareParamsWithMetadata(params, []bool{true}, []bool{true})
 
 	state := proc.DetachPrepareParams()
 	require.Nil(t, proc.GetPrepareParams())
 	require.False(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
+	proc.BorrowPrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, proc.Base.prepareParamsOwned)
+
 	proc.Free()
-	require.Equal(t, 1, params.Length(), "transient Process.Free must not release detached params")
+	require.Equal(t, 1, params.Length(), "transient Process.Free must not release borrowed params")
 
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.True(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
+}
+
+func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	value, err := proc.GetPrepareParamsAt(0)
+	require.Error(t, err)
+	require.Nil(t, value)
 }

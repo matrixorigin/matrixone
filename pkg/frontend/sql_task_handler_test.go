@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -33,6 +35,18 @@ import (
 )
 
 type sqlTaskContextKey struct{}
+
+// Observe the public handler's completion/fence ordering using the existing
+// task store and query-client fixtures.
+type sqlTaskFenceQueryClient struct {
+	*mockQueryClient
+	beforeSend func(context.Context)
+}
+
+func (c *sqlTaskFenceQueryClient) SendMessage(ctx context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
+	c.beforeSend(ctx)
+	return c.mockQueryClient.SendMessage(ctx, address, req)
+}
 
 func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -94,11 +108,38 @@ func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	require.Equal(t, "UTC", sqlTask.Timezone)
 	require.Equal(t, uint64(0), sqlTask.TriggerCount)
 
+	// Model the async-only window deterministically: the scheduled child has
+	// committed, but no executor has acquired it and therefore no run row can
+	// preserve its account mapping. DROP TASK must remove the child together
+	// with the last definition mapping.
+	sqlTask.TriggerCount++
+	parentTaskID := fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+	queued := taskpb.AsyncTask{
+		Metadata:     taskpb.TaskMetadata{ID: parentTaskID + ":1"},
+		ParentTaskID: parentTaskID,
+		Status:       taskpb.TaskStatus_Created,
+	}
+	affected, err := store.TriggerSQLTask(context.Background(), sqlTask, queued)
+	require.NoError(t, err)
+	require.Equal(t, 2, affected)
+	children, err := store.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parentTaskID))
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	runs, err := store.QuerySQLTaskRun(context.Background(),
+		taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID))
+	require.NoError(t, err)
+	require.Empty(t, runs)
+
 	require.NoError(t, handleDropSQLTask(context.Background(), ses, &tree.DropSQLTask{
 		Name: tree.Identifier("task_a"),
 	}))
 	_, err = getSQLTaskByName(context.Background(), store, "task_a", ses.GetAccountId())
 	require.Error(t, err)
+	children, err = store.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parentTaskID))
+	require.NoError(t, err)
+	require.Empty(t, children)
 
 	require.NoError(t, ts.Close())
 }
@@ -376,7 +417,7 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
 	defer ses.Close()
 	defer func() {
 		require.NoError(t, ts.Close())
@@ -425,6 +466,45 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	require.Equal(t, ts2, mockTC.syncCalledWith)
 	require.Equal(t, 3, mockQC.sendCalls)
 	require.Equal(t, 3, mockQC.releaseCalls)
+	// A body parse failure still commits the run's terminal state before the
+	// handler returns. Its error must survive the same cross-CN fence.
+	task, err := getSQLTaskByName(ctx, store, "task_sync_commit", ses.GetAccountId())
+	require.NoError(t, err)
+	task.SQLBody = "select ("
+	_, err = store.UpdateSQLTask(ctx, []taskservice.SQLTask{task}, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, err)
+	mockTC.syncCalled = false
+	mockQC.sendCalls = 0
+	mockQC.releaseCalls = 0
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer cancelRequest()
+	ses.proc.Base.QueryClient = &sqlTaskFenceQueryClient{
+		mockQueryClient: mockQC,
+		beforeSend: func(rpcCtx context.Context) {
+			runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+			require.NoError(t, queryErr)
+			require.Len(t, runs, 2)
+			require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+			// Cancel after completion: the already-owned execution still needs
+			// a live, bounded visibility RPC to publish its final metadata.
+			cancelRequest()
+			require.NoError(t, rpcCtx.Err())
+			_, bounded := rpcCtx.Deadline()
+			require.True(t, bounded)
+		},
+	}
+	err = handleExecuteSQLTask(requestCtx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "syntax")
+	runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, queryErr)
+	require.Len(t, runs, 2)
+	require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
+
 }
 
 func TestExecInFrontendSQLTaskStatements(t *testing.T) {

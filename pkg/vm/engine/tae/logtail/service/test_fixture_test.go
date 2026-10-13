@@ -32,10 +32,11 @@ import (
 // controlledLogtailer makes the server's asynchronous boundaries deterministic:
 // tests decide when a callback arrives and can block either subscription phase.
 type controlledLogtailer struct {
-	mu       sync.Mutex
-	callback func(timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail) error
-	now      timestamp.Timestamp
-	tableFn  func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error)
+	mu        sync.Mutex
+	callback  func(timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail) error
+	now       timestamp.Timestamp
+	tableFn   func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error)
+	barrierFn func(context.Context) (timestamp.Timestamp, error)
 }
 
 var _ taelogtail.Logtailer = (*controlledLogtailer)(nil)
@@ -70,6 +71,17 @@ func (l *controlledLogtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.now, timestamp.Timestamp{}
+}
+
+func (l *controlledLogtailer) ReadBarrier(ctx context.Context) (timestamp.Timestamp, error) {
+	l.mu.Lock()
+	fn := l.barrierFn
+	frontier := l.now
+	l.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return frontier, nil
 }
 
 func (l *controlledLogtailer) notify(

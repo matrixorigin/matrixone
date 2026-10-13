@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,43 +38,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type ProcOptions func(proc *process.Process)
-
-func WithMPool(pool *mpool.MPool) ProcOptions {
-	return func(proc *process.Process) {
-		proc.SetMPool(pool)
-	}
+type procConfig struct {
+	mp          *mpool.MPool
+	mpSet       bool
+	fs          fileservice.FileService
+	fsSet       bool
+	queryClient client.QueryClient
 }
 
+// ProcOptions configures a process before its resources are acquired.
+type ProcOptions func(*procConfig)
+
+var autoIncrServiceMu sync.Mutex
+
+// WithMPool borrows pool, including an explicit nil, from its caller.
+func WithMPool(pool *mpool.MPool) ProcOptions {
+	return func(cfg *procConfig) { cfg.mp, cfg.mpSet = pool, true }
+}
+
+// WithFileService borrows fs, including an explicit nil, from its caller.
 func WithFileService(fs fileservice.FileService) ProcOptions {
-	return func(proc *process.Process) {
-		if proc.GetFileService() != nil {
-			proc.GetFileService().Close(proc.Ctx)
-		}
-		proc.SetFileService(fs)
-	}
+	return func(cfg *procConfig) { cfg.fs, cfg.fsSet = fs, true }
 }
 
 func WithQueryClient(queryClient client.QueryClient) ProcOptions {
-	return func(proc *process.Process) {
-		proc.Base.QueryClient = queryClient
-	}
+	return func(cfg *procConfig) { cfg.queryClient = queryClient }
 }
 
+// NewProcess owns its default resources for t's lifetime. With nil t, the
+// caller owns Free, file-service Close and deletion of the default MPool.
+// Supplied dependencies remain caller-owned.
 func NewProcess(t testing.TB, opts ...ProcOptions) *process.Process {
-	mp := mpool.MustNewZeroNoFixed()
-	proc := NewProcessWithMPool(t, "", mp)
+	cfg := procConfig{}
 	for _, opt := range opts {
-		opt(proc)
+		opt(&cfg)
 	}
-	return proc
+	return newProcess(t, "", cfg)
 }
 
 func SetupAutoIncrService(sid string) {
+	autoIncrServiceMu.Lock()
+	defer autoIncrServiceMu.Unlock()
+
 	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
 		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	// An auto-increment service belongs to a service runtime, not to an
+	// individual Process. Replacing it for every test Process leaks the old
+	// service's background workers and their caches because the runtime is the
+	// only owner that could close it.
+	if _, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok {
+		return
 	}
 	rt.SetGlobalVariables(
 		runtime.AutoIncrementService,
@@ -83,109 +100,139 @@ func SetupAutoIncrService(sid string) {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+// ensureAutoIncrService initializes the runtime-owned service without
+// replacing an existing instance. Processes are short-lived and are created
+// repeatedly by planner tests, while the auto-increment service owns a
+// background allocator and must be shared for the lifetime of its runtime.
+func ensureAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	if v, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok && v != nil {
+		if _, ok := v.(incrservice.AutoIncrementService); ok {
+			return
+		}
+	}
 	SetupAutoIncrService(sid)
+}
+
+// NewProcessWithMPool borrows mp and owns the default file service for t's
+// lifetime. With nil t, the caller also owns process/file-service cleanup.
+func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+	return newProcess(t, sid, procConfig{mp: mp, mpSet: true})
+}
+
+// NewProcessWithOwnedMPool gives the test lifetime ownership of mp. The pool
+// cleanup is registered before the process constructor so process and file
+// service cleanup run before the pool is deleted. With nil t, the caller keeps
+// ownership and must delete mp explicitly.
+func NewProcessWithOwnedMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+	if t != nil && mp != nil {
+		t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	}
+	return NewProcessWithMPool(t, sid, mp)
+}
+
+func newProcess(t testing.TB, sid string, cfg procConfig) *process.Process {
+	mp, fs := cfg.mp, cfg.fs
+	var proc *process.Process
+	var releasePool, releaseFS, releaseProcess func()
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	proc := process.NewTopProcess(
-		ctx,
-		mp,
-		nil, // no txn client can be set
-		nil, // no txn operator can be set
-		NewFS(t),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		if !cfg.mpSet && mp != nil {
+			if releasePool != nil {
+				defer releasePool()
+			} else {
+				defer mpool.DeleteMPool(mp)
+			}
+		}
+		if !cfg.fsSet && fs != nil {
+			if releaseFS != nil {
+				defer releaseFS()
+			} else {
+				defer fs.Close(ctx)
+			}
+		}
+		if proc != nil {
+			if releaseProcess != nil {
+				releaseProcess()
+			} else {
+				proc.Free()
+			}
+		}
+	}()
+	ensureAutoIncrService(sid)
+	if !cfg.mpSet {
+		mp = mpool.MustNewZeroNoFixed()
+		if t != nil {
+			captured := mp
+			releasePool = sync.OnceFunc(func() { mpool.DeleteMPool(captured) })
+			t.Cleanup(releasePool)
+		}
+	}
+	if !cfg.fsSet {
+		fs = NewFS(t)
+		if t != nil {
+			captured := fs
+			releaseFS = sync.OnceFunc(func() { captured.Close(ctx) })
+			t.Cleanup(releaseFS)
+		}
+	}
+	proc = process.NewTopProcess(ctx, mp, nil, nil, fs, nil, cfg.queryClient, nil, nil, nil, nil)
+	if t != nil {
+		releaseProcess = sync.OnceFunc(proc.Free)
+		t.Cleanup(releaseProcess)
+	}
 	proc.Base.Lim.Size = 1 << 20
 	proc.Base.Lim.BatchRows = 1 << 20
 	proc.Base.Lim.BatchSize = 1 << 20
 	proc.Base.Lim.ReaderSize = 1 << 20
 	proc.Base.SessionInfo.TimeZone = time.Local
-
+	complete = true
 	return proc
 }
 
 var NewProc = NewProcess
 
+// NewFS returns caller-owned services; register Close immediately after return.
+// t chooses temporary local storage, while nil t chooses memory storage.
 func NewFS(t testing.TB) *fileservice.FileServices {
-	if t == nil {
-		// use memory
-		local, err := fileservice.NewMemoryFS(
-			defines.LocalFileServiceName,
-			fileservice.DisabledCacheConfig,
-			nil,
-		)
+	ctx := context.Background()
+	services := make([]fileservice.FileService, 0, 3)
+	complete := false
+	defer func() {
+		if !complete {
+			for _, fs := range services {
+				defer fs.Close(ctx)
+			}
+		}
+	}()
+	for _, name := range []string{defines.LocalFileServiceName, defines.SharedFileServiceName, defines.ETLFileServiceName} {
+		var fs fileservice.FileService
+		var err error
+		if t == nil {
+			fs, err = fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		} else if name == defines.ETLFileServiceName {
+			fs, err = fileservice.NewLocalETLFS(name, t.TempDir())
+		} else {
+			fs, err = fileservice.NewLocalFS(ctx, name, t.TempDir(), fileservice.DisabledCacheConfig, nil)
+		}
 		if err != nil {
 			panic(err)
 		}
-		shared, err := fileservice.NewMemoryFS(
-			defines.SharedFileServiceName,
-			fileservice.DisabledCacheConfig,
-			nil,
-		)
-		if err != nil {
-			panic(err)
-		}
-		etl, err := fileservice.NewMemoryFS(
-			defines.ETLFileServiceName,
-			fileservice.DisabledCacheConfig,
-			nil,
-		)
-		if err != nil {
-			panic(err)
-		}
-		fs, err := fileservice.NewFileServices(
-			"",
-			local,
-			shared,
-			etl,
-		)
-		if err != nil {
-			panic(err)
-		}
-		return fs
+		services = append(services, fs)
 	}
-
-	// use t.TempDir
-	local, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
+	fs, err := fileservice.NewFileServices("", services...)
 	if err != nil {
 		panic(err)
 	}
-	shared, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.SharedFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	if err != nil {
-		panic(err)
-	}
-	etl, err := fileservice.NewLocalETLFS(
-		defines.ETLFileServiceName,
-		t.TempDir(),
-	)
-	if err != nil {
-		panic(err)
-	}
-	fs, err := fileservice.NewFileServices(
-		"",
-		local,
-		shared,
-		etl,
-	)
-	if err != nil {
-		panic(err)
-	}
+	complete = true
 	return fs
 }
 

@@ -1,0 +1,127 @@
+DROP TABLE IF EXISTS find_in_set_set_28221;
+CREATE TABLE find_in_set_set_28221 (
+id INT PRIMARY KEY,
+v SET('z','a','m')
+);
+INSERT INTO find_in_set_set_28221 VALUES
+(1, 'z'), (2, 'a'), (3, 'm'), (4, 'z,a'),
+(5, 'a,m'), (6, 'z,a,m'), (7, ''), (8, NULL);
+SELECT id, v, FIND_IN_SET('a', v) AS a_pos,
+FIND_IN_SET('m', v) AS m_pos
+FROM find_in_set_set_28221 ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,65535,0]  ¦  a_pos[-5,64,0]  ¦  m_pos[-5,64,0]  𝄀
+1  ¦  z  ¦  0  ¦  0  𝄀
+2  ¦  a  ¦  2  ¦  0  𝄀
+3  ¦  m  ¦  0  ¦  3  𝄀
+4  ¦  z,a  ¦  2  ¦  0  𝄀
+5  ¦  a,m  ¦  2  ¦  3  𝄀
+6  ¦  z,a,m  ¦  2  ¦  3  𝄀
+7  ¦    ¦  0  ¦  0  𝄀
+8  ¦  null  ¦  null  ¦  null
+SELECT id, FIND_IN_SET('a', v) AS derived_pos
+FROM (SELECT id, v FROM find_in_set_set_28221) AS d ORDER BY id;
+➤ id[4,32,0]  ¦  derived_pos[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  0  𝄀
+4  ¦  2  𝄀
+5  ¦  2  𝄀
+6  ¦  2  𝄀
+7  ¦  0  𝄀
+8  ¦  null
+DROP VIEW IF EXISTS find_in_set_set_view_28221;
+CREATE VIEW find_in_set_set_view_28221 AS
+SELECT id, v FROM find_in_set_set_28221;
+SELECT id, FIND_IN_SET('a', v) AS view_pos
+FROM find_in_set_set_view_28221 ORDER BY id;
+➤ id[4,32,0]  ¦  view_pos[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  0  𝄀
+4  ¦  2  𝄀
+5  ¦  2  𝄀
+6  ¦  2  𝄀
+7  ¦  0  𝄀
+8  ¦  null
+SELECT id, FIND_IN_SET('a', CAST(v AS CHAR)) AS cast_pos
+FROM find_in_set_set_28221 WHERE id IN (2, 4, 5, 6) ORDER BY id;
+➤ id[4,32,0]  ¦  cast_pos[-5,64,0]  𝄀
+2  ¦  1  𝄀
+4  ¦  2  𝄀
+5  ¦  1  𝄀
+6  ¦  2
+PREPARE find_in_set_set_stmt_28221 FROM
+'SELECT id, FIND_IN_SET(?, v) AS prepared_pos
+FROM find_in_set_set_28221 ORDER BY id';
+SET @find_in_set_set_needle_28221 = 'a';
+EXECUTE find_in_set_set_stmt_28221 USING @find_in_set_set_needle_28221;
+➤ id[4,32,0]  ¦  prepared_pos[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  0  𝄀
+4  ¦  2  𝄀
+5  ¦  2  𝄀
+6  ¦  2  𝄀
+7  ¦  0  𝄀
+8  ¦  null
+SET @find_in_set_set_needle_28221 = 'A';
+EXECUTE find_in_set_set_stmt_28221 USING @find_in_set_set_needle_28221;
+➤ id[4,32,0]  ¦  prepared_pos[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  0  𝄀
+4  ¦  2  𝄀
+5  ¦  2  𝄀
+6  ¦  2  𝄀
+7  ¦  0  𝄀
+8  ¦  null
+DEALLOCATE PREPARE find_in_set_set_stmt_28221;
+DROP VIEW find_in_set_set_view_28221;
+DROP TABLE find_in_set_set_28221;
+DROP TABLE IF EXISTS find_in_set_set_empty_28221;
+CREATE TABLE find_in_set_set_empty_28221 (
+id INT PRIMARY KEY,
+v SET('','a')
+);
+INSERT INTO find_in_set_set_empty_28221 VALUES
+(1, 0), (2, 1), (3, 'a'), (4, '');
+SELECT id, v, FIND_IN_SET('', v) AS empty_pos,
+FIND_IN_SET('A', v) AS a_pos
+FROM find_in_set_set_empty_28221 ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,65535,0]  ¦  empty_pos[-5,64,0]  ¦  a_pos[-5,64,0]  𝄀
+1  ¦    ¦  0  ¦  0  𝄀
+2  ¦    ¦  1  ¦  0  𝄀
+3  ¦  a  ¦  0  ¦  2  𝄀
+4  ¦    ¦  0  ¦  0
+SELECT id, FIND_IN_SET('', v) AS derived_empty_pos
+FROM (SELECT id, v FROM find_in_set_set_empty_28221) AS d ORDER BY id;
+➤ id[4,32,0]  ¦  derived_empty_pos[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+SELECT id, 1 AS src, v
+FROM find_in_set_set_empty_28221
+WHERE id IN (1, 2)
+UNION ALL
+SELECT 0 AS id, 2 AS src, NULL AS v
+) AS u ORDER BY src, id;
+➤ id[-5,64,0]  ¦  src[-5,64,0]  ¦  v[12,65535,0]  ¦  union_empty_pos[-5,64,0]  𝄀
+1  ¦  1  ¦    ¦  0  𝄀
+2  ¦  1  ¦    ¦  1  𝄀
+0  ¦  2  ¦  null  ¦  null
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+SELECT 0 AS id, 1 AS src, NULL AS v
+UNION ALL
+SELECT id, 2 AS src, v
+FROM find_in_set_set_empty_28221
+WHERE id IN (1, 2)
+) AS u ORDER BY src, id;
+➤ id[-5,64,0]  ¦  src[-5,64,0]  ¦  v[12,65535,0]  ¦  union_empty_pos[-5,64,0]  𝄀
+0  ¦  1  ¦  null  ¦  null  𝄀
+1  ¦  2  ¦    ¦  0  𝄀
+2  ¦  2  ¦    ¦  1
+DROP TABLE find_in_set_set_empty_28221;

@@ -75,10 +75,12 @@ func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 	valueScan.runningCtx.end = 0
 
 	//for prepare stmt, valuescan batch vecs do not need to reset, when next execute, prepare just copy data to vecs, length is same to last execute
-	for i := 0; i < valueScan.ColCount; i++ {
+	for i := 0; i < valueScan.ColCount && i < len(valueScan.ExprExecLists); i++ {
 		exprExecList := valueScan.ExprExecLists[i]
 		for _, expr := range exprExecList {
-			expr.ResetForNextQuery()
+			if expr != nil {
+				expr.ResetForNextQuery()
+			}
 		}
 	}
 	valueScan.ResetProjection(proc)
@@ -89,12 +91,16 @@ func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 	if valueScan.Batchs != nil {
 		valueScan.cleanBatchs(proc)
 	}
-	for i := range valueScan.ExprExecLists {
-		exprExecList := valueScan.ExprExecLists[i]
-		for i, expr := range exprExecList {
+	freeExpressionExecLists(valueScan.ExprExecLists)
+	valueScan.ExprExecLists = nil
+}
+
+func freeExpressionExecLists(exprExecLists [][]colexec.ExpressionExecutor) {
+	for i := range exprExecLists {
+		for j, expr := range exprExecLists[i] {
 			if expr != nil {
 				expr.Free()
-				exprExecList[i] = nil
+				exprExecLists[i][j] = nil
 			}
 		}
 	}

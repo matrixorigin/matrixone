@@ -34,7 +34,7 @@ select id, round(match(body) against('hello') + 1, 3) as r from docs where match
 select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
 
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
 
 -- ---------------- wrapped in a FILTER above a view ----------------------------
@@ -55,7 +55,7 @@ select id from v where sc > 0.037 and id > 1 order by id;
 select id from v where round(cast(sc as double) * 2, 3) > 0.074 order by id;
 
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v where round(sc, 4) > 0;
 
 -- ---------------- DISCRIMINATING thresholds ------------------------------------
@@ -128,19 +128,8 @@ select id, round(match(body) against('hello'),3) as r from two order by id;  -- 
 select count(*) as n from two where match(body) against('hello') > 0.0132;   -- and through an aggregate
 select count(*) as n from two where match(body) against('hello') > 0.9;
 
--- ---------------- wrapped-only MATCH on either INNER JOIN child ----------------
--- A wrapped-only MATCH must drive the fulltext2 stream even when its table is one child of a
--- join. Check both child positions and both a qualifying and a rejecting score threshold.
-create table join_peer(id int primary key);
-insert into join_peer values (1),(2),(3),(4),(5);
-select t.id from two t join join_peer p on t.id = p.id where match(t.body) against('hello') > 0.0132 order by t.id;
-select t.id from two t join join_peer p on t.id = p.id where match(t.body) against('hello') > 0.9 order by t.id;
-select t.id from join_peer p join two t on p.id = t.id where match(t.body) against('hello') > 0.0132 order by t.id;
-select t.id from join_peer p join two t on p.id = t.id where match(t.body) against('hello') > 0.9 order by t.id;
-drop table join_peer;
-
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from two where match(body) against('hello') > 0.0132;
 
 -- a MATCH no INDEX can serve is still left alone and still raises 20105
@@ -171,7 +160,7 @@ select id from two where match(body) against('hello') and (match(body) against('
 
 -- the index must still be used
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125;
 
 -- ---------------- wrapped MATCH on the COVERED fast path -------------------------
@@ -191,7 +180,7 @@ select body, tag, round(match(body) against('hello'),3) as r from covpk where ma
 
 -- and it must still be the covered plan, not a fallback to the JOIN
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
 
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------

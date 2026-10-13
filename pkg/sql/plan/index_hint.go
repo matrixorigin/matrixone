@@ -41,6 +41,23 @@ type indexHintScopeSet struct {
 	ignore         map[string]struct{}
 }
 
+// ValidateUnresolvedIndexHints returns the original missing-key error for a
+// query whose hinted index is still unresolved. Execution calls it after the
+// metadata lock has had a chance to request a definition-change retry. Consumers
+// that only inspect a query or persist its schema must call it before publishing
+// their result, since they never reach that execution boundary.
+func ValidateUnresolvedIndexHints(ctx context.Context, query *plan.Query) error {
+	hints := query.GetUnresolvedIndexHints()
+	if len(hints) == 0 {
+		return nil
+	}
+	hint := hints[0]
+	if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
+		return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
+	}
+	return moerr.NewErrKeyDoesNotExist(ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
+}
+
 func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.TableDef, hints []*tree.IndexHint) error {
 	if len(hints) == 0 || tableDef == nil {
 		return nil
@@ -51,9 +68,12 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 		if hint == nil {
 			continue
 		}
-		names, err := validateIndexHintNames(builder.GetContext(), tableDef, hint.IndexNames)
+		names, unresolvedName, err := validateIndexHintNamesForPlanning(builder.GetContext(), tableDef, hint.IndexNames)
 		if err != nil {
 			return err
+		}
+		if unresolvedName != "" && !builder.recordUnresolvedIndexHint(nodeID, tableDef, unresolvedName) {
+			return moerr.NewErrKeyDoesNotExist(builder.GetContext(), unresolvedName, tableDef.Name)
 		}
 		if hint.HintType == tree.HintUse {
 			if hintSet.forceSpecified {
@@ -88,6 +108,27 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 	return nil
 }
 
+// recordUnresolvedIndexHint preserves a permanent-table hint that may be
+// racing a committed CREATE INDEX on another CN. The compiler uses the object
+// reference to validate the table definition before execution. Temporary,
+// prepared, and metadata-unlocked scans retain immediate planner validation
+// because they do not have this cross-CN metadata-lock boundary.
+func (builder *QueryBuilder) recordUnresolvedIndexHint(nodeID int32, tableDef *plan.TableDef, indexName string) bool {
+	if builder == nil || builder.isPrepareStatement || tableDef == nil || tableDef.IsTemporary ||
+		tableDef.TableType == catalog.SystemTemporaryTable || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.ObjRef == nil || node.ObjRef.NotLockMeta {
+		return false
+	}
+	builder.qry.UnresolvedIndexHints = append(builder.qry.UnresolvedIndexHints, &plan.UnresolvedIndexHint{
+		Table:     DeepCopyObjectRef(node.ObjRef),
+		IndexName: indexName,
+	})
+	return true
+}
+
 func (hintSet *indexHintSet) scopes(scope tree.IndexHintScope) []*indexHintScopeSet {
 	switch scope {
 	case tree.HintForOrderBy:
@@ -111,42 +152,58 @@ func (scope indexHintScopeSet) empty() bool {
 }
 
 func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names []string) ([]string, error) {
+	normalized, unresolvedName, err := validateIndexHintNamesForPlanning(ctx, tableDef, names)
+	if err != nil {
+		return nil, err
+	}
+	if unresolvedName != "" {
+		return nil, moerr.NewErrKeyDoesNotExist(ctx, unresolvedName, tableDef.Name)
+	}
+	return normalized, nil
+}
+
+// validateIndexHintNamesForPlanning preserves normal hint canonicalization,
+// but records the first missing name instead of rejecting a permanent-table
+// plan immediately. The caller decides whether that plan has a metadata-lock
+// validation boundary; ambiguity remains a planner error because it cannot be
+// made valid by a single definition retry.
+func validateIndexHintNamesForPlanning(ctx context.Context, tableDef *plan.TableDef, names []string) ([]string, string, error) {
 	if len(names) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 	existing := make(map[string]string, len(tableDef.Indexes))
 	if tableDef.Pkey != nil && !strings.EqualFold(tableDef.Pkey.PkeyColName, catalog.FakePrimaryKeyColName) {
-		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
+		existing[indexNameKey(PrimaryKeyName)] = indexNameKey(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx == nil || !idx.TableExist {
 			continue
 		}
-		lowerName := strings.ToLower(idx.IndexName)
-		existing[lowerName] = lowerName
+		nameKey := indexNameKey(idx.IndexName)
+		existing[nameKey] = nameKey
 	}
 	normalized := make([]string, 0, len(names))
 	for _, name := range names {
-		lowerName := strings.ToLower(name)
-		if exact, ok := existing[lowerName]; ok {
+		nameKey := indexNameKey(name)
+		if exact, ok := existing[nameKey]; ok {
 			normalized = append(normalized, exact)
 			continue
 		}
 		var match string
 		for existingName := range existing {
-			if strings.HasPrefix(existingName, lowerName) {
+			if strings.HasPrefix(existingName, nameKey) {
 				if match != "" {
-					return nil, moerr.NewSyntaxErrorf(ctx, "index hint %q is ambiguous", name)
+					return nil, "", moerr.NewSyntaxErrorf(ctx, "index hint %q is ambiguous", name)
 				}
 				match = existingName
 			}
 		}
 		if match == "" {
-			return nil, moerr.NewErrKeyDoesNotExist(ctx, name, tableDef.Name)
+			return append(normalized, nameKey), name, nil
 		}
 		normalized = append(normalized, match)
 	}
-	return normalized, nil
+	return normalized, "", nil
 }
 
 func addIndexHint(scope *indexHintScopeSet, hintType tree.IndexHintType, names []string) error {
@@ -232,22 +289,28 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 		if idx == nil {
 			continue
 		}
-		name := strings.ToLower(idx.IndexName)
-		if _, ignored := scope.ignore[name]; ignored {
+		if !indexAllowedByHintScope(idx.IndexName, scope) {
 			continue
-		}
-		if scope.forceSpecified {
-			if _, ok := scope.force[name]; !ok {
-				continue
-			}
-		} else if scope.useSpecified {
-			if _, ok := scope.use[name]; !ok {
-				continue
-			}
 		}
 		filtered = append(filtered, idx)
 	}
 	return filtered
+}
+
+func indexAllowedByHintScope(indexName string, scope indexHintScopeSet) bool {
+	name := indexNameKey(indexName)
+	if _, ignored := scope.ignore[name]; ignored {
+		return false
+	}
+	if scope.forceSpecified {
+		_, ok := scope.force[name]
+		return ok
+	}
+	if scope.useSpecified {
+		_, ok := scope.use[name]
+		return ok
+	}
+	return true
 }
 
 func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node) bool {
@@ -258,19 +321,7 @@ func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node
 	if hintSet == nil || hintSet.order.empty() {
 		return true
 	}
-	name := strings.ToLower(node.IndexScanInfo.IndexName)
-	if _, ignored := hintSet.order.ignore[name]; ignored {
-		return false
-	}
-	if hintSet.order.forceSpecified {
-		_, ok := hintSet.order.force[name]
-		return ok
-	}
-	if hintSet.order.useSpecified {
-		_, ok := hintSet.order.use[name]
-		return ok
-	}
-	return true
+	return indexAllowedByHintScope(node.IndexScanInfo.IndexName, hintSet.order)
 }
 
 func (builder *QueryBuilder) inheritIndexHints(dstNodeID, srcNodeID int32) {

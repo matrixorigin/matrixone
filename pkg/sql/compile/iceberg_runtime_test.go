@@ -179,6 +179,9 @@ func TestIcebergMOTypeToPlanType(t *testing.T) {
 			typ, err := icebergMOTypeToPlanType(ctx, tc.typ)
 			require.NoError(t, err)
 			require.Equal(t, int32(tc.oid), typ.Id)
+			if tc.oid == types.T_text {
+				require.Equal(t, uint32(types.CharsetUTF8), typ.Charset)
+			}
 		})
 	}
 	typ, err := icebergMOTypeToPlanType(ctx, api.MOType{Name: "DECIMAL", Width: 38, Scale: 6})

@@ -160,6 +160,55 @@ func TestCatalogFactoryCommitVerifierCreatesClientForResolvedCatalog(t *testing.
 	require.Equal(t, "ksa_gold", factory.catalog.Name)
 }
 
+func TestCatalogFactoryCommitVerifierRecoversEmptyRewriteDataFilesCommitMetadata(t *testing.T) {
+	const metadataLocation = "s3://warehouse/orders/metadata/v4.json"
+	var loadReq api.LoadTableRequest
+	client := &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			loadReq = req
+			return &api.LoadTableResponse{
+				Namespace:        req.Namespace,
+				TableName:        req.Table,
+				MetadataLocation: metadataLocation,
+				MetadataJSON: []byte(strings.Replace(
+					string(appliedRewriteMetadataJSON()),
+					`"operation": "rewrite_manifests"`,
+					`"operation": "rewrite_data_files"`,
+					1,
+				)),
+			}, nil
+		},
+	}
+	plan := &CommitPlan{
+		Catalog: api.CatalogRequest{
+			Catalog: model.Catalog{AccountID: 7, CatalogID: 42},
+			Prefix:  "main|warehouse",
+		},
+		Attempt: &api.CommitAttempt{
+			Requirements: []api.CommitRequirement{{Type: "assert-ref-snapshot-id", Ref: "main", SnapshotID: 3}},
+			Updates: []api.CommitUpdate{
+				api.NewAddSnapshotUpdate(api.NewCommitSnapshot(4, 3, 4, 1, 1767484800000, "s3://warehouse/orders/metadata/rewrite-manifest.avro", map[string]string{"operation": "rewrite_data_files"})),
+				api.NewSetSnapshotRefUpdate("main", "branch", 4),
+			},
+			BaseSnapshotID: 3,
+			TargetRef:      "main",
+		},
+	}
+	result, ok, err := (CatalogFactoryCommitVerifier{CatalogFactory: &verifierCatalogFactory{client: client}}).VerifyCommittedMaintenance(context.Background(), Request{
+		Catalog:   model.Catalog{AccountID: 7, CatalogID: 42, Name: "nessie", Type: "rest", URI: "https://catalog.example.com"},
+		Namespace: "sales",
+		Table:     "orders",
+		TargetRef: "main",
+		Operation: OperationRewriteDataFiles,
+	}, plan, api.CommitResult{})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, result.Verified)
+	require.Equal(t, int64(4), result.SnapshotID)
+	require.Equal(t, api.PathHash(metadataLocation), result.CommitID)
+	require.Equal(t, "main|warehouse", loadReq.Prefix)
+}
+
 func TestCatalogCommitVerifierValidationEdges(t *testing.T) {
 	result, ok, err := (CatalogCommitVerifier{}).VerifyCommittedMaintenance(context.Background(), Request{
 		Operation: OperationRewriteManifests,

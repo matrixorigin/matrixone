@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"testing"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchemaReplayPreservesCaseVariantColumns(t *testing.T) {
+	legacy := NewEmptySchema("duplicate_column_case_replayed")
+	legacy.ColDefs = []*ColDef{
+		{Name: "Id", Idx: 0, Type: types.T_int32.ToType()},
+		{Name: "id", Idx: 1, Type: types.T_int32.ToType()},
+	}
+	legacy.NameMap = map[string]int{"Id": 0, "id": 1}
+	buf, err := legacy.Marshal()
+	require.NoError(t, err)
+
+	replayed := NewEmptySchema("")
+	_, err = replayed.ReadFromWithVersion(bytes.NewReader(buf), IOET_WALTxnCommand_Table_CurrVer)
+	require.NoError(t, err)
+	require.Len(t, replayed.ColDefs, 2)
+	require.Equal(t, "Id", replayed.ColDefs[0].Name)
+	require.Equal(t, "id", replayed.ColDefs[1].Name)
+}
 
 func TestCoverage_DefsToSchema_FromPublicationProperty(t *testing.T) {
 	defs := []engine.TableDef{
@@ -466,9 +485,44 @@ func TestCoverage_SystemSchemas_Init(t *testing.T) {
 	assert.NotNil(t, SystemTableSchema)
 	assert.NotNil(t, SystemColumnSchema)
 	assert.NotNil(t, SystemIndexTableSchema)
+	primaryColIdx := SystemIndexTableSchema.GetColIdx(pkgcatalog.IndexTablePrimaryColName)
+	require.NotEqual(t, -1, primaryColIdx)
+	assert.Equal(t, pkgcatalog.MoTablesTypes[pkgcatalog.MO_TABLES_CPKEY_IDX], SystemIndexTableSchema.ColDefs[primaryColIdx].Type)
 }
 
 func TestCoverage_Constants(t *testing.T) {
 	assert.Equal(t, uint32(0), TenantSysID)
 	assert.Equal(t, "_ModelSchema", ModelSchemaName)
+}
+
+func TestDomainSchemaRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		oid    types.T
+		domain string
+	}{
+		{"empty enum", types.T_enum, ""}, {"empty set", types.T_uint64, ","}, {"enum", types.T_enum, "red,blue"}, {"set", types.T_uint64, "red,blue"}, {"uint64", types.T_uint64, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := NewEmptySchema("domains")
+			require.NoError(t, source.AppendPKCol("id", types.T_int32.ToType(), 0))
+			col := colDefFromPlan(&plan.ColDef{Name: "value", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}, Default: &plan.Default{NullAbility: true}}, 1, 1)
+			require.Equal(t, tc.domain, col.EnumValues)
+			require.NoError(t, source.AppendColDef(col))
+			require.NoError(t, source.Finalize(false))
+			encoded, err := source.Marshal()
+			require.NoError(t, err)
+			recovered := NewEmptySchema("")
+			_, err = recovered.ReadFromWithVersion(bytes.NewReader(encoded), IOET_WALTxnCommand_Table_CurrVer)
+			require.NoError(t, err)
+			for _, schema := range []*Schema{source, source.Clone(), recovered} {
+				defs, err := SchemaToDefs(schema)
+				require.NoError(t, err)
+				restored, err := DefsToSchema("domains", defs)
+				require.NoError(t, err)
+				require.Equal(t, tc.domain, restored.ColDefs[1].EnumValues)
+				require.Equal(t, tc.oid, restored.ColDefs[1].Type.Oid)
+			}
+		})
+	}
 }
