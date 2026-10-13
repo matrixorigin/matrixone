@@ -1625,9 +1625,17 @@ func (e *SpillEngine) makeBucketWriters(prefix string) []BucketWriter {
 	return writers
 }
 
-// TakeSpillBuildPayload transfers the complete build-side spill dependency
-// from a single-consumer JoinMap and resolves its budget generation. Any
-// validation failure closes the moved files before returning.
+// closeRejectedSpillPayload returns failed deletion ownership to the map.
+func closeRejectedSpillPayload(jm *message.JoinMap, payload *message.SpillBuildPayload, cause error) error {
+	if cleanupErr := payload.Close(); cleanupErr != nil {
+		jm.RetainSpillCleanup(payload)
+		return errors.Join(cause, cleanupErr)
+	}
+	return cause
+}
+
+// TakeSpillBuildPayload transfers and validates the sole build-side spill
+// dependency. Validation errors retain failed cleanup ownership on the map.
 func TakeSpillBuildPayload(
 	proc *process.Process,
 	jm *message.JoinMap,
@@ -1657,31 +1665,30 @@ func TakeSpillBuildPayload(
 		actualRows += rows
 	}
 	if !validRows || actualRows != expectedRows {
-		_ = payload.Close()
-		return message.SpillBuildPayload{}, nil, spillRowCountMismatch(
+		cause := spillRowCountMismatch(
 			proc,
 			"build payload",
 			expectedRows,
 			actualRows,
 		)
+		return message.SpillBuildPayload{}, nil, closeRejectedSpillPayload(jm, &payload, cause)
 	}
 	for _, file := range payload.Files {
 		if file == nil {
 			continue
 		}
 		if err := file.Validate(); err != nil {
-			_ = payload.Close()
-			return message.SpillBuildPayload{}, nil, err
+			return message.SpillBuildPayload{}, nil, closeRejectedSpillPayload(jm, &payload, err)
 		}
 	}
 
 	budget, ok := payload.BudgetRef.(*process.ExecutionResourceGeneration)
 	if !ok || budget == nil {
-		_ = payload.Close()
-		return message.SpillBuildPayload{}, nil, moerr.NewInternalError(
+		cause := moerr.NewInternalError(
 			proc.Ctx,
 			"spilled join map is missing its producer budget generation",
 		)
+		return message.SpillBuildPayload{}, nil, closeRejectedSpillPayload(jm, &payload, cause)
 	}
 	return payload, budget, nil
 }

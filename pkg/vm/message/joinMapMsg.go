@@ -599,6 +599,21 @@ func (jm *JoinMap) TakeSpillBuildPayload() (SpillBuildPayload, error) {
 	return payload, nil
 }
 
+// RetainSpillCleanup returns only failed cleanup ownership to the map after
+// TakeSpillBuildPayload. The payload remains taken and cannot be consumed again;
+// FreeMemory will retry removal when the map is released.
+func (jm *JoinMap) RetainSpillCleanup(payload *SpillBuildPayload) {
+	if jm == nil || payload == nil || len(payload.Files) == 0 {
+		return
+	}
+	jm.spillMu.Lock()
+	jm.spillPayload.Files = append(jm.spillPayload.Files, payload.Files...)
+	jm.spillPayload.BudgetRef = payload.BudgetRef
+	jm.spillPayloadTaken = true
+	jm.spillMu.Unlock()
+	*payload = SpillBuildPayload{}
+}
+
 func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }

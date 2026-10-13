@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -162,6 +163,38 @@ func TestSpillEngineCleanupRetainsFailedBucketRemoval(t *testing.T) {
 	engine.Cleanup(proc)
 	require.Empty(t, engine.orphanFiles)
 	require.Zero(t, engine.cfg.Budget.SpillDiskUsed())
+	_, err = baseFS.OpenFile(context.Background(), writer.Name)
+	require.Error(t, err)
+}
+
+func TestRejectedJoinPayloadRetainsFailedRemoval(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	defer generation.Close()
+	writer := BucketWriter{Name: "rejected-join-payload", Budget: generation}
+	require.NoError(t, writeBucketPayload(proc, []byte("real-spill-record"), 1, &writer, nil))
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fault := &blockedRemoveFS{MutableFileService: baseFS, blocked: true}
+	writer.fileFS = fault
+	file, err := writer.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
+	jm.SetRowCount(2) // The file contains one row: reject the payload.
+	jm.IncRef(1)
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		Files: []*message.SpillFile{file}, BudgetRef: generation,
+	}))
+	_, _, err = TakeSpillBuildPayload(proc, jm)
+	require.ErrorContains(t, err, "row count")
+	require.Positive(t, generation.SpillDiskUsed())
+	fault.blocked = false
+	jm.FreeMemory()
+	require.Zero(t, generation.SpillDiskUsed())
 	_, err = baseFS.OpenFile(context.Background(), writer.Name)
 	require.Error(t, err)
 }
