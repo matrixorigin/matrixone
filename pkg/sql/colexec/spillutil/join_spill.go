@@ -327,24 +327,23 @@ func (r *BucketReader) ResetForSpillFile(
 	budget *process.ExecutionResourceGeneration,
 	file *message.SpillFile,
 ) error {
-	r.closeCurrentFile()
+	if err := r.closeCurrentFile(); err != nil {
+		return err
+	}
 	if file == nil {
 		return nil
 	}
 	if err := file.Validate(); err != nil {
-		_ = file.Close()
-		return err
+		return r.closeRejectedFile(file, err)
 	}
 	if file.NeedsOpen() {
 		if budget == nil {
-			_ = file.Close()
-			return process.ErrExecutionResourceInvalid
+			return r.closeRejectedFile(file, process.ErrExecutionResourceInvalid)
 		}
 		var err error
 		r.fdReservation, err = budget.ReserveSpillFD(1)
 		if err != nil {
-			_ = file.Close()
-			return err
+			return r.closeRejectedFile(file, err)
 		}
 	}
 	fd, err := file.Open(proc.Ctx)
@@ -353,21 +352,13 @@ func (r *BucketReader) ResetForSpillFile(
 			r.fdReservation.Release()
 			r.fdReservation = nil
 		}
-		_ = file.Close()
-		return err
+		return r.closeRejectedFile(file, err)
 	}
 	r.spillFile = file
 	r.fd = fd
 	if r.reader != nil {
 		if err := r.reader.Reset(r.fd); err != nil {
-			_ = file.Close()
-			r.spillFile = nil
-			r.fd = nil
-			if r.fdReservation != nil {
-				r.fdReservation.Release()
-				r.fdReservation = nil
-			}
-			return err
+			return errors.Join(err, r.closeCurrentFile())
 		}
 	}
 	r.headerPending = false
@@ -375,12 +366,25 @@ func (r *BucketReader) ResetForSpillFile(
 	return nil
 }
 
-func (r *BucketReader) closeCurrentFile() {
+func (r *BucketReader) closeRejectedFile(file *message.SpillFile, cause error) error {
+	if err := file.Close(); err != nil {
+		r.spillFile = file
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
+func (r *BucketReader) closeCurrentFile() error {
 	spill := r.spillFile
 	r.spillFile = nil
 	spillio.DropReadCache(r.fd)
+	var cleanupErr error
 	if spill != nil {
-		_ = spill.Close()
+		if err := spill.Close(); err != nil {
+			// Preserve the only remaining remover so a later Close or Reset can retry.
+			r.spillFile = spill
+			cleanupErr = err
+		}
 		r.fd = nil
 	}
 	if r.fd != nil {
@@ -396,14 +400,16 @@ func (r *BucketReader) closeCurrentFile() {
 	}
 	r.headerPending = false
 	r.schema = nil
+	return cleanupErr
 }
 
-func (r *BucketReader) Close() {
-	r.closeCurrentFile()
+func (r *BucketReader) Close() error {
+	err := r.closeCurrentFile()
 	if r.reader != nil {
 		r.reader.Free()
 		r.reader = nil
 	}
+	return err
 }
 
 // BucketWriter retains a named spill file and its disk ownership, never an FD.
@@ -1534,6 +1540,8 @@ type SpillEngine struct {
 	// Writers whose named files could not be removed remain owned by the
 	// engine until Cleanup retries them.
 	orphanWriters []BucketWriter
+	// Handed-off files need the same retry ownership after a failed removal.
+	orphanFiles []*message.SpillFile
 
 	// Current bucket state
 	buildReader      BucketReader
@@ -1784,9 +1792,7 @@ func (e *SpillEngine) ScatterProbeTable(
 		file, err := writers[i].handOffSpillFile(proc.Ctx)
 		if err != nil {
 			for _, handedOff := range probeFiles {
-				if handedOff != nil {
-					handedOff.Close()
-				}
+				e.closeSpillFile(handedOff)
 			}
 			return err
 		}
@@ -1972,7 +1978,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		e.buckets[0].BuildFd = nil
 		e.buckets = e.buckets[1:]
 		if bucket.BuildFd != nil {
-			_ = bucket.BuildFd.Close()
+			e.closeSpillFile(bucket.BuildFd)
 		}
 		return nil, BucketSkip, nil
 	}
@@ -1990,7 +1996,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			e.closeSpillFile(bucket.ProbeFd)
 		}
 		return nil, BucketSkip, nil
 	}
@@ -2218,7 +2224,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			e.closeSpillFile(bucket.ProbeFd)
 		}
 		return nil, BucketSkip, nil
 	}
@@ -2272,16 +2278,12 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			}
 		}
 		if !probeFdConsumed && bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			e.closeSpillFile(bucket.ProbeFd)
 		}
 		if !committed {
 			for i := range subBuckets {
-				if subBuckets[i].BuildFd != nil {
-					_ = subBuckets[i].BuildFd.Close()
-				}
-				if subBuckets[i].ProbeFd != nil {
-					_ = subBuckets[i].ProbeFd.Close()
-				}
+				e.closeSpillFile(subBuckets[i].BuildFd)
+				e.closeSpillFile(subBuckets[i].ProbeFd)
 			}
 		}
 	}()
@@ -2482,9 +2484,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			}
 			probeFile, err := probeWriters[i].handOffSpillFile(proc.Ctx)
 			if err != nil {
-				if buildFile != nil {
-					buildFile.Close()
-				}
+				e.closeSpillFile(buildFile)
 				return nil, err
 			}
 			buildRowsChild := int64(0)
@@ -2510,23 +2510,15 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	// entire bucket is semantically unreachable.
 	if bucket.ProbeFd == nil && !e.cfg.NeedsBuildForEmptyProbe && !e.cfg.NeedsProbeForEmptyBuild {
 		for i := range subBuckets {
-			if subBuckets[i].BuildFd != nil {
-				_ = subBuckets[i].BuildFd.Close()
-			}
-			if subBuckets[i].ProbeFd != nil {
-				_ = subBuckets[i].ProbeFd.Close()
-			}
+			e.closeSpillFile(subBuckets[i].BuildFd)
+			e.closeSpillFile(subBuckets[i].ProbeFd)
 		}
 		return nil, nil
 	}
 	if childBuildRows != buildRows {
 		for i := range subBuckets {
-			if subBuckets[i].BuildFd != nil {
-				subBuckets[i].BuildFd.Close()
-			}
-			if subBuckets[i].ProbeFd != nil {
-				subBuckets[i].ProbeFd.Close()
-			}
+			e.closeSpillFile(subBuckets[i].BuildFd)
+			e.closeSpillFile(subBuckets[i].ProbeFd)
 		}
 		return nil, moerr.NewInternalErrorf(
 			proc.Ctx,
@@ -2550,12 +2542,8 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			(e.cfg.NeedsProbeForEmptyBuild && childProbeRows != bucket.ProbeRows))
 	if probeConservationFailed {
 		for i := range subBuckets {
-			if subBuckets[i].BuildFd != nil {
-				subBuckets[i].BuildFd.Close()
-			}
-			if subBuckets[i].ProbeFd != nil {
-				subBuckets[i].ProbeFd.Close()
-			}
+			e.closeSpillFile(subBuckets[i].BuildFd)
+			e.closeSpillFile(subBuckets[i].ProbeFd)
 		}
 		return nil, moerr.NewInternalErrorf(
 			proc.Ctx,
@@ -2569,11 +2557,11 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 }
 
 // FinishBucket closes the current bucket's probe reader.
-func (e *SpillEngine) FinishBucket() {
+func (e *SpillEngine) FinishBucket() error {
 	// Keep reader and decoded-batch reservations live with their retained
 	// capacities. The next bucket replaces them transactionally; Cleanup is the
 	// terminal release point.
-	e.probeReader.closeCurrentFile()
+	return e.probeReader.closeCurrentFile()
 }
 
 // IsProbing reports whether a probe file is currently open.
@@ -2653,8 +2641,26 @@ func noProgressError(proc *process.Process, depth int) error {
 	)
 }
 
+// closeSpillFile keeps failed removals reachable until a later Cleanup.
+func (e *SpillEngine) closeSpillFile(file *message.SpillFile) {
+	if file == nil {
+		return
+	}
+	if err := file.Close(); err != nil {
+		logutil.Errorf("join handed-off spill cleanup failed: %v", err)
+		e.orphanFiles = append(e.orphanFiles, file)
+	}
+}
+
 // Cleanup releases all engine resources.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
+	if len(e.orphanFiles) > 0 {
+		pending := e.orphanFiles
+		e.orphanFiles = nil
+		for _, file := range pending {
+			e.closeSpillFile(file)
+		}
+	}
 	if len(e.orphanWriters) > 0 {
 		pending := e.orphanWriters
 		e.orphanWriters = nil
@@ -2666,12 +2672,8 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 		}
 	}
 	for i := range e.buckets {
-		if e.buckets[i].BuildFd != nil {
-			_ = e.buckets[i].BuildFd.Close()
-		}
-		if e.buckets[i].ProbeFd != nil {
-			_ = e.buckets[i].ProbeFd.Close()
-		}
+		e.closeSpillFile(e.buckets[i].BuildFd)
+		e.closeSpillFile(e.buckets[i].ProbeFd)
 	}
 	e.buckets = nil
 	if e.buildReadBatch != nil {
@@ -2682,8 +2684,12 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 		e.probeReadBatch.Clean(proc.Mp())
 		e.probeReadBatch = nil
 	}
-	e.probeReader.Close()
-	e.buildReader.Close()
+	if err := e.probeReader.Close(); err != nil {
+		logutil.Errorf("join probe spill cleanup failed: %v", err)
+	}
+	if err := e.buildReader.Close(); err != nil {
+		logutil.Errorf("join build spill cleanup failed: %v", err)
+	}
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()

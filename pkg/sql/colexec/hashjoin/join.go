@@ -618,7 +618,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 				return result, nil
 			}
 			// EOF on probe file.
-			engine.FinishBucket()
+			if err := engine.FinishBucket(); err != nil {
+				return result, err
+			}
 			ctr.probeBucketActive = false
 			if hashJoin.AsofBuildLeft && ctr.asofBuildLeftInitialized {
 				return result, nil // finalize this logical-left build bucket

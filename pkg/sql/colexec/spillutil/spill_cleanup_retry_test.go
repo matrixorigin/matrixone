@@ -139,6 +139,33 @@ func TestHandedOffJoinSpillRetainsFailedRemovalForRetry(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSpillEngineCleanupRetainsFailedBucketRemoval(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	engine := newExactTestSpillEngine(t, SpillEngineConfig{})
+	writer := BucketWriter{Name: "queued-join-cleanup", Budget: engine.cfg.Budget}
+	require.NoError(t, writeBucketPayload(proc, []byte("real-spill-record"), 1, &writer, nil))
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fault := &blockedRemoveFS{MutableFileService: baseFS, blocked: true}
+	writer.fileFS = fault
+	file, err := writer.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	engine.buckets = []SpillBucket{{BuildFd: file, BuildRows: 1}}
+	engine.Cleanup(proc)
+	require.Positive(t, engine.cfg.Budget.SpillDiskUsed())
+	require.Len(t, engine.orphanFiles, 1)
+	physical, err := baseFS.OpenFile(context.Background(), writer.Name)
+	require.NoError(t, err)
+	require.NoError(t, physical.Close())
+	fault.blocked = false
+	engine.Cleanup(proc)
+	require.Empty(t, engine.orphanFiles)
+	require.Zero(t, engine.cfg.Budget.SpillDiskUsed())
+	_, err = baseFS.OpenFile(context.Background(), writer.Name)
+	require.Error(t, err)
+}
+
 func TestScatterProbeRetainsFailedRemovalUntilCleanup(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
