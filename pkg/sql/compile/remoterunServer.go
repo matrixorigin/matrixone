@@ -1249,9 +1249,9 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
-	if b.HasNumericBinaryLiteralMetadata() && version < defines.MORPCVersion112 {
+	if b.HasNumericBinaryLiteralMetadata() && version < defines.MORPCVersion118 {
 		return moerr.NewInvalidStateNoCtx(
-			"numeric binary-literal provenance requires MORPCVersion112 for remote results")
+			"numeric binary-literal provenance requires MORPCVersion118 for remote results")
 	}
 	if b.HasPrepareParamKindMetadataWithoutStringSources() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(
