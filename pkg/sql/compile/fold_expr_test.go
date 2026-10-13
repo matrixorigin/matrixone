@@ -24,19 +24,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestVectorQueryConcurrentDataSourceFolds(t *testing.T) {
-	for _, remote := range []bool{false, true} {
-		name := "active_local_reader"
-		if remote {
-			name = "remote_fold_registration"
-		}
+	for _, name := range []string{"active_local_reader", "remote_fold_registration", "snapshot_eager_before_selectors"} {
 		t.Run(name, func(t *testing.T) {
+			remote := name == "remote_fold_registration"
 			c := NewMockCompile(t)
 			c.e = newStubEngineForGenerateNodes("fold_init", "t")
 			c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOp(gomock.NewController(t))
@@ -58,6 +58,23 @@ func TestVectorQueryConcurrentDataSourceFolds(t *testing.T) {
 				}}}
 			}
 			first, second, reader := makeScope(11), makeScope(23), makeScope(37)
+			scopes := []*Scope{first, second}
+			values := []int64{11, 23}
+			if name == "snapshot_eager_before_selectors" {
+				// planner 的 snapshot admission 将这些扫描保留在普通域：先串行
+				// 初始化同一旧快照，再并发启动无快照 selector。不能让事务锁藏进 Fold 锁。
+				owner := &foldSnapshotTxn{TxnOperator: c.proc.Base.TxnOperator, ts: timestamp.Timestamp{PhysicalTime: 2}}
+				c.proc.Base.TxnOperator = owner
+				for _, value := range []int64{41, 43} {
+					s := makeScope(value)
+					s.DataSource.node.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+					scopes = append(scopes, s)
+					values = append(values, value)
+				}
+				require.NoError(t, (&Scope{PreScopes: scopes[2:]}).InitAllDataSource(c))
+				require.Equal(t, 1, owner.clones)
+				require.Equal(t, int64(1), c.proc.GetCloneTxnOperator().Txn().SnapshotTS.PhysicalTime)
+			}
 			if remote {
 				reader.IsRemote = true
 				reader.DataSource.BlockFilterList = reader.DataSource.node.BlockFilterList
@@ -101,8 +118,8 @@ func TestVectorQueryConcurrentDataSourceFolds(t *testing.T) {
 				require.Len(t, fold.Data, 8)
 				require.Equal(t, value, types.DecodeInt64(fold.Data))
 			}
-			for i, scope := range []*Scope{first, second} {
-				value := []int64{11, 23}[i]
+			for i, scope := range scopes {
+				value := values[i]
 				filters, err := scope.handleRuntimeFilters(c, nil)
 				require.NoError(t, err)
 				check(scope.DataSource.FilterList[0], value)
@@ -128,6 +145,23 @@ func TestVectorQueryConcurrentDataSourceFolds(t *testing.T) {
 			require.Len(t, c.filterExprExes, len(ids), "prepared reuse keeps existing Fold IDs")
 		})
 	}
+}
+
+type foldSnapshotTxn struct {
+	client.TxnOperator
+	ts     timestamp.Timestamp
+	clones int
+}
+
+func (t *foldSnapshotTxn) Txn() txn.TxnMeta {
+	meta := t.TxnOperator.Txn()
+	meta.SnapshotTS = t.ts
+	return meta
+}
+
+func (t *foldSnapshotTxn) CloneSnapshotOp(ts timestamp.Timestamp) client.TxnOperator {
+	t.clones++
+	return &foldSnapshotTxn{TxnOperator: t.TxnOperator, ts: ts}
 }
 
 func TestCompileFoldLockTerminalPaths(t *testing.T) {

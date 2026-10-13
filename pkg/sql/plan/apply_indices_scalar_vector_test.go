@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -57,12 +58,62 @@ func scalarVectorPlanFixture(t *testing.T, sql string, hnsw bool) *plan.Query {
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	p, err := BuildPlan(ctx, stmts[0], false)
+	p, err := BuildPlan(&scalarVectorSnapshotContext{ctx}, stmts[0], false)
 	require.NoError(t, err)
 	if prepare := p.GetDcl().GetPrepare(); prepare != nil {
 		return prepare.Plan.GetQuery()
 	}
 	return p.GetQuery()
+}
+
+type scalarVectorSnapshotContext struct{ *customMockCompilerContext }
+
+func (c *scalarVectorSnapshotContext) ResolveSnapshotWithSnapshotName(string) (*plan.Snapshot, error) {
+	return &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}, nil
+}
+
+func TestScalarVectorSnapshotAdmission(t *testing.T) {
+	for _, hnsw := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, items, providerA, providerB string
+			selectors, snapshots              int
+		}{
+			{name: "current", selectors: 2},
+			{name: "two_snapshot_providers", providerA: "{snapshot='s'}", providerB: "{snapshot='s'}", snapshots: 2},
+			{name: "mixed", providerB: "{snapshot='s'}", selectors: 1, snapshots: 1},
+			{name: "snapshot_candidates", items: "{snapshot='s'}", snapshots: 2},
+		} {
+			t.Run(fmt.Sprintf("hnsw=%t/%s", hnsw, tc.name), func(t *testing.T) {
+				key := "'ref'"
+				if hnsw {
+					key = "1"
+				}
+				q := scalarVectorPlanFixture(t, fmt.Sprintf(`with a as (select concat(id,'') as id from scalar_items %s order by l2_distance(v,(select v from scalar_provider %s where id=%s)) limit 2),
+ b as (select concat(id,'') as id from scalar_items %s order by l2_distance(v,(select v from scalar_provider %s where id=%s)) limit 2)
+ select a.id,b.id from a join b on a.id=b.id order by a.id`, tc.items, tc.providerA, key, tc.items, tc.providerB, key), hnsw)
+				require.Len(t, scalarVectorSelectors(q), tc.selectors)
+				seen, snapshots := make(map[int32]bool), 0
+				var walk func(int32)
+				walk = func(id int32) {
+					if seen[id] {
+						return
+					}
+					seen[id] = true
+					n := q.Nodes[id]
+					if n.ScanSnapshot != nil {
+						snapshots++
+					}
+					for _, child := range n.Children {
+						walk(child)
+					}
+				}
+				for _, root := range q.Steps {
+					walk(root)
+				}
+				require.Equal(t, tc.snapshots, snapshots, "snapshot semantics must survive fallback")
+			})
+		}
+	}
 }
 
 func scalarVectorSelectors(q *plan.Query) []*plan.Node {

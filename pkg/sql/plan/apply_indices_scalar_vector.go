@@ -37,7 +37,10 @@ func (builder *QueryBuilder) scalarVectorContext(proj *plan.Node) (*vectorSortCo
 	}
 	scan := builder.directScanWithVectorIndex(builder.qry.Nodes[join.Children[0]])
 	provider := builder.qry.Nodes[join.Children[1]]
-	if scan == nil || scan.TableDef.Partition != nil || !builder.isSingleRowVectorProvider(provider) || !builder.scalarVectorProviderSafe(provider) {
+	// Snapshot 的 CloneTxnOperator 由普通串行 datasource 初始化归属；
+	// 在有统一并发事务 owner 之前，候选表和 provider 都不能进入惰性域。
+	if scan == nil || scan.ScanSnapshot != nil || scan.TableDef.Partition != nil ||
+		!builder.isSingleRowVectorProvider(provider) || !builder.scalarVectorProviderSafe(provider) {
 		return nil, nil
 	}
 	fn := sort.OrderBy[0].Expr.GetF()
@@ -67,7 +70,7 @@ func (builder *QueryBuilder) scalarVectorProviderSafe(node *plan.Node) bool {
 	}
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		if node.TableDef == nil || node.TableDef.Partition != nil {
+		if node.ScanSnapshot != nil || node.TableDef == nil || node.TableDef.Partition != nil {
 			return false
 		}
 		for _, filter := range node.FilterList {

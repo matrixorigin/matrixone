@@ -239,6 +239,8 @@ func TestVectorQueryExecutionBoundary(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, vectorQueryExecType(plan2.ExecTypeAP_MULTICN, q))
 	q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_VECTOR_QUERY_TOP})
 	require.Equal(t, plan2.ExecTypeAP_ONECN, vectorQueryExecType(plan2.ExecTypeAP_MULTICN, q))
+	require.Equal(t, plan2.ExecTypeTP, vectorQueryExecType(plan2.ExecTypeTP, q), "TP is already local and must remain prepare-cache eligible")
+	require.Equal(t, plan2.ExecTypeAP_ONECN, vectorQueryExecType(plan2.ExecTypeAP_ONECN, q))
 	for _, id := range []int32{0, 1, 42} {
 		require.Less(t, vectorQuerySourceKey(&plan.Node{VectorQuerySourceId: id}), int32(0))
 	}

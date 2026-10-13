@@ -31,7 +31,8 @@ import (
 func vectorQuerySourceKey(node *plan.Node) int32 { return -node.VectorQuerySourceId - 1 }
 
 func vectorQueryExecType(execType plan2.ExecType, qry *plan.Query) plan2.ExecType {
-	if qry != nil {
+	// TP 已在协调 CN，提升为 AP 会使真实 PREPARE admission 拒绝缓存 Compile。
+	if execType == plan2.ExecTypeAP_MULTICN && qry != nil {
 		for _, node := range qry.Nodes {
 			if node != nil && node.NodeType == plan.Node_VECTOR_QUERY_TOP {
 				return plan2.ExecTypeAP_ONECN

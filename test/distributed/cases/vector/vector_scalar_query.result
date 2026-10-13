@@ -267,5 +267,28 @@ execute pn using @id,@k;
 ➤ id[-5,64,0]  𝄀
 1
 deallocate prepare pn;
+create snapshot scalar_vector_snap for account sys;
+update query_vectors set v='[3,0,0]' where id=1;
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1)
+select a.id,b.id from a cross join b;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+2  ¦  2
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force')
+select a.id,b.id from a cross join b;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+2  ¦  2
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1)
+select a.id,b.id from a cross join b;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+3  ¦  2
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force')
+select a.id,b.id from a cross join b;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+3  ¦  2
+drop snapshot scalar_vector_snap;
 drop database vector_scalar_query;
 set experimental_hnsw_index=@saved_hnsw;

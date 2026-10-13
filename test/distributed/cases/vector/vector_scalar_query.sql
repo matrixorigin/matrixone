@@ -114,5 +114,21 @@ execute pn using @id,@k;
 set @id=1;
 execute pn using @id,@k;
 deallocate prepare pn;
+-- Snapshot 不进入惰性 selector；两个旧 provider 与混合当前/旧 provider 保留时间语义。
+create snapshot scalar_vector_snap for account sys;
+update query_vectors set v='[3,0,0]' where id=1;
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1)
+select a.id,b.id from a cross join b;
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force')
+select a.id,b.id from a cross join b;
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1)
+select a.id,b.id from a cross join b;
+with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force')
+select a.id,b.id from a cross join b;
+drop snapshot scalar_vector_snap;
 drop database vector_scalar_query;
 set experimental_hnsw_index=@saved_hnsw;

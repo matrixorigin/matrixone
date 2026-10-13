@@ -81,7 +81,7 @@ provider 的 EOF 只是输入消费结束。selector 随后等待 `done[0]`，�
 
 ### 4.5 协调 CN 与协议边界
 
-`vectorQueryExecType` 将含 `VECTOR_QUERY_TOP` 的查询设为 `ExecTypeAP_ONECN`；现有 scheduler 的该路径选用 `c.addr`。`holdAnyCannotRemoteOperator` 递归拒绝包含 selector 的 scope，RemoteRun 在远端发送前执行此检查。只有地址匹配本 CN 的 Remote scope 才转回本地 MergeRun。
+`vectorQueryExecType` 将含 `VECTOR_QUERY_TOP` 的多 CN AP 查询限制为 `ExecTypeAP_ONECN`，保留本来就协调 CN 本地执行的 `ExecTypeTP`/`ExecTypeAP_ONECN`；现有 scheduler 的这两种本地路径都选用当前 CN。保留 TP 是实际 PREPARE 编译缓存 admission 的必要条件，修正见 §7。`holdAnyCannotRemoteOperator` 递归拒绝包含 selector 的 scope，RemoteRun 在远端发送前执行此检查。只有地址匹配本 CN 的 Remote scope 才转回本地 MergeRun。
 
 新 source 指针和生命周期回调不序列化到远端 pipeline。逻辑计划使用节点 58/59、source 字段 93；VM opcode 67 保留 63–66 的编号空档。protobuf 由工具生成，配套 deepcopy/remap/EXPLAIN/compile 消费者同步更新。保留 TN/fileservice 网络访问不等于把 selector 派发到另一 CN。
 
@@ -132,3 +132,31 @@ ONECN 只约束执行位置，不会串行化本 CN 的 selector。两个 `InitA
 | owning、静态与交付 | 完整 compile/plan normal + vet、完整 compile race、native build、Go 1.26.4 gofmt 和 diff check 通过；自有服务停止后日志无 mpool 泄漏或 pipeline cleanup timeout |
 
 本修复增量语句块覆盖 **63/65（96.92%）**；以新 compile/plan profile 替换旧 profile 的对应文件，其他未变文件复用原证据，整个 PR 为 **521/608（85.69%）**。此前四包 race 和组合 JOIN 的 440/440 仍标明原验证修订，未冒称本轮重新执行组合 merge。设计 v1 原文及批准 hash 未变；本修正不新增 SQL 能力或改变 selector/source/CN 生命周期设计，也不等于 reviewer 已通过整体设计门禁。
+
+## 7. 新增 review 修复：快照 admission、TP 缓存及统一派发（2026-10-13）
+
+XuPeng-SH 已审阅冻结设计及批准记录并认可设计方向；其 `CHANGES_REQUESTED` 指出两条具体 P2 和一条非阻塞 P3。本节记录这些修复，不替代 reviewer 后续复审或冒称 GitHub APPROVED。开始前以 merge 合入最新 `4.2-dev` 的 `02b0689fa9354cb6e957a04d0769aff9ffcd1f9a`（fulltext 引号修复）。
+
+### 快照的明确回退边界
+
+Fold 锁没有、也不应顺带保护 Process 的 `CloneTxnOperator` check/create/store。采用 reviewer 明确提出的保守方案：`scalarVectorContext` 拒绝候选表上的 ScanSnapshot，`scalarVectorProviderSafe` 拒绝 provider 中的 ScanSnapshot。两处同时作用于预探测和最终改写，快照扫描不进入任何新 selector 的惰性分支；原普通计划保留快照，在执行 goroutine 激活前初始化 datasource。混合语句中的无快照区域仍可使用 selector。
+
+不宣称通用的 CloneTxnOperator 已变为并发安全，也不引入新事务 owner/锁。公共 planner 的 IVF/HNSW × 双快照 provider/混合/快照候选表/无快照对照，验证可达 selector 数及 ScanSnapshot 保留。既有 Fold 并发 fixture 增加普通域两个同快照扫描先初始化、再启动两个非快照惰性扫描，验证真实 InitAllDataSource 只请求一个 clone、过滤值不污染。
+
+### 真实 prepared compile 缓存
+
+TP 本来就在协调 CN，不能为 locality 把它升级到 AP_ONECN，否则 `compileQuery` 拒绝 prepare-time compilation，frontend 不保留 Compile。现在只收敛 AP_MULTICN；TP/AP_ONECN 原分类不变，远端 selector 拒绝规则仍保留。
+
+新增 `pkg/frontend/prepared_scalar_vector_test.go::TestPreparedScalarVectorCompileCache`：只 stub catalog/engine 元数据，通过公共 HNSW SQL planner、真实 `createPrepareStmt → createCompile → Compile.Compile/compileQuery` 建立缓存，再经生产 `initExecuteStmtParam` 三次取回**同一个非空 Compile**并 Reset。它不注入假 Compile、不强改 execType；实际 pipeline 执行与参数/NULL/零 LIMIT 代际由公开 BVT 补足。修复前同一测试在“缓存必须非空”断言失败。
+
+### 一个派发策略 owner
+
+普通 `applyIndicesForProject` 改用已有 `applyVectorIndexForSortContext`，移除重复的 index 收集、prepared 依赖记录、vector/context 筛选及 ApplyForSort 循环。未命中仍执行 exact-sort stabilization；共享 helper 继续区分 applied（不能只看 node ID），保留错误传播及改写前依赖捕获。现有 prepared IVF index-only dependency、FORCE/descending/project-child stable sort、HNSW 和插件相关 owning 测试通过。
+
+### 验证与归属闭包
+
+- 修复前证据：公共 snapshot admission 与 TP 分类断言失败；真实 PREPARE 缓存为空。Snapshot 的底层并发写反例另由 reviewer 在 `bc5193120a` 演示，本轮不把保守回退说成修好了该通用并发 API。
+- Go 1.26.4、仓库 CGo wrapper：完整 plan/compile/frontend normal + vet、完整 compile/frontend race 通过；新/扩展两个生命周期测试各精确 `-race -count=100` 通过。单次 race 测试体约 0.01 秒，采用 30 秒预算、100 次上限。
+- native build、gofmt、diff 检查通过。BVT 数据目录先完整保留到本地证据目录，再以新数据启动自有双 CN；两个入口各 scalar **103/103** + 原 IVF 四套 **275/275**，合计 **378/378**。新增双旧快照 `(2,2)`、混合当前/旧快照 `(3,2)` 均与 FORCE 一致，结果生成后人工核对并正常 comparison。服务已停止，检查至 shutdown 没有 mpool 泄漏、cleanup timeout 或 panic。
+- 本轮修改语句块 **11/11（100%）**；以新 profile 替换相应文件、未变文件复用既有证据，整个 PR **528/611（86.42%）**。frontend 最后补齐测试外层 AST 释放后，聚焦/重复/full normal/full race 均重新通过；不影响生产 profile 或 native/BVT 输入。
+- Q1：快照不增加 owner；缓存 Compile 仍归 PrepareStmt，AST/Compile 清理由唯一归属承担。Q2：不新增锁或等待，cache Reset 仍在旧执行退出后；不改变取消/join。Q3：不新增状态或积累，反而删除重复 dispatch 策略及临时 key slice。无协议、持久化、权限、租户或原 v1 内容/hash 变化。
