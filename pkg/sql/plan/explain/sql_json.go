@@ -418,12 +418,12 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		if err != nil {
 			return err
 		}
-	case plan.Node_VECTOR_INDEX_SCAN:
-		if node.VectorIndexScan == nil || node.VectorIndexScan.Index == nil || node.VectorIndexScan.Index.IndexName == "" {
+	case plan.Node_INDEX_SEARCH_SCAN:
+		if node.IndexSearchScan == nil || node.IndexSearchScan.Index == nil || node.IndexSearchScan.Index.IndexName == "" {
 			return moerr.NewInvalidInput(b.ctx, "vector index scan metadata is missing")
 		}
 		item.TableName = sqlJSONTableName(node)
-		item.Expressions, err = sqlJSONVectorIndexExpressions(b.ctx, node.VectorIndexScan, &b.textOpts)
+		item.Expressions, err = sqlJSONIndexSearchExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
 		if err != nil {
 			return err
 		}
@@ -621,41 +621,62 @@ func sqlJSONSampleExpressions(ctx context.Context, spec *plan.SampleFuncSpec) ([
 	}, nil
 }
 
-func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexScan, options *ExplainOptions) ([]string, error) {
+func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchScan, options *ExplainOptions) ([]string, error) {
 	if spec == nil || spec.Index == nil {
 		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
 	}
 	values := make([]string, 0, 16+len(spec.PreFilters)+len(spec.IncludedColumns))
 	values = append(values, "index="+spec.Index.IndexName)
+	isVector := !isFulltextIndexSearchScan(spec)
 	if spec.DistanceFunction != "" {
 		values = append(values, "metric="+spec.DistanceFunction)
 	}
-	direction := spec.Direction.String()
-	switch spec.Direction {
-	case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
-		// valid vector scan directions
-	default:
-		return nil, moerr.NewInvalidInputf(ctx, "vector index scan has unknown direction %d", spec.Direction)
+	var scanOptions struct {
+		InitialProbeCount uint32 `json:"initial_probe_count"`
+		BucketExpandStep  uint32 `json:"bucket_expand_step"`
+		ThreadsSearch     int64  `json:"threads_search"`
 	}
-	values = append(values,
-		"direction="+direction,
-		"initial_probe_count="+strconv.FormatUint(uint64(spec.InitialProbeCount), 10),
-		"bucket_expand_step="+strconv.FormatUint(uint64(spec.BucketExpandStep), 10),
-		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
-	)
-	if spec.ThreadsSearch != 0 {
-		values = append(values, "threads_search="+strconv.FormatInt(spec.ThreadsSearch, 10))
+	if len(spec.AlgoOptions) > 0 {
+		if err := json.Unmarshal(spec.AlgoOptions, &scanOptions); err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid index search scan options: %v", err)
+		}
+	}
+	if isVector {
+		direction := spec.Direction.String()
+		switch spec.Direction {
+		case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
+			// valid vector scan directions
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "vector index scan has unknown direction %d", spec.Direction)
+		}
+		values = append(values,
+			"direction="+direction,
+			"initial_probe_count="+strconv.FormatUint(uint64(scanOptions.InitialProbeCount), 10),
+			"bucket_expand_step="+strconv.FormatUint(uint64(scanOptions.BucketExpandStep), 10),
+			"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
+		)
+		if scanOptions.ThreadsSearch != 0 {
+			values = append(values, "threads_search="+strconv.FormatInt(scanOptions.ThreadsSearch, 10))
+		}
 	}
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
+	}
+	firstRoundLimit, err := sqlJSONIndexSearchAlgoExpr(spec, "first_round_limit")
+	if err != nil {
+		return nil, err
+	}
+	payloadName := "query_payload"
+	if isVector {
+		payloadName = "query_vector"
 	}
 	for _, field := range []struct {
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_vector", expr: spec.QueryVector},
+		{name: payloadName, expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
-		{name: "first_round_limit", expr: spec.FirstRoundLimit},
+		{name: "first_round_limit", expr: firstRoundLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
 		if err != nil {
@@ -704,6 +725,19 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 		}
 	}
 	return values, nil
+}
+
+func sqlJSONIndexSearchAlgoExpr(spec *plan.IndexSearchScan, name string) (*plan.Expr, error) {
+	for i, exprName := range spec.AlgoExprNames {
+		if exprName != name {
+			continue
+		}
+		if i >= len(spec.AlgoExprs) {
+			return nil, moerr.NewInvalidInputNoCtxf("index search scan algorithm expression %q is missing", name)
+		}
+		return spec.AlgoExprs[i], nil
+	}
+	return nil, nil
 }
 
 func sqlJSONOrderByValues(ctx context.Context, specs []*plan.OrderBySpec, options *ExplainOptions) ([]sqlJSONOrderBy, error) {
