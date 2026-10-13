@@ -3539,22 +3539,22 @@ var (
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
 			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' INCLUDE (b, c) ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' ASYNC ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
 		}, {
 			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
-			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
 		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
@@ -5387,15 +5387,15 @@ var (
 		},
 		{
 			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS'",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE 'VECTOR_L2_OPS' ",
 		},
 		{
 			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS' ASYNC",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ASYNC ",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE 'VECTOR_L2_OPS' ASYNC ",
 		},
 		{
 			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  op_type 'vector_l2_ops' )",
-			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 OP_TYPE vector_l2_ops )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 OP_TYPE 'vector_l2_ops' )",
 		},
 		{
 			input:  "alter table t1 alter reindex idx1 hnsw",
@@ -5433,11 +5433,11 @@ var (
 		},
 		{
 			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
-			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
+			output: "create index idx using cagra on a (a) OP_TYPE 'VECTOR_L2_OPS' INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
 		},
 		{
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
-			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION INT8 BITS_PER_CODE 8 ",
 		},
 		{
 			input:  "create index idx using cagra on A (a) INCLUDE (price)",
@@ -5449,7 +5449,7 @@ var (
 		},
 		{
 			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
-			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+			output: "create index idx using cagra on a (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id) ",
 		},
 		{
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
@@ -6466,6 +6466,20 @@ func TestLimitByRank(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLimitByRankOptionStructure(t *testing.T) {
+	for _, option := range []string{"1", "NULL", "concat('nprobe=', '1')", "'nprobe'", "'nprobe=1=2'", "'=1'", "'nprobe='"} {
+		t.Run(option, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION "+option, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "rank options must")
+		})
+	}
+	stmt, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION ' NPROBE = 1 ', 'nprobe=2'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "2", stmt.(*tree.Select).RankOption.Option["nprobe"])
 }
 
 func TestOffsetWithoutLimit(t *testing.T) {
