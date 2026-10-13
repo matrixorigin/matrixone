@@ -258,7 +258,14 @@ func TestIssue28319SynchronousIndexPreparation(t *testing.T) {
 				execSQLRequire(t, ctx, db, fmt.Sprintf(tc.createIndex, database))
 				originalID := currentRelationID(t, ctx, db, database, "t")
 				var observed atomic.Int32
+				var phaseMu sync.Mutex
+				phaseCounts := make(map[string]int)
 				restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, op client.TxnOperator) error {
+					if dbName == database && table == "t" {
+						phaseMu.Lock()
+						phaseCounts[phase]++
+						phaseMu.Unlock()
+					}
 					if dbName != database || table != "t" || phase != "tasks-published" {
 						return nil
 					}
@@ -307,13 +314,27 @@ func TestIssue28319SynchronousIndexPreparation(t *testing.T) {
 				})
 				defer restore()
 				execSQLRequire(t, ctx, db, "alter table "+database+".t "+tc.alter)
+				phaseMu.Lock()
+				require.Equal(t, 1, phaseCounts["copy-started"])
+				require.Equal(t, 1, phaseCounts["data-copied"])
+				phaseMu.Unlock()
 				require.Equal(t, int32(1), observed.Load())
 				finalID := currentRelationID(t, ctx, db, database, "t")
 				require.NotEqual(t, originalID, finalID)
 				var tasks, initializations int
-				require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(case when coalesce(json_unquote(json_extract(job_spec,'$.InitSQL')),'') != '' then 1 else 0 end) from mo_catalog.mo_iscp_log where table_id=? and job_name='index_idx'", finalID).Scan(&tasks, &initializations))
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(case when coalesce(json_unquote(json_extract(job_spec,'$.InitSQL')),'') != '' then 1 else 0 end) from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_idx' and drop_at is null", finalID).Scan(&tasks, &initializations))
 				require.Equal(t, 1, tasks)
+				var sourceName, consumerName, sourceDB string
+				var taskSourceID uint64
+				require.NoError(t, db.QueryRowContext(ctx, "select json_unquote(json_extract(job_spec,'$.SrcTable.TableName')),json_unquote(json_extract(job_spec,'$.TableName')),json_unquote(json_extract(job_spec,'$.SrcTable.DBName')),json_extract(job_spec,'$.SrcTable.TableID') from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_idx' and drop_at is null", finalID).Scan(&sourceName, &consumerName, &sourceDB, &taskSourceID))
+				require.Equal(t, "t", sourceName)
+				require.Equal(t, "t", consumerName)
+				require.Equal(t, database, sourceDB)
+				require.Equal(t, finalID, taskSourceID)
 				require.Equal(t, tc.initializations, initializations, "preserve synchronous versus asynchronous initialization")
+				var oldLiveTasks int
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_iscp_log where table_id=? and drop_at is null", originalID).Scan(&oldLiveTasks))
+				require.Zero(t, oldLiveTasks, "replacement must retire the original generation tasks")
 			})
 		}
 	})
@@ -712,7 +733,7 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 				if mode == "binary" {
 					stmt, e := db.PrepareContext(ctx, statement)
 					require.NoError(t, e)
-					defer stmt.Close()
+					defer func() { _ = stmt.Close() }()
 					run = func() error { _, e := stmt.ExecContext(ctx); return e }
 				}
 				if mode == "text" {

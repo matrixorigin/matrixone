@@ -1,12 +1,35 @@
 # COPY ALTER QA handoff
 
+## Current integration boundary (2026-10-13)
+
+The evidence and proposed QA scenarios below are **historical**, bound to
+`d1fdf00bf6` / `e5748ddd31` and their stated old baseline. They are preserved as
+history, not transferred to the integrated candidate. The current PR is
+**Draft**, CHANGES_REQUESTED; no current Ready, maintainer approval, complete
+performance acceptance or deployed QA is claimed.
+
+The necessary integration preserves main
+`175a645a85994f2c95992d3aa8d6dacb6d9e167f` C/G/D admission before source locks.
+Delayed publication rejects a snapshot with retained lock tables, so current
+pessimistic RC COPY uses the canonical safe owner. Different-table progress
+while that owner is held, late publication refresh and optimization benefit
+are not demonstrated. Current canonical correctness evidence is reported
+separately in the PR body; historical split-path PASS rows do not satisfy it.
+
+The exact revision3 protocol and any reduced acceptance-scope proposal still
+require a maintainer decision. The original paired baseline/head 1/2/4/8-worker
+and three original-nightly requirements remain unchanged and UNMET; the
+8192-row diagnostic does not replace them.
+
+## Historical record (superseded for current delivery)
+
 Candidate: `d1fdf00bf6b315b06a6133d2cce07c91af52da3f`
 Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
 
 Status: **BLOCKED_ENVIRONMENT / owner not assigned**. This document prepares
 the handoff; it does not claim that deployment QA has started or passed. The
-issue remains open and the PR remains Ready.
+issue remains open and the PR was recorded as Ready in that historical snapshot.
 
 ## Required deployment
 

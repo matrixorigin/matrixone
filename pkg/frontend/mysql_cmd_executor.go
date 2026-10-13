@@ -3083,7 +3083,7 @@ func createPrepareStmtInSession(
 		sqlModeFlagsSet:          true,
 		divPrecisionIncrementSet: true,
 		remapDb:                  maps.Clone(execCtx.remapDb),
-		lowerCaseTableNames: parserLowerCaseTableNames(executionSes),
+		lowerCaseTableNames:      parserLowerCaseTableNames(executionSes),
 		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:         owner.GetTempTableVersion(),
 		ddlVersion:               owner.getDDLVersion(),
