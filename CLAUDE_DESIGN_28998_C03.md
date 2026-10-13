@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-13，冻结main `35c8dd5854`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
+当前维护编号（2026-10-13，冻结main `8586fa0871`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -248,3 +248,11 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - 诊断输出使用既有indexSearchScanSettings/SearchPlugin ExplainHooks获取说明并传播codec错误，完整hex保留算法opaque bytes，按当前names/values渲染表达式并拒绝缺项/空名/重复/空表达式；query payload、candidate k、方向、range、prefilter与include列仍typed。没有在SQL/catalog加入算法分支、复制IVF decoder、改hook/registry、GPU/ISCP/CDC或执行reader。
 - 旧NProbe/first-round语义由当前plugin payload拥有，不把已移除的fields当零值。公开既有JSON脚本只同步两个payload标签及NProbe说明标签，bytes/16/first-round2与3/界限/control assertions和result不变。复用原16完整C03闭包加完整JSON，普通同实例双轮与清理的资格见验证记录。
 - JSON说明仍走原authorization与query-only检查，不执行DML；ANALYZE/PHYPLAN/CHECK不支持在原owner提前拒绝。新增renderer/UT state仅本次调用局部且按输入规模有界，不新增生产生命周期或持久状态；历史race/restart/upgrade保留历史范围。
+
+## 2026-10-13 后续共享索引说明接口协调（冻结8586fa0871）
+
+- 主干f14a1fa9ee实现同一IndexSearchScan兼容修复并扩展详细说明接口；正常逐hunk合并，JSON使用`indexSearchScanSettings(spec,true)`，保留主干canonical settings、named `name=value`、vector的query_vector及fulltext的query_payload。保留本分支完整opaque bytes hex与duplicate/空白名/NULL/layout拒绝；不并存两套算法loop，不复制decoder或恢复旧PB。
+- 上游compact text稳定、VERBOSE/JSON详细设置、IVF/HNSW search threads/expansion、classic/fulltext2 mode/include predicates/score/zero guard和损坏bound类型控制原样保留；全部原typed及公共控制不弱化。只恢复两个vector payload断言标签到主干的canonical名称，SQL/result现已与8586精确相同，不重新生成golden。
+- 47bbf28c05只在legacy域不提前提取varlen bytes，native Unicode仍原Validate admission；8586 row-variable NULLIF在raw scan到目标列赋值时继续使用forceAssignmentCastExpr(target.Typ)，C03 defaults/domain owner不改。通过完整vector/plan及新增完整LOAD公开owner验证交互，数据仅其已有5行资源。
+- CI38377757841的两UT相关失败发生在精确6a3的checkout TLS（exit128），执行/coverage采集未开始；汇总缺producer不是百分比判负。不能用产品改动、retry/skip/覆盖门豁免掩盖；新正常push触发正常新CI，不声称未完成远端CI成功。
+- 当前分配仍112、4.0.15、defaults#18、598/END599；proto、grammar、native、modules未变，无本轮新执行lifetime/locks/workers/waits/格式。所有历史race/restart资格保留其输入范围，当前验收见验证文档。
