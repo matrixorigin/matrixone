@@ -27,6 +27,8 @@ select group_concat(id order by id) from (select id from t_hnsw where category =
 explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=1000', 'max_itopk=5000';
 -- max_itopk lowers itopk
 select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_itopk=20') x;
+-- post runs one search: max_itopk without itopk does not change its rows
+select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_itopk=5000') x;
 
 -- session variable after PREPARE
 prepare s from 'select group_concat(id order by id) from (select id from t_hnsw where category = 1 order by l2_distance(v, ''[0,0]'') limit 10) x';
@@ -47,6 +49,8 @@ select group_concat(id order by id) from (select id from t_ivf where category = 
 -- @separator:table
 -- @regex("Max NProbe: 8", true)
 explain select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=8';
+-- post runs one search: max_nprobe does not change its rows
+select (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=4') x) <=> (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2') x) as same_post;
 
 -- nprobe and max_nprobe are IVF knobs
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4';

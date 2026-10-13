@@ -137,7 +137,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "CAGRA",
-		alias:        "mo_cagra_alias_0",
+		alias:        "mo_cagra_alias",
 		metaDef:      cagraCtx.metaDef,
 		idxDef:       cagraCtx.idxDef,
 		metaRole:     catalog.Cagra_TblType_Metadata,

@@ -1,4 +1,4 @@
--- HNSW pre-filtering (#28988). mode=pre searches only the keys of the filtered rows
+-- HNSW pre-filtering and auto (#28988). mode=pre searches only the keys of the filtered rows
 -- (a SEMI join with a membership runtime filter), so a filter that rejects every nearest
 -- row still returns the qualifying nearest rows. Each query is compared with mode=force,
 -- the exact path on the same table. The l2 table has five sub-indexes.
@@ -49,7 +49,28 @@ set @k = 7;
 execute s using @k;
 deallocate prepare s;
 
--- mode=auto is not implemented for hnsw
-select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- mode=auto: ADAPTIVE_TOP over post, pre and force; the flush gives the planner the
+-- table statistics that keep auto from choosing force for a small table
+select mo_ctl('dn', 'flush', 'vector_filtered_search_hnsw.t_l2');
+-- @separator:table
+-- @regex("Adaptive Top", true)
+-- @regex("Join Type: SEMI", true)
+explain select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- post returns no row, pre returns the qualifying nearest rows
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+-- post fills the page
+select group_concat(id order by id) from (select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto') x;
+-- without a filter the region has post and force only
+-- @separator:table
+-- @regex("Adaptive Top", true)
+-- @regex("Join Type: SEMI", false)
+explain select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+select group_concat(id order by id) from (select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+-- prepared LIMIT
+prepare s from 'select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto'') x';
+set @k = 4;
+execute s using @k;
+deallocate prepare s;
 
 drop database vector_filtered_search_hnsw;

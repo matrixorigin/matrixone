@@ -78,6 +78,101 @@ execute s using @k;
 ➤ group_concat(x.id order by id separator ,)[-1,536870911,0]  𝄀
 501,502,503,504,505,506,507
 deallocate prepare s;
-select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
-not supported: mode=auto on index type hnsw
+select mo_ctl('dn', 'flush', 'vector_filtered_search_hnsw.t_l2');
+➤ mo_ctl(dn, flush, vector_filtered_search_hnsw.t_l2)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- @regex("Adaptive Top", true)
+-- @regex("Join Type: SEMI", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Adaptive Top  𝄀
+  Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_l2.id = #[1,0])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                          Filter Cond: (t_l2.category = 1)  𝄀
+                          Runtime Filter Probe: t_l2.id  𝄀
+                    ->  Vector Index Scan on i_l2 [l2_distance]  𝄀
+                          Vector Index: i_l2, Metric: l2_distance, Candidate Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_l2.id = #[1,0])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                          Filter Cond: (t_l2.category = 1)  𝄀
+                          Runtime Filter Probe: t_l2.id  𝄀
+                    ->  Join  𝄀
+                          Join Type: SEMI  𝄀
+                          Join Cond: (#[0,0] = t_l2.id)  𝄀
+                          Runtime Filter Build: #[11,0]  𝄀
+                          ->  Vector Index Scan on i_l2 [l2_distance]  𝄀
+                                Runtime Filter Probe: #[9,0]  𝄀
+                                Vector Index: i_l2, Metric: l2_distance, Candidate Limit: 10  𝄀
+                          ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                                Filter Cond: (t_l2.category = 1)  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(t_l2.v, ) INTERNAL, t_l2.id INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                    Filter Cond: (t_l2.category = 1)
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select group_concat(id order by id) from (select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5,6,7,8,9,10
+select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+483,490,497,504,511,518
+explain select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- @regex("Adaptive Top", true)
+-- @regex("Join Type: SEMI", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Adaptive Top  𝄀
+  Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_l2.id = #[1,0])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                          Runtime Filter Probe: t_l2.id  𝄀
+                    ->  Vector Index Scan on i_l2 [l2_distance]  𝄀
+                          Vector Index: i_l2, Metric: l2_distance, Candidate Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(t_l2.v, ) INTERNAL, t_l2.id INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Table Scan on vector_filtered_search_hnsw.t_l2
+select group_concat(id order by id) from (select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5,6,7,8,9,10
+prepare s from 'select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto'') x';
+set @k = 4;
+execute s using @k;
+➤ group_concat(x.id order by id separator ,)[-1,536870911,0]  𝄀
+501,502,503,504
+deallocate prepare s;
 drop database vector_filtered_search_hnsw;

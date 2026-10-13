@@ -303,7 +303,7 @@ explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0
 -- @regex("Vector Index Scan on", true)
 explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- rank mode clause: hnsw mode=pre adds a membership join and returns the exact rows;
--- mode=auto is rejected; mode=post and no clause plan and return the same
+-- mode=auto returns the same rows; mode=post and no clause plan and return the same
 -- @separator:table
 -- @regex("Join Type: SEMI", true)
 -- @regex("Vector Index Scan on", true)

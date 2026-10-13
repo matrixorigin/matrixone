@@ -37,6 +37,9 @@ Project  𝄀
 select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_itopk=20') x;
 ➤ count(*)[-5,64,0]  𝄀
 0
+select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_itopk=5000') x;
+➤ count(*)[-5,64,0]  𝄀
+0
 prepare s from 'select group_concat(id order by id) from (select id from t_hnsw where category = 1 order by l2_distance(v, ''[0,0]'') limit 10) x';
 execute s;
 ➤ group_concat(id order by id separator ,)[-1,536870911,0]  𝄀
@@ -84,6 +87,9 @@ Project  𝄀
                     Vector Index: i_ivf, Metric: l2_distance, Candidate Limit: 10, NProbe: 2, Max NProbe: 8  𝄀
               ->  Table Scan on vector_filtered_search_knobs.t_ivf  𝄀
                     Filter Cond: (t_ivf.category = 1)
+select (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=4') x) <=> (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2') x) as same_post;
+➤ same_post[-7,1,0]  𝄀
+1
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4';
 not supported: nprobe on index type hnsw
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_nprobe=4';

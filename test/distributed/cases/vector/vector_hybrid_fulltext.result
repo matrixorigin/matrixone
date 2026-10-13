@@ -1316,7 +1316,10 @@ select id from t_ref_ft where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3;
 8  𝄀
 15
 select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
-not supported: mode=auto on index type hnsw
+➤ id[-5,64,0]  𝄀
+1  𝄀
+8  𝄀
+15
 explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)

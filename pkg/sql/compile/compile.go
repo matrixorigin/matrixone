@@ -854,9 +854,6 @@ func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
-		return true
-	}
 	return c.isRetryErr(err)
 }
 

@@ -56,10 +56,6 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexHnswAlgo.ToString()); err != nil {
 		return nil, err
 	}
-	if vectorRankMode(vecCtx) == "auto" {
-		return nil, moerr.NewNotSupportedf(builder.GetContext(), "mode=auto on index type %s", catalog.MoIndexHnswAlgo.ToString())
-	}
-
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
 		return nil, err
@@ -164,6 +160,25 @@ func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
 	return vectorRankMode(vecCtx) == "pre" && len(vecCtx.scanNode.FilterList) > 0
 }
 
+// buildAdaptiveHnswTop builds mode=auto as ADAPTIVE_TOP [post, pre, force]. The pre
+// branch is left out when it would equal post: without a filter, or with a fulltext
+// MATCH filter, under which post already searches the matching keys. A region that is
+// small, not replay-safe or not supported by ADAPTIVE_TOP runs force.
+func (builder *QueryBuilder) buildAdaptiveHnswTop(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if builder.shouldUseForceMode(vecCtx) || !builder.adaptiveVectorReplaySafe(nodeID) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
+		return nodeID, nil
+	}
+	branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+		return builder.applyIndicesForSortUsingHnswWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
+	}
+	branches := adaptiveVectorBranches{post: branch}
+	if len(vecCtx.scanNode.FilterList) > 0 && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		branches.pre = branch
+	}
+	return builder.buildAdaptiveVectorTop(nodeID, vecCtx, idxColMap, branches, false)
+}
+
 func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
@@ -179,6 +194,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	hnswCtx, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
 	if err != nil || hnswCtx == nil {
 		return nodeID, err
+	}
+	if vectorRankMode(vecCtx) == "auto" {
+		return builder.buildAdaptiveHnswTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
 	}
 
 	// With a residual filter the hnsw search is JOIN-ed against the scan and the
@@ -234,7 +252,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	setIndexSearchScanKnobs(tableFuncNode.IndexSearchScan, vecCtx)
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx, "")
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier(indexSearchAlias(ctx, "mo_hnsw_alias"))}, ctx, "")
 	if err != nil {
 		return 0, err
 	}

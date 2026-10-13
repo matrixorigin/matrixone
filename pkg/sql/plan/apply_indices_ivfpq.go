@@ -144,7 +144,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "IVF-PQ",
-		alias:        "mo_ivfpq_alias_0",
+		alias:        "mo_ivfpq_alias",
 		metaDef:      ivfpqCtx.metaDef,
 		idxDef:       ivfpqCtx.idxDef,
 		metaRole:     catalog.Ivfpq_TblType_Metadata,

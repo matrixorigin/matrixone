@@ -38,7 +38,10 @@ select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 
 52  𝄀
 53
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=auto';
-not supported: mode=auto on index type hnsw
+➤ id[-5,64,0]  𝄀
+51  𝄀
+52  𝄀
+53
 explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀

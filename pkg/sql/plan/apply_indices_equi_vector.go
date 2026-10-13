@@ -53,7 +53,7 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	if child != nil && (len(child.FilterList) != 0 || child.Limit != nil || child.Offset != nil) {
 		return nil
 	}
-	if !builder.adaptiveIvfReplaySafe(proj.NodeId) {
+	if !builder.adaptiveVectorReplaySafe(proj.NodeId) {
 		return nil
 	}
 	left, right := builder.qry.Nodes[join.Children[0]], builder.qry.Nodes[join.Children[1]]
