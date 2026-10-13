@@ -38,11 +38,11 @@ import (
 // remain stable while final IDs are selected, rather than locking a provisional
 // value. Shared table locks are statement/transaction owned and acquired once
 // in table-ID order. Ordinary foreign keys retain the vectorized join path.
-func (p *PreInsertUnique) lockOrderedForeignKeys(proc *process.Process) error {
-	if p.ctr.ordered.foreignKeysLocked {
+func (preInsertUnique *PreInsertUnique) lockOrderedForeignKeys(proc *process.Process) error {
+	if preInsertUnique.ctr.ordered.foreignKeysLocked {
 		return nil
 	}
-	spec := p.PreInsertCtx.OrderedAutoIncrement
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 	checks := slices.Clone(spec.ForeignKeys)
 	slices.SortFunc(checks, func(a, b *plan.OrderedForeignKey) int { return cmp.Compare(a.TableDef.TblId, b.TableDef.TblId) })
 	var previous uint64
@@ -63,31 +63,31 @@ func (p *PreInsertUnique) lockOrderedForeignKeys(proc *process.Process) error {
 		}
 		previous = table.TblId
 	}
-	p.ctr.ordered.foreignKeysLocked = true
+	preInsertUnique.ctr.ordered.foreignKeysLocked = true
 	return nil
 }
 
-func (p *PreInsertUnique) checkOrderedForeignKeys(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
-	spec := p.PreInsertCtx.OrderedAutoIncrement
+func (preInsertUnique *PreInsertUnique) checkOrderedForeignKeys(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 	if len(spec.ForeignKeys) == 0 {
 		return true, nil
 	}
-	if err := p.ensureOrderedWorkspace(proc); err != nil {
+	if err := preInsertUnique.ensureOrderedWorkspace(proc); err != nil {
 		return false, err
 	}
-	if err := p.lockOrderedForeignKeys(proc); err != nil {
+	if err := preInsertUnique.lockOrderedForeignKeys(proc); err != nil {
 		return false, err
 	}
-	if p.ctr.ordered.foreignKeyResults == nil {
-		p.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
+	if preInsertUnique.ctr.ordered.foreignKeyResults == nil {
+		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
 	}
 	for i, check := range spec.ForeignKeys {
 		// A rejected generated value can recur arbitrarily often. For a
 		// single-column auto-ID FK retain just its last point lookup, bounded
 		// by the number of constraints and discarded on Reset.
-		cached := &p.ctr.ordered.foreignKeyResults[i]
+		cached := &preInsertUnique.ctr.ordered.foreignKeyResults[i]
 		if len(check.SelfParentColumns) > 0 && cached.parents != nil {
-			valid, err := p.fillOrderedForeignKeyTuple(proc, cached, check.ChildColumns, input, row, generated, value)
+			valid, err := preInsertUnique.fillOrderedForeignKeyTuple(proc, cached, check.ChildColumns, input, row, generated, value)
 			if err != nil {
 				return false, err
 			}
@@ -101,14 +101,14 @@ func (p *PreInsertUnique) checkOrderedForeignKeys(proc *process.Process, input *
 				}
 			}
 		}
-		reusable := len(check.SelfParentColumns) == 0 && generated && len(check.ChildColumns) == 1 && check.ChildColumns[0].ColPos == p.PreInsertCtx.AutoIncrementColumn
+		reusable := len(check.SelfParentColumns) == 0 && generated && len(check.ChildColumns) == 1 && check.ChildColumns[0].ColPos == preInsertUnique.PreInsertCtx.AutoIncrementColumn
 		if reusable && cached.valid && cached.value == value {
 			if !cached.exists {
 				return false, nil
 			}
 			continue
 		}
-		ok, err := p.checkOrderedForeignKey(proc, check, input, row, generated, value)
+		ok, err := preInsertUnique.checkOrderedForeignKey(proc, check, input, row, generated, value)
 		if reusable && err == nil {
 			*cached = orderedForeignKeyResult{value: value, valid: true, exists: ok}
 		}
@@ -119,7 +119,7 @@ func (p *PreInsertUnique) checkOrderedForeignKeys(proc *process.Process, input *
 	return true, nil
 }
 
-func (p *PreInsertUnique) checkOrderedForeignKey(proc *process.Process, check *plan.OrderedForeignKey, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
+func (preInsertUnique *PreInsertUnique) checkOrderedForeignKey(proc *process.Process, check *plan.OrderedForeignKey, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
 	if err := proc.Ctx.Err(); err != nil {
 		return false, err
 	}
@@ -131,7 +131,7 @@ func (p *PreInsertUnique) checkOrderedForeignKey(proc *process.Process, check *p
 		vec := input.Vecs[col.ColPos]
 		index := vectorRowIndex(vec, row)
 		var literal *plan.Literal
-		if generated && col.ColPos == p.PreInsertCtx.AutoIncrementColumn {
+		if generated && col.ColPos == preInsertUnique.PreInsertCtx.AutoIncrementColumn {
 			literal = generatedAutoIncrementLiteral(vec.GetType().Oid, value)
 		} else {
 			if vec.IsNull(uint64(index)) {
@@ -277,20 +277,20 @@ func generatedAutoIncrementLiteral(typ types.T, value uint64) *plan.Literal {
 
 // Keep only referenced parent keys accepted earlier in this statement. A self
 // reference cannot see the current row before its constraints have passed.
-func (p *PreInsertUnique) recordOrderedForeignKeyParents(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) error {
-	spec := p.PreInsertCtx.OrderedAutoIncrement
+func (preInsertUnique *PreInsertUnique) recordOrderedForeignKeyParents(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) error {
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 	if spec == nil || len(spec.ForeignKeys) == 0 {
 		return nil
 	}
-	if p.ctr.ordered.foreignKeyResults == nil {
-		p.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
+	if preInsertUnique.ctr.ordered.foreignKeyResults == nil {
+		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
 	}
 	for i, check := range spec.ForeignKeys {
 		if len(check.SelfParentColumns) == 0 {
 			continue
 		}
-		state := &p.ctr.ordered.foreignKeyResults[i]
-		valid, err := p.fillOrderedForeignKeyTuple(proc, state, check.SelfParentColumns, input, row, generated, value)
+		state := &preInsertUnique.ctr.ordered.foreignKeyResults[i]
+		valid, err := preInsertUnique.fillOrderedForeignKeyTuple(proc, state, check.SelfParentColumns, input, row, generated, value)
 		if err != nil {
 			return err
 		}
@@ -298,7 +298,7 @@ func (p *PreInsertUnique) recordOrderedForeignKeyParents(proc *process.Process, 
 			continue
 		}
 		if state.parents == nil {
-			state.parents, err = hashmap.NewStrHashMapWithAllocation(false, proc.Mp(), p.hashAllocation)
+			state.parents, err = hashmap.NewStrHashMapWithAllocation(false, proc.Mp(), preInsertUnique.hashAllocation)
 			if err != nil {
 				return err
 			}
@@ -311,7 +311,7 @@ func (p *PreInsertUnique) recordOrderedForeignKeyParents(proc *process.Process, 
 	return nil
 }
 
-func (p *PreInsertUnique) fillOrderedForeignKeyTuple(proc *process.Process, state *orderedForeignKeyResult, columns []*plan.ColRef, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
+func (preInsertUnique *PreInsertUnique) fillOrderedForeignKeyTuple(proc *process.Process, state *orderedForeignKeyResult, columns []*plan.ColRef, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
 	if state.tuple == nil {
 		state.tuple = make([]*vector.Vector, len(columns))
 	}
@@ -325,7 +325,7 @@ func (p *PreInsertUnique) fillOrderedForeignKeyTuple(proc *process.Process, stat
 		}
 		dst := state.tuple[i]
 		dst.CleanOnlyData()
-		if generated && col.ColPos == p.PreInsertCtx.AutoIncrementColumn {
+		if generated && col.ColPos == preInsertUnique.PreInsertCtx.AutoIncrementColumn {
 			if err := appendAutoIncrementValue(proc, dst, *src.GetType(), value); err != nil {
 				return false, err
 			}

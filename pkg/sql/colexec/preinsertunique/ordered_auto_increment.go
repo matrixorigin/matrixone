@@ -49,16 +49,16 @@ type orderedAutoIncrementState struct {
 	manualVecs        []*vector.Vector
 }
 
-func (p *PreInsertUnique) orderedContext(proc *process.Process) context.Context {
-	spec := p.PreInsertCtx.OrderedAutoIncrement
+func (preInsertUnique *PreInsertUnique) orderedContext(proc *process.Process) context.Context {
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 	ctx := incrservice.WithAutoIDCachePolicy(proc.Ctx, spec.TableDef.TblId, spec.TableDef.AutoIdCache)
 	return incrservice.WithAutoIncrementOptions(ctx, proc.GetSessionInfo().AutoIncrementIncrement, proc.GetSessionInfo().AutoIncrementOffset)
 }
 
-func (p *PreInsertUnique) orderedCandidate(proc *process.Process) (uint64, error) {
-	state := &p.ctr.ordered
-	queue := &p.ctr.autoIncrementCandidates
-	spec := p.PreInsertCtx.OrderedAutoIncrement
+func (preInsertUnique *PreInsertUnique) orderedCandidate(proc *process.Process) (uint64, error) {
+	state := &preInsertUnique.ctr.ordered
+	queue := &preInsertUnique.ctr.autoIncrementCandidates
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 	if queue.runIndex == len(queue.runs) {
 		count := state.remaining
 		if !state.started {
@@ -70,7 +70,7 @@ func (p *PreInsertUnique) orderedCandidate(proc *process.Process) (uint64, error
 		col := spec.TableDef.Cols[spec.ColumnIndex]
 		typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
 		request := incrservice.AutoIncrementReservation{ColumnIndex: int(spec.ColumnIndex), Type: typ, Count: count}
-		ctx := incrservice.WithAutoIncrementReservation(p.orderedContext(proc), &request)
+		ctx := incrservice.WithAutoIncrementReservation(preInsertUnique.orderedContext(proc), &request)
 		_, err := proc.GetIncrService().InsertValues(ctx, spec.TableDef.TblId, spec.TableDef.AutoIncrEpoch, proc.Base.TxnOperator, nil, 0, 0)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
@@ -100,14 +100,14 @@ func (p *PreInsertUnique) orderedCandidate(proc *process.Process) (uint64, error
 	return queue.valueAt(queue.runs[queue.runIndex], queue.runOffset)
 }
 
-func (p *PreInsertUnique) finishOrderedRow() {
-	if p.ctr.ordered.started && p.ctr.ordered.remaining > 0 {
-		p.ctr.ordered.remaining--
+func (preInsertUnique *PreInsertUnique) finishOrderedRow() {
+	if preInsertUnique.ctr.ordered.started && preInsertUnique.ctr.ordered.remaining > 0 {
+		preInsertUnique.ctr.ordered.remaining--
 	}
 }
 
-func (p *PreInsertUnique) acceptOrderedExplicit(proc *process.Process, vec *vector.Vector, row int, value uint64) error {
-	queue := &p.ctr.autoIncrementCandidates
+func (preInsertUnique *PreInsertUnique) acceptOrderedExplicit(proc *process.Process, vec *vector.Vector, row int, value uint64) error {
+	queue := &preInsertUnique.ctr.autoIncrementCandidates
 	advance := !queue.hasLowerBound || value > queue.lowerBound
 	if queue.runIndex < len(queue.runs) {
 		next, err := queue.valueAt(queue.runs[queue.runIndex], queue.runOffset)
@@ -119,8 +119,8 @@ func (p *PreInsertUnique) acceptOrderedExplicit(proc *process.Process, vec *vect
 		}
 	}
 	if advance {
-		state := &p.ctr.ordered
-		spec := p.PreInsertCtx.OrderedAutoIncrement
+		state := &preInsertUnique.ctr.ordered
+		spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
 		if state.manual == nil {
 			state.manual = vector.NewVec(*vec.GetType())
 			state.manualVecs = make([]*vector.Vector, len(spec.TableDef.Cols))
@@ -130,7 +130,7 @@ func (p *PreInsertUnique) acceptOrderedExplicit(proc *process.Process, vec *vect
 		if err := state.manual.UnionOne(vec, int64(vectorRowIndex(vec, row)), proc.Mp()); err != nil {
 			return err
 		}
-		if _, err := proc.GetIncrService().InsertValues(p.orderedContext(proc), spec.TableDef.TblId, spec.TableDef.AutoIncrEpoch,
+		if _, err := proc.GetIncrService().InsertValues(preInsertUnique.orderedContext(proc), spec.TableDef.TblId, spec.TableDef.AutoIncrEpoch,
 			proc.Base.TxnOperator, state.manualVecs, 1, 0); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 				return moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
@@ -141,58 +141,58 @@ func (p *PreInsertUnique) acceptOrderedExplicit(proc *process.Process, vec *vect
 	return queue.discardThrough(value)
 }
 
-func (queue *autoIncrementCandidateStream) appendRun(typ types.Type, first, count, step uint64, mp *mpool.MPool) error {
+func (stream *autoIncrementCandidateStream) appendRun(typ types.Type, first, count, step uint64, mp *mpool.MPool) error {
 	if count == 0 {
 		return moerr.NewInvalidInputNoCtx("empty AUTO_INCREMENT run")
 	}
-	if queue.hasLowerBound && first <= queue.lowerBound {
+	if stream.hasLowerBound && first <= stream.lowerBound {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT reservation below explicit value")
 	}
-	if !queue.initialized {
-		queue.typ = typ
-		queue.initialized = true
-	} else if !queue.typ.Eq(typ) {
+	if !stream.initialized {
+		stream.typ = typ
+		stream.initialized = true
+	} else if !stream.typ.Eq(typ) {
 		return moerr.NewInvalidInputNoCtx("AUTO_INCREMENT type changed")
 	}
-	if queue.runIndex == len(queue.runs) {
-		queue.runs = queue.runs[:0]
-		queue.runIndex = 0
-		queue.runOffset = 0
+	if stream.runIndex == len(stream.runs) {
+		stream.runs = stream.runs[:0]
+		stream.runIndex = 0
+		stream.runOffset = 0
 	}
-	if len(queue.runs) == cap(queue.runs) {
-		grown, err := mpool.MakeSlice[autoIncrementCandidateRun](max(8, 2*cap(queue.runs)), mp, true)
+	if len(stream.runs) == cap(stream.runs) {
+		grown, err := mpool.MakeSlice[autoIncrementCandidateRun](max(8, 2*cap(stream.runs)), mp, true)
 		if err != nil {
 			return err
 		}
-		copy(grown, queue.runs)
-		mpool.FreeSlice(mp, queue.runs)
-		queue.runs = grown[:len(queue.runs)]
+		copy(grown, stream.runs)
+		mpool.FreeSlice(mp, stream.runs)
+		stream.runs = grown[:len(stream.runs)]
 	}
-	queue.runs = append(queue.runs, autoIncrementCandidateRun{start: first, count: count, step: step})
+	stream.runs = append(stream.runs, autoIncrementCandidateRun{start: first, count: count, step: step})
 	return nil
 }
 
 // Reuse the ordinary PRE_INSERT lease-timestamp guard on the final batch. A
 // concurrent explicit insert may have occupied an older CN lease even though
 // its generated values have never been published by this statement.
-func (p *PreInsertUnique) checkOrderedPrimaryKeys(proc *process.Process, output *batch.Batch) error {
-	spec := p.PreInsertCtx.OrderedAutoIncrement
-	if spec == nil || !p.ctr.ordered.hasTimestamp || spec.TableDef.IsTemporary {
+func (preInsertUnique *PreInsertUnique) checkOrderedPrimaryKeys(proc *process.Process, output *batch.Batch) error {
+	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
+	if spec == nil || !preInsertUnique.ctr.ordered.hasTimestamp || spec.TableDef.IsTemporary {
 		return nil
 	}
 	eng := proc.Base.SessionInfo.StorageEngine
 	if eng == nil || proc.Base.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "missing ordered AUTO_INCREMENT transaction")
 	}
-	if err := p.ensureOrderedWorkspace(proc); err != nil {
+	if err := preInsertUnique.ensureOrderedWorkspace(proc); err != nil {
 		return err
 	}
 	_, _, rel, err := eng.GetRelationById(proc.Ctx, proc.Base.TxnOperator, spec.TableDef.TblId)
 	if err != nil {
 		return err
 	}
-	changed, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, types.TimestampToTS(p.ctr.ordered.oldest),
-		types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS()), output, p.PreInsertCtx.AutoIncrementOutputColumn)
+	changed, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, types.TimestampToTS(preInsertUnique.ctr.ordered.oldest),
+		types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS()), output, preInsertUnique.PreInsertCtx.AutoIncrementOutputColumn)
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func (p *PreInsertUnique) checkOrderedPrimaryKeys(proc *process.Process, output 
 
 // Remote pipelines have a transaction snapshot but may not have a local
 // workspace yet. Use the same read-only workspace admission as PRE_INSERT.
-func (p *PreInsertUnique) ensureOrderedWorkspace(proc *process.Process) error {
+func (preInsertUnique *PreInsertUnique) ensureOrderedWorkspace(proc *process.Process) error {
 	op := proc.GetTxnOperator()
 	if op == nil {
 		return moerr.NewInternalError(proc.Ctx, "missing ordered AUTO_INCREMENT transaction")
@@ -222,8 +222,8 @@ func (p *PreInsertUnique) ensureOrderedWorkspace(proc *process.Process) error {
 	return nil
 }
 
-func (p *PreInsertUnique) validateOrderedAutoIncrement(proc *process.Process) error {
-	ctx := p.PreInsertCtx
+func (preInsertUnique *PreInsertUnique) validateOrderedAutoIncrement(proc *process.Process) error {
+	ctx := preInsertUnique.PreInsertCtx
 	spec := ctx.OrderedAutoIncrement
 	if spec == nil {
 		return nil
