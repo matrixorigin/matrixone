@@ -4,8 +4,10 @@
 import json
 import os
 import uuid
+from decimal import Decimal
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 from sqlalchemy import event
 
@@ -53,6 +55,77 @@ def rows(n):
 
 def literal_query():
     return "SELECT ':tag', '% %% %s %(tag)s'"
+
+
+def scalar_rows():
+    values = [True, False, 1.0, Decimal('1.0'), np.int64(1), np.float32(1.0), np.bool_(True), np.bool_(False)]
+    return [
+        dict(row, scalar=value, flag=value, label=value, precise=Decimal('12345678901234567890.125'))
+        for row, value in zip(rows(len(values)), values)
+    ]
+
+
+def assert_scalar_values(result):
+    assert [tuple(row) for row in result] == [
+        (count, flag, label, Decimal('12345678901234567890.125'))
+        for count, flag, label in [
+            (1, True, '1'),
+            (0, False, '0'),
+            (1, True, '1.0'),
+            (1, True, '1.0'),
+            (1, True, '1'),
+            (1, True, '1.0'),
+            (1, True, '1'),
+            (0, False, '0'),
+        ]
+    ]
+
+
+def scalar_schema(table):
+    return (
+        'ALTER TABLE ' + table + ' ADD COLUMN scalar INT, ADD COLUMN flag BOOLEAN, '
+        'ADD COLUMN label VARCHAR(40), ADD COLUMN precise DECIMAL(30,10)'
+    )
+
+
+@pytest.mark.parametrize('mode', ['vector_single', 'vector_batch', 'client_batch', 'session_batch'])
+def test_native_scalar_types_across_public_consumers(client, table, mode):
+    client.execute(scalar_schema(table))
+    data = scalar_rows()
+    if mode == 'vector_single':
+        for row in data:
+            client.vector_ops.insert(table, row)
+    elif mode == 'vector_batch':
+        client.vector_ops.batch_insert(table, data, batch_size=2)
+    elif mode == 'client_batch':
+        client.batch_insert(table, data)
+    else:
+        with client.session() as session:
+            session.batch_insert(table, data)
+    assert_scalar_values(client.execute('SELECT scalar,flag,label,precise FROM ' + table + ' ORDER BY id').rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['vector_single', 'vector_batch', 'client_batch', 'session_batch'])
+async def test_async_native_scalar_types_across_public_consumers(client, table, mode):
+    client.execute(scalar_schema(table))
+    c = AsyncClient(logger=Mock())
+    await c.connect(**params(), on_connect=[])
+    try:
+        data = scalar_rows()
+        if mode == 'vector_single':
+            for row in data:
+                await c.vector_ops.insert(table, row)
+        elif mode == 'vector_batch':
+            await c.vector_ops.batch_insert(table, data, batch_size=2)
+        elif mode == 'client_batch':
+            await c.batch_insert(table, data)
+        else:
+            async with c.session() as session:
+                await session.batch_insert(table, data)
+        assert_scalar_values((await c.execute('SELECT scalar,flag,label,precise FROM ' + table + ' ORDER BY id')).rows)
+    finally:
+        await c.disconnect()
 
 
 def test_native_batch_values_and_roundtrip_count(client, table):

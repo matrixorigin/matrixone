@@ -241,8 +241,103 @@ def test_session_substitution_orm_options_and_logging(client, cls):
             session.execute('SELECT * FROM missing_table')
         client.logger.log_query.assert_called_once()
         assert client.logger.log_query.call_args.kwargs['success'] is False
-        with pytest.raises(QueryError, match='unexpected keyword'):
-            session.execute('SELECT 1', unknown_option=True)
+
+
+ROUTING_MODES = ['dictionary', 'bind', 'mapper', 'clause', 'mixed', 'unknown', 'event', 'invoke']
+
+
+def routing_options(mode, alternate):
+    if mode == 'dictionary':
+        return {'bind_arguments': {'bind': alternate}}
+    if mode == 'mixed':
+        return {'bind_arguments': {'mapper': Row}, 'bind': alternate}
+    if mode in ('bind', 'mapper', 'clause'):
+        return {mode: {'bind': alternate, 'mapper': Row, 'clause': Row.__table__}[mode]}
+    if mode == 'unknown':
+        return {'unknown_option': True}
+
+    def route(state):
+        if mode == 'invoke':
+            return state.invoke_statement(bind_arguments={'bind': alternate})
+        state.bind_arguments['bind'] = alternate
+        state.update_execution_options(routing_hook=True)
+
+    return {'_add_event': route}
+
+
+def route_observation(execute, statement, options):
+    try:
+        return ('value', execute(statement, **options).scalar())
+    except QueryError as error:
+        return ('error', str(error))
+
+
+def assert_routing_outcomes(outcomes, mode, *, asynchronous=False):
+    assert outcomes[0] == outcomes[1]
+    legacy = sqlalchemy.__version__.startswith('1.4.')
+    if mode == 'unknown' or (not legacy and mode in ('bind', 'mapper', 'clause', 'mixed')):
+        assert outcomes[0][0] == 'error'
+        assert 'unexpected keyword argument' in outcomes[0][1]
+    elif legacy and mode == 'invoke' and not asynchronous:
+        # Existing sync wrappers don't accept 1.4 invoke_statement's positional
+        # option arguments. The unchanged text path is the same control.
+        assert outcomes[0][0] == 'error'
+        assert 'positional arguments' in outcomes[0][1]
+    else:
+        assert outcomes[0] == ('value', 'alternate')
+
+
+@pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('mode', ROUTING_MODES)
+def test_execution_keywords_match_parent_and_route(client, cls, mode, tmp_path):
+    client.execute("INSERT INTO rows (id,label) VALUES (1,'primary')")
+    alternate = create_engine('sqlite:///' + str(tmp_path / 'routing.sqlite'))
+    try:
+        Base.metadata.create_all(alternate)
+        with alternate.begin() as connection:
+            connection.execute(text("INSERT INTO rows (id,label) VALUES (1,'alternate')"))
+        outcomes = []
+        for raw in [False, True]:
+            with session_for(client, cls) as session:
+                session.bind_mapper(Row, alternate)
+                options = routing_options(mode, alternate)
+                original = dict(options.get('bind_arguments', {}))
+                sql = 'SELECT label FROM rows WHERE id=1'
+                outcomes.append(route_observation(session.execute, sql if raw else text(sql), options))
+                if raw and 'bind_arguments' in options:
+                    assert options['bind_arguments'] == original
+        assert_routing_outcomes(outcomes, mode)
+    finally:
+        alternate.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ROUTING_MODES)
+async def test_async_execution_keywords_match_parent_and_route(async_client, mode, tmp_path):
+    c = async_client
+    await c.execute("INSERT INTO rows (id,label) VALUES (1,'primary')")
+    alternate = create_async_engine('sqlite+aiosqlite:///' + str(tmp_path / 'routing.sqlite'))
+    try:
+        async with alternate.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+            await connection.execute(text("INSERT INTO rows (id,label) VALUES (1,'alternate')"))
+        outcomes = []
+        for raw in [False, True]:
+            async with c.session() as session:
+                session.sync_session.bind_mapper(Row, alternate.sync_engine)
+                options = routing_options(mode, alternate.sync_engine)
+                original = dict(options.get('bind_arguments', {}))
+                sql = 'SELECT label FROM rows WHERE id=1'
+                try:
+                    result = await session.execute(sql if raw else text(sql), **options)
+                    outcomes.append(('value', result.scalar()))
+                except QueryError as error:
+                    outcomes.append(('error', str(error)))
+                if raw and 'bind_arguments' in options:
+                    assert options['bind_arguments'] == original
+        assert_routing_outcomes(outcomes, mode, asynchronous=True)
+    finally:
+        await alternate.dispose()
 
 
 @pytest.mark.parametrize('cls', [ClientSession, ExportedSession])

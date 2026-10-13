@@ -43,9 +43,10 @@ def _compile_literal_sql(statement, compiler, **kwargs):
     return statement.text
 
 
-def execute_session_sql(parent_execute, sql, *, bind_arguments=None, execution_options=None):
+def execute_session_sql(parent_execute, sql, *, bind_arguments=None, execution_options=None, **kwargs):
     return parent_execute(
         _LiteralSQL(sql),
         bind_arguments=dict(bind_arguments) if bind_arguments is not None else None,
         execution_options=dict(execution_options or {}),
+        **kwargs,
     )

@@ -13,6 +13,24 @@ from matrixone.vector_manager import AsyncVectorManager, VectorManager
 ROWS = [{'id': i, 'embedding': [i, i + 1]} for i in range(7)]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+async def test_public_chunks_preserve_scalar_literals(asynchronous):
+    executor = SimpleNamespace(execute=AsyncMock() if asynchronous else Mock())
+    manager = (AsyncVectorManager if asynchronous else VectorManager)(Mock(), executor=executor)
+    rows = [{'id': i, 'embedding': [1, 2], 'value': value} for i, value in enumerate([True, 1.0, False])]
+    if asynchronous:
+        await manager.batch_insert('t', rows, batch_size=2)
+        calls = executor.execute.await_args_list
+    else:
+        manager.batch_insert('t', rows, batch_size=2)
+        calls = executor.execute.call_args_list
+    assert [call.args[0] for call in calls] == [
+        "INSERT INTO t (id, embedding, value) VALUES (0, '[1,2]', True), (1, '[1,2]', 1.0)",
+        "INSERT INTO t (id, embedding, value) VALUES (2, '[1,2]', False)",
+    ]
+
+
 def test_client_batch_owns_one_transaction():
     executor = Mock()
     entries = []
