@@ -93,6 +93,12 @@ it. The validated 16-CPU profile is unchanged. Merged #34 is tree-identical to
 the tested fixture correction and changes no production, ABI, CMake or provider
 input relative to measured `0cc6e484`. Its source-pin and SDK receipts are
 refreshed separately; existing captures retain their original identities.
+The refreshed release SDK is `878c0ec8` at merged `06400cf4`. Its guarded MO
+consumer build, standard merged control suite (93 cases/877 assertions), owning
+parser/function/compiler suites, all 22 native preparations and real GPU
+bridge/cancellation/cuVS coexistence checks pass. Main `e5111936b9`'s
+qualified-identifier parser consumers pass separately. The unchanged complete
+archive passes the tightened acceptance validator; raw runs are not relabeled.
 
 ## Contract and choice
 
