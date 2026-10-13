@@ -445,7 +445,7 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 
 | # | Claim | Black-box test |
 |---|---|---|
-| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes, except an ivfflat query vector that ties every centroid (claim 16). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
+| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes, except ivfflat searches that run as `pre` on one reader (`mode=pre`, the `pre` branch of `mode=auto`, `enable_vector_prefilter_by_default`, include mode's PRE fallback), which now widen, and an ivfflat query vector that ties every centroid (claim 16). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
 | 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error; ivfflat accepts both. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 4 | `EXPLAIN` shows the SQL options `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and ivfflat's `NProbe`. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
@@ -522,9 +522,12 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 - The centroid ranking of a round search is a permutation of the lists. Before, a zero query
   vector under cosine ranked some lists twice and others never, so include-mode rounds
   returned duplicate rows; pre now runs in rounds too.
-- Checked against the merge-base `cd8d5abf96` on one data directory: 2,070 ivfflat queries over
-  four tables (integer and string keys, INCLUDE columns, l2 and cosine), every mode, filter
-  shape, LIMIT/OFFSET, `probe_limit` and session default. `post`, the default mode, `auto`,
-  `force` and INCLUDE-column include mode return the same rows; the rows that differ are `pre`
-  searches (explicit, the session default, or include mode's PRE fallback) and zero-vector
-  cosine queries, and none of them is further from the `force` rows than before.
+- Checked against the merge-base `cd8d5abf96` on one data directory, with 2,070 ivfflat
+  queries wrapped in an aggregate and 1,782 bare queries (the form that builds
+  `ADAPTIVE_TOP`), over four tables (integer and string keys, INCLUDE columns, l2 and cosine),
+  every mode, filter shape, LIMIT/OFFSET, `probe_limit` and session default. `post`, the
+  default mode, `force` and INCLUDE-column include mode return the same rows. The rows that
+  differ are `pre` searches (explicit, the session default, include mode's PRE fallback, and
+  `auto`, whose `pre` branch now fills pages it used to pass to `force`) and zero-vector cosine
+  queries. None of them is further from the `force` rows than before, except zero-vector
+  cosine `auto` pages, whose rows all tie at distance 1 and so equal any `force` page.
