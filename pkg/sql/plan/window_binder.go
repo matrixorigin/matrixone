@@ -127,7 +127,10 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 
 func semanticNodeKey(node tree.NodeFormatter) string {
 	display := tree.String(node, dialect.MYSQL)
-	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset())
+	// Display formatting omits string quotes: 0.5 and '0.5' look equal
+	// but bind to different domains. Preserve literal boundaries as well as
+	// parameter offsets in every consumer of the shared semantic key.
+	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset(), tree.WithSingleQuoteString())
 	if identity == display {
 		return display
 	}

@@ -70,4 +70,71 @@ execute st_lag_default using @long_default;
 2  ¦  a  𝄀
 3  ¦  b
 deallocate prepare st_lag_default;
+create table wtext (v mediumtext);
+insert into wtext values (repeat('a', 65536));
+select length(v) as original_length,
+length(lag(v, 0) over ()) as control_length,
+length(lag(v, 0, 0) over ()) as lag_length,
+length(lead(v, 0, 0) over ()) as lead_length from wtext;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lag_length[-5,64,0]  ¦  lead_length[-5,64,0]  𝄀
+65536  ¦  65536  ¦  65536  ¦  65536
+select length(lag(v, 1, 0) over ()) as default_length from wtext;
+➤ default_length[-5,64,0]  𝄀
+1
+select length(lag(0, 1, v) over ()) as text_default_length from wtext;
+➤ text_default_length[-5,64,0]  𝄀
+65536
+select lag(7,0,0.5) over () as num, lag(7,0,'0.5') over () as str;
+➤ num[3,20,1]  ¦  str[12,3,0]  𝄀
+7.0  ¦  7
+select lag(7,0,'0.5') over () as str, lag(7,0,0.5) over () as num;
+➤ str[12,3,0]  ¦  num[3,20,1]  𝄀
+7  ¦  7.0
+select lag(7,0,0.5) over () as num;
+➤ num[3,20,1]  𝄀
+7.0
+select lag(7,0,'0.5') over () as str;
+➤ str[12,3,0]  𝄀
+7
+select lead(7,0,0.5) over () as num, lead(7,0,'0.5') over () as str;
+➤ num[3,20,1]  ¦  str[12,3,0]  𝄀
+7.0  ¦  7
+select lead(7,0,'0.5') over () as str, lead(7,0,0.5) over () as num;
+➤ str[12,3,0]  ¦  num[3,20,1]  𝄀
+7  ¦  7.0
+select lead(7,0,0.5) over () as num;
+➤ num[3,20,1]  𝄀
+7.0
+select lead(7,0,'0.5') over () as str;
+➤ str[12,3,0]  𝄀
+7
+select length(lag(7,0,0.5) over ()) as num_length,
+length(lag(7,0,'0.5') over ()) as str_length;
+➤ num_length[-5,64,0]  ¦  str_length[-5,64,0]  𝄀
+3  ¦  1
+create table wdecimal as select lag(cast(1 as decimal(2,1)), 1, 1000) over () as v;
+show columns from wdecimal;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  decimal(5,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from wdecimal;
+➤ v[3,5,1]  𝄀
+1000.0
+create table wdecimal_column as
+select id, lag(cast(1 as decimal(2,1)), 1, v) over (order by id) as d from wdefault;
+show columns from wdecimal_column;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(11,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wdecimal_column order by id;
+➤ id[4,32,0]  ¦  d[3,11,1]  𝄀
+1  ¦  100.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0
+select lag(cast(1 as decimal(38,30)), 1, 999999999999) over () as lg,
+lead(cast(1 as decimal(38,30)), 1, 999999999999) over () as ld;
+➤ lg[3,42,30]  ¦  ld[3,42,30]  𝄀
+999999999999.000000000000000000000000000000  ¦  999999999999.000000000000000000000000000000
+select lag(cast(1 as decimal(38,30)), 0, 999999999999) over () as source_value;
+➤ source_value[3,42,30]  𝄀
+1.000000000000000000000000000000
 drop database window_lag_lead_default_type;

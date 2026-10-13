@@ -8103,7 +8103,30 @@ func bindFuncExprImplByPlanExpr(
 			if len(argsCastType) == 0 {
 				argsCastType = append([]types.Type(nil), argsType...)
 			}
-			if commonType, ok := reconcileLagLeadDefaultType(ctx, argsType[0], argsType[2]); ok {
+			commonType, ok, typeErr := reconcileLagLeadDefaultType(ctx, args[2], argsType[0], argsType[2])
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			if ok {
+				// COALESCE's mixed string/numeric overload starts with a generic
+				// VARCHAR capacity. Refine known display bounds, but never shrink
+				// TEXT (including its width-zero/unbounded domain) to VARCHAR.
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
+					unbounded := false
+					for _, idx := range []int{0, 2} {
+						if argsType[idx].Oid == types.T_text {
+							commonType.Oid = types.T_text
+							unbounded = unbounded || argsType[idx].Width == 0
+						}
+						if argsType[idx].Oid.IsMySQLString() {
+							commonType.Width = max(commonType.Width, argsType[idx].Width)
+						}
+					}
+					if unbounded {
+						commonType.Width = 0
+					}
+				}
 				returnType = commonType
 				argsCastType[0] = commonType
 				argsCastType[2] = commonType
@@ -8245,41 +8268,36 @@ func isXMLXPathConstant(expr *Expr) bool {
 	return true
 }
 
-// reconcileLagLeadDefaultType returns the common type able to represent both
-// the value argument and the default value of LAG/LEAD. It mirrors MySQL's
-// type aggregation for window functions: a decimal value keeps its declared
-// precision when the default is an integer, and the remaining combinations
-// follow the COALESCE type reconciliation. It reports false when either side
-// is the domainless NULL pseudo-type or the two types cannot be reconciled;
-// callers keep their historical behavior then.
-func reconcileLagLeadDefaultType(ctx context.Context, valueArg, defaultArg types.Type) (types.Type, bool) {
+// reconcileLagLeadDefaultType refines COALESCE's common domain for LAG/LEAD.
+// Decimal values must retain their scale and have room for the default's
+// integer digits; a literal needs only its actual digits, while a column or
+// parameter requires its full type domain. An unrepresentable exact domain
+// is an error, not permission to fall back to a narrowing cast.
+func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueArg, defaultArg types.Type) (types.Type, bool, error) {
 	if valueArg.Oid == types.T_any || defaultArg.Oid == types.T_any {
-		return types.Type{}, false
+		return types.Type{}, false, nil
 	}
-	// A decimal value keeps its declared precision when the default value is
-	// an integer: MySQL preserves the decimal branch of the pair (e.g.
-	// LAG(decimal(10,4), 1, -1) stays decimal(10,4)) because the integer is
-	// always representable there, and widening it to the integer's full
-	// decimal representation would change established result metadata
-	// without protecting any value. The default is cast into the decimal at
-	// bind time, keeping the scaled-literal semantics fixed by #24402.
 	if valueArg.Oid.IsDecimal() && defaultArg.Oid.IsInteger() {
-		return valueArg, true
+		digits, _ := decimalIntegerWidth(defaultExpr, defaultArg)
+		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&valueArg), plan.Type{Width: digits})
+		if !ok {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds decimal256 capacity")
+		}
+		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
 	resolved, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{valueArg, defaultArg})
 	if err != nil {
-		return types.Type{}, false
+		return types.Type{}, false, nil
 	}
-	// The cast targets, not the plain return type, carry the aligned width and
-	// scale (decimal scale alignment, string max width) of both branches.
-	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast && len(targets) == 2 {
-		return targets[0], true
-	}
+	// Cast targets carry the aligned decimal scale and string capacity.
 	ret := resolved.GetReturnType()
-	if ret.Oid == types.T_any {
-		return types.Type{}, false
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast && len(targets) == 2 {
+		ret = targets[0]
 	}
-	return ret, true
+	if ret.Oid == types.T_any {
+		return types.Type{}, false, nil
+	}
+	return ret, true, nil
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
