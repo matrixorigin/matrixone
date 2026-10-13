@@ -265,8 +265,9 @@ func dataBranchPickSubqueryHasParams(selectStmt *tree.Select) bool {
 	selectStmt.Format(fmtCtx)
 	scanner := mysql.NewScanner(dialect.MYSQL, fmtCtx.String())
 	defer mysql.PutScanner(scanner)
+	previousToken := 0
 	for {
-		token, _ := scanner.Scan()
+		token, _ := scanSQLToken(scanner, &previousToken)
 		switch token {
 		case mysql.VALUE_ARG:
 			return true

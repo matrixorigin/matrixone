@@ -1759,6 +1759,82 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	return materialization, nil
 }
 
+// Parentheses are flattened during binding, but prepared execution retains the
+// original AST. Only this wrapper chain belongs to the statement's result limit.
+func statementHasExplicitTopLevelLimit(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return false
+	}
+	for selectStmt != nil {
+		if selectStmt.Limit != nil && selectStmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := selectStmt.Select.(*tree.ParenSelect)
+		if !ok || paren == nil {
+			return false
+		}
+		selectStmt = paren.Select
+	}
+	return false
+}
+
+// materializePreparedLimitZero uses the existing empty-result topology for a
+// bound outer LIMIT. Parameterized pagination is compiled afresh by the frontend;
+// restoring the borrowed plan prevents a zero execution contaminating later ones.
+func (c *Compile) materializePreparedLimitZero(pn *plan.Plan) (func(), error) {
+	if c.isPrepare || pn == nil || !pn.IsPrepare || c.proc.GetPrepareParams() == nil || statementHasSQLCalcFoundRows(c.stmt) {
+		return nil, nil
+	}
+	if !statementHasExplicitTopLevelLimit(c.stmt) {
+		return nil, nil
+	}
+	q := pn.GetQuery()
+	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) == 0 {
+		return nil, nil
+	}
+	id := q.Steps[len(q.Steps)-1]
+	if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+		return nil, nil
+	}
+	root, node := q.Nodes[id], q.Nodes[id]
+	for depth := 0; node.Limit == nil; depth++ {
+		if depth >= len(q.Nodes) {
+			return nil, nil
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 || node.Offset != nil {
+			return nil, nil
+		}
+		id = node.Children[0]
+		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+			return nil, nil
+		}
+		node = q.Nodes[id]
+	}
+	if node.NodeType == plan.Node_RECURSIVE_CTE || node.Limit.Typ.Id != int32(types.T_uint64) {
+		return nil, nil
+	}
+	expr := node.Limit
+	for expr.GetP() == nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
+			return nil, nil
+		}
+		expr = fn.Args[0]
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer free()
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) || vec.GetType().Oid != types.T_uint64 || vec.Length() == 0 || vector.MustFixedColWithTypeCheck[uint64](vec)[0] != 0 {
+		return nil, nil
+	}
+	original := root.Limit
+	root.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	return func() { root.Limit = original }, nil
+}
+
 // makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are
 // reused across EXECUTEs. Ordinary statements are compiled for one execution,
 // so resolve their value once and omit the default unlimited no-op entirely.

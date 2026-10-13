@@ -104,6 +104,9 @@ deallocate prepare pick_composite_mixed_stmt;
 prepare pick_subquery_parameter_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys(select id, shard from composite_pick_src where id = ?) when conflict accept';
 -- @regex("prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers", true)
 not supported: prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers
+prepare pick_qualified_parameter_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys(select t.begin + ?, t.shard from (select 3 as `begin`, ''bound'' as shard) t) when conflict accept';
+-- @regex("prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers", true)
+not supported: prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers
 create database issue_28377_source;
 create table issue_28377_source.db_base(id int primary key, v varchar(20));
 insert into issue_28377_source.db_base values (1, 'database-branch');
