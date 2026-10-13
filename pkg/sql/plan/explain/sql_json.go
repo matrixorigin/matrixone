@@ -418,12 +418,12 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		if err != nil {
 			return err
 		}
-	case plan.Node_VECTOR_INDEX_SCAN:
-		if node.VectorIndexScan == nil || node.VectorIndexScan.Index == nil || node.VectorIndexScan.Index.IndexName == "" {
+	case plan.Node_INDEX_SEARCH_SCAN:
+		if node.IndexSearchScan == nil || node.IndexSearchScan.Index == nil || node.IndexSearchScan.Index.IndexName == "" {
 			return moerr.NewInvalidInput(b.ctx, "vector index scan metadata is missing")
 		}
 		item.TableName = sqlJSONTableName(node)
-		item.Expressions, err = sqlJSONVectorIndexExpressions(b.ctx, node.VectorIndexScan, &b.textOpts)
+		item.Expressions, err = sqlJSONVectorIndexExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
 		if err != nil {
 			return err
 		}
@@ -621,7 +621,7 @@ func sqlJSONSampleExpressions(ctx context.Context, spec *plan.SampleFuncSpec) ([
 	}, nil
 }
 
-func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexScan, options *ExplainOptions) ([]string, error) {
+func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.IndexSearchScan, options *ExplainOptions) ([]string, error) {
 	if spec == nil || spec.Index == nil {
 		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
 	}
@@ -639,12 +639,22 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 	}
 	values = append(values,
 		"direction="+direction,
-		"initial_probe_count="+strconv.FormatUint(uint64(spec.InitialProbeCount), 10),
-		"bucket_expand_step="+strconv.FormatUint(uint64(spec.BucketExpandStep), 10),
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	if spec.ThreadsSearch != 0 {
-		values = append(values, "threads_search="+strconv.FormatInt(spec.ThreadsSearch, 10))
+	if len(spec.AlgoOptions) > 0 {
+		values = append(values, "algo_options="+string(spec.AlgoOptions))
+	}
+	if len(spec.AlgoExprs) != len(spec.AlgoExprNames) {
+		return nil, moerr.NewInvalidInput(ctx, "index search algorithm expression names do not match expressions")
+	}
+	for i, expr := range spec.AlgoExprs {
+		value, err := sqlJSONExpr(ctx, expr, options)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			values = append(values, spec.AlgoExprNames[i]+"="+value)
+		}
 	}
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
@@ -653,9 +663,8 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_vector", expr: spec.QueryVector},
+		{name: "query_payload", expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
-		{name: "first_round_limit", expr: spec.FirstRoundLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
 		if err != nil {
