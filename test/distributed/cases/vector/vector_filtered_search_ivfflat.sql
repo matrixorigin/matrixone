@@ -56,4 +56,13 @@ set @k = 7;
 execute s using @k;
 deallocate prepare s;
 
+-- a zero query vector ties every centroid under cosine: the rounds scan each list once
+create table t_cos(id bigint primary key, v vecf32(4));
+insert into t_cos select result, cast(concat('[', sin(result), ',', cos(result * 1.3), ',', sin(result * 0.7), ',', cos(result * 2.1), ']') as vecf32(4)) from generate_series(1, 3000, 1) g;
+create index i_cos using ivfflat on t_cos(v) lists = 16 op_type 'vector_cosine_ops';
+create table t_cos_ref(id bigint primary key, category int);
+insert into t_cos_ref select result, result % 2 from generate_series(1, 3000, 1) g;
+select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=include') x;
+select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=pre') x;
+
 drop database vector_filtered_search_ivfflat;

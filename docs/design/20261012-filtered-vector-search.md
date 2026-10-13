@@ -247,6 +247,10 @@ fixture: every near neighbor fails the filter).
   holds the merged row count.
 - `post` and the default mode search one round, also when the index search evaluates the
   filter.
+- Centroid ranking: the rounds walk one ranking of all lists, a permutation of the centroid ids
+  (`completeCentroidRanking`, `ivfflat/search.go`). A query vector whose centroid distances tie
+  or are not numbers (a zero vector under cosine) can rank a centroid twice and leave others
+  out; the duplicates are dropped and the missing lists appended in id order.
 - Short page when (`pre`): a membership set over 100 keys, or index-evaluated filters, and the
   lists probed reach `max_nprobe < n_lists`; or the search is split across readers and the
   `nprobe` lists hold too few qualifying rows. A membership set of 100 keys or fewer is never
@@ -441,7 +445,7 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 
 | # | Claim | Black-box test |
 |---|---|---|
-| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes. | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
+| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes, except an ivfflat query vector that ties every centroid (claim 16). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
 | 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error; ivfflat accepts both. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 4 | `EXPLAIN` shows the SQL options `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and ivfflat's `NProbe`. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
@@ -457,6 +461,7 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 | 13 | ivfpq with `max_nprobe = n_lists` returns min(`LIMIT`, qualifying) rows in `pre`. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 14 | Literal and prepared `LIMIT` give the same rows under the same knobs. | the three files of claim 8 |
 | 15 | With `gpu_mode` on, `force` on a cagra or ivfpq table runs on the GPU and returns the exact rows. | `gpu_cases/vector/vector_filtered_search_gpu.sql` (PR7) |
+| 16 | ivfflat rounds scan each list once: a query vector that ties every centroid (a zero vector under cosine) returns no duplicate rows. | `cases/vector/vector_filtered_search_ivfflat.sql` |
 
 ## Decision log
 
@@ -514,3 +519,12 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 - A PRE search split across readers keeps one shared round and its `nprobe`, as before.
 - `mode=pre` also widens when the index search evaluates every filter itself (no membership
   join); `post` and the default mode keep one round there.
+- The centroid ranking of a round search is a permutation of the lists. Before, a zero query
+  vector under cosine ranked some lists twice and others never, so include-mode rounds
+  returned duplicate rows; pre now runs in rounds too.
+- Checked against the merge-base `cd8d5abf96` on one data directory: 2,070 ivfflat queries over
+  four tables (integer and string keys, INCLUDE columns, l2 and cosine), every mode, filter
+  shape, LIMIT/OFFSET, `probe_limit` and session default. `post`, the default mode, `auto`,
+  `force` and INCLUDE-column include mode return the same rows; the rows that differ are `pre`
+  searches (explicit, the session default, or include mode's PRE fallback) and zero-vector
+  cosine queries, and none of them is further from the `force` rows than before.

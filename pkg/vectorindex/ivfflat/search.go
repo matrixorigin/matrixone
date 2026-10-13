@@ -324,7 +324,36 @@ func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, que
 	if limit == 0 {
 		limit = 1
 	}
-	return idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
+	ids, err := idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
+	if err != nil {
+		return nil, err
+	}
+	return completeCentroidRanking(ids, idxcfg.Ivfflat.Lists), nil
+}
+
+// completeCentroidRanking returns ids as a permutation of the centroid ids 0..lists-1:
+// the first occurrence of each id in ids, then the ids missing from it in ascending
+// order. A query whose centroid distances tie or are not numbers (a zero vector under
+// cosine) can rank a centroid twice and leave others out.
+func completeCentroidRanking(ids []int64, lists uint) []int64 {
+	if lists == 0 {
+		return ids
+	}
+	seen := make([]bool, lists)
+	ranked := make([]int64, 0, lists)
+	for _, id := range ids {
+		if id < 0 || uint64(id) >= uint64(lists) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ranked = append(ranked, id)
+	}
+	for id := range seen {
+		if !seen[id] {
+			ranked = append(ranked, int64(id))
+		}
+	}
+	return ranked
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {

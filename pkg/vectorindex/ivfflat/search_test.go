@@ -733,3 +733,11 @@ func TestBuildActiveCentroidIDsUsesNonOverlappingBucketSlices(t *testing.T) {
 func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&IvfflatSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }
+
+func TestCompleteCentroidRanking(t *testing.T) {
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 0, 1, 3}, 4))
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 2, 0, 2}, 4))
+	require.Equal(t, []int64{3, 0, 1, 2}, completeCentroidRanking([]int64{3, 7, -1}, 4))
+	require.Equal(t, []int64{0, 1}, completeCentroidRanking(nil, 2))
+	require.Equal(t, []int64{5, 5}, completeCentroidRanking([]int64{5, 5}, 0))
+}
