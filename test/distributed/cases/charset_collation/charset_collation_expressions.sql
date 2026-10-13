@@ -13,6 +13,12 @@ SELECT 'Á' COLLATE utf8mb4_unicode_ci = 'a',
        _binary'a ' = _binary'a';
 SELECT 'Á' COLLATE utf8mb4_unicode_ci IN ('a', 'z'),
        'Á' COLLATE utf8mb4_unicode_ci BETWEEN 'a' AND 'b';
+-- Numeric comparisons do not resolve the text operands' conflicting collations.
+SELECT 5 BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci,
+       5 IN ('5' COLLATE utf8mb4_bin, '7' COLLATE utf8mb4_general_ci),
+       5 NOT IN ('5' COLLATE utf8mb4_bin, '7' COLLATE utf8mb4_general_ci);
+SELECT '5' COLLATE utf8mb4_bin BETWEEN '0' COLLATE utf8mb4_general_ci AND 9;
+SELECT CAST(NULL AS SIGNED) BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci;
 SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B'),
        GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B'),
        CONCAT('a' COLLATE utf8mb4_unicode_ci, 'B');
@@ -23,6 +29,9 @@ SELECT CASE WHEN TRUE THEN 'Á' COLLATE utf8mb4_unicode_ci
 
 -- Conflict checking also applies to derived expressions and set columns.
 SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_general_ci;
+SELECT '5' COLLATE utf8mb4_bin IN ('7' COLLATE utf8mb4_general_ci, 5);
+SELECT '5' BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci;
+SELECT CAST(NULL AS CHAR) BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci;
 SELECT CONCAT('a' COLLATE utf8mb4_bin, 'b' COLLATE utf8mb4_general_ci);
 SELECT CASE WHEN TRUE THEN 'a' COLLATE utf8mb4_bin
             ELSE 'b' COLLATE utf8mb4_general_ci END;
@@ -36,6 +45,9 @@ SELECT NULL COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE source_values (id INT PRIMARY KEY, v VARCHAR(20), KEY k_v(v));
 INSERT INTO source_values VALUES (1, 'Á'), (2, 'a '), (3, 'z');
+SELECT id, id BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci,
+       id IN ('1' COLLATE utf8mb4_bin, '2' COLLATE utf8mb4_general_ci)
+       FROM source_values ORDER BY id;
 -- Legacy source identities are preserved. Explicit expression conversion must
 -- compare at the resolved domain without probing a raw-byte key as a UCA key.
 SELECT id, v FROM source_values WHERE v COLLATE utf8mb4_unicode_ci = 'a' ORDER BY id;
@@ -77,6 +89,28 @@ EXECUTE expression_values USING @left, @right;
 SET @right = _binary'a ';
 EXECUTE expression_values USING @left, @right;
 DEALLOCATE PREPARE expression_values;
+
+-- A numeric parameter retains the numeric comparison domain on each EXECUTE.
+PREPARE numeric_collation FROM 'SELECT CAST(? AS SIGNED) BETWEEN ''0'' COLLATE utf8mb4_bin AND ''9'' COLLATE utf8mb4_general_ci';
+SET @numeric_value = 5;
+EXECUTE numeric_collation USING @numeric_value;
+SET @numeric_value = 10;
+EXECUTE numeric_collation USING @numeric_value;
+SET @numeric_value = NULL;
+EXECUTE numeric_collation USING @numeric_value;
+SET @numeric_value = 5;
+EXECUTE numeric_collation USING @numeric_value;
+DEALLOCATE PREPARE numeric_collation;
+SET @numeric_value = NULL;
+
+-- COLLATE changes the rule within the source charset, not its encoding.
+CREATE TABLE charset_values (s3 VARCHAR(4) COLLATE utf8_unicode_ci, s4 VARCHAR(4) COLLATE utf8mb4_unicode_ci);
+INSERT INTO charset_values VALUES ('a', 'a');
+SELECT s3 COLLATE utf8_unicode_ci, s3 COLLATE utf8mb3_unicode_ci,
+       s4 COLLATE utf8mb4_unicode_ci FROM charset_values;
+SELECT s3 COLLATE utf8mb4_unicode_ci FROM charset_values;
+SELECT s4 COLLATE utf8_unicode_ci FROM charset_values;
+SELECT _utf8mb4'a' COLLATE utf8_unicode_ci;
 
 -- A scalar subquery retains the projected expression's comparison domain.
 CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);

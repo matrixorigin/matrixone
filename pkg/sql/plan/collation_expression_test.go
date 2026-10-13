@@ -39,6 +39,10 @@ func TestExplicitCollationConflicts(t *testing.T) {
 		"select coalesce(" + left + "," + right + ")",
 		"select least(" + left + "," + right + ")",
 		"select " + left + " union all select " + right,
+		"select '5' in ('5' collate utf8mb4_bin, '7' collate utf8mb4_general_ci)",
+		"select '5' collate utf8mb4_bin in ('7' collate utf8mb4_general_ci, 5)",
+		"select '5' between '0' collate utf8mb4_bin and '9' collate utf8mb4_general_ci",
+		"select cast(null as char) between '0' collate utf8mb4_bin and '9' collate utf8mb4_general_ci",
 		"values row(" + left + "), row(" + right + ")",
 		"select least('a' collate utf8mb4_bin,'bb') = 'a' collate utf8mb4_general_ci",
 		"select greatest('a' collate utf8mb4_bin,'bb') = 'bb' collate utf8mb4_general_ci",
@@ -125,6 +129,49 @@ func TestExpressionCollationAssignmentAdmission(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	build := func(sql string) (*Plan, error) {
+		t.Helper()
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(compiler, stmt, false)
+	}
+	created, err := build("create table collation_charset(s3 varchar(4) collate utf8_unicode_ci,s4 varchar(4) collate utf8mb4_unicode_ci)")
+	require.NoError(t, err)
+	compiler.tables["collation_charset"] = created.GetDdl().GetCreateTable().TableDef
+	compiler.objects["collation_charset"] = &ObjectRef{ObjName: "collation_charset", SchemaName: "tpch"}
+	original := proto.Clone(compiler.tables["collation_charset"])
+	for _, tc := range []struct {
+		sql   string
+		valid bool
+	}{
+		{"select s3 collate utf8_unicode_ci from collation_charset", true},
+		{"select s3 collate utf8mb3_unicode_ci from collation_charset", true},
+		{"select s4 collate utf8mb4_unicode_ci from collation_charset", true},
+		{"select _utf8mb4'a' collate utf8mb4_unicode_ci", true},
+		{"select 1 collate utf8_unicode_ci", true},
+		{"prepare p from 'select ? collate utf8_unicode_ci'", true},
+		{"select s3 collate utf8mb4_unicode_ci from collation_charset", false},
+		{"select s4 collate utf8_unicode_ci from collation_charset", false},
+		{"select _utf8mb4'a' collate utf8_unicode_ci", false},
+		{"select 'a' collate utf8mb3_unicode_ci", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			_, err := build(tc.sql)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				var sqlErr *moerr.Error
+				require.ErrorAs(t, err, &sqlErr)
+				require.Equal(t, uint16(1253), sqlErr.MySQLCode())
+			}
+		})
+	}
+	require.True(t, proto.Equal(original, compiler.tables["collation_charset"]), "COLLATE admission must not relabel the source columns")
 }
 
 func TestExpressionCollationAssignmentHintRestored(t *testing.T) {
@@ -407,6 +454,13 @@ func TestExpressionCollationSemantics(t *testing.T) {
 		{"_binary'a ' = _binary'a'", "false"},
 		{"'Á' collate utf8mb4_unicode_ci in ('a','z')", "true"},
 		{"'Á' collate utf8mb4_unicode_ci between 'a' and 'b'", "true"},
+		{"5 between '0' collate utf8mb4_bin and '9' collate utf8mb4_general_ci", "true"},
+		{"10 between '0' collate utf8mb4_bin and '9' collate utf8mb4_general_ci", "false"},
+		{"'5' collate utf8mb4_bin between '0' collate utf8mb4_general_ci and 9", "true"},
+		{"5 in ('5' collate utf8mb4_bin, '7' collate utf8mb4_general_ci)", "true"},
+		{"5 not in ('5' collate utf8mb4_bin, '7' collate utf8mb4_general_ci)", "false"},
+		{"5 in ('4' collate utf8mb4_bin, '7' collate utf8mb4_general_ci)", "false"},
+		{"cast(null as signed) between '0' collate utf8mb4_bin and '9' collate utf8mb4_general_ci", "NULL"},
 		{"least('a' collate utf8mb4_unicode_ci,'B')", "a"},
 		{"greatest('a' collate utf8mb4_unicode_ci,'B')", "B"},
 		{"concat('a' collate utf8mb4_unicode_ci,'B')", "aB"},
@@ -445,7 +499,9 @@ func TestExpressionCollationSemantics(t *testing.T) {
 					defer executor.Free()
 					value, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 					require.NoError(t, err)
-					if tc.want == "true" || tc.want == "false" {
+					if tc.want == "NULL" {
+						require.True(t, value.IsNull(0))
+					} else if tc.want == "true" || tc.want == "false" {
 						require.Equal(t, tc.want == "true", vector.MustFixedColNoTypeCheck[bool](value)[0])
 					} else {
 						require.Equal(t, tc.want, string(value.GetBytesAt(0)))

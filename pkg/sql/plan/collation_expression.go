@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // Expression provenance belongs to plan.Type, not to the persisted runtime
@@ -71,6 +72,20 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 		}
 	} else if definition.Charset == collation.CharsetBinary {
 		return nil, moerr.NewCollationCharsetMismatch(ctx, definition.Name, "utf8mb4")
+	} else if !parameter && source.Oid.IsMySQLString() {
+		sourceDefinition, err := collation.EffectiveDefinition(uint32(source.Charset), uint32(source.CollationVersion))
+		if err != nil {
+			return nil, err
+		}
+		sourceCharset := sourceDefinition.Charset
+		if sourceCharset == collation.CharsetUnspecified {
+			// Historical text and ordinary literals carry identity zero, whose
+			// SQL encoding remains utf8mb4 even without a comparison rule.
+			sourceCharset = collation.CharsetUTF8MB4
+		}
+		if sourceCharset != definition.Charset {
+			return nil, moerr.NewCollationCharsetMismatch(ctx, definition.Name, sourceCharset.Name())
+		}
 	}
 	target := expr.Typ
 	if !types.T(target.Id).IsMySQLString() {
@@ -253,6 +268,23 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 	if (name == "in" || name == "not_in") && len(args) > 0 && args[0].GetList() != nil {
 		return args, nil
 	}
+	if (name == "in" || name == "not_in") && len(args) == 2 && args[0] != nil && makeTypeByPlan2Expr(args[0]).IsNumeric() {
+		// Numeric IN owns the comparison domain. Its existing typed-list and
+		// mixed-comparison paths must decide casts before considering text.
+		return args, nil
+	}
+	if name == "between" {
+		if len(args) == 3 && args[0] != nil && makeTypeByPlan2Expr(args[0]).IsNumeric() {
+			// Leave the existing overload and column-preserving cast rules in
+			// charge; only string-domain validation is inapplicable here.
+			return args, nil
+		}
+		var err error
+		args, err = numericBetweenCollationArguments(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	indexes := expressionCollationIndexes(name, len(args))
 	selected, active, err := resolveExpressionCollation(ctx, name, expressionCollationCandidates(args, indexes))
 	if err != nil || !active {
@@ -305,6 +337,59 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 		}
 	}
 	return result, nil
+}
+
+func numericBetweenCollationArguments(ctx context.Context, args []*Expr) ([]*Expr, error) {
+	if len(args) != 3 {
+		return args, nil
+	}
+	var inputTypes [3]types.Type
+	numericIndex, hasText := -1, false
+	for i, arg := range args {
+		if arg == nil {
+			return args, nil
+		}
+		inputTypes[i] = makeTypeByPlan2Expr(arg)
+		switch {
+		case inputTypes[i].IsNumeric():
+			numericIndex = i
+		case inputTypes[i].Oid.IsMySQLString():
+			hasText = true
+		case inputTypes[i].Oid == types.T_any && isNullLiteralExpr(arg):
+		default:
+			return args, nil
+		}
+	}
+	if numericIndex < 0 || !hasText {
+		return args, nil
+	}
+	// Reuse the registered comparison casts with a numeric peer first. With
+	// a text left operand, the ordinary pairwise check could otherwise reject
+	// its text/text pair before seeing the numeric bound. Only lookup types
+	// are permuted; executable operands and their cast targets keep SQL order.
+	inputTypes[0], inputTypes[numericIndex] = inputTypes[numericIndex], inputTypes[0]
+	resolved, err := function.GetFunctionByName(ctx, "between", inputTypes[:])
+	if err != nil {
+		return args, nil
+	}
+	targets, cast := resolved.ShouldDoImplicitTypeCast()
+	if !cast || len(targets) != len(args) {
+		return args, nil
+	}
+	for _, target := range targets {
+		if !target.IsNumeric() {
+			return args, nil
+		}
+	}
+	targets[0], targets[numericIndex] = targets[numericIndex], targets[0]
+	converted := make([]*Expr, len(args))
+	for i, arg := range args {
+		converted[i], err = appendCastBeforeExpr(ctx, arg, makePlan2Type(&targets[i]))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return converted, nil
 }
 
 func setExpressionCollation(ctx context.Context, name string, args []*Expr, typ *plan.Type) error {
