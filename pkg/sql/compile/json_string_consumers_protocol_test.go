@@ -157,8 +157,10 @@ func TestJSONStringConsumerSimulatedVersionSerializationFences(t *testing.T) {
 	c.cnList = workers
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-	data, err := encodeRemoteScope(scope, c.proc)
+	minimum := int64(0)
+	data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion112, minimum, "the execution stream must confirm the selected JSON overload")
 	require.NotEmpty(t, data)
 
 	// A simulated v111 receiver rejects the serialized overload; a simulated
