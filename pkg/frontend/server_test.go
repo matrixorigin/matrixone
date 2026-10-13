@@ -96,6 +96,7 @@ func TestMOServerStopCompletesCleanupAfterListenerCloseError(t *testing.T) {
 func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.UnixSocketAddress = ""
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -105,6 +106,23 @@ func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
 	require.NoError(t, mo.Stop())
 	require.NoError(t, mo.Stop())
 
+	rebound, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	require.NoError(t, rebound.Close())
+}
+
+func TestMOServerEmptyUnixAddressUsesTCPOnly(t *testing.T) {
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.UnixSocketAddress = ""
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	mo := NewMOServer(ctx, "127.0.0.1:0", pu, nil, &testMOServerBaseService{id: t.Name()})
+	t.Cleanup(func() { require.NoError(t, mo.Stop()) })
+	require.Len(t, mo.listeners, 1)
+	require.Equal(t, "tcp", mo.listeners[0].Addr().Network())
+	addr := mo.listeners[0].Addr().String()
+	require.NoError(t, mo.Stop())
 	rebound, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	require.NoError(t, rebound.Close())

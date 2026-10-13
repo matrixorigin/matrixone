@@ -432,6 +432,67 @@ func TestSetOperationIntegerLiteralDecimalType(t *testing.T) {
 	}
 }
 
+func TestNarrowUnsignedBigintConsumerCommonType(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sql         string
+		prepare     bool
+		notNullable bool
+	}{
+		{"uint8 union all", "select u8 as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"uint16 reversed union", "select -9007199254740993 as x union select u16 from test.integer_common_type", false, false},
+		{"week union", "select week(d, 3) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"dayofyear union", "select dayofyear(d) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"quarter union", "select quarter(d) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"null and multiple branches", "select null as x union all select u8 from test.integer_common_type union all select s from test.integer_common_type union all select u16 from test.integer_common_type", false, false},
+		{"coalesce", "select coalesce(u8, u16, s) as x from test.integer_common_type", false, false},
+		{"intersect", "select u8 as x from test.integer_common_type intersect select s from test.integer_common_type", false, false},
+		{"except", "select s as x from test.integer_common_type except select u16 from test.integer_common_type", false, false},
+		{"prepared union", "select u8 as x from test.integer_common_type union all select 9007199254740993", true, false},
+		{"prepared coalesce", "select coalesce(u16, 9007199254740993) as x from test.integer_common_type", true, true},
+		{"ctas", "create table integer_common_type_ctas as select u8 as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"empty ctas", "create table integer_common_type_ctas as select u16 as x from test.integer_common_type where false union all select s from test.integer_common_type where false", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			ctx.dbs["test"] = true
+			ctx.objects["integer_common_type"] = &planpb.ObjectRef{DbName: "test", ObjName: "integer_common_type", Obj: 1}
+			ctx.tables["integer_common_type"] = &planpb.TableDef{
+				Name: "integer_common_type", DbName: "test",
+				Cols: []*planpb.ColDef{
+					{Name: "u8", Typ: planpb.Type{Id: int32(types.T_uint8)}},
+					{Name: "u16", Typ: planpb.Type{Id: int32(types.T_uint16)}},
+					{Name: "s", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "d", Typ: planpb.Type{Id: int32(types.T_date)}},
+				},
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(ctx, stmt, test.prepare)
+			require.NoError(t, err)
+			var typ planpb.Type
+			if query := logicPlan.GetQuery(); query != nil {
+				require.NotEmpty(t, query.Steps)
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Len(t, root.ProjectList, 1)
+				typ = root.ProjectList[0].Typ
+			} else {
+				var visible []*planpb.ColDef
+				for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+					if !col.Hidden {
+						visible = append(visible, col)
+					}
+				}
+				require.Len(t, visible, 1)
+				typ = visible[0].Typ
+			}
+			require.Equal(t, int32(types.T_int64), typ.Id)
+			require.Equal(t, test.notNullable, typ.NotNullable)
+		})
+	}
+}
+
 func buildFirstQueryResultType(t *testing.T, sql string) planpb.Type {
 	t.Helper()
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
