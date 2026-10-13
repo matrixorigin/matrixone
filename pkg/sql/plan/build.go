@@ -217,7 +217,15 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		if err != nil {
 			return nil, err
 		}
-		if enabled {
+		orderedSelfChecks := false
+		for _, node := range query.Nodes {
+			if spec := node.GetPreInsertUkCtx().GetOrderedAutoIncrement(); spec != nil {
+				for _, fk := range spec.ForeignKeys {
+					orderedSelfChecks = orderedSelfChecks || len(fk.SelfParentColumns) > 0
+				}
+			}
+		}
+		if enabled && !orderedSelfChecks {
 			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
 				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
 			if err != nil {

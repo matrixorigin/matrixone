@@ -140,6 +140,21 @@ func (c *tableCache) insertAutoValues(
 	rows int,
 	estimate int64,
 ) (uint64, error) {
+	if request, ok := ctx.Value(autoIncrementReservationKey{}).(*AutoIncrementReservation); ok {
+		if request == nil {
+			return 0, moerr.NewInvalidInput(ctx, "nil AUTO_INCREMENT reservation")
+		}
+		limit, valid := autoIncrementTypeLimit(request.Type)
+		if !valid || request.ColumnIndex < 0 || request.Count == 0 || len(request.Runs) != 0 || rows != 0 || estimate != 0 || len(vecs) != 0 {
+			return 0, moerr.NewInvalidInput(ctx, "invalid AUTO_INCREMENT reservation")
+		}
+		for _, col := range c.cols {
+			if col.ColIndex == request.ColumnIndex {
+				return 0, c.getColumnCache(col.ColName).reserveAutoValues(ctx, tableID, request, limit, c.getTxn())
+			}
+		}
+		return 0, moerr.NewInvalidInput(ctx, "AUTO_INCREMENT reservation column not found")
+	}
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
 	for _, col := range c.cols {

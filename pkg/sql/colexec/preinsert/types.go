@@ -59,6 +59,8 @@ type PreInsert struct {
 	RejectZeroTemporal           bool
 	TrackAutoIncrementGenerated  bool
 	AutoIncrementGeneratedColumn int32
+	CheckEligibility             *plan.ColRef
+	DeferAutoIncrement           bool
 	HasTargetSelector            bool
 	TargetRowNumberCol           int32
 	TargetActiveCol              int32

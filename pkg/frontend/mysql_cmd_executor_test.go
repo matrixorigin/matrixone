@@ -3058,7 +3058,7 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.False(t, tree.IsIgnoreStatement(parsed[0]))
+	require.True(t, tree.IsIgnoreStatement(parsed[0]), "LOCAL implies IGNORE independently of the header count")
 }
 
 func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
@@ -3095,6 +3095,12 @@ func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
 	require.NoError(t, err)
 	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	load.Local = true
+	cw = InitTxnComputationWrapper(ses, load, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data local infile 'data.csv' into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {

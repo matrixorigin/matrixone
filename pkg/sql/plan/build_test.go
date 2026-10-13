@@ -4010,7 +4010,7 @@ func TestInsertIgnoreAutoIncrementProvenanceNameDoesNotCollideWithUserColumn(t *
 	}
 }
 
-func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T) {
+func TestInsertIgnoreAutoIncrementReorderAllowsRedundantUniqueIndex(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tables["dept"]
 	tableDef.Cols[0].Typ.AutoIncr = true
@@ -4026,8 +4026,8 @@ func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T)
 			continue
 		}
 		found = true
-		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
-			"a unique index containing the reassigned primary key must keep the established path")
+		require.True(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"a unique index containing the primary key is covered by final PK arbitration")
 	}
 	require.True(t, found)
 }

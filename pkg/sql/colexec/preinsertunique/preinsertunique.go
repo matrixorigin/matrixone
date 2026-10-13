@@ -65,6 +65,9 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 	if preInsertUnique.PreInsertCtx == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "missing pre-insert unique context")
 	}
+	if err := preInsertUnique.validateOrderedAutoIncrement(proc); err != nil {
+		return err
+	}
 	insertIgnore := preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup()
 	odkuArbitration := preInsertUnique.PreInsertCtx.GetOdkuTargetArbitration()
 	if !insertIgnore && !odkuArbitration {
@@ -384,6 +387,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	keyColumns := ctx.KeyColumns
 	conflictColumns := ctx.ConflictColumns
 	autoIncrementReorder := ctx.AutoIncrementReorder
+	orderedAllocation := ctx.OrderedAutoIncrement != nil
 	outputColumns := int(ctx.OutputColumns)
 	if len(keyColumns) == 0 || len(keyColumns) != len(conflictColumns) ||
 		outputColumns <= 0 || outputColumns > len(inputBat.Vecs) {
@@ -455,6 +459,15 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			moerr.FormatDuplicateEntry(rowStr, keyName),
 		)
 	}
+	var eligibilityVec *vector.Vector
+	if ctx.RowEligibility != nil {
+		pos := int(ctx.RowEligibility.ColPos)
+		if !autoIncrementReorder || pos < 0 || pos >= len(inputBat.Vecs) ||
+			inputBat.Vecs[pos] == nil || !inputBat.Vecs[pos].GetType().IsBoolean() {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE row eligibility column")
+		}
+		eligibilityVec = inputBat.Vecs[pos]
+	}
 	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector
 	autoOutputColumn := -1
 	if autoIncrementReorder {
@@ -501,7 +514,9 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			generated = !autoIncrementGeneratedVec.IsNull(uint64(markerRow)) &&
 				vector.GetFixedAtNoTypeCheck[bool](autoIncrementGeneratedVec, markerRow)
 			var err error
-			if generated {
+			if generated && orderedAllocation {
+				autoValue, err = preInsertUnique.orderedCandidate(proc)
+			} else if generated {
 				autoValue, err = autoIncrementCandidateValue(autoIncrementVec, row)
 			} else {
 				autoValue, explicitAdvancesSequence, err = autoIncrementValue(autoIncrementVec, row)
@@ -510,10 +525,33 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				return vm.CancelResult, err
 			}
 		}
+		if orderedAllocation {
+			preInsertUnique.finishOrderedRow()
+		}
+		if eligibilityVec != nil {
+			eligibilityRow := vectorRowIndex(eligibilityVec, row)
+			if eligibilityVec.IsNull(uint64(eligibilityRow)) ||
+				!vector.GetFixedAtNoTypeCheck[bool](eligibilityVec, eligibilityRow) {
+				// CHECK/FK rejection owns no keys. Keep its generated candidate
+				// in the same statement-local stream used for UK rejection.
+				pkConflict := inputBat.Vecs[conflictColumns[ctx.AutoIncrementKeyIndex]]
+				pkRow := vectorRowIndex(pkConflict, row)
+				reservedPK := !pkConflict.IsNull(uint64(pkRow)) && vector.GetFixedAtNoTypeCheck[bool](pkConflict, pkRow)
+				if generated && !orderedAllocation && !reservedPK && !preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
+					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
+						return vm.CancelResult, err
+					}
+				}
+				continue
+			}
+		}
 		accepted := true
 		primaryKeyConflict := false
 		conflictKey := -1
 		for keyIdx, conflictPos := range conflictColumns {
+			if orderedAllocation && generated && keyIdx == int(ctx.AutoIncrementKeyIndex) {
+				continue
+			}
 			conflictVec := inputBat.Vecs[conflictPos]
 			conflictRow := vectorRowIndex(conflictVec, row)
 			if !conflictVec.IsNull(uint64(conflictRow)) &&
@@ -552,7 +590,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		if !accepted {
 			recordDuplicateWarning(conflictKey, row)
-			if autoIncrementReorder && generated && !primaryKeyConflict {
+			if autoIncrementReorder && generated && !orderedAllocation && !primaryKeyConflict {
 				if !preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
 					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
 						return vm.CancelResult, err
@@ -560,6 +598,16 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				}
 			}
 			continue
+		}
+
+		if orderedAllocation {
+			ok, err := preInsertUnique.checkOrderedForeignKeys(proc, inputBat, row, generated, autoValue)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if !ok {
+				continue
+			}
 		}
 
 		// Publish all constraint ownership only after the complete row passes.
@@ -587,8 +635,10 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
 			output := preInsertUnique.ctr.buf.Vecs[autoOutputColumn]
 			if generated {
-				if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
-					return vm.CancelResult, err
+				if !orderedAllocation {
+					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
+						return vm.CancelResult, err
+					}
 				}
 				candidate, ok, err := preInsertUnique.popAutoIncrementCandidate()
 				if err != nil {
@@ -607,7 +657,13 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				}
 			} else {
 				if explicitAdvancesSequence {
-					if err := preInsertUnique.ctr.autoIncrementCandidates.discardThrough(autoValue); err != nil {
+					var err error
+					if orderedAllocation {
+						err = preInsertUnique.acceptOrderedExplicit(proc, autoIncrementVec, row, autoValue)
+					} else {
+						err = preInsertUnique.ctr.autoIncrementCandidates.discardThrough(autoValue)
+					}
+					if err != nil {
 						return vm.CancelResult, err
 					}
 				}
@@ -616,6 +672,11 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				}
 			}
 			if err := preInsertUnique.recordAcceptedAutoIncrementValue(autoValue); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		if orderedAllocation {
+			if err := preInsertUnique.recordOrderedForeignKeyParents(proc, inputBat, row, generated, autoValue); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -642,6 +703,11 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			}
 		}
 		preInsertUnique.ctr.buf.SetRowCount(len(sels))
+		if orderedAllocation && firstGenerated != 0 {
+			if err := preInsertUnique.checkOrderedPrimaryKeys(proc, preInsertUnique.ctr.buf); err != nil {
+				return vm.CancelResult, err
+			}
+		}
 		// Publish only after the complete output batch has been built, and
 		// update the shared statement coordinator once rather than once per row.
 		if firstGenerated != 0 {

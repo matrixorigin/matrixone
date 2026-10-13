@@ -16,7 +16,6 @@ package incrservice
 
 import (
 	"context"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -234,31 +233,8 @@ type AutoColumn struct {
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
 // by the destination AUTO_INCREMENT column type.
 func ValidateAutoColumnOffset(ctx context.Context, typ types.Type, offset uint64) error {
-	var limit uint64
-	switch typ.Oid {
-	case types.T_uint8:
-		limit = math.MaxUint8
-	case types.T_uint16:
-		limit = math.MaxUint16
-	case types.T_uint32:
-		limit = math.MaxUint32
-		if typ.IsMediumInt() {
-			limit = 1<<24 - 1
-		}
-	case types.T_uint64:
-		return nil
-	case types.T_int8:
-		limit = math.MaxInt8
-	case types.T_int16:
-		limit = math.MaxInt16
-	case types.T_int32:
-		limit = math.MaxInt32
-		if typ.IsMediumInt() {
-			limit = 1<<23 - 1
-		}
-	case types.T_int64:
-		limit = math.MaxInt64
-	default:
+	limit, valid := autoIncrementTypeLimit(typ)
+	if !valid {
 		return nil
 	}
 	if offset <= limit {
