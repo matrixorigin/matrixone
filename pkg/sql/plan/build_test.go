@@ -250,6 +250,10 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 			sql:  "prepare stmt from 'data branch pick branch into base keys(select ''?'' from branch) when conflict accept'",
 		},
 		{
+			name: "pick qualified BEGIN subquery without parameters",
+			sql:  "prepare stmt from 'data branch pick branch into base keys(select t.begin from (select 7 as `begin`) t) when conflict accept'",
+		},
+		{
 			name: "delete table",
 			sql:  "prepare stmt from 'data branch delete table branch'",
 		},
@@ -274,9 +278,18 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 }
 
 func TestPrepareDataBranchRejectsSubqueryParameters(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		"prepare stmt from 'data branch pick branch into base keys(select id from branch where id = ?) when conflict accept'")
-	require.ErrorContains(t, err, "prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+	for _, query := range []string{
+		"select id from branch where id = ?",
+		"select t.begin + ? from branch t",
+		"select t. /* component */ begin + ? from branch t",
+		"select t.`begin` + ? from branch t",
+	} {
+		t.Run(query, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"prepare stmt from 'data branch pick branch into base keys("+query+") when conflict accept'")
+			require.ErrorContains(t, err, "prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+		})
+	}
 }
 
 func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {

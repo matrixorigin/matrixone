@@ -122,7 +122,7 @@ type StatementOption struct {
 	// preparation result of ALTER TABLE ... ALGORITHM=COPY. It is set only by
 	// the owning ALTER compile, never by user SQL.
 	copyAlterPrepare CopyAlterPreparation
-	optimizerHints           string
+	optimizerHints   string
 }
 
 // Result exec sql result

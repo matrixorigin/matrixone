@@ -1,6 +1,7 @@
 # EXPLAIN FORMAT=JSON compatibility contract
 
-- Status: draft; implementation and QA remain pending
+- Status: accepted design; implementation validation and QA remain separate gates
+- Design acceptance: [PR #28415](https://github.com/matrixorigin/matrixone/pull/28415), merged 2026-09-11 as `b922526ecb40f70e02f59e68b83ba3996a7325e5`
 - Tracking issue: [matrixorigin/matrixone#28301](https://github.com/matrixorigin/matrixone/issues/28301)
 - Target: MatrixOne main
 - Design revision: explain-format-json-2026-09-09-r2
@@ -149,6 +150,26 @@ The following mappings are normative for schema version 1:
   is emitted as an `assignments` entry, so a plan for `SET v = 2` includes a
   value of `2`; unchanged columns remain visible as their row-image
   expressions. An unresolved required row-image reference is an SQL error.
+- A `RECURSIVE_CTE` node records `recursive_union_mode=DISTINCT` or
+  `recursive_union_mode=ALL` in `node.expressions`, directly from
+  `RecursiveUnionDistinct`. Both values are explicit; a missing boolean does
+  not stand in for ALL. Ordinary CTE and UNION nodes retain their mappings.
+- A `FILL` node records `fill_type=<NONE|PREV|NEXT|NULL|VALUE|LINEAR>`,
+  followed by `fill_target[i]=<expression>` from its optimized `AggList` and
+  `fill_value[i]=<expression>` from `FillVal`, in their original order.
+  Empty target/value lists add no entries. Unknown modes and missing required
+  expressions are errors; the renderer never rebuilds pre-pruning targets.
+- Serialized scalar bytes use
+  `serialized(type=<oid>,width=<width>,scale=<scale>,value=0x<HEX>)`.
+  Serialized literal vectors use
+  `serialized_vec(type=<oid>,width=<width>,scale=<scale>,values=[0x<HEX>,NULL,...])`.
+  Type/width/scale come from the scalar type or decoded vector type. Hex is
+  uppercase, empty bytes are `0x`, and one-element vectors retain brackets.
+  The vector marker means at least one element was serialized; it does not
+  invent per-element provenance. JSON retains every byte-valued element and
+  function argument, while text EXPLAIN keeps its existing diagnostic
+  redaction. Unsupported serialized vector types and malformed complete
+  vector payloads are errors, not successful opaque/invalid placeholders.
 - Statistics are copied only when finite. The source `Stats` object is never
   cleaned or rewritten as part of serialization.
 

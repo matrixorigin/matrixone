@@ -52,7 +52,7 @@ payout_ops    UPDATE    30    null    null    null    2024-02-28 10:00:00    leo
 payout_stage    INSERT    40    north    null    2500.00    null    null    ad-hoc bonus    null    null
 payout_ops    INSERT    50    south    2    null    null    kai    null    ÌÌ3    new workflow
 data branch merge payout_stage into payout_ops;
-internal error: conflict: payout_stage DELETE and payout_ops DELETE on pk(10) with different values
+internal error: conflict: payout_stage UPDATE and payout_ops UPDATE on pk(10)
 data branch merge payout_stage into payout_ops when conflict skip;
 select batch_id, region, total_count, payout_amount, reviewer, escalation_reason
 from payout_ops

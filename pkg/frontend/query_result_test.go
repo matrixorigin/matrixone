@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
@@ -150,6 +151,46 @@ func TestCanSaveQueryResultBySQLSource(t *testing.T) {
 			assert.Equal(t, test.want, canSaveQueryResult(ctx, ses))
 		})
 	}
+	t.Run("classified qualified statements", func(t *testing.T) {
+		// Exercise real profile publication without allocating statement telemetry.
+		tracing := motrace.GetTracerProvider().IsEnable()
+		motrace.GetTracerProvider().SetEnable(false)
+		t.Cleanup(func() { motrace.GetTracerProvider().SetEnable(tracing) })
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		for _, tc := range []struct {
+			sql      string
+			internal bool
+			sources  []string
+			save     []bool
+		}{
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", false, []string{constant.ExternSql, constant.CloudUserSql}, []bool{false, true}},
+			{"SELECT t.begin, t.rank FROM t; /* cloud_nonuser */ SELECT 2", false, []string{constant.ExternSql, constant.CloudNoUserSql}, []bool{false, false}},
+			{"SELECT t. /* gap */ begin, t.rank FROM t /* save_result */", false, []string{constant.CloudUserSql}, []bool{true}},
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", true, []string{constant.InternalSql, constant.InternalSql}, []bool{false, false}},
+		} {
+			t.Run(fmt.Sprintf("internal=%t/%s", tc.internal, tc.sql), func(t *testing.T) {
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				execCtx.input = &UserInput{sql: tc.sql, isInternalInput: tc.internal}
+				cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+				require.NoError(t, err)
+				defer func() {
+					for _, cw := range cws {
+						cw.Free()
+					}
+				}()
+				require.Len(t, cws, len(tc.sources))
+				require.Equal(t, tc.sources, execCtx.input.getSqlSourceTypes())
+				for i, cw := range cws {
+					_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "", execCtx.input.getSqlSourceType(i), true)
+					require.NoError(t, err)
+					require.Equal(t, tc.sources[i], ses.GetSqlSourceType())
+					require.Equal(t, "Select", ses.GetStmtType())
+					require.Equal(t, tc.save[i], canSaveQueryResult(ctx, ses))
+				}
+			})
+		}
+	})
 }
 
 func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T) {
