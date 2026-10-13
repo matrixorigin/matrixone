@@ -226,7 +226,7 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 	assert.Equal(t, "l2_distance", r.origFuncName)
 	assert.Equal(t, int32(0), r.partPos)
 	assert.Equal(t, int32(1), r.pkPos)
-	assert.Equal(t, algo, r.params)
+	assert.Equal(t, algo, r.idxDef.IndexAlgoParams)
 	assert.Equal(t, int64(8), r.nThread)
 	assert.Equal(t, int64(64), r.batchWindow)
 	assert.NotNil(t, r.vecLitArg)
@@ -357,7 +357,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
-	// PROJECT now points at SORT → JOIN(SCAN, FUNCTION_SCAN)
+	// PROJECT now points at SORT → JOIN(SCAN, INDEX_SEARCH_SCAN)
 	sortID := vecCtx.projNode.Children[0]
 	sort := builder.qry.Nodes[sortID]
 	require.Equal(t, plan.Node_SORT, sort.NodeType)
@@ -366,8 +366,21 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 	join := builder.qry.Nodes[joinID]
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, cagraplan.CAGRASearchFuncName, right.TableDef.TblFunc.Name)
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	spec := right.IndexSearchScan
+	require.NotNil(t, spec)
+	assert.Equal(t, "l2_distance", spec.DistanceFunction)
+	assert.False(t, spec.PostFilterOverFetch)
+	assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
+	require.Len(t, spec.HiddenTables, 2)
+	assert.Equal(t, catalog.Cagra_TblType_Metadata, spec.HiddenTables[0].Role)
+	assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
+	assert.Equal(t, catalog.Cagra_TblType_Storage, spec.HiddenTables[1].Role)
+	assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
+	opts, err := cagraplan.DecodeScanOptions(spec.AlgoOptions)
+	require.NoError(t, err)
+	assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
+	assert.Empty(t, opts.FilterJSON)
 }
 
 // TestApplyIndicesForSortUsingCagra_RichPushdown drives the optimizer through
@@ -539,10 +552,14 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 	sort := builder.qry.Nodes[sortID]
 	join := builder.qry.Nodes[sort.Children[0]]
 	tf := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, tf.NodeType)
-	assert.Equal(t, 3, len(tf.TblFuncExprList), "expected predsJSON arg appended")
-	// Distance filter should have been peeled onto the function scan.
-	assert.NotEmpty(t, tf.FilterList, "distance filter should land on the table function")
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tf.NodeType)
+	assert.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	opts, err := cagraplan.DecodeScanOptions(tf.IndexSearchScan.AlgoOptions)
+	require.NoError(t, err)
+	assert.NotEmpty(t, opts.FilterJSON, "INCLUDE predicate should be pushed to the search")
+	// The distance filter moves onto the index search scan.
+	assert.NotEmpty(t, tf.FilterList)
+	assert.Len(t, scanNode.FilterList, 1)
 }
 
 // Same as the success test but with a non-constant LIMIT and a residual
@@ -636,4 +653,13 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 
 	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
+
+	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	join := builder.qry.Nodes[sort.Children[0]]
+	right := builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	assert.True(t, right.IndexSearchScan.PostFilterOverFetch)
+	// The candidate limit stays the raw k; execution over-fetches.
+	assert.NotNil(t, right.IndexSearchScan.CandidateLimit.GetCol())
+	assert.Nil(t, right.Limit)
 }

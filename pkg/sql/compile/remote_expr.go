@@ -87,7 +87,7 @@ func validateRemoteBoundStringVariables(p *pipeline.Pipeline) error {
 		if node := source.Node; node != nil {
 			bound = bound || hasExecutableBoundStringVariable(node.BlockFilterList) ||
 				hasExecutableBoundStringVariable(node.IndexReaderParam) ||
-				hasExecutableBoundStringVariable(node.VectorIndexScan)
+				hasExecutableBoundStringVariable(node.IndexSearchScan)
 			if node.TableDef != source.TableDef {
 				bound = bound || hasExecutableBoundStringVariable(node.TableDef)
 			}

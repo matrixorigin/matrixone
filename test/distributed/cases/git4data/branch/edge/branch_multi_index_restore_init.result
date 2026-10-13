@@ -60,7 +60,7 @@ and job_state = 4;
 0
 explain select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -73,7 +73,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on issue27950_branch_indexes.leaf_t  𝄀
                           Runtime Filter Probe: leaf_t.id  𝄀
-                    ->  Table Function on fulltext2_search
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 ➤ id[-5,64,0]  𝄀
@@ -81,21 +82,20 @@ where match(body) against('+branch' in boolean mode) order by id;
 3
 explain select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (leaf_t.id = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (leaf_t.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on issue27950_branch_indexes.leaf_t  𝄀
                     Runtime Filter Probe: leaf_t.id  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 2  𝄀
-                    Limit: 2
+              ->  Vector Index Scan on hv [l2_distance]  𝄀
+                    Vector Index: hv, Metric: l2_distance, Candidate Limit: 2
 select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
 ➤ id[-5,64,0]  𝄀

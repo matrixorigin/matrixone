@@ -2747,6 +2747,8 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
+		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
+		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
