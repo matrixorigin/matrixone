@@ -200,3 +200,22 @@ func validateFunctionalJSONIndexSemantics(ctx context.Context, table *TableDef, 
 	}
 	return nil
 }
+
+// The equality binder widens CHAR keys into its VARCHAR comparison domain.
+// Match only this known value-preserving wrapper; the original predicate stays
+// as a residual and the persisted JSON expression still matches exactly.
+func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef) *Expr {
+	if expr == nil || !functionalKnownFunction(expr, function.CAST, 2) {
+		return expr
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil || !sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
+		return expr
+	}
+	inner := fn.Args[0]
+	from, to := inner.Typ, expr.Typ
+	if from.Id != int32(types.T_char) || to.Id != int32(types.T_varchar) || to.Width < from.Width || from.Charset != to.Charset || from.CollationVersion != to.CollationVersion || from.PadSpace != to.PadSpace || from.Scale != to.Scale || !functionalJSONTextCastEligible(inner, cols, make(map[int32]bool)) {
+		return expr
+	}
+	return inner
+}

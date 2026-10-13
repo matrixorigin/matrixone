@@ -18,10 +18,12 @@ import (
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,6 +113,23 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 	p, err := build("create table docs(id int primary key,doc json,index idx_kind((cast(doc ->> '$.kind' as char(20)))))")
 	require.NoError(t, err)
 	table := p.GetDdl().GetCreateTable().TableDef
+	key := functionalIndexColumn(table, table.Indexes[0]).GeneratedCol.Expr
+	target := key.Typ
+	target.Id = int32(types.T_varchar)
+	target.Width = 65535
+	wrap := &Expr{Typ: target, Expr: &pb.Expr_F{F: &pb.Function{Func: &ObjectRef{Obj: int64(function.CAST)<<32 | 2, ObjName: "cast"}, Args: []*Expr{key, {Typ: target, Expr: &pb.Expr_T{T: &pb.TargetType{}}}}}}}
+	require.Same(t, key, functionalJSONComparisonOperand(wrap, table.Cols))
+	for _, change := range []func(*Expr){
+		func(e *Expr) { e.Typ.Width = 19; e.GetF().Args[1].Typ = e.Typ },
+		func(e *Expr) { e.Typ.Charset = uint32(types.CharsetBinary); e.GetF().Args[1].Typ = e.Typ },
+		func(e *Expr) { e.Typ.CollationVersion = 1; e.GetF().Args[1].Typ = e.Typ },
+		func(e *Expr) { e.Typ.PadSpace = true; e.GetF().Args[1].Typ = e.Typ },
+		func(e *Expr) { e.GetF().Func.Obj = int64(function.CAST) << 32 },
+	} {
+		bad := DeepCopyExpr(wrap)
+		change(bad)
+		require.Same(t, bad, functionalJSONComparisonOperand(bad, table.Cols))
+	}
 	ctx.tables["docs"] = table
 	ctx.objects["docs"] = &ObjectRef{ObjName: "docs", SchemaName: "tpch"}
 	for _, it := range p.GetDdl().GetCreateTable().IndexTables {
