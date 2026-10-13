@@ -1934,6 +1934,31 @@ func TestPitrInternal(t *testing.T) {
 	}
 }
 
+func TestRestoreSnapshotFromSyntaxHint(t *testing.T) {
+	const hint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
+	for _, sql := range []string{
+		"restore database ki from snapshot kis",
+		"restore account sys database ki from snapshot kis",
+		"RESTORE DATABASE `Ki` /* target */ FROM SNAPSHOT 'KiS'",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.ErrorContains(t, err, hint)
+	}
+
+	stmt, err := ParseOne(context.Background(), `restore database sys.ki{snapshot="kis"}`, 1)
+	require.NoError(t, err)
+	restored, ok := stmt.(*tree.RestoreSnapShot)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("sys"), restored.AccountName)
+	require.Equal(t, tree.Identifier("ki"), restored.DatabaseName)
+	require.Equal(t, tree.Identifier("kis"), restored.SnapShotName)
+
+	_, err = ParseOne(context.Background(), "restore database ki from nonsense kis", 1)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), hint)
+}
+
 var (
 	validSQL = []struct {
 		input  string

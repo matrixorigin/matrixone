@@ -986,7 +986,7 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion112JSONStringConsumerOverload(t *testing.T) {
+func TestRequiresMORPCVersion113JSONStringConsumerOverload(t *testing.T) {
 	consumer := func(functionID, overloadID int32) *Expr {
 		return &Expr{
 			Typ: Type{Id: 61},
@@ -998,11 +998,11 @@ func TestRequiresMORPCVersion112JSONStringConsumerOverload(t *testing.T) {
 
 	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
 		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
-			required, err := RequiresMORPCVersion112JSONStringConsumerOverload(consumer(functionID, 1))
+			required, err := RequiresMORPCVersion113JSONStringConsumerOverload(consumer(functionID, 1))
 			require.NoError(t, err)
 			require.True(t, required)
 			for _, overloadID := range []int32{0, 2} {
-				required, err = RequiresMORPCVersion112JSONStringConsumerOverload(consumer(functionID, overloadID))
+				required, err = RequiresMORPCVersion113JSONStringConsumerOverload(consumer(functionID, overloadID))
 				require.NoError(t, err)
 				require.False(t, required)
 			}
@@ -1010,7 +1010,7 @@ func TestRequiresMORPCVersion112JSONStringConsumerOverload(t *testing.T) {
 	}
 
 	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
-		required, err := RequiresMORPCVersion112JSONStringConsumerOverload(control)
+		required, err := RequiresMORPCVersion113JSONStringConsumerOverload(control)
 		require.NoError(t, err)
 		require.False(t, required)
 	}
@@ -1072,6 +1072,36 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, features.MediumIntAssignmentBounds)
 			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}
+
+func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		id, overload, result int32
+		want                 bool
+	}{
+		{"week date", 216, 0, 22, true}, {"week datetime", 216, 1, 22, true},
+		{"week date mode", 216, 2, 22, true}, {"week datetime mode", 216, 3, 22, true},
+		{"dayofyear", 206, 0, 22, true},
+		{"legacy week", 216, 2, 25, false}, {"legacy dayofyear", 206, 0, 26, false},
+		{"weekofyear control", 217, 0, 23, false}, {"other int function", 218, 0, 22, false},
+		{"unknown overload", 216, 4, 22, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: tc.result}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
+			data, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(data))
+			features, err := RequiredRemoteExpressionFeatures(&TableDef{Cols: []*ColDef{{Default: &Default{Expr: decoded}}}})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.DateNumericResultContracts)
+			if tc.want {
+				require.True(t, features.Any())
+			}
+			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
 		})
 	}
 }
