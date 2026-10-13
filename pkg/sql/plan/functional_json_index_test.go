@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/gogo/protobuf/proto"
 	"strings"
 	"testing"
 
@@ -242,7 +243,7 @@ func TestFunctionalJSONForeignKeyFinalRowImage(t *testing.T) {
 		_, changed = action.updateColPosMap[unrelated.Name]
 		require.False(t, changed)
 		for i, e := range getProjectionByLastNode(builder, source) {
-			require.True(t, e.Equal(builder.qry.Nodes[last].ProjectList[i]), "old-row/delete prefix preserved")
+			require.True(t, proto.Equal(e, builder.qry.Nodes[last].ProjectList[i]), "old-row/delete prefix preserved")
 		}
 		refs := collectRefColPos(builder.qry.Nodes[last].ProjectList[pos])
 		require.Contains(t, refs, int32(replacementPos))
