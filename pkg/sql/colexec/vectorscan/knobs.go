@@ -16,6 +16,7 @@ package vectorscan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -30,22 +31,26 @@ const (
 // ResolveVariable reads a session variable, as process.Process.GetResolveVariableFunc.
 type ResolveVariable func(name string, isSystemVar, isGlobalVar bool) (any, error)
 
-// StampSessionKnobs fills the unset knobs of spec from the session variables. The
-// coordinator stamps the copy of spec it sends to a CN that runs the scan without the
-// session.
+// StampSessionKnobs fills the unset knobs of spec from the session variables, only
+// the knobs the index algorithm of spec uses: itopk and max_itopk for a vector index,
+// max_nprobe for an index that probes lists. The coordinator stamps the copy of spec
+// it sends to a CN that runs the scan without the session.
 func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) error {
 	if spec == nil || resolve == nil {
 		return nil
 	}
+	algo := spec.GetIndex().GetIndexAlgo()
+	vector := indexplugin.IsVectorIndexAlgo(algo)
 	for _, knob := range []struct {
 		name string
 		dst  *uint64
+		used bool
 	}{
-		{SessionVarITopK, &spec.InternalTopk},
-		{SessionVarMaxITopK, &spec.MaxInternalTopk},
-		{SessionVarMaxNprobe, &spec.MaxNprobe},
+		{SessionVarITopK, &spec.InternalTopk, vector},
+		{SessionVarMaxITopK, &spec.MaxInternalTopk, vector},
+		{SessionVarMaxNprobe, &spec.MaxNprobe, vector && indexplugin.SupportsProbeKnobs(algo)},
 	} {
-		if *knob.dst != 0 {
+		if *knob.dst != 0 || !knob.used {
 			continue
 		}
 		v, err := resolve(knob.name, true, false)
@@ -70,6 +75,7 @@ func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) erro
 // budget, lowered to its cap and raised to the result limit.
 func ApplySearchKnobs(req *searchplugin.Request, spec *plan.IndexSearchScan, resolve ResolveVariable) error {
 	knobs := &plan.IndexSearchScan{
+		Index:           spec.GetIndex(),
 		InternalTopk:    spec.GetInternalTopk(),
 		MaxInternalTopk: spec.GetMaxInternalTopk(),
 		MaxNprobe:       spec.GetMaxNprobe(),

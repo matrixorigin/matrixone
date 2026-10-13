@@ -17,37 +17,52 @@ package vectorscan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStampSessionKnobs(t *testing.T) {
 	session := map[string]any{SessionVarITopK: int64(100), SessionVarMaxITopK: int64(1000), SessionVarMaxNprobe: int64(32)}
 	resolve := func(name string, _, _ bool) (any, error) { return session[name], nil }
+	ivfflat := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
 
-	spec := &plan.IndexSearchScan{}
+	spec := &plan.IndexSearchScan{Index: ivfflat}
 	require.NoError(t, StampSessionKnobs(spec, resolve))
 	require.Equal(t, uint64(100), spec.InternalTopk)
 	require.Equal(t, uint64(1000), spec.MaxInternalTopk)
 	require.Equal(t, uint64(32), spec.MaxNprobe)
 
 	// a BY RANK option wins over the session variable
-	spec = &plan.IndexSearchScan{InternalTopk: 7, MaxNprobe: 9}
+	spec = &plan.IndexSearchScan{Index: ivfflat, InternalTopk: 7, MaxNprobe: 9}
 	require.NoError(t, StampSessionKnobs(spec, resolve))
 	require.Equal(t, uint64(7), spec.InternalTopk)
 	require.Equal(t, uint64(1000), spec.MaxInternalTopk)
 	require.Equal(t, uint64(9), spec.MaxNprobe)
 
+	// an index that probes no lists takes no max_nprobe; a non-vector index no knob
+	spec = &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()}}
+	require.NoError(t, StampSessionKnobs(spec, resolve))
+	require.Equal(t, uint64(100), spec.InternalTopk)
+	require.Zero(t, spec.MaxNprobe)
+	spec = &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}}
+	require.NoError(t, StampSessionKnobs(spec, resolve))
+	require.Zero(t, spec.InternalTopk)
+	require.Zero(t, spec.MaxInternalTopk)
+	require.Zero(t, spec.MaxNprobe)
+	require.Equal(t, int64(IndexSearchScanProtocolVersion), RequiredProtocolVersion(spec))
+
 	// no resolver (a CN without a session) and unset variables leave spec as is
-	spec = &plan.IndexSearchScan{}
+	spec = &plan.IndexSearchScan{Index: ivfflat}
 	require.NoError(t, StampSessionKnobs(spec, nil))
 	require.NoError(t, StampSessionKnobs(spec, func(string, bool, bool) (any, error) { return nil, nil }))
-	require.Equal(t, &plan.IndexSearchScan{}, spec)
+	require.Equal(t, &plan.IndexSearchScan{Index: ivfflat}, spec)
 	require.NoError(t, StampSessionKnobs(nil, resolve))
 
-	require.Error(t, StampSessionKnobs(&plan.IndexSearchScan{}, func(string, bool, bool) (any, error) { return "x", nil }))
-	require.Error(t, StampSessionKnobs(&plan.IndexSearchScan{}, func(string, bool, bool) (any, error) { return int64(-1), nil }))
+	require.Error(t, StampSessionKnobs(&plan.IndexSearchScan{Index: ivfflat}, func(string, bool, bool) (any, error) { return "x", nil }))
+	require.Error(t, StampSessionKnobs(&plan.IndexSearchScan{Index: ivfflat}, func(string, bool, bool) (any, error) { return int64(-1), nil }))
 }
 
 func TestApplySearchKnobs(t *testing.T) {
@@ -77,16 +92,17 @@ func TestApplySearchKnobs(t *testing.T) {
 func TestApplySearchKnobsSessionFallback(t *testing.T) {
 	session := map[string]any{SessionVarITopK: int64(300), SessionVarMaxITopK: int64(0), SessionVarMaxNprobe: int64(16)}
 	resolve := func(name string, _, _ bool) (any, error) { return session[name], nil }
-	spec := &plan.IndexSearchScan{}
+	ivfflat := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
+	spec := &plan.IndexSearchScan{Index: ivfflat}
 	req := searchplugin.Request{ResultLimit: 10, CandidateBudget: 20}
 	require.NoError(t, ApplySearchKnobs(&req, spec, resolve))
 	require.Equal(t, uint64(300), req.CandidateBudget)
 	require.Equal(t, uint64(16), req.MaxNprobe)
-	require.Equal(t, &plan.IndexSearchScan{}, spec, "the spec is not changed")
+	require.Equal(t, &plan.IndexSearchScan{Index: ivfflat}, spec, "the spec is not changed")
 
 	// the BY RANK option wins over the session variable
 	req = searchplugin.Request{ResultLimit: 10, CandidateBudget: 20}
-	require.NoError(t, ApplySearchKnobs(&req, &plan.IndexSearchScan{InternalTopk: 50}, resolve))
+	require.NoError(t, ApplySearchKnobs(&req, &plan.IndexSearchScan{Index: ivfflat, InternalTopk: 50}, resolve))
 	require.Equal(t, uint64(50), req.CandidateBudget)
 
 	// a later session value applies to the same spec

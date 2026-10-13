@@ -238,3 +238,11 @@ func TestCagraAutoBuildsAdaptiveTop(t *testing.T) {
 		})
 	}
 }
+
+// A mode the index does not support is an error only when that index serves the query.
+func TestVectorModeCheckedOnlyForServingIndex(t *testing.T) {
+	for _, option := range []string{"'mode=include'", "'nprobe=4'"} {
+		query := cagraPlanFixture(t, "select id from cagra_iter order by cosine_distance(v,'[0,0]') limit 2 by rank with option "+option)
+		require.Nil(t, findNodeOfType(query, plan.Node_INDEX_SEARCH_SCAN), option)
+	}
+}

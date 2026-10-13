@@ -50,9 +50,6 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
 		return nil, nil
 	}
-	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexCagraAlgo.ToString()); err != nil {
-		return nil, err
-	}
 
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
@@ -108,6 +105,10 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexCagraAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &cagraIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,

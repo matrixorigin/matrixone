@@ -373,7 +373,9 @@ the vector top-k region, annotates the copies `post`, `pre` and `force`, and ask
 plan rewrite for the post and pre branches. Each copy binds its index search under its own alias
 (`mo_<algo>_alias_N`, the smallest unused `N`), so the first keeps the alias of a non-adaptive
 plan. The operator runs the branches one after another and returns the first full page, or the
-last branch's page.
+last branch's page. A region whose SELECT outputs more than one column, or that reads a volatile
+expression, a membership join or a provider row, runs `force` instead (`adaptiveVectorTopSupported`),
+as ivfflat `auto` does on main.
 
 ### Hybrid fulltext + vector
 
@@ -611,4 +613,27 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 - `post` on cagra and ivfpq does not use INCLUDE columns, as on ivfflat: primary-key predicates
   run in the search, every other filter after it. The default mode (no option) keeps the
   INCLUDE columns in the search, so plans without a mode do not change.
+
+2026-10-13 (self-review of the branch against `cd8d5abf96`):
+
+- Fixed: the mode and knob check ran before an index proved it serves the query, so a mode an
+  unused index rejects failed the query (in map order with several vector indexes); it now
+  runs after the applicability checks.
+- Fixed: the vector session knobs were stamped on every IndexSearchScan, so a fulltext search
+  needed MORPC 112 while `vector_itopk` was set (rolling upgrade); a knob is stamped only for an
+  algorithm that uses it (`itopk`, `max_itopk`: vector indexes; `max_nprobe`: list probing).
+- Fixed: an ivfflat `iterative` search with a bloom membership (non-integer key, optional
+  filter) stopped on false positives; the member count bounds the search only for an exact set.
+- Fixed: EXPLAIN printed large filter numbers as floats; `include` is admitted by capability
+  (membership and index filter), not by algorithm name; the equi-join rewrite accepts
+  `iterative` and `include`.
+- Accepted: members without an index entry (NULL vectors, rows not yet indexed) make an hnsw
+  `iterative` search widen to its cap; the first ivfflat round is not capped at 4096 lists (a
+  large `nprobe` or prediction probes them in one round, as before); the session knobs are
+  resolved per row in a correlated APPLY and the remote copy of a scan is deep-copied with no
+  knob set (cost only).
+- Kept (Eric): an `auto` region with more than one output column runs `force`, as on main.
+  `ADAPTIVE_TOP` pins the same output positions in every branch and fails the plan when a
+  branch's width differs; multi-column `[post, force]` regions run today, but no test shows
+  the rebuilt pre branch keeps the post branch's layout.
 

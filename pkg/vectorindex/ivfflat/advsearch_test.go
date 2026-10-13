@@ -17,6 +17,9 @@ package ivfflat
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
@@ -97,12 +100,39 @@ func TestAdvancedSearchNextRound(t *testing.T) {
 	require.Equal(t, uint64(maxRoundLists), next.NProbe)
 }
 
-func TestMembershipKeyCount(t *testing.T) {
-	n, err := membershipKeyCount(nil)
+func TestExactMembershipCount(t *testing.T) {
+	n, err := exactMembershipCount(nil, false)
 	require.NoError(t, err)
 	require.Zero(t, n)
-	_, err = membershipKeyCount([]byte{1})
+	_, err = exactMembershipCount([]byte{1}, false)
 	require.Error(t, err)
+
+	mp := mpool.MustNewZero()
+	payload := func(typ types.Type, appendKeys func(*vector.Vector)) []byte {
+		v := vector.NewVec(typ)
+		defer v.Free(mp)
+		appendKeys(v)
+		b, err := v.MarshalBinary()
+		require.NoError(t, err)
+		return b
+	}
+	ints := payload(types.T_int64.ToType(), func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
+	})
+	strs := payload(types.T_varchar.ToType(), func(v *vector.Vector) {
+		require.NoError(t, vector.AppendBytes(v, []byte("a"), false, mp))
+		require.NoError(t, vector.AppendBytes(v, []byte("b"), false, mp))
+	})
+	// integer keys are an exact set; other keys build a bloom filter unless required
+	n, err = exactMembershipCount(ints, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), n)
+	n, err = exactMembershipCount(strs, false)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	n, err = exactMembershipCount(strs, true)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), n)
 }
 
 func TestPlanReaderWidensMembership(t *testing.T) {

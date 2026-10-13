@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -515,7 +516,7 @@ func searchPlanReader[T types.RealNumbers](
 	}
 	if widen {
 		if r.req.HasMembershipFilter {
-			if stats.Members, err = membershipKeyCount(r.req.MembershipFilter); err != nil {
+			if stats.Members, err = exactMembershipCount(r.req.MembershipFilter, r.req.MembershipFilterRequired); err != nil {
 				return err
 			}
 		}
@@ -590,14 +591,20 @@ func (r *planReader) widensMembership() bool {
 	return r.generation == nil || r.generation.parallelism == 1
 }
 
-// membershipKeyCount returns the number of keys of a membership filter payload.
-func membershipKeyCount(payload []byte) (uint64, error) {
+// exactMembershipCount returns the number of keys of a membership filter payload when
+// the search applies them exactly: a required filter, or integer keys, which build an
+// exact set. A bloom filter of other keys admits false positives, so its key count is
+// no bound on the rows a search returns; it returns 0, unknown, then.
+func exactMembershipCount(payload []byte, required bool) (uint64, error) {
 	if len(payload) == 0 {
 		return 0, nil
 	}
 	var keys vector.Vector
 	if err := keys.UnmarshalBinary(payload); err != nil {
 		return 0, err
+	}
+	if !required && !docfilter.SupportsBitset(*keys.GetType()) {
+		return 0, nil
 	}
 	return uint64(keys.Length()), nil
 }

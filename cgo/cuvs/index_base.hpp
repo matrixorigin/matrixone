@@ -961,8 +961,8 @@ public:
     //
     // `out_user_mask` (optional): if non-null AND a user filter is present, the
     // function populates *out_user_mask with the packed host bitmap uploaded to
-    // the device. out_popcount (optional, IVF-PQ only): receives popcount of
-    // the combined mask so the post-filter skip-fast can gate.
+    // the device. out_popcount (optional): receives popcount of
+    // the combined mask.
     std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
     build_search_bitset(raft_handle_wrapper_t& handle,
                         const std::string& preds_json,

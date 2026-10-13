@@ -31,6 +31,11 @@ func TestDescribeFilterJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "id BETWEEN 501 AND 1000 AND category = 1 AND note IN ('a', 'b''c') AND category IS NULL AND note IS NOT NULL AND note LIKE 'x%' AND category >= 2.5", got)
 
+	// numbers print with their JSON digits
+	got, err = DescribeFilterJSON(`[{"col":-1,"op":"between","lo":1000000,"hi":9007199254740993},{"col":0,"op":"in","vals":[-5,0.125]}]`, name)
+	require.NoError(t, err)
+	require.Equal(t, "id BETWEEN 1000000 AND 9007199254740993 AND category IN (-5, 0.125)", got)
+
 	got, err = DescribeFilterJSON("", name)
 	require.NoError(t, err)
 	require.Empty(t, got)

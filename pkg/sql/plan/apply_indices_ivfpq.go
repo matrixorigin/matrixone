@@ -48,9 +48,6 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
 		return nil, nil
 	}
-	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexIvfpqAlgo.ToString()); err != nil {
-		return nil, err
-	}
 
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
@@ -114,6 +111,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexIvfpqAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &ivfpqIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,

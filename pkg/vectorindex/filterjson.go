@@ -39,8 +39,12 @@ func DescribeFilterJSON(filterJSON string, colName func(col int) string) (string
 	if filterJSON == "" {
 		return "", nil
 	}
+	// Numbers keep their JSON digits: a float64 would print 1000000 as 1e+06 and round
+	// integers above 2^53.
+	dec := json.NewDecoder(strings.NewReader(filterJSON))
+	dec.UseNumber()
 	var preds []filterJSONPred
-	if err := json.Unmarshal([]byte(filterJSON), &preds); err != nil {
+	if err := dec.Decode(&preds); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("invalid vector index filter JSON: %v", err)
 	}
 	parts := make([]string, 0, len(preds))

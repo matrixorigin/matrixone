@@ -19,6 +19,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -977,7 +978,8 @@ func TestSourceNodeForRemoteRunStampsSessionKnobs(t *testing.T) {
 		return int64(0), nil
 	})
 	source := &Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
-		IndexSearchScan: &plan.IndexSearchScan{MaxInternalTopk: 900}}}
+		IndexSearchScan: &plan.IndexSearchScan{MaxInternalTopk: 900,
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}}}}
 	node, err := sourceNodeForRemoteRun(source, c.proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(150), node.IndexSearchScan.InternalTopk)
@@ -985,6 +987,14 @@ func TestSourceNodeForRemoteRunStampsSessionKnobs(t *testing.T) {
 	require.Equal(t, uint64(32), node.IndexSearchScan.MaxNprobe)
 	require.Zero(t, source.node.IndexSearchScan.InternalTopk, "the reusable node is not changed")
 	require.Equal(t, vectorscan.SearchKnobsProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
+
+	// a fulltext search takes no vector knob and keeps the IndexSearchScan protocol
+	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}}}}, c.proc)
+	require.NoError(t, err)
+	require.Zero(t, node.IndexSearchScan.InternalTopk)
+	require.Zero(t, node.IndexSearchScan.MaxNprobe)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
 
 	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_TABLE_SCAN}}, c.proc)
 	require.NoError(t, err)
