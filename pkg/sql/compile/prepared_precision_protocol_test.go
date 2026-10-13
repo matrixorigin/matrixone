@@ -51,7 +51,7 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 
 	// Keep the upstream prepared-precision v95 floor independently covered by
 	// the common destination validator. The real CEIL expression below also
-	// requires v112 because its scalar precision semantics changed there.
+	// requires v113 because its scalar precision semantics changed there.
 	precisionOnlyFeatures := planpb.RemoteExpressionFeatures{PreparedPrecisionScalar: true}
 	require.Equal(t, defines.MORPCVersion95, remoteExpressionProtocolVersion(precisionOnlyFeatures))
 
@@ -105,29 +105,33 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	place(defines.MORPCVersion95)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112",
-		"the real CEIL precision contract has an independent v112 floor")
+	require.ErrorContains(t, err, "version 113",
+		"the real CEIL precision contract has an independent v113 floor")
 	place(int64(101))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, err, "version 113")
 	place(int64(102))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, err, "version 113")
 	place(defines.MORPCVersion109)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, err, "version 113")
 	place(defines.MORPCVersion110)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, err, "version 113")
 	place(defines.MORPCVersion111)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, err, "version 113")
 	place(defines.MORPCVersion112)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 113")
+	place(defines.MORPCVersion113)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -144,13 +148,13 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.ErrorContains(t, err, "version 95")
-	for _, version := range []int64{defines.MORPCVersion95, 101, 102, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
+	for _, version := range []int64{defines.MORPCVersion95, 101, 102, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 113")
 		_, err = decodeScope(data, c.proc, true, nil)
-		require.ErrorContains(t, err, "version 112")
+		require.ErrorContains(t, err, "version 113")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)

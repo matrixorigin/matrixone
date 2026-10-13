@@ -60,7 +60,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
-		required = max(required, defines.MORPCVersion112)
+		required = max(required, defines.MORPCVersion118)
 	}
 	if required == 0 {
 		return nil
