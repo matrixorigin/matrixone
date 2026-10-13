@@ -208,6 +208,9 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			r.defaultMarker = fieldStringBinary
 			result = r.expr(fn.Args[0])
 			r.defaultMarker = previous
+			// Aggregate/window outputs retain a bare operand's declaration,
+			// not its first NULL value. Composite operands own their own domain.
+			result = materializedFieldStringDomain(result)
 			return result
 		}
 	default:
@@ -229,6 +232,13 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 				domain := r.expr(arg)
 				dependent = dependent || domain.parameter
 				inputs[i] = fieldDomainType(domain, makeTypeByPlan2Expr(arg))
+				if domain.kind == fieldStringNull && domain.parameter && !domain.directParameter {
+					// T_any is also the overload resolver's untyped-NULL input.
+					// A parameter-dependent NULL composite has a binary declaration;
+					// a literal NULL peer stays untyped and neutral. Do not let a
+					// string function replace the composite's domain with TEXT.
+					inputs[i] = types.T_blob.ToType()
+				}
 			}
 			if dependent {
 				if resolved, err := function.GetFunctionByName(r.binder.GetContext(), name, inputs); err == nil {
@@ -322,10 +332,9 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 	if isPreparedSetOperationNode(node.NodeType) {
 		result := preparedFieldStringDomain{kind: fieldStringNull}
 		for _, child := range node.Children {
-			domain := r.output(child, -1, pos, fallback)
-			if domain.kind == fieldStringMarker {
-				domain.kind = fieldStringText
-			}
+			// UNION consumes materialized branch declarations before merging
+			// them, just as scalar and column references consume projections.
+			domain := materializedFieldStringDomain(r.output(child, -1, pos, fallback))
 			result.parameter = result.parameter || domain.parameter
 			result.history = result.history || domain.history
 			if domain.kind == fieldStringOther {
