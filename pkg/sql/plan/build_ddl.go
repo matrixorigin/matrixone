@@ -3395,9 +3395,7 @@ func validateAlterColumnCount(ctx context.Context, original, target *TableDef) e
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	columnLimit := TableColumnCountLimit
-	if replay := ddlReplayForTable(ctx.GetContext(), string(stmt.Table.ObjectName)); replay != nil {
-		columnLimit = max(columnLimit, replay.columnLimit)
-	}
+	columnLimit = max(columnLimit, defines.AlterCopyColumnLimit(ctx.GetContext(), createTable.Database, string(stmt.Table.ObjectName)))
 	if userColumnCount(asSelectCols, stmt.IsClusterTable) > columnLimit {
 		return moerr.NewErrTooManyFields(ctx.GetContext())
 	}

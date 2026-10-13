@@ -1372,7 +1372,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if baseCtx == nil {
 			baseCtx = c.proc.GetTopContext()
 		}
-		replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, sourceTableDef, qry.CopyTableDef)
+		replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, dbName, sourceTableDef, qry.CopyTableDef)
 		if err != nil {
 			return err
 		}

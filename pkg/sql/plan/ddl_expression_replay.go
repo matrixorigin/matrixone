@@ -20,6 +20,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -30,10 +31,9 @@ type persistedDDLReplayKey struct{}
 // table through SQL reconstruction. New or type-dependent expressions are
 // still bound from the reconstructed SQL in the current session.
 type persistedDDLReplay struct {
-	tableName   string
-	columnLimit int // only a validated COPY reconstruction may exceed the SQL quota
-	columns     map[string]*replayedColumnExpressions
-	checks      map[string]*planpb.CheckDef
+	tableName string
+	columns   map[string]*replayedColumnExpressions
+	checks    map[string]*planpb.CheckDef
 }
 
 type replayedColumnExpressions struct {
@@ -50,6 +50,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = defines.WithoutAlterCopyColumnLimit(ctx)
 	if original == nil || target == nil {
 		return ctx
 	}
@@ -212,14 +213,13 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 
 // WithAlterTableDDLReplay preserves COPY expressions and admits exactly the
 // validated replacement width. Ordinary LIKE expression replay has no allowance.
-func WithAlterTableDDLReplay(ctx context.Context, original, target *planpb.TableDef) (context.Context, error) {
+func WithAlterTableDDLReplay(ctx context.Context, database string, original, target *planpb.TableDef) (context.Context, error) {
 	if err := validateAlterColumnCount(ctx, original, target); err != nil {
 		return nil, err
 	}
 	ctx = WithPersistedDDLReplay(ctx, original, target)
-	replay := ddlReplayForTable(ctx, target.Name)
 	if count := userColumnCount(target.Cols, util.TableIsClusterTable(target.TableType)); count > TableColumnCountLimit {
-		replay.columnLimit = count
+		ctx = defines.WithAlterCopyColumnLimit(ctx, database, target.Name, count)
 	}
 	return ctx, nil
 }

@@ -174,7 +174,7 @@ func TestTableColumnLimitLikeAndReplay(t *testing.T) {
 	target := DeepCopyTableDef(original, true)
 	target.Name = "copy"
 	target.Cols = append(target.Cols[:4097:4097], target.Cols[len(target.Cols)-1])
-	ctx, err := WithAlterTableDDLReplay(t.Context(), original, target)
+	ctx, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), original, target)
 	require.NoError(t, err)
 	mock.ctxt.SetContext(ctx)
 	sql := strings.Replace(columnLimitCreateSQL(4097, ",PRIMARY KEY(c0)"), "wide", "copy", 1)
@@ -186,7 +186,7 @@ func TestTableColumnLimitLikeAndReplay(t *testing.T) {
 	_, err = buildSingleStmt(mock, t, strings.Replace(columnLimitCreateSQL(4098, ""), "wide", "copy", 1))
 	requireColumnLimitError(t, err)
 	// After shrinking, the current source width is the bound; no high-water mark.
-	_, err = WithAlterTableDDLReplay(t.Context(), target, original)
+	_, err = WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), target, original)
 	requireColumnLimitError(t, err)
 	mock.ctxt.SetContext(WithPersistedDDLReplay(t.Context(), original, target))
 	_, err = buildSingleStmt(mock, t, sql)
