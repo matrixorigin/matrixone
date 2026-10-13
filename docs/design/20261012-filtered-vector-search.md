@@ -88,8 +88,15 @@ ignored).
 
 ### Knobs
 
-Set in `BY RANK WITH OPTION '...'`, by index family. A knob that does not belong to the index's
-family is an error.
+Set in `BY RANK WITH OPTION`, one `key=value` per string literal, by index family:
+
+```sql
+... ORDER BY l2_distance(v, q) LIMIT 10 BY RANK WITH OPTION 'mode=pre', 'itopk=200', 'max_itopk=5000';
+```
+
+A knob that does not belong to the index's family is an error; values are positive integers and
+a cap is at least its start. A string literal that is not one `key=value` pair is ignored, as
+before.
 
 | family | knob | meaning |
 |---|---|---|
@@ -104,13 +111,21 @@ Defaults and precedence (most specific wins):
 | knob | SQL option | session variable | index parameter | built-in |
 |---|---|---|---|---|
 | `itopk` | `itopk` | `vector_itopk` | `ef_search` (hnsw), `itopk_size` (cagra) | today's over-fetch of `LIMIT` |
-| `max_itopk` | `max_itopk` | `vector_max_itopk` | — | set from the 1M benchmark in PR2 |
+| `max_itopk` | `max_itopk` | `vector_max_itopk` | — | 0 (unset); the widening PRs set it from the 1M benchmark |
 | `nprobe` | `nprobe` | `probe_limit` (existing, unchanged) | — | `probe_limit` default |
-| `max_nprobe` | `max_nprobe` | `vector_max_nprobe` | — | set from the 1M benchmark in PR2 |
+| `max_nprobe` | `max_nprobe` | `vector_max_nprobe` | — | 0 (unset); the widening PRs set it from the 1M benchmark |
 
-`probe_limit` keeps its name, range, default and plan-time read. The new session variables are
-read at execute time, where a prepared `LIMIT ?` is resolved, so a `SET` after `PREPARE` applies
-to the next `EXECUTE`.
+`probe_limit` keeps its name, range, default and plan-time read; an explicit `nprobe` replaces it
+(and turns off ivfflat's `auto` nprobe amplification). The plan carries only the SQL options.
+The new session variables are read for every execution, never stored in a reusable plan or
+compiled scope: a scan running on the session's CN reads them when it builds its search request,
+and the coordinator writes them into the per-message copy of the scan it sends to another CN,
+which has no session. So a `SET` after `PREPARE` applies to the next `EXECUTE`.
+
+With an internal top-k set, the candidate budget is `max(itopk, LIMIT)`, lowered to `max_itopk`;
+unset, it is today's over-fetch. In PR2 the search runs once with that budget: hnsw requests it
+from usearch, cagra raises `itopk_size` to it, ivfpq and ivfflat return that many candidates from
+the probed lists.
 
 ### Which knob acts, per mode
 
@@ -300,18 +315,21 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 
 ## Compatibility and rollout
 
-- **Wire**: `IndexSearchScan.internal_topk`, `IndexSearchScan.max_internal_topk`, the IVF
-  `nprobe` / `max_nprobe` in the IVF algorithms' `algo_options`, and the post-retry marker on
-  `ADAPTIVE_TOP` are added together in PR2 with one MORPC version and one feature-local alias. A
-  CN below that version cannot receive a plan that uses them.
+- **Wire**: PR2 adds `IndexSearchScan.internal_topk`, `max_internal_topk` and `max_nprobe`
+  (`nprobe` keeps the IVF algorithms' existing `algo_options` probe count) with MORPC version 112
+  and the alias `vectorscan.SearchKnobsProtocolVersion`. A scan that carries any of them, from
+  the SQL option or a session variable, requires 112 on every CN that runs it; a scan without
+  them keeps requiring 111. PR5 adds the `ADAPTIVE_TOP` retry marker and bumps the version again
+  only if the marker crosses CNs.
 - **Membership**: no version change. Since #29746 the hnsw, cagra and ivfpq readers refuse
   `MembershipFilterRequired`, so a CN running an older build fails a PRE plan instead of ignoring
   the filter.
 - **Defaults**: `post` stays the default; the caps have session defaults, so widening is on for
   `pre` and `post` without any option. A query using no new mode or knob runs exactly as today.
-- **Observability**: `EXPLAIN` prints the search mode, `Candidate Limit`, each knob with its cap
-  and source (option, session variable, index parameter, default), and inactive knobs.
-  `EXPLAIN ANALYZE` prints the rounds and final knobs.
+- **Observability**: `EXPLAIN` prints `Candidate Limit`, ivfflat's `NProbe`, and the SQL options
+  `Internal Top-K`, `Max Internal Top-K` and `Max NProbe` when set; a scan without them prints
+  as before. Session-variable values are not in the plan and are not printed by `EXPLAIN`.
+  `EXPLAIN ANALYZE` prints the rounds and final knobs once the search widens.
 
 ## Resources and performance
 
@@ -358,9 +376,10 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 |---|---|---|
 | 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes. | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
 | 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error; ivfflat accepts both. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
-| 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` |
-| 4 | `EXPLAIN` shows the mode, `Candidate Limit`, each knob, its cap and source, and inactive knobs. | `cases/vector/vector_filtered_search_knobs.sql` |
-| 5 | A `SET vector_max_itopk` after `PREPARE` applies to the next `EXECUTE`; `probe_limit` behaves as before. | `cases/vector/vector_filtered_search_knobs.sql` |
+| 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
+| 4 | `EXPLAIN` shows the SQL options `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and ivfflat's `NProbe`. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
+| 5 | A `SET vector_itopk` after `PREPARE` applies to the next `EXECUTE` and stops applying once reset; the SQL option wins over it. | `cases/vector/vector_filtered_search_knobs.sql` |
+| 5a | With a single search, `itopk` covering the index returns ids 501..510 on the issue fixture where the default budget returns none, on hnsw, ivfflat, cagra and ivfpq; `max_itopk` lowers `itopk`. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 6 | The issue fixture returns ids 501..510 in `pre` through the hnsw index, for l2, cosine and inner product, on a single and a multi-sub-index table. | `cases/vector/vector_filtered_search_hnsw.sql` |
 | 7 | The issue fixture returns ids 501..510 in `pre` through the cagra and the ivfpq index. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 8 | `pre` returns zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and `LIMIT` rows when exactly or more than `LIMIT` qualify, on hnsw, cagra, ivfpq and ivfflat. | `cases/vector/vector_filtered_search_hnsw.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`, `cases/vector/vector_filtered_search_ivfflat.sql` |

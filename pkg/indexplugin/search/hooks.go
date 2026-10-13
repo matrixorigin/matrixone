@@ -49,6 +49,15 @@ type Request struct {
 	// scan carries no candidate limit.
 	ResultLimit     uint64
 	CandidateBudget uint64
+	// InternalTopK is the internal top-k of the search: BY RANK option itopk, else
+	// the session variable vector_itopk; 0 when unset. CandidateBudget is at least it.
+	InternalTopK uint64
+	// MaxInternalTopK caps InternalTopK while a search widens: BY RANK option
+	// max_itopk, else vector_max_itopk; 0 when unset.
+	MaxInternalTopK uint64
+	// MaxNprobe is the session variable vector_max_nprobe; an IVF search uses
+	// its algo_options max_nprobe first. 0 when unset.
+	MaxNprobe uint64
 	// AlgoValues are the evaluated IndexSearchScan.AlgoExprs, by name, for this
 	// search. Only the index algorithm that declared them interprets them.
 	AlgoValues       []AlgoValue
@@ -122,6 +131,12 @@ type ExplainHooks interface {
 // build the PRE shape and serve a fulltext MATCH or membership join with it.
 type MembershipHooks interface {
 	SupportsMembership() bool
+}
+
+// ProbeKnobsHooks optionally reports that the search probes inverted lists, so
+// the BY RANK options nprobe and max_nprobe apply to it.
+type ProbeKnobsHooks interface {
+	SupportsProbeKnobs() bool
 }
 
 // CandidateBudgetHooks optionally sizes the candidate budget of a scan whose

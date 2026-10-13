@@ -105,6 +105,9 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 	if err != nil {
 		return nil, err
 	}
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Nprobe > 0 {
+		nProbe = int64(vecCtx.rankOption.Nprobe)
+	}
 
 	gpuMultiSim, err := builder.resolveInt64Variable("gpu_multi_simulation", 0)
 	if err != nil {

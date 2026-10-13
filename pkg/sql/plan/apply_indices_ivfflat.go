@@ -555,10 +555,15 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		}
 		nProbe = val
 	}
+	explicitNprobe := vecCtx.rankOption != nil && vecCtx.rankOption.Nprobe > 0
+	if explicitNprobe {
+		nProbe = int64(vecCtx.rankOption.Nprobe)
+	}
 
 	// Dynamically amplify nprobe for auto mode.
-	// Only applied if mode is "post" (pushdown disabled) and totalLists is available
-	if isAutoMode && mode == "post" && totalLists > 0 {
+	// Only applied if mode is "post" (pushdown disabled), totalLists is available and
+	// nprobe is not given by the BY RANK option.
+	if isAutoMode && mode == "post" && totalLists > 0 && !explicitNprobe {
 		oldNProbe := nProbe
 		nProbe = builder.calculateAdaptiveNprobe(
 			nProbe,
@@ -881,6 +886,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			},
 		},
 	}
+	setIndexSearchScanKnobs(tableFuncNode.IndexSearchScan, vecCtx)
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
 	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{

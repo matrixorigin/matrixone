@@ -109,6 +109,7 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 			},
 		},
 	}
+	setIndexSearchScanKnobs(searchNode.IndexSearchScan, vecCtx)
 	searchNodeID := builder.appendNode(searchNode, ctx)
 
 	err = builder.addBinding(searchNodeID, tree.AliasClause{Alias: tree.Identifier(s.alias)}, ctx, "")

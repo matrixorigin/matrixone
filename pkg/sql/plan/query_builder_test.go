@@ -6928,7 +6928,6 @@ func TestParseRankOption(t *testing.T) {
 	t.Run("options without mode", func(t *testing.T) {
 		options := map[string]string{
 			"fudge_factor": "3.0",
-			"nprobe":       "10",
 		}
 		rankOption, err := parseRankOption(options, ctx)
 		require.NoError(t, err)
@@ -6945,6 +6944,7 @@ func TestParseRankOption(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rankOption)
 		require.Equal(t, "pre", rankOption.Mode)
+		require.Equal(t, uint64(10), rankOption.Nprobe)
 	})
 
 	t.Run("case insensitive key matching", func(t *testing.T) {
@@ -6969,6 +6969,35 @@ func TestParseRankOption(t *testing.T) {
 		// The actual value depends on map iteration order, but should be either "pre" or "post"
 		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
 	})
+}
+
+func TestParseRankOptionSearchKnobs(t *testing.T) {
+	ctx := context.Background()
+	opt, err := parseRankOption(map[string]string{"ITOPK": " 200 ", "max_itopk": "5000", "nprobe": "8", "Max_Nprobe": "64"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Itopk: 200, MaxItopk: 5000, Nprobe: 8, MaxNprobe: 64}, opt)
+
+	opt, err = parseRankOption(map[string]string{"mode": "post", "itopk": "10"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Mode: "post", Itopk: 10}, opt)
+
+	opt, err = parseRankOption(map[string]string{"unknown": "1"}, ctx)
+	require.NoError(t, err)
+	require.Nil(t, opt)
+
+	for name, options := range map[string]map[string]string{
+		"zero":             {"itopk": "0"},
+		"negative":         {"max_itopk": "-1"},
+		"not a number":     {"nprobe": "abc"},
+		"fraction":         {"max_nprobe": "1.5"},
+		"itopk above cap":  {"itopk": "10", "max_itopk": "5"},
+		"nprobe above cap": {"nprobe": "10", "max_nprobe": "5"},
+	} {
+		_, err := parseRankOption(options, ctx)
+		require.Error(t, err, name)
+	}
+	_, err = parseRankOption(map[string]string{"itopk": "5", "max_itopk": "5"}, ctx)
+	require.NoError(t, err)
 }
 
 // TestBaseBinder_bindComparisonExpr tests bindComparisonExpr with various comparison operators

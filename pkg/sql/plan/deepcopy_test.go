@@ -119,9 +119,17 @@ func TestDeepCopyIndexSearchScanOwnsNestedMetadata(t *testing.T) {
 		AlgoExprNames:       []string{"first_round_limit"},
 		ScanSnapshot:        &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 9}, Tenant: &planpb.SnapshotTenant{TenantID: 7}},
 		PostFilterOverFetch: true,
+		InternalTopk:        200,
+		MaxInternalTopk:     5000,
+		MaxNprobe:           64,
 	}
 
 	cloned := DeepCopyIndexSearchScan(source)
+	require.Equal(t, uint64(200), cloned.InternalTopk)
+	require.Equal(t, uint64(5000), cloned.MaxInternalTopk)
+	require.Equal(t, uint64(64), cloned.MaxNprobe)
+	require.Equal(t, &planpb.RankOption{Mode: "pre", Itopk: 1, MaxItopk: 2, Nprobe: 3, MaxNprobe: 4},
+		DeepCopyRankOption(&planpb.RankOption{Mode: "pre", Itopk: 1, MaxItopk: 2, Nprobe: 3, MaxNprobe: 4}))
 	require.NotSame(t, source, cloned)
 	require.Equal(t, source.SourceTable, cloned.SourceTable)
 	require.Equal(t, source.Index, cloned.Index)

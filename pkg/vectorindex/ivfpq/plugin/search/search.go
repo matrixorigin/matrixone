@@ -37,6 +37,10 @@ type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
+var _ searchplugin.ProbeKnobsHooks = Hooks{}
+
+// SupportsProbeKnobs reports true: the search probes IVF lists.
+func (Hooks) SupportsProbeKnobs() bool { return true }
 
 // PostFilterCandidateBudget is the ivfpq post-filter over-fetch of resultLimit.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {

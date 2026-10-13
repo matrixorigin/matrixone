@@ -38,6 +38,13 @@ type membershipHooks struct {
 
 func (h membershipHooks) SupportsMembership() bool { return h.supports }
 
+type probeKnobsHooks struct {
+	searchHooks
+	supports bool
+}
+
+func (h probeKnobsHooks) SupportsProbeKnobs() bool { return h.supports }
+
 type searchAlgo struct {
 	bareAlgo
 	hooks searchplugin.Hooks
@@ -57,4 +64,17 @@ func TestSupportsMembership(t *testing.T) {
 	require.False(t, SupportsMembership("membership_no"))
 	require.True(t, SupportsMembership("membership_yes"))
 	require.True(t, SupportsMembership(" MEMBERSHIP_YES "))
+}
+
+func TestSupportsProbeKnobs(t *testing.T) {
+	registerForTest(t, bareAlgo{algo: "probe_bare"})
+	registerForTest(t, searchAlgo{bareAlgo: bareAlgo{algo: "probe_search"}, hooks: searchHooks{}})
+	registerForTest(t, searchAlgo{bareAlgo: bareAlgo{algo: "probe_no"}, hooks: probeKnobsHooks{supports: false}})
+	registerForTest(t, searchAlgo{bareAlgo: bareAlgo{algo: "probe_yes"}, hooks: probeKnobsHooks{supports: true}})
+
+	require.False(t, SupportsProbeKnobs("probe_unregistered"))
+	require.False(t, SupportsProbeKnobs("probe_bare"))
+	require.False(t, SupportsProbeKnobs("probe_search"))
+	require.False(t, SupportsProbeKnobs("probe_no"))
+	require.True(t, SupportsProbeKnobs("probe_yes"))
 }

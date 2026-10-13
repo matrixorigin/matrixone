@@ -13902,7 +13902,34 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		rankOption.Mode = modeLower
 	}
 
-	if rankOption.Mode == "" {
+	for _, knob := range []struct {
+		name string
+		dst  *uint64
+	}{
+		{"itopk", &rankOption.Itopk},
+		{"max_itopk", &rankOption.MaxItopk},
+		{"nprobe", &rankOption.Nprobe},
+		{"max_nprobe", &rankOption.MaxNprobe},
+	} {
+		value, ok := getOptionValue(knob.name)
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		if err != nil || v == 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "%s must be a positive integer, got '%s'", knob.name, value)
+		}
+		*knob.dst = v
+	}
+	if rankOption.MaxItopk != 0 && rankOption.Itopk > rankOption.MaxItopk {
+		return nil, moerr.NewInvalidInputf(ctx, "itopk %d exceeds max_itopk %d", rankOption.Itopk, rankOption.MaxItopk)
+	}
+	if rankOption.MaxNprobe != 0 && rankOption.Nprobe > rankOption.MaxNprobe {
+		return nil, moerr.NewInvalidInputf(ctx, "nprobe %d exceeds max_nprobe %d", rankOption.Nprobe, rankOption.MaxNprobe)
+	}
+
+	if rankOption.Mode == "" && rankOption.Itopk == 0 && rankOption.MaxItopk == 0 &&
+		rankOption.Nprobe == 0 && rankOption.MaxNprobe == 0 {
 		return nil, nil
 	}
 

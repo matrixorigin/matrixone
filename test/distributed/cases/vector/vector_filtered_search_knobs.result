@@ -1,0 +1,99 @@
+drop database if exists vector_filtered_search_knobs;
+create database vector_filtered_search_knobs;
+use vector_filtered_search_knobs;
+set experimental_hnsw_index = 1;
+set experimental_ivf_index = 1;
+create table t_hnsw(id bigint primary key, category int not null, v vecf32(2));
+insert into t_hnsw select result, if(result <= 500, 0, 1), cast(concat('[', result, ',0]') as vecf32(2)) from generate_series(1, 1000, 1) g;
+create index i_hnsw using hnsw on t_hnsw(v) op_type 'vector_l2_ops';
+create table t_ivf(id bigint primary key, category int not null, v vecf32(2));
+insert into t_ivf select id, category, v from t_hnsw;
+create index i_ivf using ivfflat on t_ivf(v) lists = 4 op_type 'vector_l2_ops';
+select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10) x;
+➤ count(*)[-5,64,0]  𝄀
+0
+select group_concat(id order by id) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=1000') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select group_concat(id order by id) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post', 'itopk=1000') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=1000', 'max_itopk=5000';
+-- @regex("Internal Top-K: 1000, Max Internal Top-K: 5000", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_hnsw.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_filtered_search_knobs.t_hnsw  𝄀
+                    Filter Cond: (t_hnsw.category = 1)  𝄀
+                    Runtime Filter Probe: t_hnsw.id  𝄀
+              ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                    Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 10, Internal Top-K: 1000, Max Internal Top-K: 5000
+select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_itopk=20') x;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare s from 'select group_concat(id order by id) from (select id from t_hnsw where category = 1 order by l2_distance(v, ''[0,0]'') limit 10) x';
+execute s;
+➤ group_concat(id order by id separator ,)[-1,536870911,0]  𝄀
+null
+set vector_itopk = 1000;
+execute s;
+➤ group_concat(id order by id separator ,)[-1,536870911,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select count(*) from (select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=20') x;
+➤ count(*)[-5,64,0]  𝄀
+0
+set vector_itopk = 0;
+execute s;
+➤ group_concat(id order by id separator ,)[-1,536870911,0]  𝄀
+null
+deallocate prepare s;
+explain select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4', 'itopk=1000';
+-- @regex("NProbe: 4", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,0] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (#[0,0] = t_ivf.id)  𝄀
+              ->  Vector Index Scan on i_ivf [l2_distance]  𝄀
+                    Vector Index: i_ivf, Metric: l2_distance, Candidate Limit: 10, NProbe: 4, Internal Top-K: 1000  𝄀
+              ->  Table Scan on vector_filtered_search_knobs.t_ivf  𝄀
+                    Filter Cond: (t_ivf.category = 1)
+select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4', 'itopk=1000') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+explain select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=8';
+-- @regex("Max NProbe: 8", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,0] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (#[0,0] = t_ivf.id)  𝄀
+              ->  Vector Index Scan on i_ivf [l2_distance]  𝄀
+                    Vector Index: i_ivf, Metric: l2_distance, Candidate Limit: 10, NProbe: 2, Max NProbe: 8  𝄀
+              ->  Table Scan on vector_filtered_search_knobs.t_ivf  𝄀
+                    Filter Cond: (t_ivf.category = 1)
+select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4';
+not supported: nprobe on index type hnsw
+select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_nprobe=4';
+not supported: max_nprobe on index type hnsw
+select id from t_hnsw order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=0';
+invalid input: itopk must be a positive integer, got '0'
+select id from t_hnsw order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=abc';
+invalid input: itopk must be a positive integer, got 'abc'
+select id from t_hnsw order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=100', 'max_itopk=50';
+invalid input: itopk 100 exceeds max_itopk 50
+select id from t_ivf order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=8', 'max_nprobe=4';
+invalid input: nprobe 8 exceeds max_nprobe 4
+drop database vector_filtered_search_knobs;

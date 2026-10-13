@@ -1967,7 +1967,8 @@ func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContex
 }
 
 // checkVectorSearchMode rejects an explicit mode=pre or mode=auto on an algorithm without
-// the membership capability.
+// the membership capability, and nprobe or max_nprobe on an algorithm without the probe
+// knobs capability.
 func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo string) error {
 	if vecCtx == nil || vecCtx.rankOption == nil {
 		return nil
@@ -1978,7 +1979,26 @@ func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo 
 			return moerr.NewNotSupportedf(ctx, "mode=%s on index type %s", mode, algo)
 		}
 	}
+	if !indexplugin.SupportsProbeKnobs(algo) {
+		if vecCtx.rankOption.Nprobe != 0 {
+			return moerr.NewNotSupportedf(ctx, "nprobe on index type %s", algo)
+		}
+		if vecCtx.rankOption.MaxNprobe != 0 {
+			return moerr.NewNotSupportedf(ctx, "max_nprobe on index type %s", algo)
+		}
+	}
 	return nil
+}
+
+// setIndexSearchScanKnobs copies the BY RANK options itopk, max_itopk and max_nprobe of
+// vecCtx to spec.
+func setIndexSearchScanKnobs(spec *plan.IndexSearchScan, vecCtx *vectorSortContext) {
+	if spec == nil || vecCtx == nil || vecCtx.rankOption == nil {
+		return
+	}
+	spec.InternalTopk = vecCtx.rankOption.Itopk
+	spec.MaxInternalTopk = vecCtx.rankOption.MaxItopk
+	spec.MaxNprobe = vecCtx.rankOption.MaxNprobe
 }
 
 // projectionMatchesScan reports whether the project above or below the Top-K of vecCtx

@@ -184,6 +184,22 @@ func SupportsMembership(algo string) bool {
 	return ok && h.SupportsMembership()
 }
 
+// SupportsProbeKnobs reports whether algo's search probes inverted lists
+// (searchplugin.ProbeKnobsHooks), so nprobe and max_nprobe apply to it. An
+// unregistered algo, one without a SearchPlugin, or one without the hook reports false.
+func SupportsProbeKnobs(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.ProbeKnobsHooks)
+	return ok && h.SupportsProbeKnobs()
+}
+
 // IsFullTextIndexAlgo reports whether algo is the fulltext index
 // algorithm AND the fulltext plugin is registered.
 func IsFullTextIndexAlgo(algo string) bool {

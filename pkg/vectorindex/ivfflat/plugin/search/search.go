@@ -31,10 +31,14 @@ var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ParallelHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.MembershipHooks = Hooks{}
+var _ searchplugin.ProbeKnobsHooks = Hooks{}
 
 // SupportsMembership reports true: the reader applies Request.MembershipFilter
 // to the entries scan.
 func (Hooks) SupportsMembership() bool { return true }
+
+// SupportsProbeKnobs reports true: the search probes centroid lists.
+func (Hooks) SupportsProbeKnobs() bool { return true }
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)

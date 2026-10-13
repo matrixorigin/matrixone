@@ -102,3 +102,29 @@ func TestHasMembershipVectorIndex(t *testing.T) {
 	require.False(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString())))
 	require.True(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString())))
 }
+
+func TestCheckVectorSearchModeProbeKnobs(t *testing.T) {
+	ctx := context.Background()
+	opt := func(o *planpb.RankOption) *vectorSortContext { return &vectorSortContext{rankOption: o} }
+	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString()} {
+		err := checkVectorSearchMode(ctx, opt(&planpb.RankOption{Nprobe: 4}), algo)
+		require.ErrorContains(t, err, "nprobe on index type "+algo)
+		err = checkVectorSearchMode(ctx, opt(&planpb.RankOption{MaxNprobe: 4}), algo)
+		require.ErrorContains(t, err, "max_nprobe on index type "+algo)
+		require.NoError(t, checkVectorSearchMode(ctx, opt(&planpb.RankOption{Itopk: 4, MaxItopk: 8}), algo))
+	}
+	for _, algo := range []string{catalog.MoIndexIvfFlatAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString()} {
+		require.NoError(t, checkVectorSearchMode(ctx, opt(&planpb.RankOption{Itopk: 4, MaxItopk: 8, Nprobe: 2, MaxNprobe: 16}), algo))
+	}
+}
+
+func TestSetIndexSearchScanKnobs(t *testing.T) {
+	spec := &planpb.IndexSearchScan{}
+	setIndexSearchScanKnobs(spec, &vectorSortContext{})
+	require.Zero(t, spec.InternalTopk)
+	setIndexSearchScanKnobs(spec, &vectorSortContext{rankOption: &planpb.RankOption{Itopk: 200, MaxItopk: 5000, Nprobe: 8, MaxNprobe: 64}})
+	require.Equal(t, uint64(200), spec.InternalTopk)
+	require.Equal(t, uint64(5000), spec.MaxInternalTopk)
+	require.Equal(t, uint64(64), spec.MaxNprobe)
+	setIndexSearchScanKnobs(nil, &vectorSortContext{rankOption: &planpb.RankOption{Itopk: 1}})
+}
