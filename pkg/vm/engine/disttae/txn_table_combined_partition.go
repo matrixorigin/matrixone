@@ -31,8 +31,13 @@ func (t *combinedTxnTable) relationsForPKCheck(
 	bat *batch.Batch,
 	pkIndex, partitionIndex int32,
 ) ([]engine.Relation, error) {
+	def := t.primary.GetTableDef(ctx)
+	if partitionIndex >= 0 && def.Partition != nil {
+		if _, ok := partitionSingleColumn(def); !ok {
+			return t.tablesFunc()
+		}
+	}
 	if partitionIndex < 0 {
-		def := t.primary.GetTableDef(ctx)
 		if def.Partition != nil {
 			// A lock input is a projection, not necessarily a base-table row.
 			// In particular, ODKU can resolve an incoming PK to a different
@@ -51,26 +56,35 @@ func (t *combinedTxnTable) relationsForPKCheck(
 }
 
 func partitionUsesOnlyPrimaryKey(def *plan.TableDef) bool {
-	if def.Pkey == nil || len(def.Pkey.Names) != 1 ||
-		def.Pkey.PkeyColName != def.Pkey.Names[0] ||
-		def.Partition == nil || len(def.Partition.PartitionDefs) == 0 {
+	if def.Pkey == nil || len(def.Pkey.Names) != 1 || def.Pkey.PkeyColName != def.Pkey.Names[0] {
 		return false
 	}
 	pos, ok := def.Name2ColIndex[def.Pkey.PkeyColName]
-	if !ok {
-		return false
+	source, single := partitionSingleColumn(def)
+	return ok && single && source == pos
+}
+
+// A lock projection supplies one partition value, so every definition must
+// depend on the same schema column before that value can select relations.
+func partitionSingleColumn(def *plan.TableDef) (int32, bool) {
+	if def.Partition == nil || len(def.Partition.PartitionDefs) == 0 {
+		return -1, false
 	}
-	var usesOnlyPK func(*plan.Expr) bool
-	usesOnlyPK = func(expr *plan.Expr) bool {
+	source := int32(-1)
+	var visit func(*plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
 		if expr == nil {
 			return false
 		}
 		switch e := expr.Expr.(type) {
 		case *plan.Expr_Col:
-			return e.Col.ColPos == pos
+			if source == -1 {
+				source = e.Col.ColPos
+			}
+			return e.Col.ColPos >= 0 && e.Col.ColPos == source
 		case *plan.Expr_F:
 			for _, arg := range e.F.Args {
-				if !usesOnlyPK(arg) {
+				if !visit(arg) {
 					return false
 				}
 			}
@@ -82,11 +96,11 @@ func partitionUsesOnlyPrimaryKey(def *plan.TableDef) bool {
 		}
 	}
 	for _, partition := range def.Partition.PartitionDefs {
-		if !usesOnlyPK(partition.Def) {
-			return false
+		if !visit(partition.Def) {
+			return -1, false
 		}
 	}
-	return true
+	return source, source >= 0
 }
 
 func getPartitionPrunePKFunc(

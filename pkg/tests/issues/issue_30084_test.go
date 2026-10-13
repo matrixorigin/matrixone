@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,6 +34,11 @@ import (
 )
 
 func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
+	t.Cleanup(func() {
+		if t.Failed() {
+			require.NoError(t, embed.CloseBaseClusterTests())
+		}
+	})
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -52,16 +58,24 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 			name      string
 			partition string
 			composite bool
+			incoming  string
 		}{
 			{name: "plain"},
 			{name: "key", partition: "partition by key(id) partitions 8"},
 			{name: "range", partition: "partition by range(id) (partition p0 values less than (2), partition p1 values less than maxvalue)"},
 			{name: "non_pk_partition", partition: "partition by hash(uk) partitions 2"},
+			{name: "hash_repeated", partition: "partition by hash(id+id) partitions 4", incoming: "(-1,10,999)"},
+			{name: "range_repeated", partition: "partition by range(id+id) (partition p0 values less than (1), partition p1 values less than maxvalue)", incoming: "(-1,10,999)"},
+			{name: "range_product", partition: "partition by range(id*id) (partition p0 values less than (0), partition p1 values less than maxvalue)", incoming: "(-1,10,999)"},
+			{name: "nested_repeated", partition: "partition by range((id+id)*id) (partition p0 values less than (1), partition p1 values less than maxvalue)", incoming: "(-1,10,999)"},
 			{name: "composite", partition: "partition by key(id) partitions 8", composite: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				table := fmt.Sprintf("`%s`.`%s`", name, tc.name)
 				columns, seed, incoming := "(id int primary key, uk int unique, v int)", "(1,10,1)", "(100099,10,999)"
+				if tc.incoming != "" {
+					incoming = tc.incoming
+				}
 				if tc.composite {
 					columns, seed, incoming = "(id int, shard int, uk int unique, v int, primary key(id,shard))", "(1,7,10,1)", "(100099,7,10,999)"
 				}
@@ -77,61 +91,101 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 				require.NoError(t, err)
 				defer writer.Close()
 				statement := "insert into " + table + " values" + incoming + " on duplicate key update v=v+1"
-				issue30084CommitBetweenScanAndLock(t, ctx, cn, writer, db, tableID, statement)
+				require.NoError(t, issue30084CommitBetweenScanAndLock(ctx, cn, writer, tableID, statement, func() error {
+					_, err := db.ExecContext(ctx, statement)
+					return err
+				}))
 				commitTS = cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
 				testutils.WaitLogtailApplied(t, commitTS, cn)
-				for _, predicate := range []string{"", " where id=1", " where uk=10"} {
-					rows, err := db.QueryContext(ctx, "select id,uk,v from "+table+predicate)
-					require.NoError(t, err)
-					defer rows.Close()
-					var actual [][3]int
-					for rows.Next() {
-						var row [3]int
-						require.NoError(t, rows.Scan(&row[0], &row[1], &row[2]))
-						actual = append(actual, row)
-					}
-					require.NoError(t, rows.Err())
-					require.Equal(t, [][3]int{{1, 10, 3}}, actual, predicate)
+				projection, pkPredicate := "id,0 as shard,uk,v", " where id=1"
+				expected := [][4]int{{1, 0, 10, 3}}
+				if tc.composite {
+					projection, pkPredicate = "id,shard,uk,v", " where id=1 and shard=7"
+					expected[0][1] = 7
+				}
+				for _, predicate := range []string{"", pkPredicate, " where uk=10"} {
+					func() {
+						rows, err := db.QueryContext(ctx, "select "+projection+" from "+table+predicate)
+						require.NoError(t, err)
+						defer rows.Close()
+						var actual [][4]int
+						for rows.Next() {
+							var row [4]int
+							require.NoError(t, rows.Scan(&row[0], &row[1], &row[2], &row[3]))
+							actual = append(actual, row)
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, expected, actual, predicate)
+					}()
 				}
 			})
+			if t.Failed() {
+				return
+			}
 		}
+		// Exercise terminal paths on the same fixture, then make a normal
+		// request to prove hooks do not leak into the next operation.
+		table := fmt.Sprintf("`%s`.`barrier_lifecycle`", name)
+		execSQLRequire(t, ctx, db, "create table "+table+"(id int primary key, v int)")
+		execSQLRequire(t, ctx, db, "insert into "+table+" values(1,1)")
+		var tableID uint64
+		require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='barrier_lifecycle'", name).Scan(&tableID))
+		writer, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer writer.Close()
+		err = issue30084CommitBetweenScanAndLock(ctx, cn, writer, tableID, "invalid SQL", func() error { t.Error("invalid writer reached barrier"); return nil })
+		require.ErrorContains(t, err, "did not reach")
+		canceled, stop := context.WithCancel(ctx)
+		err = issue30084CommitBetweenScanAndLock(canceled, cn, writer, tableID, "update "+table+" set v=v+1 where id=1", func() error { stop(); return nil })
+		stop()
+		require.ErrorIs(t, err, context.Canceled)
+		execSQLRequire(t, ctx, db, "update "+table+" set v=v+1 where id=1")
 	})
 }
 
-func issue30084CommitBetweenScanAndLock(t *testing.T, ctx context.Context, cn embed.ServiceOperator,
-	writer *sql.Conn, db *sql.DB, tableID uint64, statement string,
-) {
-	t.Helper()
-	paused, release := make(chan struct{}), make(chan struct{})
+func issue30084CommitBetweenScanAndLock(ctx context.Context, cn embed.ServiceOperator,
+	writer *sql.Conn, tableID uint64, statement string, compete func() error,
+) (err error) {
+	workCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	paused, release, callbackExited := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
 	var once sync.Once
 	tc := moruntime.MustGetTestingContext(cn.ServiceID())
 	tc.SetBeforeLockFunc(func(_ []byte, lockedTable uint64) {
 		if lockedTable == tableID && first.CompareAndSwap(false, true) {
+			defer close(callbackExited)
 			close(paused)
 			select {
 			case <-release:
-			case <-ctx.Done():
+			case <-workCtx.Done():
 			}
 		}
 	})
-	// The existing before-lock hook requires this hook, but no lock result is
-	// changed. Only scheduling is controlled; both writes commit through TN.
+	// The before-lock hook is gated by this hook; results stay unchanged.
 	tc.SetAdjustLockResultFunc(func([]byte, uint64, *pblock.Result) {})
 	defer tc.SetBeforeLockFunc(nil)
 	defer tc.SetAdjustLockResultFunc(nil)
-	workCtx, stop := context.WithCancel(ctx)
-	defer stop()
 	done := make(chan error, 1)
 	joined := false
 	defer func() {
 		stop()
 		once.Do(func() { close(release) })
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
 		if !joined {
 			select {
 			case <-done:
-			case <-time.After(10 * time.Second):
-				t.Error("ODKU did not terminate during cleanup")
+			case <-timer.C:
+				err = errors.Join(err, errors.New("ODKU did not terminate during cleanup"))
+				return
+			}
+		}
+		if first.Load() {
+			select {
+			case <-callbackExited:
+			case <-timer.C:
+				err = errors.Join(err, errors.New("before-lock callback did not terminate during cleanup"))
 			}
 		}
 	}()
@@ -140,20 +194,21 @@ func issue30084CommitBetweenScanAndLock(t *testing.T, ctx context.Context, cn em
 	case <-paused:
 	case err := <-done:
 		joined = true
-		t.Fatalf("ODKU did not reach its base row lock: %v", err)
+		return fmt.Errorf("ODKU did not reach its base row lock: %w", err)
 	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+		return ctx.Err()
 	}
-	// The first writer already has its statement snapshot. The competing
-	// writer commits before it takes the row lock, so there is no active lock
-	// conflict to trigger an unconditional retry.
-	execSQLRequire(t, ctx, db, statement)
+	// The competitor commits after the first statement's snapshot, before
+	// its row lock. No active lock conflict can mask a missed partition check.
+	if err := compete(); err != nil {
+		return err
+	}
 	once.Do(func() { close(release) })
 	select {
 	case err := <-done:
 		joined = true
-		require.NoError(t, err)
+		return err
 	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+		return ctx.Err()
 	}
 }

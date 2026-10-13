@@ -41,6 +41,8 @@ func TestPartitionPKCheckUsesLockedIdentity(t *testing.T) {
 	}{
 		{name: "resolved PK differs from incoming schema position", partition: col(0), explicit: -1, wantColumn: 5},
 		{name: "partition expression", partition: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{col(0)}}}}, explicit: -1, wantColumn: 5},
+		{name: "repeated PK references", partition: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{col(0), col(0)}}}}, explicit: -1, wantColumn: 5},
+		{name: "explicit mixed columns", partition: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{col(0), col(1)}}}}, explicit: 3, wantAll: true},
 		{name: "explicit partition column", partition: col(1), explicit: 3, wantColumn: 3},
 		{name: "partition on another column", partition: col(1), explicit: -1, wantAll: true},
 		{name: "composite PK is not a scalar partition value", partition: col(0), composite: true, explicit: -1, wantAll: true},
