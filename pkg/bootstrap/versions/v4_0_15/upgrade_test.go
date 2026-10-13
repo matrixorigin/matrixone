@@ -39,7 +39,7 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	require.Equal(t, "4.0.14", metadata.MinUpgradeVersion)
 	require.Equal(t, versions.No, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Equal(t, int64(defines.MORPCVersion112), metadata.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion113), metadata.RequiredProtocolVersion)
 	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
 	require.True(t, metadata.CanDirectUpgrade("4.0.14"))
 	require.False(t, metadata.CanDirectUpgrade("4.0.13"))
@@ -48,8 +48,8 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 
 func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T) {
 	for _, response := range []string{
-		`{"result":"cn-a:111"}`,
-		`{"result":"cn-a:112,cn-b:111"}`,
+		`{"result":"cn-a:112"}`,
+		`{"result":"cn-a:113,cn-b:112"}`,
 		`{"result":""}`,
 		`invalid`,
 	} {
@@ -61,7 +61,7 @@ func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T)
 				return repairStringResult(t, response), nil
 			}, nil)
 			err := Handler.HandleTenantUpgrade(context.Background(), 7, txn)
-			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 112")
+			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 113")
 			require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, statements)
 		})
 	}
@@ -166,7 +166,7 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 			}
 			return executor.Result{}, nil
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:112"}`), nil
+			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:113"}`), nil
 		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
 			for column := range state.columns {
 				if strings.Contains(sql, "add column "+column+" ") {
