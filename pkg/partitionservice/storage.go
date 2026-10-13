@@ -1064,15 +1064,11 @@ func getExprWithRowID(v []byte) *plan.Expr {
 
 func resetPosWithRowID(expr *plan.Expr) {
 	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		e.Col.ColPos++
 	case *plan.Expr_F:
-		for i := range e.F.Args {
-			switch col := e.F.Args[i].Expr.(type) {
-			case *plan.Expr_Col:
-				col.Col.ColPos++
-				return
-			case *plan.Expr_F:
-				resetPosWithRowID(e.F.Args[i])
-			}
+		for _, arg := range e.F.Args {
+			resetPosWithRowID(arg)
 		}
 	}
 }
