@@ -722,7 +722,11 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        connect_args = {}
+        connect_args = {
+            "connect_timeout": self.connection_timeout,
+            "read_timeout": self.query_timeout,
+            "write_timeout": self.query_timeout,
+        }
         if self._connection_params.get("ssl_ca"):
             connect_args["ssl"] = {"ca": self._connection_params["ssl_ca"]}
             if self._connection_params.get("ssl_cert"):
@@ -987,6 +991,17 @@ class Client(BaseMatrixOneClient):
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
             raise _classify_db_error(e, sql) from None
+
+    @property
+    def analytics(self):
+        """Optional file-query and Arrow APIs; requires the ``analytics`` extra.
+
+        Use ``with client.analytics.query(sql) as batches`` for bounded result
+        reads and ``read_parquet/read_csv/read_json`` for managed external scans.
+        """
+        from .analytics import AnalyticsManager
+
+        return AnalyticsManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
