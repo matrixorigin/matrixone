@@ -9,11 +9,13 @@ SELECT FORMAT_BYTES(1152) AS bytes_tie, FORMAT_PICO_TIME(1125) AS time_tie, FORM
 SELECT FORMAT_BYTES(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_bytes, FORMAT_PICO_TIME(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_time, FORMAT_BYTES(1152921504606846975) AS double_threshold;
 SELECT FORMAT_BYTES(118059162071741143500099) AS exponent_bytes, FORMAT_PICO_TIME(-8650000000000000000099) AS exponent_time;
 SELECT FORMAT_BYTES(CAST(1024 AS DECIMAL(20,2))) AS decimal_bytes, FORMAT_PICO_TIME(CAST(3501 AS DECIMAL(20,2))) AS decimal_time, FORMAT_BYTES('1024') AS text_bytes, FORMAT_PICO_TIME('1e9') AS text_time;
+
+-- Empty and numeric-prefix strings use the explicit compatibility contract.
+SET @format_units_sql_mode=@@sql_mode;
+SET SESSION sql_mode='MYSQL_NUMERIC_COMPATIBILITY';
 SELECT CONCAT('[',FORMAT_BYTES(TRUE),']') AS bool_bytes, CONCAT('[',FORMAT_PICO_TIME(FALSE),']') AS bool_time, CONCAT('[',FORMAT_BYTES(''),']') AS empty_bytes, CONCAT('[',FORMAT_PICO_TIME(''),']') AS empty_time;
 
 -- Reuse existing MySQL numeric-prefix conversion and diagnostics.
-SET @format_units_sql_mode=@@sql_mode;
-SET sql_mode='';
 SELECT FORMAT_BYTES('40000 foo 2000') AS prefix_bytes;
 SHOW WARNINGS;
 SELECT FORMAT_PICO_TIME('40000 foo 2000') AS prefix_time;

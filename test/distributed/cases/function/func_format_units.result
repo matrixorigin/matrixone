@@ -22,11 +22,11 @@ SELECT FORMAT_BYTES(118059162071741143500099) AS exponent_bytes, FORMAT_PICO_TIM
 SELECT FORMAT_BYTES(CAST(1024 AS DECIMAL(20,2))) AS decimal_bytes, FORMAT_PICO_TIME(CAST(3501 AS DECIMAL(20,2))) AS decimal_time, FORMAT_BYTES('1024') AS text_bytes, FORMAT_PICO_TIME('1e9') AS text_time;
 ➤ decimal_bytes[12,65535,0]  ¦  decimal_time[12,65535,0]  ¦  text_bytes[12,65535,0]  ¦  text_time[12,65535,0]  𝄀
 1.00 KiB  ¦  3.50 ns  ¦  1.00 KiB  ¦  1.00 ms
+SET @format_units_sql_mode=@@sql_mode;
+SET SESSION sql_mode='MYSQL_NUMERIC_COMPATIBILITY';
 SELECT CONCAT('[',FORMAT_BYTES(TRUE),']') AS bool_bytes, CONCAT('[',FORMAT_PICO_TIME(FALSE),']') AS bool_time, CONCAT('[',FORMAT_BYTES(''),']') AS empty_bytes, CONCAT('[',FORMAT_PICO_TIME(''),']') AS empty_time;
 ➤ bool_bytes[-1,16383,0]  ¦  bool_time[-1,16383,0]  ¦  empty_bytes[-1,16383,0]  ¦  empty_time[-1,16383,0]  𝄀
 [   1 bytes]  ¦  [  0 ps]  ¦  [   0 bytes]  ¦  [  0 ps]
-SET @format_units_sql_mode=@@sql_mode;
-SET sql_mode='';
 SELECT FORMAT_BYTES('40000 foo 2000') AS prefix_bytes;
 ➤ prefix_bytes[12,65535,0]  𝄀
 39.06 KiB
