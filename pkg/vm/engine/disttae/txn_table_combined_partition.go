@@ -18,11 +18,76 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func (t *combinedTxnTable) relationsForPKCheck(
+	ctx context.Context,
+	bat *batch.Batch,
+	pkIndex, partitionIndex int32,
+) ([]engine.Relation, error) {
+	if partitionIndex < 0 {
+		def := t.primary.GetTableDef(ctx)
+		if def.Partition != nil {
+			// A lock input is a projection, not necessarily a base-table row.
+			// In particular, ODKU can resolve an incoming PK to a different
+			// existing row through a UNIQUE key. Never prune by the incoming row.
+			if !partitionUsesOnlyPrimaryKey(def) {
+				return t.tablesFunc()
+			}
+			partitionIndex = pkIndex
+			if bat.Vecs[0].GetType().Oid == types.T_Rowid {
+				// Prune's explicit index excludes a leading physical RowID.
+				partitionIndex--
+			}
+		}
+	}
+	return t.prunePKFunc(bat, partitionIndex)
+}
+
+func partitionUsesOnlyPrimaryKey(def *plan.TableDef) bool {
+	if def.Pkey == nil || len(def.Pkey.Names) != 1 ||
+		def.Pkey.PkeyColName != def.Pkey.Names[0] ||
+		def.Partition == nil || len(def.Partition.PartitionDefs) == 0 {
+		return false
+	}
+	pos, ok := def.Name2ColIndex[def.Pkey.PkeyColName]
+	if !ok {
+		return false
+	}
+	var usesOnlyPK func(*plan.Expr) bool
+	usesOnlyPK = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			return e.Col.ColPos == pos
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				if !usesOnlyPK(arg) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+			return true
+		default:
+			return false
+		}
+	}
+	for _, partition := range def.Partition.PartitionDefs {
+		if !usesOnlyPK(partition.Def) {
+			return false
+		}
+	}
+	return true
+}
 
 func getPartitionPrunePKFunc(
 	proc *process.Process,
