@@ -336,7 +336,15 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Datetime:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected datetime value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -346,10 +354,18 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
-		value := data.(string)
-		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
-		if err != nil {
-			return nil, err
+		var ts types.Timestamp
+		switch v := data.(type) {
+		case string:
+			parsed, err := types.ParseTimestamp(time.UTC, v, typ.Scale)
+			if err != nil {
+				return nil, err
+			}
+			ts = parsed
+		case types.Timestamp:
+			ts = v
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected timestamp value type %T", data)
 		}
 		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
