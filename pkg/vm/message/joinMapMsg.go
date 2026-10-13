@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var _ Message = new(JoinMapMsg)
@@ -248,22 +249,30 @@ type SpillBuildPayload struct {
 
 // Close releases payload ownership that has not been transferred to a
 // SpillEngine. It is safe on a partially populated payload and clears every
-// handle so repeated cleanup is harmless.
+// handle that was successfully cleaned up. Failed removals remain owned by the
+// payload so a later Close can retry them.
 func (p *SpillBuildPayload) Close() error {
 	if p == nil {
 		return nil
 	}
 	var firstErr error
-	for i, file := range p.Files {
+	pending := make([]*SpillFile, 0, len(p.Files))
+	for _, file := range p.Files {
 		if file != nil {
-			if err := file.Close(); err != nil && firstErr == nil {
-				firstErr = err
+			if err := file.Close(); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				pending = append(pending, file)
 			}
-			p.Files[i] = nil
 		}
 	}
-	p.Files = nil
-	p.BudgetRef = nil
+	if len(pending) == 0 {
+		p.Files = nil
+		p.BudgetRef = nil
+	} else {
+		p.Files = pending
+	}
 	return firstErr
 }
 
@@ -277,16 +286,13 @@ func (p *SpillBuildPayload) Close() error {
 // message -> process import cycle while still keeping physical cleanup with the
 // move-only payload.
 type SpillFile struct {
-	mu          sync.Mutex
-	fd          *os.File
-	open        func(context.Context) (*os.File, error)
-	remove      func() error
-	rows        int64
-	bytes       uint64
-	release     func()
-	removeOnce  sync.Once
-	removeErr   error
-	releaseOnce sync.Once
+	mu      sync.Mutex
+	fd      *os.File
+	open    func(context.Context) (*os.File, error)
+	remove  func() error
+	rows    int64
+	bytes   uint64
+	release func()
 }
 
 // NewReopenableSpillFile creates a dormant spill payload. open must return the
@@ -410,27 +416,26 @@ func (f *SpillFile) Close() error {
 		return nil
 	}
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	fd := f.fd
 	f.fd = nil
 	f.open = nil
-	f.mu.Unlock()
-	var err error
+	var closeErr error
 	if fd != nil {
-		err = fd.Close()
+		closeErr = fd.Close()
 	}
-	f.removeOnce.Do(func() {
-		if f.remove != nil {
-			f.removeErr = f.remove()
-			f.remove = nil
+	if f.remove != nil {
+		if err := f.remove(); err != nil {
+			// Keep the remover and disk reservation until the physical file is gone.
+			return errors.Join(closeErr, err)
 		}
-	})
-	f.releaseOnce.Do(func() {
-		if f.release != nil {
-			f.release()
-			f.release = nil
-		}
-	})
-	return errors.Join(err, f.removeErr)
+		f.remove = nil
+	}
+	if f.release != nil {
+		f.release()
+		f.release = nil
+	}
+	return closeErr
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -606,11 +611,11 @@ func (jm *JoinMap) FreeMemory() {
 		}
 	})
 	jm.spillMu.Lock()
-	payload := jm.spillPayload
-	jm.spillPayload = SpillBuildPayload{}
+	if err := jm.spillPayload.Close(); err != nil {
+		logutil.Errorf("join spill payload cleanup failed: %v", err)
+	}
 	jm.spillPayloadTaken = true
 	jm.spillMu.Unlock()
-	_ = payload.Close()
 	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()

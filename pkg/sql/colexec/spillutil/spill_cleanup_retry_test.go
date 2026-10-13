@@ -110,6 +110,35 @@ func TestBucketWriterRetainsFailedRemovalForRetry(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHandedOffJoinSpillRetainsFailedRemovalForRetry(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	defer generation.Close()
+	w := BucketWriter{Name: "join-spill-handoff-retry", Budget: generation}
+	require.NoError(t, writeBucketPayload(proc, []byte("real-spill-record"), 1, &w, nil))
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fault := &blockedRemoveFS{MutableFileService: baseFS, blocked: true}
+	w.fileFS = fault
+	file, err := w.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	require.Positive(t, generation.SpillDiskUsed())
+	require.ErrorContains(t, file.Close(), "injected persistent remove error")
+	require.Positive(t, generation.SpillDiskUsed())
+	physical, err := baseFS.OpenFile(context.Background(), w.Name)
+	require.NoError(t, err)
+	require.NoError(t, physical.Close())
+	fault.blocked = false
+	require.NoError(t, file.Close())
+	require.Zero(t, generation.SpillDiskUsed())
+	_, err = baseFS.OpenFile(context.Background(), w.Name)
+	require.Error(t, err)
+}
+
 func TestScatterProbeRetainsFailedRemovalUntilCleanup(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
