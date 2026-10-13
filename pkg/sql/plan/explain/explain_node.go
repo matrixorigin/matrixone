@@ -718,7 +718,8 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 192))
-	if !isFulltextIndexSearchScan(spec) {
+	isFulltext := isFulltextIndexSearchScan(spec)
+	if !isFulltext {
 		buf.WriteString("Vector Index: ")
 		buf.WriteString(spec.GetIndex().GetIndexName())
 		buf.WriteString(", Metric: ")
@@ -733,13 +734,17 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 			return "", err
 		}
 	}
-	settings, err := indexSearchScanSettings(spec)
-	if err != nil {
-		return "", err
-	}
-	for _, setting := range settings {
-		buf.WriteString(", ")
-		buf.WriteString(setting)
+	// Keep the compact fulltext summary stable; explicit VERBOSE includes its
+	// static semantics. SQL JSON requests the complete settings separately.
+	if !isFulltext || options != nil && options.Verbose {
+		settings, err := indexSearchScanSettings(spec, options != nil && options.Verbose)
+		if err != nil {
+			return "", err
+		}
+		for _, setting := range settings {
+			buf.WriteString(", ")
+			buf.WriteString(setting)
+		}
 	}
 	if len(spec.GetPreFilters()) > 0 {
 		buf.WriteString(", Index Filter: ")
@@ -1846,7 +1851,7 @@ func isFulltextIndexSearchScan(spec *plan.IndexSearchScan) bool {
 
 // indexSearchScanSettings returns the EXPLAIN fragments the search plugin of
 // spec describes for its algorithm settings.
-func indexSearchScanSettings(spec *plan.IndexSearchScan) ([]string, error) {
+func indexSearchScanSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
 	p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo())
 	if !ok {
 		return nil, nil
@@ -1859,5 +1864,5 @@ func indexSearchScanSettings(spec *plan.IndexSearchScan) ([]string, error) {
 	if !ok {
 		return nil, nil
 	}
-	return explainer.ExplainSettings(spec)
+	return explainer.ExplainSettings(spec, detailed)
 }
