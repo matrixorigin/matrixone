@@ -138,7 +138,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
-	if features.JSONStringConsumerOverload {
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
 	}
 	if features.JSONMinMaxTypedComparison {

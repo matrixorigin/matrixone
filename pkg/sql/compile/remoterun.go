@@ -147,10 +147,10 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		return nil, err
 	}
 	if requiredVectorProtocol != nil && features.JSONMinMaxTypedComparison {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
 	}
-	if requiredVectorProtocol != nil && features.JSONStringConsumerOverload {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion112)
+	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2243,11 +2243,11 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
-		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 113")
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 114")
 	}
-	if features.JSONStringConsumerOverload && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 112")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 113")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
