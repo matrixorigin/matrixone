@@ -1437,6 +1437,9 @@ func TestAlterPartitionTablesKeepsAutoIncrementCleanupAtStatementBoundary(t *tes
 }
 
 type alterCopyInsertSpyExecutor struct {
+	createSQL       string
+	createCtx       context.Context
+	createErr       error
 	insertSQL       string
 	insertErr       error
 	insertCtx       context.Context
@@ -2119,6 +2122,10 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	e.executedSQLs = append(e.executedSQLs, sql)
+	if sql == e.createSQL {
+		e.createCtx = ctx
+		return executor.Result{}, e.createErr
+	}
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
@@ -2170,7 +2177,13 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 		skipPkDedup        bool
 		nilCtxBeforeInsert bool
 		wantPipelineFlush  bool
+		wide               bool
+		stale              bool
+		createErr          error
 	}{
+		{name: "wide create error restores context", wide: true, createErr: errors.New("create-copy failed")},
+		{name: "wide cancellation restores context", wide: true, createErr: context.Canceled},
+		{name: "wide stale generation rejects before CREATE", wide: true, stale: true},
 		{
 			name:               "skip pk dedup false",
 			skipPkDedup:        false,
@@ -2223,6 +2236,16 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 				TblId: 2,
 				Name:  "dept_copy",
 			}
+			if tc.wide {
+				tableDef.Version = 1
+				for i := 0; i < 4098; i++ {
+					col := &plan.ColDef{Name: fmt.Sprintf("c%d", i), ColId: uint64(i + 1), Typ: plan.Type{Id: int32(types.T_int32)}}
+					tableDef.Cols = append(tableDef.Cols, col)
+					if i < 4097 {
+						copyTableDef.Cols = append(copyTableDef.Cols, plan.DeepCopyColDef(col))
+					}
+				}
+			}
 			alterTable := &plan2.AlterTable{
 				Database:          "test",
 				TableDef:          tableDef,
@@ -2248,8 +2271,11 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
-			originRel.EXPECT().CopyTableDef(gomock.Any()).
-				Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
+			liveTableDef := plan.DeepCopyTableDef(tableDef, true)
+			if tc.stale {
+				liveTableDef.Version++
+			}
+			originRel.EXPECT().CopyTableDef(gomock.Any()).Return(liveTableDef).Times(1)
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
 			if tc.nilCtxBeforeInsert {
@@ -2275,12 +2301,30 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 			spyExec := &alterCopyInsertSpyExecutor{
+				createSQL: alterTable.CreateTmpTableSql,
+				createErr: tc.createErr,
 				insertSQL: alterTable.InsertTmpDataSql,
 				insertErr: insertErr,
 			}
 			rt := moruntime.DefaultRuntime()
+			priorExecutor, hadExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			priorRuntime := moruntime.ServiceRuntime(proc.GetService())
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+			t.Cleanup(func() {
+				if hadExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, priorExecutor)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+				}
+			})
 			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			t.Cleanup(func() {
+				if priorRuntime != nil {
+					moruntime.SetupServiceBasedRuntime(proc.GetService(), priorRuntime)
+				} else {
+					moruntime.CompareAndDeleteServiceBasedRuntime(proc.GetService(), rt)
+				}
+			})
 
 			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
 			c.pn = s.Plan
@@ -2288,6 +2332,20 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			origCtx := proc.Ctx
 
 			err := s.AlterTableCopy(c)
+			if tc.stale {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+				require.NotContains(t, spyExec.executedSQLs, alterTable.CreateTmpTableSql)
+				require.Same(t, origCtx, proc.Ctx)
+				return
+			}
+			require.NotNil(t, spyExec.createCtx)
+			require.NotSame(t, origCtx, spyExec.createCtx)
+			if tc.createErr != nil {
+				require.ErrorIs(t, err, tc.createErr)
+				require.Same(t, origCtx, proc.Ctx)
+				require.Nil(t, spyExec.insertCtx, "failed CREATE must not start copying rows")
+				return
+			}
 			require.ErrorIs(t, err, insertErr)
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
