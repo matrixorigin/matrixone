@@ -1506,10 +1506,13 @@ func doSetVar(
 	}
 	for _, assign := range sv.Assignments {
 		if assign.SetNames {
-			for _, name := range []string{
+			names := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
-				"collation_connection",
-			} {
+			}
+			if assign.Reserved != nil {
+				names = append(names, "collation_connection")
+			}
+			for _, name := range names {
 				captureSystemReplayability(name)
 			}
 		} else if assign.System {
@@ -1649,10 +1652,13 @@ func doSetVar(
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
-			for _, name := range []string{
+			names := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
-				"collation_connection",
-			} {
+			}
+			if assign.Reserved != nil {
+				names = append(names, "collation_connection")
+			}
+			for _, name := range names {
 				mark(name, replayable)
 			}
 			return
@@ -1689,8 +1695,8 @@ func doSetVar(
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
-			//replaced into three system variable:
-			//character_set_client, character_set_connection, and character_set_results
+			// SET NAMES updates the three character-set variables. An explicit
+			// COLLATE clause additionally updates collation_connection below.
 			replacedBy := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
