@@ -90,6 +90,16 @@ func TestDirectIntegerResultClassification(t *testing.T) {
 	}{
 		{"select (strcmp('a','b')) as x, find_in_set('b','a,b') as y", 2, []uint32{2, 3}},
 		{"select id, strcmp(s,'a') from t", 2, []uint32{0, 2}},
+		{"select (week(d)) as w, week(dt,3) as w3, dayofyear(d) as doy, id from t", 4, []uint32{3, 3, 4, 0}},
+		{"select weekofyear(d) from t", 1, nil},
+		{"select cast(week(d) as signed), dayofyear(d)+1 from t", 2, nil},
+		{"select distinct week(d) from t", 1, nil},
+		{"select dayofyear(d) from t group by d", 1, nil},
+		{"select week(d) from t having week(d)>0", 1, nil},
+		{"select week(d) from t union all select week(d) from t", 1, nil},
+		{"select * from (select week(d) as w from t) x", 1, nil},
+		{"select x.*, dayofyear(d) from t x", 2, nil},
+		{"select w as week from stored", 1, nil},
 		{"select cast(strcmp(s,'a') as signed), strcmp(s,'a') + 1 from t", 2, nil},
 		{"select distinct strcmp(s,'a') from t", 1, nil},
 		{"select strcmp(s,'a') from t group by s", 1, nil},
@@ -129,6 +139,8 @@ func TestDirectIntegerPrepareWireMetadata(t *testing.T) {
 	for _, query := range []string{
 		"select find_in_set('b','a,b') pos, strcmp('a','b') cmp",
 		"select find_in_set(?,'a,b') pos, strcmp(?,'b') cmp",
+		"select week('2024-12-31',3) w, dayofyear('2024-12-31') doy",
+		"select week(?,3) w, dayofyear(?) doy",
 	} {
 		t.Run(query, func(t *testing.T) {
 			ctx := context.Background()
@@ -138,7 +150,11 @@ func TestDirectIntegerPrepareWireMetadata(t *testing.T) {
 			cols := getPreparedResultColumns(stmt, false)
 			require.Len(t, cols, 2)
 			lengths := directIntegerResultLengths(stmt.PrepareStmt, cols)
-			require.Equal(t, []uint32{3, 2}, lengths)
+			wantLengths := []uint32{3, 2}
+			if cols[0].Name == "w" {
+				wantLengths = []uint32{3, 4}
+			}
+			require.Equal(t, wantLengths, lengths)
 			for _, col := range cols {
 				require.Equal(t, int32(types.T_int32), col.Typ.Id)
 			}
@@ -154,7 +170,7 @@ func TestDirectIntegerPrepareWireMetadata(t *testing.T) {
 				require.NoError(t, proto.SendPrepareResponse(ctx, stmt))
 				packets := splitProtocolPackets(t, conn.writes)
 				resultStart := len(packets) - 3
-				for i, wantLength := range []uint32{3, 2} {
+				for i, wantLength := range wantLengths {
 					col := parsePrepareColumnDefinition(t, packets[resultStart+i])
 					require.Equal(t, defines.MYSQL_TYPE_LONGLONG, col.typ)
 					require.Zero(t, col.flags&uint16(defines.UNSIGNED_FLAG))
