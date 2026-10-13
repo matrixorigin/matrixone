@@ -240,6 +240,13 @@ func callSkipLocked(
 			err = performLock(candidate, proc, lockOp, analyzer, -1)
 			candidate.Clean(proc.Mp())
 			if err == lockservice.ErrLockConflict {
+				if lockOp.ctr.retryError != nil {
+					// A completed target can have advanced the snapshot or detected a
+					// definition fence before a later target conflicts. That candidate
+					// must trigger a retry, not be silently converted into a skip.
+					result.Batch = nil
+					return result, lockOp.ctr.retryError
+				}
 				// Only the physical owner's settled direct-conflict outcome is
 				// skippable. Joined conflict/cleanup/transport errors remain fatal.
 				continue
@@ -525,8 +532,12 @@ func performLock(
 			continue
 		}
 
-		if defChanged && !lockOp.ctr.defChanged {
+		if defChanged {
 			lockOp.ctr.defChanged = true
+			// Persist a definition retry before inspecting another target. A later
+			// direct SKIP LOCKED conflict must not discard this plan-generation
+			// fence, including when every remaining candidate is skipped.
+			lockOp.ctr.retryError = retryWithDefChangedError
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
@@ -548,6 +559,12 @@ func performLock(
 		// the locks to avoid another conflict when retrying
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
+		}
+		if !defChanged && !refreshTS.IsEmpty() && lockOp.ctr.retryError == nil {
+			// Keep the refresh outcome in operator state while continuing to
+			// acquire successful targets. A subsequent direct SKIP LOCKED conflict
+			// can then surface this retry instead of losing it on early return.
+			lockOp.ctr.retryError = retryError
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
