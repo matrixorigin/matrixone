@@ -14,6 +14,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -88,7 +89,8 @@ func TestIvfflatQueryNprobeConsumer(t *testing.T) {
 			require.NoError(t, err)
 			var scans []*plan.Node
 			for _, node := range builder.qry.Nodes {
-				if node.VectorIndexScan != nil {
+				if node.NodeType == plan.Node_INDEX_SEARCH_SCAN && node.IndexSearchScan != nil &&
+					node.IndexSearchScan.Index != nil && node.IndexSearchScan.Index.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
 					scans = append(scans, node)
 				}
 			}
@@ -97,7 +99,7 @@ func TestIvfflatQueryNprobeConsumer(t *testing.T) {
 			} else {
 				require.NotEmpty(t, scans)
 				for _, node := range scans {
-					require.Equal(t, uint32(3), node.VectorIndexScan.InitialProbeCount)
+					require.Equal(t, uint32(3), testIvfScanOptions(t, node.IndexSearchScan).InitialProbeCount)
 				}
 			}
 		})
