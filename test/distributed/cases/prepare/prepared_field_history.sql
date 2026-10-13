@@ -132,3 +132,84 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 SET @field_value = _binary '9007199254740993';
 EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
+
+-- String wrappers retain CASE type history.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- Binary-first wrapped history keeps the reverse transition binary.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- CONCAT has a TEXT declaration even for a NULL-first marker.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- CONCAT_WS keeps parameter dependencies across all contributors.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT_WS('''', ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- A scalar marker has a materialized TEXT declaration for NULL first.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT ? LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- A binary-first scalar projection retains its binary declaration.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT ? LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- Plan invalidation preserves type history; restore the session settings.
+SET @field_old_locale = @@lc_time_names;
+SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
+SET @field_old_auto_mode = @@enable_vector_auto_mode_by_default;
+SET lc_time_names = 'en_US';
+SET enable_vector_prefilter_by_default = 0;
+SET enable_vector_auto_mode_by_default = 0;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET lc_time_names = 'fr_FR';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET enable_vector_prefilter_by_default = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET enable_vector_auto_mode_by_default = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+SET lc_time_names = @field_old_locale;
+SET enable_vector_prefilter_by_default = @field_old_prefilter;
+SET enable_vector_auto_mode_by_default = @field_old_auto_mode;

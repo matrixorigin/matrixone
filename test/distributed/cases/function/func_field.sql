@@ -179,3 +179,17 @@ set @field_binary_value = _binary 'a';
 select field(@field_binary_value, 'A', 'a');
 set @field_binary_value = null;
 
+
+-- Window value and default both determine FIELD comparison; offset does not.
+select field(lag(NULL, 1, 'a') over (), 'A', 'a'),
+       field(lead(NULL, 1, 'a') over (), 'A', 'a');
+select field(lag(NULL, 1, _binary 'a') over (), 'A', 'a'),
+       field(lead(NULL, 1, _binary 'a') over (), 'A', 'a');
+select field(lag('x', 1, 'a') over (), 'A', 'a'),
+       field(lead('x', 1, 'a') over (), 'A', 'a');
+select field(lag('x', 1, _binary 'a') over (), 'A', 'a'),
+       field(lead('x', 1, _binary 'a') over (), 'A', 'a');
+select field(lag(_binary 'x', 1, 'a') over (), 'A', 'a'),
+       field(lead(_binary 'x', 1, 'a') over (), 'A', 'a');
+select field(lag(_binary 'x', 1, _binary 'a') over (), 'A', 'a'),
+       field(lead(_binary 'x', 1, _binary 'a') over (), 'A', 'a');

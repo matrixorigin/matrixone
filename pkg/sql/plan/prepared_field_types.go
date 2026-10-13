@@ -329,7 +329,8 @@ func (b *preparedFieldTypeBinding) collectParameters(expr *Expr, typ types.Type)
 	if p := expr.GetP(); p != nil {
 		b.params[p.Pos] = preparedFieldParameter{typ: typ}
 	} else if fn := expr.GetF(); fn != nil {
-		if fn.Func.ObjName == "cast" || fn.Func.ObjName == "case" || fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff" {
+		switch fn.Func.ObjName {
+		case "cast", "case", "coalesce", "if", "iff", "concat", "concat_ws":
 			for _, child := range fn.Args {
 				b.collectParameters(child, typ)
 			}

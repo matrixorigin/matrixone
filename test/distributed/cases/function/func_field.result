@@ -313,3 +313,27 @@ select field(@field_binary_value, 'A', 'a');
 ➤ field(@field_binary_value, A, a)[-5,64,0]  𝄀
 2
 set @field_binary_value = null;
+select field(lag(NULL, 1, 'a') over (), 'A', 'a'),
+field(lead(NULL, 1, 'a') over (), 'A', 'a');
+➤ field(lag(null, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(null, 1, a) over (), A, a)[-5,64,0]  𝄀
+1  ¦  1
+select field(lag(NULL, 1, _binary 'a') over (), 'A', 'a'),
+field(lead(NULL, 1, _binary 'a') over (), 'A', 'a');
+➤ field(lag(null, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(null, 1, a) over (), A, a)[-5,64,0]  𝄀
+2  ¦  2
+select field(lag('x', 1, 'a') over (), 'A', 'a'),
+field(lead('x', 1, 'a') over (), 'A', 'a');
+➤ field(lag(x, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(x, 1, a) over (), A, a)[-5,64,0]  𝄀
+1  ¦  1
+select field(lag('x', 1, _binary 'a') over (), 'A', 'a'),
+field(lead('x', 1, _binary 'a') over (), 'A', 'a');
+➤ field(lag(x, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(x, 1, a) over (), A, a)[-5,64,0]  𝄀
+2  ¦  2
+select field(lag(_binary 'x', 1, 'a') over (), 'A', 'a'),
+field(lead(_binary 'x', 1, 'a') over (), 'A', 'a');
+➤ field(lag(x, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(x, 1, a) over (), A, a)[-5,64,0]  𝄀
+2  ¦  2
+select field(lag(_binary 'x', 1, _binary 'a') over (), 'A', 'a'),
+field(lead(_binary 'x', 1, _binary 'a') over (), 'A', 'a');
+➤ field(lag(x, 1, a) over (), A, a)[-5,64,0]  ¦  field(lead(x, 1, a) over (), A, a)[-5,64,0]  𝄀
+2  ¦  2

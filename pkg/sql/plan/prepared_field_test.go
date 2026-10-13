@@ -81,6 +81,14 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 		sql    string
 		binary bool
 	}{
+		{"select field(lag(NULL, 1, 'a') over (), 'A', 'a')", false},
+		{"select field(lag(NULL, 1, _binary 'a') over (), 'A', 'a')", true},
+		{"select field(lag('x', 1, _binary 'a') over (), 'A', 'a')", true},
+		{"select field(lag(_binary 'x', 1, 'a') over (), 'A', 'a')", true},
+		{"select field(lead(NULL, 1, 'a') over (), 'A', 'a')", false},
+		{"select field(lead(NULL, 1, _binary 'a') over (), 'A', 'a')", true},
+		{"select field(lead('x', 1, _binary 'a') over (), 'A', 'a')", true},
+		{"select field(lead(_binary 'x', 1, 'a') over (), 'A', 'a')", true},
 		{"select field(coalesce('a', _binary 'x'), 'A', 'a')", true},
 		{"select field(coalesce(_binary 'a', 'x'), 'A', 'a')", true},
 		{"select field(coalesce('a', 'x'), 'A', 'a')", false},
@@ -258,5 +266,45 @@ func TestPreparedFieldUnrelatedStatementsKeepNoHistory(t *testing.T) {
 			require.NoError(t, err)
 			require.Nil(t, bound.FieldTypes)
 		})
+	}
+}
+
+func TestPreparedFieldWrappedTypeHistory(t *testing.T) {
+	for _, wrapper := range []string{"concat(?)", "concat_ws('', ?)", "(select ? limit 1)"} {
+		for _, first := range []types.T{types.T_any, types.T_varchar, types.T_blob, types.T_int64} {
+			t.Run(wrapper+"/"+first.String(), func(t *testing.T) {
+				ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select field(case when ? then "+wrapper+" else null end,'A','a')", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				var state *PreparedFieldTypes
+				want := types.T_text
+				if first == types.T_blob {
+					want = types.T_blob
+				} else if first == types.T_int64 && wrapper == "(select ? limit 1)" {
+					want = types.T_int64
+				}
+				for _, oid := range []types.T{first, types.T_varchar, types.T_blob} {
+					bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: oid.ToType()}}
+					var value any = "a"
+					if oid == types.T_any {
+						value = nil
+					} else if oid == types.T_int64 {
+						value = int64(123)
+					}
+					values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
+					ctx.SetContext(WithPreparedFieldTypes(context.Background(), state))
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					require.NoError(t, err)
+					require.NotNil(t, bound.FieldTypes, "the wrapper must retain its parameter dependency")
+					require.Equal(t, want, bound.FieldTypes.cases[0].result.Oid)
+					if state != nil {
+						require.Same(t, state, bound.FieldTypes, "string source changes must preserve resolved history")
+					}
+					state = bound.FieldTypes
+					require.Equal(t, oid, bindings[1].Type.Oid, "return types must not rewrite marker sources")
+				}
+			})
+		}
 	}
 }
