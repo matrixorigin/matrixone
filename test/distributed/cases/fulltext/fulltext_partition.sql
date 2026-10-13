@@ -51,6 +51,24 @@ select id from ft_replace where match(body) against('beta') order by id;
 select id from ft_replace where match(body) against('gamma') order by id;
 drop table ft_replace;
 
+-- #28477 P2: merged REPLACE scan must capture the old partition key for
+-- schemas without a UNIQUE secondary index (useMergedMainScan). Partition key
+-- is the non-PK bucket so same-partition and cross-partition REPLACE both need
+-- the captured old key to drop old FULLTEXT postings from the right partition.
+create table ft_nuk(id int primary key, bucket int, body text, fulltext fti_nuk(body))
+partition by range(bucket)(partition n0 values less than (10), partition n1 values less than maxvalue);
+insert into ft_nuk values (1, 1, 'old alpha'), (2, 20, 'old beta');
+select id from ft_nuk where match(body) against('alpha') order by id;
+select id from ft_nuk where match(body) against('beta') order by id;
+replace into ft_nuk values (1, 1, 'new gamma');
+select id from ft_nuk where match(body) against('alpha') order by id;
+select id from ft_nuk where match(body) against('gamma') order by id;
+replace into ft_nuk values (1, 20, 'moved delta');
+select id from ft_nuk where match(body) against('gamma') order by id;
+select id from ft_nuk where match(body) against('delta') order by id;
+select id from ft_nuk where match(body) against('beta') order by id;
+drop table ft_nuk;
+
 create table ft_join_src(id int);
 insert into ft_join_src values (3), (3), (999);
 delete d from ft_part d join ft_join_src s on d.id = s.id;

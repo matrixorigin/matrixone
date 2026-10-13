@@ -73,6 +73,31 @@ select id from ft_replace where match(body) against('gamma') order by id;
 id
 3
 drop table ft_replace;
+create table ft_nuk(id int primary key, bucket int, body text, fulltext fti_nuk(body))
+partition by range(bucket)(partition n0 values less than (10), partition n1 values less than maxvalue);
+insert into ft_nuk values (1, 1, 'old alpha'), (2, 20, 'old beta');
+select id from ft_nuk where match(body) against('alpha') order by id;
+id
+1
+select id from ft_nuk where match(body) against('beta') order by id;
+id
+2
+replace into ft_nuk values (1, 1, 'new gamma');
+select id from ft_nuk where match(body) against('alpha') order by id;
+id
+select id from ft_nuk where match(body) against('gamma') order by id;
+id
+1
+replace into ft_nuk values (1, 20, 'moved delta');
+select id from ft_nuk where match(body) against('gamma') order by id;
+id
+select id from ft_nuk where match(body) against('delta') order by id;
+id
+1
+select id from ft_nuk where match(body) against('beta') order by id;
+id
+2
+drop table ft_nuk;
 create table ft_join_src(id int);
 insert into ft_join_src values (3), (3), (999);
 delete d from ft_part d join ft_join_src s on d.id = s.id;
