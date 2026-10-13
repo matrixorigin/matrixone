@@ -810,7 +810,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
@@ -1158,7 +1158,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
@@ -2578,13 +2578,13 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 				return moerr.NewNotSupportedNoCtx(
-					"remote ODKU result tracking requires MORPC protocol version 114")
+					"remote ODKU result tracking requires MORPC protocol version 115")
 			}
 		}
 		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
 			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
