@@ -1306,9 +1306,9 @@ func hashDiffIfHasLCA(
 						}
 
 						err3 = moerr.NewInternalErrorNoCtxf(
-							"conflict: %s %s and %s %s on pk(%v) with different values",
-							tarWrapped.name, tarWrapped.kind,
-							baseWrapped.name, baseWrapped.kind, key,
+							"conflict: %s %s and %s %s on pk(%v)",
+							tarWrapped.name, tarWrapped.logicalOperation(),
+							baseWrapped.name, baseWrapped.logicalOperation(), key,
 						)
 						return
 					}
