@@ -127,7 +127,11 @@ func isGossipFixtureBindCollision(err error) bool {
 func makeGossipFixtureConfigs(t *testing.T, rt runtime.Runtime, nodeCount int) ([]Config, error) {
 	t.Helper()
 	return makeGossipFixtureConfigsWithAllocator(t, rt, nodeCount, func() (int, error) {
-		return randomPorts.allocate(probeTestPort)
+		first, limit, err := testPortRange()
+		if err != nil {
+			return 0, err
+		}
+		return randomPorts.allocate(first, limit, probeTestPort)
 	})
 }
 
