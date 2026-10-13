@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"net/url"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,11 +35,14 @@ func CheckExclusiveWrite(fs FileService) error {
 	case *LocalETLFS:
 		return nil
 	case *S3FS:
-		switch f.rawStorage.(type) {
-		case *AwsSDKv2, *diskObjectStorage:
+		switch storage := f.rawStorage.(type) {
+		case *AwsSDKv2:
+			if awsS3ConditionalPutEndpoint(storage.endpoint) {
+				return nil
+			}
+		case *diskObjectStorage:
 			return nil
-		}
-		if storage, ok := f.rawStorage.(*MinioSDK); ok {
+		case *MinioSDK:
 			endpoint := strings.ToLower(storage.endpoint)
 			// These cloud endpoints are routed through the MinIO SDK for
 			// compatibility, but their conditional-PUT behavior has not been
@@ -51,6 +55,25 @@ func CheckExclusiveWrite(fs FileService) error {
 		}
 	}
 	return moerr.NewNotSupportedNoCtxf("exclusive publication for %T", fs)
+}
+
+// awsS3ConditionalPutEndpoint limits the AWS SDK path to Amazon-owned
+// endpoints. The SDK also accepts arbitrary S3-compatible endpoints, whose
+// handling of If-None-Match is not guaranteed by the S3 API contract.
+func awsS3ConditionalPutEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return true // AWS SDK's default S3 endpoint.
+	}
+	if !strings.Contains(endpoint, "://") {
+		endpoint = "https://" + endpoint
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return strings.HasSuffix(host, ".amazonaws.com") ||
+		strings.HasSuffix(host, ".amazonaws.com.cn")
 }
 
 // WriteExclusive creates a bounded, known-size file without replacing a prior

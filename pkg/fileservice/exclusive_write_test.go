@@ -161,7 +161,11 @@ func TestWriteExclusiveObjectStorage(t *testing.T) {
 				}))
 				defer server.Close()
 				if provider == "aws" {
-					storage = newTestAWSClient(t, server)
+					awsStorage := newTestAWSClient(t, server)
+					// The client uses the httptest transport, while this field
+					// identifies the production endpoint capability being tested.
+					awsStorage.endpoint = "https://s3.us-east-1.amazonaws.com"
+					storage = awsStorage
 				} else {
 					endpoint, err := url.Parse(server.URL)
 					require.NoError(t, err)
@@ -203,6 +207,27 @@ func TestWriteExclusiveRejectsUnsupported(t *testing.T) {
 	defer fs.Close(context.Background())
 	require.Error(t, WriteExclusive(context.Background(), fs, IOVector{FilePath: "large", Entries: []IOEntry{{Size: smallObjectThreshold + 1}}}))
 	require.Error(t, WriteExclusive(context.Background(), fs, IOVector{FilePath: "unknown", Entries: []IOEntry{{Size: -1}}}))
+}
+
+func TestCheckExclusiveWriteAWSEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		allowed  bool
+	}{
+		{endpoint: "", allowed: true}, // AWS SDK default endpoint.
+		{endpoint: "s3.us-east-1.amazonaws.com", allowed: true},
+		{endpoint: "https://bucket.s3.cn-north-1.amazonaws.com.cn", allowed: true},
+		{endpoint: "https://s3.example.com", allowed: false},
+		{endpoint: "http://localhost:9000", allowed: false},
+		{endpoint: "https://s3.amazonaws.com.example.com", allowed: false},
+	} {
+		err := CheckExclusiveWrite(&S3FS{rawStorage: &AwsSDKv2{endpoint: tc.endpoint}})
+		if tc.allowed {
+			require.NoError(t, err, tc.endpoint)
+		} else {
+			require.Error(t, err, tc.endpoint)
+		}
+	}
 }
 
 func TestWriteExclusiveCancellation(t *testing.T) {
