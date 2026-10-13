@@ -4405,6 +4405,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
+		preparedSourceBindings(b.GetContext()) == nil {
+		var err error
+		args, err = bindPrepareCoalesceNumericArguments(b.GetContext(), args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if preparedBindingState(b.GetContext()) != nil {
 		var err error
 		if isIfNull && len(args) == 3 {

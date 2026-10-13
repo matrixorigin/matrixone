@@ -4850,6 +4850,19 @@ func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 			require.Equal(t, int32(test.wantID), valueCol.Typ.Id)
 		})
 	}
+
+	t.Run("text int32 max with primary key", func(t *testing.T) {
+		plan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"CREATE TABLE text_length(id INT PRIMARY KEY,body TEXT(2147483647))")
+		require.NoError(t, err)
+
+		tableDef := plan.GetDdl().GetCreateTable().GetTableDef()
+		bodyCol := FindColumn(tableDef.Cols, "body")
+		require.NotNil(t, bodyCol)
+		require.Equal(t, int32(types.T_text), bodyCol.Typ.Id)
+		require.NotNil(t, tableDef.GetPkey())
+		require.Equal(t, []string{"id"}, tableDef.GetPkey().GetNames())
+	})
 }
 
 func TestBuildCreateTableError(t *testing.T) {
