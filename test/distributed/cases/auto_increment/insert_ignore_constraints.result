@@ -1,0 +1,248 @@
+drop database if exists auto_increment_ignore_constraints;
+create database auto_increment_ignore_constraints;
+use auto_increment_ignore_constraints;
+create table checks_case(id bigint auto_increment primary key, uk int unique, v int check(v > 0));
+insert ignore into checks_case values (NULL,1,-1),(NULL,2,1),(NULL,2,1),(NULL,3,1);
+select id,uk from checks_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select id from checks_case where uk=3;
+➤ id[-5,64,0]  𝄀
+2
+insert into checks_case(uk,v) values (99,1);
+select id,uk from checks_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+5  ¦  99
+truncate table checks_case;
+insert ignore into checks_case values (NULL,1,1),(NULL,2,-1),(NULL,3,1);
+select id,uk from checks_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  3
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+truncate table checks_case;
+insert ignore into checks_case values (NULL,1,-1),(NULL,2,-1);
+select count(*) from checks_case;
+➤ count(*)[-5,64,0]  𝄀
+0
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+insert into checks_case(uk,v) values (3,1);
+select id,uk from checks_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  3
+create table tiny_case(id tinyint auto_increment primary key, uk int unique, v int check(v>0));
+insert ignore into tiny_case values (127,1,-1),(NULL,2,1);
+select id,uk from tiny_case order by id;
+➤ id[-6,8,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+insert into tiny_case(uk,v) values (3,1);
+select id,uk from tiny_case order by id;
+➤ id[-6,8,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2  𝄀
+3  ¦  3
+create table manual_case(id bigint auto_increment primary key, v int check(v>0));
+insert ignore into manual_case values (NULL,-1),(5,1);
+insert into manual_case(v) values (2);
+select id,v from manual_case order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+5  ¦  1  𝄀
+6  ¦  2
+create table check_only(id bigint auto_increment primary key, v int check(v>0));
+insert ignore into check_only(v) values (-1),(1),(-1),(2);
+select id,v from check_only order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+create table parents(id int primary key);
+insert into parents values (1);
+create table fk_case(id bigint auto_increment primary key, uk int unique, p int,
+foreign key(p) references parents(id));
+insert ignore into fk_case values (NULL,1,9),(NULL,2,1),(NULL,2,1),(NULL,3,1);
+select id,uk,p from fk_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  ¦  p[4,32,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  3  ¦  1
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+insert into fk_case(uk,p) values (99,1);
+select id,uk from fk_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+5  ¦  99
+truncate table fk_case;
+insert ignore into fk_case(uk,p) values (1,9),(2,9);
+insert into fk_case(uk,p) values (3,1);
+select id,uk from fk_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+3  ¦  3
+create table fk_only(id bigint auto_increment primary key, p int,
+foreign key(p) references parents(id));
+insert ignore into fk_only(p) values (9),(NULL),(1);
+select id,p from fk_only order by id;
+➤ id[-5,64,0]  ¦  p[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+create table mixed_case(id bigint auto_increment primary key, uk int unique,
+v int check(v>0), p int, foreign key(p) references parents(id));
+insert ignore into mixed_case values
+(NULL,7,-1,1),(NULL,7,1,9),(NULL,7,1,1),(NULL,7,1,1),(NULL,8,1,1);
+select id,uk from mixed_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  8
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select id from mixed_case where uk=8;
+➤ id[-5,64,0]  𝄀
+2
+begin;
+insert ignore into mixed_case values (NULL,9,-1,1),(NULL,10,1,1);
+rollback;
+select id,uk from mixed_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  8
+set @saved_increment = @@auto_increment_increment;
+set @saved_offset = @@auto_increment_offset;
+set auto_increment_increment=3;
+set auto_increment_offset=2;
+create table series_case(id bigint auto_increment primary key, uk int unique, v int check(v>0));
+insert ignore into series_case values (NULL,1,-1),(NULL,2,1),(NULL,2,1),(NULL,3,1);
+select id,uk from series_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+2  ¦  2  𝄀
+5  ¦  3
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+2
+insert into series_case(uk,v) values (99,1);
+select id,uk from series_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+2  ¦  2  𝄀
+5  ¦  3  𝄀
+14  ¦  99
+set auto_increment_increment=@saved_increment;
+set auto_increment_offset=@saved_offset;
+create table tiny_tail(id tinyint auto_increment primary key, v int check(v>0)) auto_increment=124;
+insert ignore into tiny_tail(v) values (1),(-1),(-1),(-1),(-1);
+select id,v from tiny_tail order by id;
+➤ id[-6,8,0]  ¦  v[4,32,0]  𝄀
+124  ¦  1
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+124
+insert into tiny_tail(v) values (2);
+select id,v from tiny_tail order by id;
+➤ id[-6,8,0]  ¦  v[4,32,0]  𝄀
+124  ¦  1  𝄀
+127  ¦  2
+create table medium_tail(id mediumint unsigned auto_increment primary key, v int check(v>0)) auto_increment=16777212;
+insert ignore into medium_tail(v) values (1),(-1),(-1),(-1),(-1);
+insert into medium_tail(v) values (2);
+select id,v from medium_tail order by id;
+➤ id[4,8,0]  ¦  v[4,32,0]  𝄀
+16777212  ¦  1  𝄀
+16777215  ¦  2
+create table expression_case(id bigint auto_increment primary key, uk int unique, v int check(v>0), index uk_abs((abs(uk))));
+insert ignore into expression_case(uk,v) values (1,-1),(2,1),(2,1),(-3,1);
+select id,uk from expression_case order by id;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  -3
+select id,uk from expression_case force index(uk_abs) where abs(uk)=3;
+➤ id[-5,64,0]  ¦  uk[4,32,0]  𝄀
+2  ¦  -3
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+create table prepared_case(id bigint auto_increment primary key, v int check(v>0)) auto_increment=124;
+prepare check_stmt from 'insert ignore into prepared_case(v) values (?),(?)';
+set @rejected=-1;
+set @accepted=1;
+execute check_stmt using @rejected,@accepted;
+select id,v from prepared_case order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+124  ¦  1
+execute check_stmt using @rejected,@rejected;
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+124
+execute check_stmt using @accepted,@accepted;
+select id,v from prepared_case order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+124  ¦  1  𝄀
+126  ¦  1  𝄀
+127  ¦  1
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+126
+deallocate prepare check_stmt;
+create table self_auto(id int auto_increment primary key, p int, v int check(v>0),
+foreign key(p) references self_auto(id));
+insert ignore into self_auto values (1,1,1),(2,1,1),(3,999,1);
+select id,p from self_auto order by id;
+➤ id[4,32,0]  ¦  p[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+truncate table self_auto;
+insert ignore into self_auto values (NULL,1,1),(NULL,1,1);
+select id,p from self_auto order by id;
+➤ id[4,32,0]  ¦  p[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+truncate table self_auto;
+insert ignore into self_auto values (1,1,-1),(2,1,1),(3,3,1),(4,3,1);
+select id,p from self_auto order by id;
+➤ id[4,32,0]  ¦  p[4,32,0]  𝄀
+3  ¦  3  𝄀
+4  ¦  3
+create table self_load(id int primary key, p int, foreign key(p) references self_load(id));
+load data inline format='csv', data='1,999' into table self_load fields terminated by ',';
+Cannot add or update a child row: a foreign key constraint fails
+select count(*) from self_load;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data inline format='csv', data='1,999' ignore into table self_load fields terminated by ',';
+select count(*) from self_load;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data inline format='csv', data='1,1' ignore into table self_load fields terminated by ',';
+insert ignore into self_load values (2,1),(3,999),(4,3);
+select id,p from self_load order by id;
+➤ id[4,32,0]  ¦  p[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+set foreign_key_checks=0;
+load data inline format='csv', data='9,999' into table self_load fields terminated by ',';
+set foreign_key_checks=1;
+insert ignore into self_load values (5,5),(6,5);
+select id,p from self_load order by id;
+➤ id[4,32,0]  ¦  p[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+5  ¦  5  𝄀
+6  ¦  5  𝄀
+9  ¦  999
+drop database auto_increment_ignore_constraints;

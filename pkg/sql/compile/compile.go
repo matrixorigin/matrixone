@@ -2558,6 +2558,11 @@ func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam,
 	if !strict || proc == nil || param == nil || param.ExternType != int32(plan.ExternType_LOAD) {
 		return strict
 	}
+	if param.Local {
+		// LOCAL rejects rows like IGNORE, but only explicit IGNORE relaxes
+		// strict input parsing. The statement profile intentionally combines both.
+		return !param.LoadExplicitIgnore
+	}
 	return !proc.GetStmtProfile().GetStatementIgnore()
 }
 

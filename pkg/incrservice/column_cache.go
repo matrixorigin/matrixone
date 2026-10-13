@@ -802,7 +802,7 @@ func insertAutoValues[T constraints.Integer](
 			return filter
 		},
 		func(i int, v uint64) error {
-			if v > uint64(max) ||
+			if v > uint64(max) || (v == math.MaxUint64 && !col.col.isInternal) ||
 				v == 0 {
 				return outOfRangeError(v)
 			}

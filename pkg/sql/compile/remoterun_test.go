@@ -2062,6 +2062,94 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 	require.ErrorContains(t, err, "MORPC protocol version 57")
 }
 
+func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
+	c, destination := expressionProtocolTestCompile(t)
+	destination.version = defines.MORPCVersion119
+	proc := c.proc
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+		}
+	})
+	arg := preinsertunique.NewArgument()
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		arg.Release()
+	})
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
+		InsertIgnoreMultiDedup: true, AutoIncrementReorder: true,
+		OrderedAutoIncrement: &planpb.OrderedAutoIncrement{ValuesRows: 3},
+	}
+	scope := &Scope{Proc: proc, RootOp: arg, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	// Published version 118 does not support the new ordered IGNORE contract.
+	destination.version = defines.MORPCVersion118
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 119")
+	destination.version = defines.MORPCVersion119
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 119")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 119")
+	require.NoError(t, validateRemoteInsertIgnoreEligibilityProtocol(proc, false))
+	require.Error(t, validateRemoteInsertIgnoreEligibilityProtocol(nil, true))
+
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
+		InsertIgnoreMultiDedup: true,
+		OrderedForeignKeys: []*planpb.OrderedForeignKey{{
+			ChildColumns:      []*planpb.ColRef{{ColPos: 1}},
+			SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
+		}},
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+	data, err = encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	decoded, err := decodeScope(data, proc, true, nil)
+	require.NoError(t, err)
+	decodedArg := decoded.RootOp.(*preinsertunique.PreInsertUnique)
+	t.Cleanup(func() {
+		decodedArg.Free(proc, false, nil)
+		decodedArg.Release()
+	})
+	require.Equal(t, arg.PreInsertCtx.OrderedForeignKeys, decodedArg.PreInsertCtx.OrderedForeignKeys)
+	destination.version = defines.MORPCVersion118
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 119")
+	destination.version = defines.MORPCVersion119
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 119")
+
+	pre := preinsert.NewArgument()
+	t.Cleanup(func() {
+		pre.Free(proc, false, nil)
+		pre.Release()
+	})
+	pre.HasAutoCol = true
+	pre.TrackAutoIncrementGenerated = true
+	pre.DeferAutoIncrement = true
+	scope.RootOp = pre
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+	data, err = encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	destination.version = defines.MORPCVersion118
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 119")
+	destination.version = defines.MORPCVersion119
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 119")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 119")
+}
+
 func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := &process.Process{Base: &process.BaseProcess{}}

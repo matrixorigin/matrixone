@@ -41,6 +41,7 @@ const (
 )
 
 type container struct {
+	ordered         orderedAutoIncrementState
 	buf             *batch.Batch
 	acceptedMaps    []*hashmap.StrHashMap
 	acceptedIters   []hashmap.Iterator
@@ -224,6 +225,25 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 	}
 	preInsertUnique.ctr.acceptedRows = nil
 	preInsertUnique.ctr.autoIncrementCandidates.reset(proc.Mp())
+	if preInsertUnique.ctr.ordered.manual != nil {
+		preInsertUnique.ctr.ordered.manual.Free(proc.Mp())
+	}
+	for _, state := range preInsertUnique.ctr.ordered.foreignKeyResults {
+		if state.parents != nil {
+			state.parents.Free()
+		}
+		for _, vectors := range [][]*vector.Vector{state.tuple, state.selfTuple} {
+			for _, vec := range vectors {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+		}
+		if state.selfExecutor != nil {
+			state.selfExecutor.Free()
+		}
+	}
+	preInsertUnique.ctr.ordered = orderedAutoIncrementState{}
 	if preInsertUnique.ctr.acceptedAutoIncrementValues != nil {
 		preInsertUnique.ctr.acceptedAutoIncrementValues.Free()
 	}

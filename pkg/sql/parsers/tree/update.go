@@ -290,13 +290,15 @@ type HivePartColType struct {
 }
 
 type ExParam struct {
-	ExternType            int32
-	JsonData              string
-	FileService           fileservice.FileService
-	NullMap               map[string]([]string)
-	S3Param               *S3Parameter
-	Ctx                   context.Context
-	Local                 bool
+	ExternType  int32
+	JsonData    string
+	FileService fileservice.FileService
+	NullMap     map[string]([]string)
+	S3Param     *S3Parameter
+	Ctx         context.Context
+	Local       bool
+	// LoadExplicitIgnore distinguishes IGNORE syntax from LOCAL's row rejection policy.
+	LoadExplicitIgnore    bool `json:",omitempty"`
 	Parallel              bool
 	ParallelSpecified     bool
 	ParallelLoadRequested bool

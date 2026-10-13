@@ -1561,6 +1561,33 @@ message PreInsertUkCtx {
   repeated string key_names = 16;
   repeated Type key_types = 17;
   repeated int32 key_type_counts = 18;
+  // Optional physical child column. Post-allocation constraint rejection
+  // preserves provenance until arbitration, but never publishes keys or rows.
+  ColRef row_eligibility = 19;
+  // Ordered allocation defers explicit high-water marks until row acceptance.
+  OrderedAutoIncrement ordered_auto_increment = 20;
+  // Row-ordered self-reference checks also apply without AUTO_INCREMENT.
+  repeated OrderedForeignKey ordered_foreign_keys = 21;
+}
+
+message OrderedAutoIncrement {
+  ObjectRef ref = 1;
+  TableDef table_def = 2;
+  int32 column_index = 3;
+  // Zero identifies an unknown-length SELECT/LOAD stream.
+  uint64 values_rows = 4;
+  repeated OrderedForeignKey foreign_keys = 5;
+}
+
+message OrderedForeignKey {
+  ObjectRef ref = 1;
+  TableDef table_def = 2;
+  repeated ColRef child_columns = 3;
+  repeated int32 parent_columns = 4;
+  // Parent refs use table ordinals; relation 1 names the child tuple slots.
+  Expr predicate = 5;
+  // Non-empty only for self references; final accepted parent tuple inputs.
+  repeated ColRef self_parent_columns = 6;
 }
 
 message PreInsertCtx {
@@ -1580,6 +1607,10 @@ message PreInsertCtx {
   // INSERT IGNORE arbiter must distinguish generated from explicit values.
   bool track_auto_increment_generated = 13;
   int32 auto_increment_generated_column = 14;
+  // Independent CHECK predicates are evaluated once before allocation.
+  // Rejected rows count towards unused reservation only if generation starts.
+  ColRef check_eligibility = 15;
+  bool defer_auto_increment = 16;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

@@ -168,6 +168,10 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkOnUpdate(p)
 	case *OrderBySpec:
 		return true, v.walkOrderBySpec(p)
+	case *OrderedAutoIncrement:
+		return true, v.walkOrderedAutoIncrement(p)
+	case *OrderedForeignKey:
+		return true, v.walkOrderedForeignKey(p)
 	case *OriginTableMessageForFuzzy:
 		return true, v.walkOriginTableMessageForFuzzy(p)
 	case *Partition:
@@ -1197,6 +1201,32 @@ func (v *legacyCollationVisitor) walkOrderBySpec(p *OrderBySpec) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkOrderedAutoIncrement(p *OrderedAutoIncrement) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.TableDef); err != nil {
+		return err
+	}
+	for _, item0 := range p.ForeignKeys {
+		if err := v.walkOrderedForeignKey(item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkOrderedForeignKey(p *OrderedForeignKey) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.TableDef); err != nil {
+		return err
+	}
+	if err := v.walkExpr(p.Predicate); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkOriginTableMessageForFuzzy(p *OriginTableMessageForFuzzy) error {
 	if p == nil {
 		return nil
@@ -1305,6 +1335,14 @@ func (v *legacyCollationVisitor) walkPreInsertUkCtx(p *PreInsertUkCtx) error {
 	}
 	for _, item0 := range p.KeyTypes {
 		if err := v.walkType(item0); err != nil {
+			return err
+		}
+	}
+	if err := v.walkOrderedAutoIncrement(p.OrderedAutoIncrement); err != nil {
+		return err
+	}
+	for _, item0 := range p.OrderedForeignKeys {
+		if err := v.walkOrderedForeignKey(item0); err != nil {
 			return err
 		}
 	}
