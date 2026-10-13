@@ -43,13 +43,10 @@ func CheckExclusiveWrite(fs FileService) error {
 		case *diskObjectStorage:
 			return nil
 		case *MinioSDK:
-			endpoint := strings.ToLower(storage.endpoint)
-			// These cloud endpoints are routed through the MinIO SDK for
-			// compatibility, but their conditional-PUT behavior has not been
-			// verified. Do not treat SDK selection as a capability guarantee.
-			if !strings.Contains(endpoint, "ctyunapi.cn") &&
-				!strings.Contains(endpoint, "myqcloud.com") &&
-				!strings.Contains(endpoint, "aliyuncs.com") {
+			// The MinIO SDK also targets compatibility endpoints. Only the
+			// explicit MinIO configuration opts into the conditional-PUT
+			// guarantee; SDK selection alone is not a capability guarantee.
+			if storage.supportsConditionalPut {
 				return nil
 			}
 		}

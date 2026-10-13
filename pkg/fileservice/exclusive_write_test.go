@@ -171,7 +171,7 @@ func TestWriteExclusiveObjectStorage(t *testing.T) {
 					require.NoError(t, err)
 					client, err := minio.New(endpoint.Host, &minio.Options{Creds: credentials.NewStaticV4("id", "secret", ""), Region: "us-east-1", Secure: false, Transport: server.Client().Transport})
 					require.NoError(t, err)
-					storage = &MinioSDK{bucket: "bucket", client: client}
+					storage = &MinioSDK{bucket: "bucket", client: client, supportsConditionalPut: true}
 				}
 			}
 			fs := &S3FS{name: "etl", storage: storage, rawStorage: storage, parallelMode: ParallelForce}
@@ -199,9 +199,11 @@ func TestWriteExclusiveRejectsUnsupported(t *testing.T) {
 		"cos.ap-guangzhou.myqcloud.com",
 		"oss-cn-shenzhen.aliyuncs.com",
 		"tos-cn-shanghai.ctyunapi.cn",
+		"custom-s3.example.com",
 	} {
 		require.Error(t, CheckExclusiveWrite(&S3FS{rawStorage: &MinioSDK{endpoint: endpoint}}), endpoint)
 	}
+	require.NoError(t, CheckExclusiveWrite(&S3FS{rawStorage: &MinioSDK{endpoint: "minio.internal:9000", supportsConditionalPut: true}}))
 	fs, err := NewLocalETLFS("etl", t.TempDir())
 	require.NoError(t, err)
 	defer fs.Close(context.Background())
@@ -227,6 +229,38 @@ func TestCheckExclusiveWriteAWSEndpoints(t *testing.T) {
 		} else {
 			require.Error(t, err, tc.endpoint)
 		}
+	}
+}
+
+func TestCheckExclusiveWriteMinioCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		isMinio  bool
+		allowed  bool
+	}{
+		{name: "explicit minio", endpoint: "http://minio.internal:9000", isMinio: true, allowed: true},
+		{name: "unverified compatible endpoint", endpoint: "https://s3-compatible.example.com", allowed: false},
+		{name: "cloud compatibility endpoint", endpoint: "https://tos-cn-shanghai.ctyunapi.cn", isMinio: true, allowed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, err := NewMinioSDK(context.Background(), ObjectStorageArguments{
+				Endpoint:             tc.endpoint,
+				Bucket:               "bucket",
+				KeyID:                "id",
+				KeySecret:            "secret",
+				IsMinio:              tc.isMinio,
+				NoDefaultCredentials: true,
+				NoBucketValidation:   true,
+			}, nil)
+			require.NoError(t, err)
+			err = CheckExclusiveWrite(&S3FS{rawStorage: storage})
+			if tc.allowed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
 	}
 }
 

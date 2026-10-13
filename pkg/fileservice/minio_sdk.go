@@ -38,14 +38,15 @@ import (
 )
 
 type MinioSDK struct {
-	name                 string
-	endpoint             string
-	bucket               string
-	core                 *minio.Core
-	client               *minio.Client
-	copyCredentialDomain objectStorageCopyCredentialDomain
-	perfCounterSets      []*perfcounter.CounterSet
-	listMaxKeys          int
+	name                   string
+	endpoint               string
+	supportsConditionalPut bool
+	bucket                 string
+	core                   *minio.Core
+	client                 *minio.Client
+	copyCredentialDomain   objectStorageCopyCredentialDomain
+	perfCounterSets        []*perfcounter.CounterSet
+	listMaxKeys            int
 }
 
 var _ objectStorageCopier = new(MinioSDK)
@@ -243,11 +244,12 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:     args.Name,
-		endpoint: args.Endpoint,
-		bucket:   args.Bucket,
-		client:   client,
-		core:     core,
+		name:                   args.Name,
+		endpoint:               args.Endpoint,
+		supportsConditionalPut: args.IsMinio && !minioEndpointIsKnownUnsupported(args.Endpoint),
+		bucket:                 args.Bucket,
+		client:                 client,
+		core:                   core,
 		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
 			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
 		),
@@ -265,6 +267,13 @@ type sqlMinioSTSTransport struct {
 
 func (t sqlMinioSTSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.next.RoundTrip(req.WithContext(t.ctx))
+}
+
+func minioEndpointIsKnownUnsupported(endpoint string) bool {
+	endpoint = strings.ToLower(endpoint)
+	return strings.Contains(endpoint, "ctyunapi.cn") ||
+		strings.Contains(endpoint, "myqcloud.com") ||
+		strings.Contains(endpoint, "aliyuncs.com")
 }
 
 var _ ObjectStorage = new(MinioSDK)
