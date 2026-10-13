@@ -1404,41 +1404,124 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 	return err == nil && caseFn.GetReturnType().Eq(sourceType)
 }
 
-// Proof must inspect computed key origins: a comparison's total widening
-// cast does not make a fallible expression hidden behind a Project column total.
-// Inline only the forwarding Project/Filter spine in a private proof copy.
+// A total comparison cast does not prove a column's computed origin total.
+// Inspect only referenced origins in the input graph, without expanding or
+// mutating expressions. Unknown producers retain the historical IS TRUE barrier.
 func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
 	if !areTruncationSafePredicates(predicates) {
 		return false
 	}
-	var proof []*plan.Expr
-	for _, id := range inputs {
-		for depth := 0; depth < len(builder.qry.Nodes); depth++ {
-			if id < 0 || int(id) >= len(builder.qry.Nodes) {
+	origins := make(map[int32]*plan.Node)
+	visited := make(map[int32]uint8)
+	var collect func(int32) bool
+	collect = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return false
+		}
+		if visited[id] != 0 {
+			return visited[id] == 2
+		}
+		visited[id] = 1
+		node := builder.qry.Nodes[id]
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_TABLE_SCAN:
+			if len(node.BindingTags) != 1 {
 				return false
 			}
-			node := builder.qry.Nodes[id]
-			if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER {
-				break
+			tag := node.BindingTags[0]
+			if previous := origins[tag]; previous != nil && previous != node {
+				return false
 			}
-			if node.NodeType == plan.Node_PROJECT {
-				if proof == nil {
-					proof = DeepCopyExprList(predicates)
-				}
-				if len(node.BindingTags) != 1 {
+			origins[tag] = node
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if node.TableDef == nil || len(node.Children) != 0 {
 					return false
 				}
-				for i, predicate := range proof {
-					proof[i] = replaceColRefs(predicate, node.BindingTags[0], node.ProjectList)
-				}
+				visited[id] = 2
+				return true
 			}
 			if len(node.Children) != 1 {
 				return false
 			}
-			id = node.Children[0]
+		case plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_PARTITION:
+			if len(node.Children) != 1 || len(node.BindingTags) != 0 {
+				return false
+			}
+		case plan.Node_JOIN:
+			if len(node.Children) != 2 {
+				return false
+			}
+		default:
+			// Do not certify columns defined by aggregate, window, CTE or
+			// other computed producers merely because their inputs are safe.
+			visited[id] = 2
+			return true
+		}
+		for _, child := range node.Children {
+			if !collect(child) {
+				return false
+			}
+		}
+		visited[id] = 2
+		return true
+	}
+	for _, id := range inputs {
+		if !collect(id) {
+			return false
 		}
 	}
-	return proof == nil || areTruncationSafePredicates(proof)
+
+	proved := make(map[[2]int32]uint8)
+	var inspect func(*plan.Expr) bool
+	inspect = func(expr *plan.Expr) bool {
+		if col := expr.GetCol(); col != nil {
+			key := [2]int32{col.RelPos, col.ColPos}
+			if proved[key] != 0 {
+				return proved[key] == 2
+			}
+			proved[key] = 1
+			node := origins[col.RelPos]
+			if node == nil || col.ColPos < 0 {
+				return false
+			}
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if int(col.ColPos) >= len(node.TableDef.Cols) {
+					return false
+				}
+			} else {
+				if int(col.ColPos) >= len(node.ProjectList) {
+					return false
+				}
+				origin := node.ProjectList[col.ColPos]
+				if !isTruncationSafePredicateValue(origin) || !inspect(origin) {
+					return false
+				}
+			}
+			proved[key] = 2
+			return true
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !inspect(arg) {
+					return false
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if !inspect(item) {
+					return false
+				}
+			}
+		}
+		return true // Non-column leaves were checked by the totality gate.
+	}
+	for _, predicate := range predicates {
+		if !inspect(predicate) {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
@@ -1456,7 +1539,10 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 		builder.existentialJoinPredicatesAreTotal(joinPreds, left, right)
 	if !keepRawExistential {
 		for i, pred := range joinPreds {
-			if !pred.Typ.NotNullable {
+			// Non-nullability does not prove that evaluating a key is total.
+			// EXISTS needs this structural barrier whenever its proof fails;
+			// retain historical null normalization for IN/ANY/ALL.
+			if existential || !pred.Typ.NotNullable {
 				joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
 				if err != nil {
 					return
