@@ -518,7 +518,7 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 		return nil
 	}
 	// check ww conflict
-	tbl := nn.GetNode().GetPayload()
+	tbl := node.GetPayload()
 	// skip the same table entry
 	if tbl.ID == tid {
 		return nil
@@ -531,7 +531,10 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 		// replay checkpoint
 		return nil
 	}
-	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
+	// A visible historical binding can be the rename target itself after its
+	// provisional schema update. Distinct admitted owners precede it in this
+	// list; do not continue into older history and introduce new waits.
+	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil && existEntry.GetPayload().ID != tid {
 		return moerr.GetOkExpectedDup()
 	}
 	return nil
