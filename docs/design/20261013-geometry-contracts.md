@@ -98,7 +98,7 @@ bare WKB, with SRID in type Width and float32 precision selected by GEOMETRY32.
 The typed converter widens GEOMETRY32, including every collection member.
 
 Both fast row writers and both materialized row writers use one frontend encoder.
-MysqlColumn retains the immutable source geometry type so materialized WKT,
+MysqlColumn retains immutable source OID and Width so materialized WKT,
 including prepared cursor results, retains the correct SRID. Missing source type
 is an error. Metadata stays type 255, with binary charset 63 and the binary flag.
 NULL and length encoding continue to use their existing protocol owners.
@@ -107,6 +107,33 @@ Internal row extraction, user variables, background results, CSV/data-branch
 exports and cursor memory reservation continue to use WKT. Direct SQL geometry
 values intentionally change to compatible binary output; use `ST_AsText` for
 readable text. Rollback needs no data rewrite but restores the former wire defect.
+
+### Output allocation
+
+Designs W1/W2 passed before implementation using `gpt-6.1-sol/xhigh`, session
+`01a133d4-b8e9-7e03-bcd1-8af9d1594eb8`. The WKB writer reserves the emitted size
+from structural counts, without inspecting flat coordinate arrays, then uses
+its existing byte emitter. `AppendWKB` lets the frontend encode directly after
+the SRID prefix, removing the intermediate WKB buffer and full copy. The typed
+append converter completes decoding before changing caller-owned destination
+storage; borrowed geometry payloads remain immutable. Size arithmetic is
+checked. Overflow or unusually deep direct standard-writer inputs disable the
+reservation optimization without adding validation or changing emitted bytes.
+Float32 validation still precedes allocation.
+
+Only OID and signed Width are needed for materialized conversion. Retaining that
+pair instead of the full type avoids unnecessary metadata space for every result
+column, without pointers, caches or new cursor state. Fast writers retain their
+vector type source. The four-byte output prefix remains a small allocation.
+Cached WKT still requires parsing; changing cursor representation is outside this
+optimization.
+
+`BenchmarkGeometryWireEncoding` and `BenchmarkGeometryMaterializedRow` cover a
+point and 1024/4096-vertex polygons, typed WKB and cached WKT. The latter measures
+actual row writing/flush to a discard connection, not full SQL/network latency.
+Ordinary 4/128-column rows and metadata allocation are controls; standalone WKB
+benchmarks cover primitives and collections. Compare serial three-sample 500ms
+runs with `-benchmem`; performance limits do not become timing assertions in UT.
 
 Rejected alternatives: only filling contacts when area is empty (loses mixed
 results), a second boundary scan (duplicates the kernel and cost), globally

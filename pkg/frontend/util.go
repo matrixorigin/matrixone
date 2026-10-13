@@ -2099,7 +2099,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
-		col.geometryType = typ
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
 		setMysqlColumnTypeMetadata(col, typ)
 		col.SetCharset(charsetBinary)
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))

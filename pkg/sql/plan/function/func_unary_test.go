@@ -13458,3 +13458,76 @@ func TestGeometryStandardWKBPreservesHistoricalText(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestAppendGeometryStandardWKB(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, payload string
+		oid           types.T
+	}{
+		{"standard", "0101000000000000000000f03f0000000000000040", types.T_geometry},
+		{"big endian", "00000000013ff00000000000004000000000000000", types.T_geometry},
+		{"float32", "01010000000000803f00000040", types.T_geometry32},
+		{"cached WKT", "POINT(1 2)", types.T_geometry},
+		{"cached EWKT", "SRID=999;POINT(1 2)", types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(tc.payload)
+			if strings.Contains(tc.name, "endian") || tc.name == "standard" || tc.name == "float32" {
+				payload, err = hex.DecodeString(tc.payload)
+				require.NoError(t, err)
+			}
+			original := bytes.Clone(payload)
+			typ := tc.oid.ToType()
+			typ.Width = 4327
+			dst := make([]byte, 4, 4+len(point))
+			copy(dst, []byte{1, 2, 3, 4})
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, payload, typ)
+			require.NoError(t, err)
+			require.Equal(t, uint32(4326), srid)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, append([]byte{1, 2, 3, 4}, point...), out)
+			require.Equal(t, original, payload)
+		})
+	}
+	// Mixed byte orders and a noncanonical NaN payload still normalize through
+	// the existing reader/emitter, rather than passing stored bytes through.
+	payload, err := hex.DecodeString("01070000000200000000000000013ff000000000000040000000000000000101000000000000000000f87f000000000000f87f")
+	require.NoError(t, err)
+	want, err := hex.DecodeString("0107000000020000000101000000000000000000f03f00000000000000400101000000010000000000f87f010000000000f87f")
+	require.NoError(t, err)
+	out, _, err := AppendGeometryPayloadToStandardWKB(nil, payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Equal(t, want, out)
+}
+
+func TestAppendGeometryStandardWKBErrorAtomicity(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	countInvalid, err := hex.DecodeString("0102000000ffffffff")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		oid     types.T
+	}{
+		{"missing type", point, types.T_varchar},
+		{"truncated", point[:len(point)-1], types.T_geometry},
+		{"invalid count", countInvalid, types.T_geometry},
+		{"trailing", append(bytes.Clone(point), 42), types.T_geometry},
+		{"malformed text", []byte("POLYGON((0 0,1 0,1))"), types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backing := bytes.Repeat([]byte{0xaa}, 64)
+			original := bytes.Clone(backing)
+			dst := backing[:4]
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, tc.payload, tc.oid.ToType())
+			require.Error(t, err)
+			require.Zero(t, srid)
+			require.Equal(t, dst, out)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, original, backing, "including spare capacity")
+		})
+	}
+}

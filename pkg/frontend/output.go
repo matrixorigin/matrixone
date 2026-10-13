@@ -898,11 +898,10 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 // encodeMySQLGeometry belongs to the MySQL boundary. Internal row extraction
 // continues to produce WKT; persisted payloads remain bare WKB.
 func encodeMySQLGeometry(payload []byte, typ types.Type) ([]byte, error) {
-	wkb, srid, err := planfunction.GeometryPayloadToStandardWKB(payload, typ)
+	out, srid, err := planfunction.AppendGeometryPayloadToStandardWKB(make([]byte, 4), payload, typ)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]byte, 4, 4+len(wkb))
 	binary.LittleEndian.PutUint32(out, srid)
-	return append(out, wkb...), nil
+	return out, nil
 }

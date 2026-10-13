@@ -108,7 +108,8 @@ type MysqlColumn struct {
 	ColumnImpl
 
 	// Immutable source metadata retained for geometry wire encoding, including cursors.
-	geometryType types.Type
+	geometryOid   types.T
+	geometryWidth int32
 
 	//schema name
 	schema string
@@ -140,6 +141,10 @@ type MysqlColumn struct {
 
 func (mc *MysqlColumn) DefaultValue() []byte {
 	return mc.defaultValue
+}
+
+func (mc *MysqlColumn) geometrySourceType() types.Type {
+	return types.Type{Oid: mc.geometryOid, Width: mc.geometryWidth}
 }
 
 func (mc *MysqlColumn) SetDefaultValue(defaultValue []byte) {

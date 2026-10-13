@@ -2330,8 +2330,15 @@ func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined
 // GeometryPayloadToStandardWKB converts using declared precision, without a WKT
 // round trip for stored WKB. SRID remains authoritative in the result type.
 func GeometryPayloadToStandardWKB(payload []byte, typ types.Type) ([]byte, uint32, error) {
+	return AppendGeometryPayloadToStandardWKB(nil, payload, typ)
+}
+
+// AppendGeometryPayloadToStandardWKB decodes before appending, so errors leave
+// dst untouched. The caller owns dst, which must not alias borrowed payload
+// storage. Source precision and SRID remain authoritative in typ.
+func AppendGeometryPayloadToStandardWKB(dst, payload []byte, typ types.Type) ([]byte, uint32, error) {
 	if typ.Oid != types.T_geometry && typ.Oid != types.T_geometry32 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("missing geometry source type")
+		return dst, 0, moerr.NewInvalidInputNoCtx("missing geometry source type")
 	}
 	var g geo.Geometry
 	var err error
@@ -2346,9 +2353,9 @@ func GeometryPayloadToStandardWKB(payload []byte, typ types.Type) ([]byte, uint3
 		g, err = geo.ParseWKTForSerialization(wkt)
 	}
 	if err != nil {
-		return nil, 0, err
+		return dst, 0, err
 	}
-	return geo.WriteWKB(g), sridFromTypeWidth(typ.Width), nil
+	return geo.AppendWKB(dst, g), sridFromTypeWidth(typ.Width), nil
 }
 
 func GeometryPayloadToText(payload []byte) (string, error) {

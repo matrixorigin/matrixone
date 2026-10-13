@@ -2715,7 +2715,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			// Preserve raw bytes for binary values, including legacy vectors
 			// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_GEOMETRY:
-			if err := mp.appendGeometryValue(mrs, rowIdx, i, mysqlColumn.geometryType); err != nil {
+			if err := mp.appendGeometryValue(mrs, rowIdx, i, mysqlColumn.geometrySourceType()); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
@@ -2982,7 +2982,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			// Preserve raw bytes for binary values, including legacy vectors
 			// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_GEOMETRY:
-			if err := mp.appendGeometryValue(mrs, r, i, mysqlColumn.geometryType); err != nil {
+			if err := mp.appendGeometryValue(mrs, r, i, mysqlColumn.geometrySourceType()); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,

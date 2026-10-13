@@ -1367,7 +1367,8 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlGeometryResultSet() *MysqlResultSet {
+func makeMysqlGeometryResultSet(t *testing.T) *MysqlResultSet {
+	t.Helper()
 	var rs = &MysqlResultSet{}
 
 	name := "Geometry"
@@ -1375,12 +1376,10 @@ func makeMysqlGeometryResultSet() *MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
-	mysqlCol.geometryType = types.T_geometry.ToType()
+	require.NoError(t, setMysqlColumnTypeInfo(context.Background(), types.T_geometry.ToType(), mysqlCol))
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -1940,7 +1939,7 @@ func TestMysqlResultSet(t *testing.T) {
 		},
 		{
 			sql: "select geometry",
-			mrs: makeMysqlGeometryResultSet(),
+			mrs: makeMysqlGeometryResultSet(t),
 		},
 		{
 			sql: "select date",
