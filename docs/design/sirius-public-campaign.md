@@ -16,7 +16,8 @@ separate allocation profiling without a native observability prerequisite. E/F a
 The owner approved the focused performance plan before implementation. This
 increment makes the owned campaign's Go CPU budget explicit and records pinned
 allocation granularity; production backend and service defaults do not change.
-Both `serve` and `freeze` require positive `--gomaxprocs` and accept
+Both `serve` and `freeze` require `--gomaxprocs` in Go's runtime range
+1 through 2147483647 and accept
 `--host-block-bytes` of 65536 or 1048576, defaulting to 65536. New provenance
 records `config.gomaxprocs` and `config.native_host_block_bytes`. `run` validates
 the frozen profile before starting services and launches native and embedded
@@ -33,8 +34,9 @@ and 10% numeric gates, and do not infer acceptance from the targeted diagnostics
 Q15 shared-CTE reuse, Q13 join changes and default cutover require separate work.
 
 Sirius #32 merged as `87aaaa24137d20e5022e41d2b67c867b608883c7` and #33
-merged as `0cc6e484e0ee9dae3aa41919598116625d1abec8`. The consumer pins the
-latter for logical input/result initialization and eligible Decimal64 grouped
+merged as `0cc6e484e0ee9dae3aa41919598116625d1abec8`. Sirius #34 merged as
+`06400cf48073e51955067bfd75c5c4defe955a72`; the consumer pins this fixture
+correction on top of logical input/result initialization and eligible Decimal64 grouped
 SUM/AVG/COUNT. Checked global merge, final precision and AVG rounding retain
 their existing implementation. Fresh guarded release qualification compares
 against merged #31 on the same MO main base and frozen 16-CPU/64-KiB profile;
@@ -83,6 +85,14 @@ relabeled. Public writer/compiler normal/race cleanup, owning function/compiler,
 actual GPU bridge and same-process cuVS checks, all 86 tooling tests and full
 SCA pass. Fail-closed artifact acceptance reports local completion, with CI and
 reviewer approval remaining. Generated evidence remains outside Git.
+
+The deep delivery review rejects CPU budgets beyond Go's signed 32-bit range:
+the runtime silently ignores those values, so accepting them would misreport
+the execution profile. Boundary fixtures fail before this guard and pass after
+it. The validated 16-CPU profile is unchanged. Merged #34 is tree-identical to
+the tested fixture correction and changes no production, ABI, CMake or provider
+input relative to measured `0cc6e484`. Its source-pin and SDK receipts are
+refreshed separately; existing captures retain their original identities.
 
 ## Contract and choice
 

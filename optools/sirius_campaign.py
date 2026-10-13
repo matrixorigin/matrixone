@@ -855,8 +855,10 @@ def write_timing_tables(output, campaign, records, summary):
 
 
 def execution_environment(gomaxprocs):
-    if type(gomaxprocs) is not int or gomaxprocs <= 0:
-        raise v2.CampaignError("campaign Go CPU budget must be a positive integer")
+    if type(gomaxprocs) is not int or not 0 < gomaxprocs <= v2.MAX_GOMAXPROCS:
+        raise v2.CampaignError(
+            "campaign Go CPU budget must be between 1 and 2147483647"
+        )
     environment = os.environ.copy()
     environment["GOMAXPROCS"] = str(gomaxprocs)
     return environment

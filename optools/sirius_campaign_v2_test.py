@@ -150,14 +150,14 @@ class CampaignV2Test(unittest.TestCase):
             campaign.build_campaign(value)
 
     def test_execution_profile_requires_explicit_bounded_settings(self):
-        for budget, block in ((4, 1048576), (16, 65536)):
+        for budget, block in ((4, 1048576), (16, 65536), ((1 << 31) - 1, 65536)):
             value = provenance()
             value["config"].update(gomaxprocs=budget, native_host_block_bytes=block)
             frozen = campaign.build_campaign(value)["provenance"]["config"]
             self.assertEqual(frozen["gomaxprocs"], budget)
             self.assertEqual(frozen["native_host_block_bytes"], block)
         for key, values in (
-            ("gomaxprocs", (None, True, 0, -1, "16", 16.0)),
+            ("gomaxprocs", (None, True, 0, -1, "16", 16.0, 1 << 31, 10**100)),
             ("native_host_block_bytes", (None, True, 0, 32768, 65536.0)),
         ):
             for setting in values:

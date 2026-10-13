@@ -38,10 +38,11 @@ from sirius_campaign_v2_test import provenance, output
 class ControllerTest(unittest.TestCase):
     def test_execution_environment_replays_frozen_cpu_budget(self):
         with patch.dict(os.environ, {"GOMAXPROCS": "99"}):
-            environment = controller.execution_environment(16)
-            self.assertEqual(environment["GOMAXPROCS"], "16")
+            for budget in (16, (1 << 31) - 1):
+                environment = controller.execution_environment(budget)
+                self.assertEqual(environment["GOMAXPROCS"], str(budget))
             self.assertEqual(os.environ["GOMAXPROCS"], "99")
-        for value in (0, -1, True, 1.5, "16", None):
+        for value in (0, -1, True, 1.5, "16", None, 1 << 31, 10**100):
             with self.subTest(value=value), self.assertRaises(v2.CampaignError):
                 controller.execution_environment(value)
 

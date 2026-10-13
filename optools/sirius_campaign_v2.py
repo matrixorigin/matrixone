@@ -44,6 +44,9 @@ SCRATCH_BYTES = 4 << 30
 ROW_BYTES = 1 << 20
 OUTPUT_BYTES = 1 << 20
 STDERR_BYTES = 64 << 10
+# The Go runtime parses GOMAXPROCS as a signed 32-bit integer. Larger values
+# are ignored, so accepting one would record a CPU budget the service never uses.
+MAX_GOMAXPROCS = (1 << 31) - 1
 ROUTES = (
     {"id": "mo-native", "backend": "native", "scan_mode": "mo"},
     {"id": "embedded-mo", "backend": "embedded", "scan_mode": "mo"},
@@ -176,7 +179,10 @@ def build_campaign(provenance, *, resource=False, flight_profiles=()):
     }:
         raise CampaignError("campaign session semantics differ")
     config = provenance["config"]
-    if type(config["gomaxprocs"]) is not int or config["gomaxprocs"] <= 0:
+    if (
+        type(config["gomaxprocs"]) is not int
+        or not 0 < config["gomaxprocs"] <= MAX_GOMAXPROCS
+    ):
         raise CampaignError("invalid campaign Go CPU budget")
     if type(config["native_host_block_bytes"]) is not int or config[
         "native_host_block_bytes"
