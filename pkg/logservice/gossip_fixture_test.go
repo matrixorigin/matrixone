@@ -126,8 +126,12 @@ func isGossipFixtureBindCollision(err error) bool {
 
 func makeGossipFixtureConfigs(t *testing.T, rt runtime.Runtime, nodeCount int) ([]Config, error) {
 	t.Helper()
+	first, limit, err := testPortRange()
+	if err != nil {
+		return nil, err
+	}
 	return makeGossipFixtureConfigsWithAllocator(t, rt, nodeCount, func() (int, error) {
-		return randomPorts.allocate(probeTestPort)
+		return randomPorts.allocate(first, limit, probeTestPort)
 	})
 }
 
@@ -694,6 +698,25 @@ func TestGossipFixtureStartupConfigurationFailure(t *testing.T) {
 				require.ErrorIs(t, err, cancelErr)
 			}
 		})
+	}
+}
+
+func TestGossipFixtureConfigPortRange(t *testing.T) {
+	first, limit, err := testPortRange()
+	require.NoError(t, err)
+	rt := runtime.DefaultRuntime()
+	configs, err := makeGossipFixtureConfigs(t, rt, 2)
+	defer func() { require.NoError(t, closeGossipFixture(rt, configs, nil)) }()
+	require.NoError(t, err)
+	require.Len(t, configs, 2)
+	seen := make(map[int]struct{})
+	for _, cfg := range configs {
+		for _, port := range []int{cfg.GossipPort, cfg.RaftPort, cfg.LogServicePort} {
+			require.GreaterOrEqual(t, port, first)
+			require.Less(t, port, limit)
+			require.NotContains(t, seen, port)
+			seen[port] = struct{}{}
+		}
 	}
 }
 
