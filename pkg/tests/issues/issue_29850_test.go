@@ -59,6 +59,21 @@ func TestIssue29850PreparedPrimaryKeyUpsertIdentityGuard(t *testing.T) {
 
 		exec("CREATE TABLE pk_only (id INT PRIMARY KEY, payload VARCHAR(40))")
 		exec("INSERT INTO pk_only VALUES (1, 'seed')")
+
+		// MySQL parses a negative numeric literal as a unary expression around
+		// the number. It is still a direct key value and should pass the runtime
+		// identity guard when the duplicate row already has that key.
+		exec("CREATE TABLE negative_pk (id INT PRIMARY KEY, payload VARCHAR(20))")
+		exec("INSERT INTO negative_pk VALUES (-1, 'old')")
+		exec("INSERT INTO negative_pk VALUES (-1, 'new') " +
+			"ON DUPLICATE KEY UPDATE id = -1, payload = VALUES(payload)")
+		var negativeID int
+		var negativePayload string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT id, payload FROM negative_pk WHERE id = -1").Scan(&negativeID, &negativePayload))
+		require.Equal(t, -1, negativeID)
+		require.Equal(t, "new", negativePayload)
+
 		pkStmt, err := conn.PrepareContext(ctx,
 			"INSERT INTO pk_only(id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload=VALUES(payload), id=?")
 		require.NoError(t, err)

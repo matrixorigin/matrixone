@@ -99,6 +99,28 @@ func TestInsertOnDupPrimaryKeyLiteralIdentityIsRuntimeGuarded(t *testing.T) {
 	requireODKUPKIdentityGuard(t, logicPlan, 0)
 }
 
+func TestInsertOnDupPrimaryKeySignedLiteralIdentityIsRuntimeGuarded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		pk    string
+	}{
+		{name: "negative", value: "-1", pk: "-1"},
+		{name: "positive", value: "1", pk: "+1"},
+		{name: "parenthesized negative", value: "-1", pk: "-(1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a, b) values ("+tc.value+", 'x') "+
+					"on duplicate key update a = "+tc.pk+", b = values(b)")
+			require.NoError(t, err)
+			requireOnDupUpdateColumns(t, logicPlan, []int32{0, 1}, nil)
+			requireODKUPKIdentityGuard(t, logicPlan, 0)
+		})
+	}
+}
+
 func TestInsertOnDupGuardedPrimaryKeyDoesNotEnableActionReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -223,6 +245,7 @@ func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
 func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
 	for _, assignment := range []string{
 		"a = a + 1, b = values(b)",
+		"a = -(1 + 0), b = values(b)",
 		"a = 1, a = a + 1, b = values(b)",
 		"a = a + 1, a = 1, b = values(b)",
 	} {

@@ -4471,9 +4471,26 @@ func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 // wrapped expressions and cross-column references on the existing unsupported
 // path; direct parentheses do not change the assignment's meaning.
 func isDirectODKUPKIdentityValue(expr tree.Expr) bool {
-	switch unwrapParenExpr(expr).(type) {
+	expr = unwrapParenExpr(expr)
+	switch value := expr.(type) {
 	case *tree.NumVal, *tree.StrVal, *tree.ParamExpr:
 		return true
+	case *tree.UnaryExpr:
+		return isSignedODKUPKNumericLiteral(value)
+	default:
+		return false
+	}
+}
+
+func isSignedODKUPKNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		return isSignedODKUPKNumericLiteral(value.Expr)
 	default:
 		return false
 	}
