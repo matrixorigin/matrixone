@@ -1,4 +1,4 @@
-# Filtered vector search: pre, post and auto for every vector index
+# Filtered vector search: pre, iterative, post and auto for every vector index
 
 Owner issue: #28988. Branch `bug_28988`, delivered as PR1–PR7 below. Design revision 1,
 2026-10-12, based on main `cd8d5abf96` (IndexSearchScan for all index searches, #29746).
@@ -43,8 +43,9 @@ no index) is the only mode that never returns a short page.
 
 1. Pre-filtering (`mode=pre`) for hnsw, cagra and ivfpq: the filter's qualifying keys are applied
    inside the index search.
-2. In `pre`, a search budget that widens when the page is short, up to a cap the user can set,
-   on all four vector indexes. `post` runs one search whose budget the user can set.
+2. `mode=iterative`: a pre-filtered search whose budget widens when the page is short, up to a
+   cap the user can set, on all four vector indexes. `pre` and `post` run one search whose
+   budget the user can set.
 3. `auto` for every index that supports pre.
 4. Hybrid fulltext + vector top-k uses the vector index on hnsw, cagra and ivfpq.
 5. The chosen mode, knobs, caps and rounds are visible in `EXPLAIN` / `EXPLAIN ANALYZE`.
@@ -68,7 +69,8 @@ results.
 Where MatrixOne differs. pgvector documents its iterative scan as post-filtering, but the filter
 runs on each tuple while the scan is still going, so the scan learns how many rows qualify: in
 MatrixOne's terms that is `pre`. MatrixOne's `post` filters in the join after the index search has
-returned, like pgvector with `iterative_scan = off`. pgvector streams and resumes one scan. usearch (hnsw) and cuVS
+returned, like pgvector with `iterative_scan = off`. MatrixOne's `iterative` is pgvector's
+iterative scan; its `pre` is the filter inside one search. pgvector streams and resumes one scan. usearch (hnsw) and cuVS
 (cagra, ivfpq) return a fixed top-k per call and expose no resume or list-subset API, so widening
 here restarts the search with larger knobs. ivfflat already has a resumable cursor
 (`IvfSearchCursor`), so its widening continues instead. MatrixOne keeps one restart-and-double
@@ -82,19 +84,21 @@ loop per algorithm and a predictive starting point so that restarts are rare (se
 | mode | meaning |
 |---|---|
 | `post` (default) | one index search, then the residual filter |
-| `pre` | the filter's qualifying keys (membership) are applied inside the index search; the budget widens while the page is short |
+| `pre` | the filter is applied inside one index search: the qualifying keys of a filtered scan (membership), or, on ivfflat, a filter the index search evaluates itself (the primary key) |
+| `iterative` | `pre` whose search widens while the page is short, up to `max_itopk` / `max_nprobe`; on ivfflat a filter covered by INCLUDE columns runs inside the index search |
+| `include` | ivfflat only: `iterative` (the mode INCLUDE columns introduced, #24168) |
 | `auto` | `ADAPTIVE_TOP [post, pre, force]`: the next branch runs when the previous one is short |
 | `force` | exact search without the vector index |
 
-Explicit `pre` or `auto` on an index that does not support membership is an error (today it is
-ignored).
+Explicit `pre`, `iterative` or `auto` on an index that does not support membership is an error
+(today `pre` and `auto` are ignored); `include` on an index other than ivfflat is an error.
 
 ### Knobs
 
 Set in `BY RANK WITH OPTION`, one `key=value` per string literal, by index family:
 
 ```sql
-... ORDER BY l2_distance(v, q) LIMIT 10 BY RANK WITH OPTION 'mode=pre', 'itopk=200', 'max_itopk=5000';
+... ORDER BY l2_distance(v, q) LIMIT 10 BY RANK WITH OPTION 'mode=iterative', 'itopk=200', 'max_itopk=5000';
 ```
 
 A knob that does not belong to the index's family is an error; values are positive integers and
@@ -108,7 +112,8 @@ before.
 | IVF: ivfflat, ivfpq | `itopk`, `max_itopk` | candidates returned from the probed lists: start / cap |
 
 `LIMIT` rows are returned; the knobs only size the internal search. The caps `max_itopk` and
-`max_nprobe` bound the widening of `pre`; `post` runs one search and does not use them.
+`max_nprobe` bound the widening of `iterative`; `pre` and `post` run one search and do not use
+them.
 
 Defaults and precedence (most specific wins):
 
@@ -133,10 +138,11 @@ the probed lists.
 
 ### Which knob acts, per mode
 
-In `pre` the filter runs inside the search; in `post` it runs after it. That decides which knob
-can fill a short page.
+In `iterative` the filter runs inside the search and the search widens; in `post` the filter
+runs after one search. That decides which knob can fill a short page. `pre` runs one search
+with `itopk` (or `nprobe`) and no cap.
 
-| | pre | post |
+| | iterative | post |
 |---|---|---|
 | hnsw | `itopk` / `max_itopk`: non-members still occupy beam slots while the graph is traversed | `itopk` |
 | cagra | `itopk` / `max_itopk` as start and cap; cuVS `filtering_rate` (auto) scales the internal list for the filter rate | `itopk` |
@@ -150,7 +156,7 @@ A knob with no effect in the chosen mode is accepted, so the same SQL works acro
 
 ### Predictive start
 
-In `pre`, the selectivity is exact: `|S|` qualifying keys over `N` indexed rows.
+In `iterative`, the selectivity is exact: `|S|` qualifying keys over `N` indexed rows.
 
 - hnsw starts at `itopk ≈ k · N / |S|` (times a safety factor), clamped to `[itopk, max_itopk]`.
 - ivfflat and ivfpq scale `nprobe` the same way, clamped to `[nprobe, max_nprobe]`. ivfflat
@@ -171,24 +177,28 @@ fixture: every near neighbor fails the filter).
 ### hnsw (CPU, usearch)
 
 - Regular search: `HnswModel.Search` per sub-index, merged into a global top-k
-  (`pkg/vectorindex/hnsw/search.go`). For `pre` it calls the existing
+  (`pkg/vectorindex/hnsw/search.go`). For `pre` and `iterative` it calls the existing
   `usearchex.FilteredSearchUnsafeWithMembership` (`pkg/vectorindex/usearchex/search.go`): a C
   predicate tests each usearch key, which is the BIGINT primary key, against the membership
   filter (cbitmap or sorted64), with one cgo crossing per sub-index search.
 - Knob mapping: the requested count is `itopk`; usearch searches with `max(count, ef_search)`, so
   a larger count widens the beam for that call without changing the shared index's
   `ExpansionSearch`.
-- Widening: `hnsw.AdvancedSearch` (`pkg/vectorindex/hnsw/advsearch.go`) starts at the larger of
+- `pre`: one membership search with the candidate budget.
+- Widening (`iterative`, `ScanOptions.Iterative`): `hnsw.AdvancedSearch`
+  (`pkg/vectorindex/hnsw/advsearch.go`) starts at the larger of
   the candidate budget and `k·N/|S| × 2`, and restarts with `itopk × 2` up to `max_itopk`
   (default `DefaultMaxInternalTopK` = 20000, pgvector's `hnsw.max_scan_tuples` default), bounded
   by the indexed rows. usearch has no resumable search. An exact empty key set returns no rows
   without searching.
 - Traversal: usearch's filtered search navigates through non-matching nodes and only keeps
   matching keys in its results. On the issue fixture (the 500 nearest rows fail the filter,
-  `ef_search` 16) `mode=pre` returns the 10 qualifying nearest rows even with `max_itopk` = 10.
-- Short page when: `max_itopk` is reached before the qualifying nearest rows are found. The
-  tested fixtures (prefix, periodic, `IN`, combined and `NULL` filters) do not reach it.
-- Plan: `mode=pre`, a membership join, or a fulltext `MATCH` filter on the scan builds the PRE
+  `ef_search` 16) `mode=pre` returns the 10 qualifying nearest rows in one search, and
+  `mode=iterative` with `max_itopk` = 10.
+- Short page when: `pre`, the one search misses qualifying nearest rows; `iterative`,
+  `max_itopk` is reached before they are found. The tested fixtures (prefix, periodic, `IN`,
+  combined and `NULL` filters) reach neither.
+- Plan: `mode=pre`, `mode=iterative`, a membership join, or a fulltext `MATCH` filter on the scan builds the PRE
   shape. A query vector from a provider row runs the search per row in APPLY, which receives no
   membership runtime filter; that query keeps the exact sort.
 - Auto: `mode=auto` builds `ADAPTIVE_TOP [post, pre, force]` with the builder shared with
@@ -208,20 +218,22 @@ fixture: every near neighbor fails the filter).
   (`cgo/cuvs/index_base.hpp`): INCLUDE predicates AND not-deleted AND membership. Membership is a
   sorted array of primary keys tested against `host_ids` in the same pass.
 - Knob mapping: `itopk_size = max(itopk, LIMIT)`; `filtering_rate` stays auto.
-- Widening (`pre`): restart with `itopk × 2` up to `max_itopk`, clamped to cuVS's `itopk_size`
-  limit.
-- Short page when: `max_itopk` (or the cuVS limit) is reached.
+- Widening (`iterative`): restart with `itopk × 2` up to `max_itopk`, clamped to cuVS's
+  `itopk_size` limit. `pre` searches once.
+- Short page when: `pre`, the one search misses qualifying rows; `iterative`, `max_itopk` (or
+  the cuVS limit) is reached.
 - Ranking: exact distances on the stored vectors (see "Ranking precision by storage type").
 
 ### ivfpq (GPU, cuVS)
 
 - Regular search: cuVS IVF-PQ with the same per-query bitset as cagra.
-- Knob mapping: `n_probes = nprobe`; `k = itopk` in `post`, `LIMIT` in `pre`.
-- Widening (`pre`): restart with `nprobe × 2` up to `max_nprobe`. `ivf_pq::search` takes only `n_probes`; it has no list-subset or resume API, so earlier
+- Knob mapping: `n_probes = nprobe`; `k = itopk` in `post`, `LIMIT` in `pre` and `iterative`.
+- Widening (`iterative`): restart with `nprobe × 2` up to `max_nprobe`; `pre` searches once. `ivf_pq::search` takes only `n_probes`; it has no list-subset or resume API, so earlier
   lists are scanned again. Because the knobs double, the total over all rounds is at most about
   twice the final round.
 - `max_nprobe = n_lists` probes every list, so every qualifying row can be returned.
-- Short page when: the caps are reached with `max_nprobe < n_lists`.
+- Short page when: `pre`, the `nprobe` lists hold too few qualifying rows; `iterative`, the
+  caps are reached with `max_nprobe < n_lists`.
 - Ranking: PQ distances (approximate) in every case, including `n_probes = n_lists`. The index
   holds PQ codes only; there are no raw vectors to rank exactly.
 
@@ -232,8 +244,9 @@ fixture: every near neighbor fails the filter).
   the membership set and the filters evaluated in the index search (INCLUDE columns and the
   primary key), up to its row limit.
 - Pre-filters: a membership set (the PRE shape, when a filter needs the table), or filters the
-  index search evaluates itself (when every filter reads only INCLUDE columns or the primary
-  key; no membership join is built). A membership set of 100 keys or fewer
+  index search evaluates itself: the primary key in every mode, and INCLUDE columns in the
+  default mode, `iterative` / `include` and `auto` (not in `pre` or `post`). No membership join is
+  built when the index search evaluates every filter. A membership set of 100 keys or fewer
   (`exactPkFilterThreshold`) scans those keys in every list.
 - Knob mapping: `nprobe` lists in the first round; candidate count `itopk`.
 - Widening: `ivfflat.AdvancedSearch` (`pkg/vectorindex/ivfflat/advsearch.go`) runs in the reader
@@ -241,20 +254,21 @@ fixture: every near neighbor fails the filter).
   membership set, at least `n_lists · budget / |S| × 2`. Each further round continues the cursor
   with twice the previous round's lists (at most 4096), until the reader holds the candidate
   budget (at most `|S|`), all lists are probed, or the lists probed reach `max_nprobe`. It runs
-  for `mode=pre` on one reader (membership set or index-evaluated filters) and for `include`
-  mode, whose loop it replaces. A PRE search split across readers (local DOP or one reader per
-  CN, for large entries tables) shares one route and searches one round, as before: no reader
+  for `mode=iterative` (and `include`): when the index search evaluates every filter the scan
+  is multi-round (`BucketExpandStep`); a membership search widens on a reader that holds the
+  whole search (`ScanOptions.Iterative`). A PRE search split across readers (local DOP or one
+  reader per CN, for large entries tables) shares one route and searches one round: no reader
   holds the merged row count.
-- `post` and the default mode search one round, also when the index search evaluates the
-  filter.
+- `pre`, `post` and the default mode search one round, also when the index search evaluates
+  the filter.
 - Centroid ranking: the rounds walk one ranking of all lists, a permutation of the centroid ids
   (`completeCentroidRanking`, `ivfflat/search.go`). A query vector whose centroid distances tie
   or are not numbers (a zero vector under cosine) can rank a centroid twice and leave others
   out; the duplicates are dropped and the missing lists appended in id order.
-- Short page when (`pre`): a membership set over 100 keys, or index-evaluated filters, and the
-  lists probed reach `max_nprobe < n_lists`; or the search is split across readers and the
-  `nprobe` lists hold too few qualifying rows. A membership set of 100 keys or fewer is never
-  short.
+- Short page when: `pre`, the `nprobe` lists hold too few qualifying rows (a membership set of
+  100 keys or fewer is never short); `iterative`, a membership set over 100 keys or
+  index-evaluated filters and the lists probed reach `max_nprobe < n_lists`, or the search is
+  split across readers and the `nprobe` lists hold too few qualifying rows.
 - Ranking: exact on the stored entries; quantized entries (`quantization` option) rank by the
   quantized values.
 
@@ -271,12 +285,12 @@ fixture: every near neighbor fails the filter).
 A cell reads "short when ..." under the default and configured caps. Every cell has a test in
 "Claims".
 
-| | post | pre | auto | force |
-|---|---|---|---|---|
-| hnsw | the residual filter rejects more candidates than the one search returned (`itopk`, or the over-fetch) | `max_itopk` reached before the qualifying nearest rows are found (not reached by the tested fixtures) | never: a short `post` and `pre` fall through to `force` | never |
-| cagra | as hnsw | `max_itopk` / cuVS limit reached | as hnsw | never |
-| ivfpq | as hnsw, with the candidates of `nprobe` lists | `max_nprobe < n_lists` reached | as hnsw | never |
-| ivfflat | as ivfpq | over 100 keys or index-evaluated filters: `max_nprobe < n_lists` reached, or the search split across readers; 100 keys or fewer: never | as hnsw | never |
+| | post | pre | iterative | auto | force |
+|---|---|---|---|---|---|
+| hnsw | the residual filter rejects more candidates than the one search returned (`itopk`, or the over-fetch) | the one search misses qualifying nearest rows (not reached by the tested fixtures) | `max_itopk` reached before the qualifying nearest rows are found (not reached by the tested fixtures) | never: a short `post` and `pre` fall through to `force` | never |
+| cagra | as hnsw | the one search misses qualifying rows | `max_itopk` / cuVS limit reached | as hnsw | never |
+| ivfpq | as hnsw, with the candidates of `nprobe` lists | the `nprobe` lists hold too few qualifying rows | `max_nprobe < n_lists` reached | as hnsw | never |
+| ivfflat | as ivfpq | the `nprobe` lists hold too few qualifying rows; 100 keys or fewer: never | over 100 keys or index-evaluated filters: `max_nprobe < n_lists` reached, or the search split across readers; 100 keys or fewer: never | as hnsw | never |
 
 "Short" here means fewer than min(`LIMIT`, qualifying rows).
 
@@ -296,10 +310,10 @@ A cell reads "short when ..." under the default and configured caps. Every cell 
   (`pkg/indexplugin/search/hooks.go`): `StartRound` returns the first `Round` (`ITopK`, and
   `NProbe` for IVF) from the request and the `SearchStats` the caller knows (indexed rows,
   membership keys); `NextRound` returns the round after one that returned too few rows, or
-  stops. The algorithm's membership (pre) search runs the rounds itself. The search of each round
+  stops. The algorithm's `iterative` search runs the rounds itself. The search of each round
   is the algorithm's regular search.
 - The only other shared code is option parsing and precedence.
-- The reader calls the regular search directly when no mode or knob needs the advanced layer.
+- The reader calls the regular search directly unless the scan is `iterative`.
 
 ### Membership capability
 
@@ -358,10 +372,10 @@ unchanged.
 The residual filter runs in the join above the `IndexSearchScan`, after the search has returned
 all its candidates, so the search cannot count the rows that survive it and has no signal to
 widen on. `post` runs one search sized by `itopk` (or the over-fetch). A short `post` page is
-filled by `pre`, or by `auto`, whose `ADAPTIVE_TOP` (`pkg/sql/colexec/adaptivetop`) runs `pre` and
-then `force` when the previous branch is short.
+filled by `iterative`, or by `auto`, whose `ADAPTIVE_TOP` (`pkg/sql/colexec/adaptivetop`) runs
+`pre` and then `force` when the previous branch is short.
 
-### End-to-end flow (pre on cagra)
+### End-to-end flow (iterative on cagra)
 
 1. The planner builds the PRE shape; the filtered scan produces the qualifying primary keys.
 2. The runtime filter carries them to the `IndexSearchScan`; the reader decodes them into a
@@ -394,8 +408,11 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 - **Membership**: no version change. Since #29746 the hnsw, cagra and ivfpq readers refuse
   `MembershipFilterRequired`, so a CN running an older build fails a PRE plan instead of ignoring
   the filter.
-- **Defaults**: `post` stays the default; the caps have session defaults, so widening is on for
-  `pre` without any option. A query using no new mode or knob runs exactly as today.
+- **Defaults**: `post` stays the default; widening runs only under `mode=iterative` (or ivfflat's
+  `include`). A query using no new mode or knob runs exactly as today.
+- **Scan options**: `iterative` is a field of the hnsw and ivfflat `algo_options` JSON. A CN of an
+  older build ignores it: hnsw then searches once (as `pre`), ivfflat widens a scan marked
+  multi-round and searches a membership scan once.
 - **Observability**: `EXPLAIN` prints `Candidate Limit`, ivfflat's `NProbe`, and the SQL options
   `Internal Top-K`, `Max Internal Top-K` and `Max NProbe` when set; a scan without them prints
   as before. Session-variable values are not in the plan and are not printed by `EXPLAIN`.
@@ -435,7 +452,7 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 | PR2 | knobs, session variables, wire fields and MORPC version, `EXPLAIN`; single search, no widening |
 | PR3 | hnsw `pre` + `hnsw/advsearch.go`; hybrid fulltext on hnsw |
 | PR4 | hnsw `auto`: the `ADAPTIVE_TOP [post, pre, force]` builder for every capable algorithm; remove the unused `rewriteAutoModeToPre` path |
-| PR5 | ivfflat onto the two layers: `ivfflat/advsearch.go` drives `pre` and `include` rounds in the reader |
+| PR5 | ivfflat onto the two layers: `ivfflat/advsearch.go` drives the `iterative` (and `include`) rounds in the reader; `mode=iterative` on ivfflat and hnsw |
 | PR6 | cagra and ivfpq `pre` and `auto` (C++ membership mask) + their `advsearch.go`; hybrid fulltext on both |
 | PR7 | `force` under `gpu_mode` through the `vector_matmul` engine (after #29554 is on main) |
 
@@ -445,23 +462,24 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 
 | # | Claim | Black-box test |
 |---|---|---|
-| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes, except ivfflat searches that run as `pre` on one reader (`mode=pre`, the `pre` branch of `mode=auto`, `enable_vector_prefilter_by_default`, include mode's PRE fallback), which now widen, and an ivfflat query vector that ties every centroid (claim 16). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
-| 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error; ivfflat accepts both. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
+| 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes, except an ivfflat query vector that ties every centroid (claim 16) and ivfflat `include`, now `iterative`, whose membership search also widens. | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
+| 2 | Explicit `mode=pre`, `mode=iterative` or `mode=auto` on an index without membership support is an error; ivfflat and hnsw accept them. `mode=include` is accepted by ivfflat only. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 4 | `EXPLAIN` shows the SQL options `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and ivfflat's `NProbe`. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
 | 5 | A `SET vector_itopk` after `PREPARE` applies to the next `EXECUTE` and stops applying once reset; the SQL option wins over it. | `cases/vector/vector_filtered_search_knobs.sql` |
 | 5a | With a single search, `itopk` covering the index returns a full page on the issue fixture where the default budget returns none, on hnsw, ivfflat, cagra and ivfpq (ids 501..510 on all but cagra, whose graph build is not deterministic); `max_itopk` lowers `itopk`. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
-| 6 | The issue fixture returns ids 501..510 in `pre` through the hnsw index, for l2 on a five-sub-index table and cosine, where the default post returns none. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_modes.sql` |
-| 7 | The issue fixture returns ids 501..510 in `pre` through the cagra and the ivfpq index. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
-| 8 | `pre` returns zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and `LIMIT` rows when exactly or more than `LIMIT` qualify, with periodic, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`, equal to `mode=force`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR6); `cases/vector/vector_filtered_search_ivfflat.sql` (ivfflat) |
-| 9 | Each "short when" cell of the short-page matrix that a fixture reaches: with a cap set below what the filter needs, the page is short; with the cap raised, it fills. hnsw `pre` fills at `max_itopk` = k on the tested fixtures. | the three files of claim 8 |
+| 6 | The issue fixture returns ids 501..510 in `pre` and `iterative` through the hnsw index, for l2 on a five-sub-index table and cosine, where the default post returns none. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_modes.sql` |
+| 7 | The issue fixture returns ids 501..510 in `iterative` through the cagra and the ivfpq index. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
+| 8 | `iterative` returns zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and `LIMIT` rows when exactly or more than `LIMIT` qualify, with periodic, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`, equal to `mode=force`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR6); `cases/vector/vector_filtered_search_ivfflat.sql` (ivfflat) |
+| 9 | Each "short when" cell of the short-page matrix that a fixture reaches: with a cap set below what the filter needs, the `iterative` page is short; with the cap raised, it fills. ivfflat `pre` searches one round and is short on the issue fixture. hnsw `pre` and `iterative` fill at `max_itopk` = k on the tested fixtures. | the three files of claim 8 |
 | 10 | `post` runs one search: `max_itopk` and `max_nprobe` without `itopk` do not change its rows. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 11 | `auto` on hnsw, cagra and ivfpq builds `ADAPTIVE_TOP` over `post`, `pre` and `force` (`post` and `force` without a filter) and returns the `force` rows where `post` is short and where it fills, with a prepared `LIMIT`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR6) |
 | 12 | A hybrid `MATCH` + vector top-k on hnsw, cagra and ivfpq uses the fulltext index and the vector index through the PRE shape and returns the same rows as the table without a vector index; with a query vector from a provider row it keeps the exact sort. | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq, PR6) |
-| 13 | ivfpq with `max_nprobe = n_lists` returns min(`LIMIT`, qualifying) rows in `pre`. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
+| 13 | ivfpq with `max_nprobe = n_lists` returns min(`LIMIT`, qualifying) rows in `iterative`. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 14 | Literal and prepared `LIMIT` give the same rows under the same knobs. | the three files of claim 8 |
 | 15 | With `gpu_mode` on, `force` on a cagra or ivfpq table runs on the GPU and returns the exact rows. | `gpu_cases/vector/vector_filtered_search_gpu.sql` (PR7) |
 | 16 | ivfflat rounds scan each list once: a query vector that ties every centroid (a zero vector under cosine) returns no duplicate rows. | `cases/vector/vector_filtered_search_ivfflat.sql` |
+| 17 | ivfflat `include` builds the plan of `iterative` and returns its rows; `pre` does not use INCLUDE columns. | `cases/vector/vector_filtered_search_ivfflat.sql`, the existing `mode=include` cases under `cases/vector/` |
 
 ## Decision log
 
@@ -531,3 +549,19 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
   `auto`, whose `pre` branch now fills pages it used to pass to `force`) and zero-vector cosine
   queries. None of them is further from the `force` rows than before, except zero-vector
   cosine `auto` pages, whose rows all tie at distance 1 and so equal any `force` page.
+
+2026-10-13 (pre and iterative, Eric):
+
+- `pre` is the filter inside one search, as INCLUDE columns' #24168 kept it ("keep mode=post and
+  mode=pre on their original single-round path"); widening is `mode=iterative` (pgvector's
+  iterative scan), on every index with membership support. hnsw's widening moved under
+  `iterative`.
+- `mode=include` stays on ivfflat as `iterative`, its existing behavior; hnsw, cagra and ivfpq
+  reject it.
+- `auto`'s middle branch stays `pre`, as on main.
+- `pre` on ivfflat does not use INCLUDE columns, as on main; `iterative` does.- Checked again against the merge-base `cd8d5abf96` after the split, with the same 2,070
+  wrapped and 1,782 bare ivfflat queries on one data directory per comparison: `pre`, `auto`,
+  `post`, the default mode and `force` return the rows of main. The rows that differ are
+  `include` on tables without INCLUDE columns, whose PRE fallback now widens (29 bare / 34
+  wrapped queries), and zero-vector cosine queries (claim 16); none has fewer rows than before
+  or a duplicate row.

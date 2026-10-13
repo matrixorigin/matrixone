@@ -200,14 +200,6 @@ func findIvfTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 	return nil
 }
 
-func TestEnsureIvfIncludeSearchRoundLimitAtLeastK(t *testing.T) {
-	k := makePlan2Uint64ConstExprWithType(5)
-	require.Equal(t, uint64(5), ensureIvfIncludeSearchRoundLimitAtLeastK(0, k))
-	require.Equal(t, uint64(5), ensureIvfIncludeSearchRoundLimitAtLeastK(3, k))
-	require.Equal(t, uint64(7), ensureIvfIncludeSearchRoundLimitAtLeastK(7, k))
-	require.Equal(t, uint64(0), ensureIvfIncludeSearchRoundLimitAtLeastK(0, nil))
-}
-
 func TestApplyIndicesForSortUsingIvfflat_PostModeBuildsEmptyFallback(t *testing.T) {
 	builder, ctx, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 	for _, def := range multiTableIndex.IndexDefs {
@@ -713,7 +705,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPo
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetchesFirstRound(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownWidens(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -745,10 +737,11 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
-	assert.Equal(t, uint64(12), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
+	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffsetCompensatedK(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownCandidateLimitIncludesOffset(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -781,7 +774,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
-	assert.Equal(t, uint64(25), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
 	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 }
 
@@ -802,6 +795,60 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleC
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
-	assert.Equal(t, uint64(5), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
 	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_IncludeModeIsIterativeMode(t *testing.T) {
+	type shape struct {
+		root            plan.Node_NodeType
+		preFilters      int
+		runtimeFilters  int
+		postOverFetch   bool
+		opts            ivfflatplan.ScanOptions
+		candidateLimit  uint64
+		residualFilters int
+	}
+	build := func(mode string, covered bool) shape {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		scanTag := scanNode.BindingTags[0]
+		col, name, val := int32(4), "note", makePlan2StringConstExprWithType("n2")
+		if covered {
+			col, name, val = 3, "category", MakePlan2Int32ConstExprWithType(20)
+		}
+		scanNode.FilterList = []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "="},
+				Args: []*plan.Expr{
+					{Typ: scanNode.TableDef.Cols[col].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: col, Name: name}}},
+					val,
+				},
+			}},
+		}}
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, mode, 0, 2, 3)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+		require.NoError(t, err)
+		sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+		tf := findIvfTableFunctionNode(builder, sortNode.Children[0])
+		require.NotNil(t, tf)
+		return shape{
+			root:            builder.qry.Nodes[sortNode.Children[0]].NodeType,
+			preFilters:      len(tf.IndexSearchScan.PreFilters),
+			runtimeFilters:  len(tf.RuntimeFilterProbeList),
+			postOverFetch:   tf.IndexSearchScan.GetPostFilterOverFetch(),
+			opts:            testIvfScanOptions(t, tf.IndexSearchScan),
+			candidateLimit:  tf.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val(),
+			residualFilters: len(scanNode.FilterList),
+		}
+	}
+	for _, covered := range []bool{true, false} {
+		iterative := build("iterative", covered)
+		require.Equal(t, iterative, build("include", covered), "covered=%v", covered)
+		require.True(t, iterative.opts.Iterative)
+		pre := build("pre", covered)
+		require.False(t, pre.opts.Iterative)
+		require.Zero(t, pre.opts.BucketExpandStep)
+		require.Zero(t, pre.preFilters, "pre does not use INCLUDE columns")
+	}
 }

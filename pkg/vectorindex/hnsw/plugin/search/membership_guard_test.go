@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,4 +100,16 @@ func TestNewReaderMembership(t *testing.T) {
 	require.Error(t, err)
 
 	require.True(t, Hooks{}.SupportsMembership())
+
+	// the iterative scan option makes the membership search widen
+	r = f32Request([]float32{1, 2}, 10)
+	s, err = newSearcher(proc, membershipSpec(), r)
+	require.NoError(t, err)
+	require.False(t, s.widen)
+	spec = membershipSpec()
+	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{Iterative: true})
+	require.NoError(t, err)
+	s, err = newSearcher(proc, spec, r)
+	require.NoError(t, err)
+	require.True(t, s.widen)
 }

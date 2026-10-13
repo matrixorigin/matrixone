@@ -76,21 +76,39 @@ func TestCheckVectorSearchMode(t *testing.T) {
 	for _, algo := range []string{
 		catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
 	} {
-		for _, mode := range []string{"pre", "auto"} {
+		for _, mode := range []string{"pre", "auto", "iterative"} {
 			err := checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%s %s", algo, mode)
 			require.ErrorContains(t, err, "mode="+mode+" on index type "+algo)
 		}
-		for _, mode := range []string{"post", "force", "include", ""} {
+		for _, mode := range []string{"post", "force", ""} {
 			require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo), "%s %s", algo, mode)
 		}
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{}, algo))
 		require.NoError(t, checkVectorSearchMode(ctx, nil, algo))
 	}
-	for _, mode := range []string{"pre", "auto"} {
+	for _, mode := range []string{"pre", "auto", "iterative"} {
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, ivfflat))
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, catalog.MoIndexHnswAlgo.ToString()))
 	}
+
+	// mode=include is ivfflat only
+	include := &vectorSortContext{rankOption: &planpb.RankOption{Mode: "include"}}
+	require.NoError(t, checkVectorSearchMode(ctx, include, ivfflat))
+	for _, algo := range []string{
+		catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
+	} {
+		err := checkVectorSearchMode(ctx, include, algo)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), algo)
+		require.ErrorContains(t, err, "mode=include on index type "+algo)
+	}
+}
+
+func TestIvfIterativeMode(t *testing.T) {
+	require.True(t, ivfIterativeMode("iterative"))
+	require.True(t, ivfIterativeMode("include"))
+	require.False(t, ivfIterativeMode("pre"))
+	require.False(t, ivfIterativeMode(""))
 }
 
 func TestHasMembershipVectorIndex(t *testing.T) {

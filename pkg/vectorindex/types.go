@@ -311,11 +311,12 @@ type RuntimeConfig struct {
 	BackgroundQueries []*plan.Query
 
 	// Membership, when non-nil, restricts an HNSW search to the primary keys it
-	// holds; MembershipCount is the number of keys. ResultLimit is the number of
-	// rows the query returns and MaxLimit caps Limit while the search widens
-	// (0 = DefaultMaxInternalTopK). Other algorithms ignore these fields.
+	// holds; MembershipCount is the number of keys. With Widen the search widens in
+	// rounds: ResultLimit is the number of rows the query returns and MaxLimit caps
+	// Limit (0 = DefaultMaxInternalTopK). Other algorithms ignore these fields.
 	Membership      docfilter.MembershipFilter
 	MembershipCount uint64
+	Widen           bool
 	ResultLimit     uint
 	MaxLimit        uint
 

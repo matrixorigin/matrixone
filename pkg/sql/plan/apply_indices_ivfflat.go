@@ -156,7 +156,10 @@ func (builder *QueryBuilder) resolveVectorSearchMode(
 	}
 
 	// 4. Handle explicitly specified pre/post mode
-	if userMode == "pre" || userMode == "post" {
+	if userMode == "pre" || ivfIterativeMode(userMode) {
+		return "pre", false, false
+	}
+	if userMode == "post" {
 		return userMode, false, false
 	}
 
@@ -409,30 +412,6 @@ func buildIvfScanToTableFuncMap(tableFuncTag int32, tableFuncIncludeColumns []st
 		}
 	}
 	return projMap
-}
-
-func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
-	if limit == nil || limit.GetLit() == nil {
-		return 0
-	}
-
-	originalLimit := limit.GetLit().GetU64Val()
-	if !hasFilterPressure {
-		return originalLimit
-	}
-
-	overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
-	return overfetch.Limit(originalLimit, overFetchFactor)
-}
-
-func ensureIvfIncludeSearchRoundLimitAtLeastK(searchRoundLimit uint64, outerResultNeed *plan.Expr) uint64 {
-	if outerResultNeed == nil || outerResultNeed.GetLit() == nil {
-		return searchRoundLimit
-	}
-	if k := outerResultNeed.GetLit().GetU64Val(); searchRoundLimit < k {
-		return k
-	}
-	return searchRoundLimit
 }
 
 func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfIndexContext, error) {
@@ -736,7 +715,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	preserveAutoInclude := prepared != nil && ivfCtx.isAutoMode
 	if vecCtx.rankOption != nil && !preserveAutoInclude {
 		switch vecCtx.rankOption.Mode {
-		case "", "include", "auto":
+		case "", "include", "iterative", "auto":
 		default:
 			includeAwareColumns = nil
 		}
@@ -767,11 +746,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if err != nil {
 		return nodeID, err
 	}
-	// Multi-round search may stop on a candidate count only when the index scan has
-	// observed every filter. Keep residual predicates on the membership-filter
-	// topology and use the bounded, legacy-compatible single-round IVF search.
-	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
-	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
+	usePreFilter := ivfCtx.pushdownEnabled
 	if !asyncIndex && !usePreFilter {
 		var removedFilters []*plan.Expr
 		remainingFilters, removedFilters = removeIvfCandidateImpliedNotNullFilter(
@@ -807,46 +782,24 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	// candidate budget while preserving the semantic outer LIMIT.
 	postFilterOverFetch := len(remainingFilters) > 0
 
-	firstRoundLimit := uint64(0)
-	var firstRoundLimitExpr *plan.Expr
+	// mode=iterative widens in rounds: a search whose filters (if any) all run in the
+	// index search continues its cursor (BucketExpandStep); a membership search widens on
+	// a reader that holds the whole search (ScanOptions.Iterative).
+	iterative := ivfIterativeMode(vectorRankMode(vecCtx))
 	bucketExpandStep := uint64(0)
-	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && !includeModeFallbackToPre {
-		firstRoundLimit = firstIvfSearchRoundLimit(outerResultNeedExpr, len(typedPushdownFilters) > 0)
-		firstRoundLimit = ensureIvfIncludeSearchRoundLimitAtLeastK(firstRoundLimit, outerResultNeedExpr)
-		if firstRoundLimit > 0 {
-			firstRoundLimitExpr = makePlan2Uint64ConstExprWithType(firstRoundLimit)
-		} else if outerResultNeedExpr != nil {
-			// A prepared LIMIT must remain an execution-time expression. Using a
-			// plan-time fallback of one truncates the only populated centroid and
-			// cannot be repaired by expanding into unrelated centroid buckets.
-			firstRoundLimitExpr = DeepCopyExpr(outerResultNeedExpr)
-		}
-		bucketExpandStep = uint64(ivfCtx.nProbe)
-		if bucketExpandStep == 0 {
-			bucketExpandStep = 1
-		}
-	}
-	// mode=pre whose every filter runs in the index search widens in rounds.
-	if bucketExpandStep == 0 && vectorRankMode(vecCtx) == "pre" && !vecCtx.hasMembership &&
-		len(typedPushdownFilters) > 0 && len(remainingFilters) == 0 {
+	if iterative && !vecCtx.hasMembership && len(remainingFilters) == 0 {
 		bucketExpandStep = uint64(max(ivfCtx.nProbe, 1))
 	}
 	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
 	algoOptions, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{
 		InitialProbeCount: uint32(ivfCtx.nProbe),
 		BucketExpandStep:  uint32(bucketExpandStep),
+		Iterative:         iterative,
 		ThreadsSearch:     ivfCtx.nThread,
 	})
 	if err != nil {
 		return 0, err
 	}
-	var algoExprs []*plan.Expr
-	var algoExprNames []string
-	if firstRoundLimitExpr != nil {
-		algoExprs = []*plan.Expr{firstRoundLimitExpr}
-		algoExprNames = []string{ivfflatplan.FirstRoundLimitExpr}
-	}
-
 	// Build an optimizer-visible vector-index access path.  The hidden table
 	// references are resolved by name on the execution CN in the same txn; no
 	// generated SQL or nested plan is needed.
@@ -881,8 +834,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			PreFilters:          typedPreFilters,
 			IncludedColumns:     append([]string(nil), tableFuncIncludeColumns...),
 			AlgoOptions:         algoOptions,
-			AlgoExprs:           algoExprs,
-			AlgoExprNames:       algoExprNames,
 			PostFilterOverFetch: postFilterOverFetch,
 			HiddenTables: []*plan.IndexHiddenTableRef{
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.metaDef.IndexTableName}},
@@ -968,7 +919,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			candidateNodeID: candidateNodeID,
 			annotateRequiredDomain: func(tableFuncNode *plan.Node, requiredDomain bool) error {
 				if asyncIndex || candidateNodeID != tableFuncNodeID || !requiredDomain ||
-					bucketExpandStep != 0 || firstRoundLimitExpr != nil ||
+					bucketExpandStep != 0 ||
 					!types.T(ivfCtx.pkType.Id).IsInteger() {
 					return nil
 				}
@@ -1096,6 +1047,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	}
 	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
+}
+
+// ivfIterativeMode reports whether mode selects the widening pre-filter search; include
+// is an ivfflat alias of iterative.
+func ivfIterativeMode(mode string) bool {
+	return mode == "iterative" || mode == "include"
 }
 
 func vectorRankMode(vecCtx *vectorSortContext) string {

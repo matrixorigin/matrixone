@@ -78,6 +78,20 @@ execute s using @k;
 ➤ group_concat(x.id order by id separator ,)[-1,536870911,0]  𝄀
 501,502,503,504,505,506,507
 deallocate prepare s;
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'max_itopk=10') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select group_concat(id order by id) from (select id from t_cos where category = 1 order by cosine_distance(v, '[1,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+483,490,497,504,511,518
+select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include';
+not supported: mode=include on index type hnsw
 select mo_ctl('dn', 'flush', 'vector_filtered_search_hnsw.t_l2');
 ➤ mo_ctl(dn, flush, vector_filtered_search_hnsw.t_l2)[12,65535,0]  𝄀
 {

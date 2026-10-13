@@ -152,12 +152,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 
 // hnswUsesPreFilter reports whether the hnsw search of vecCtx is restricted to the keys
 // of a filtered copy of its scan: under a membership join, a fulltext MATCH filter, or
-// mode=pre with a filter.
+// mode=pre or mode=iterative with a filter.
 func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
 	if vecCtx.hasMembership || builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
 		return true
 	}
-	return vectorRankMode(vecCtx) == "pre" && len(vecCtx.scanNode.FilterList) > 0
+	mode := vectorRankMode(vecCtx)
+	return (mode == "pre" || mode == "iterative") && len(vecCtx.scanNode.FilterList) > 0
 }
 
 // buildAdaptiveHnswTop builds mode=auto as ADAPTIVE_TOP [post, pre, force]. The pre
@@ -210,7 +211,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	}
 	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter
 
-	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{ThreadsSearch: hnswCtx.nThread})
+	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{
+		ThreadsSearch: hnswCtx.nThread,
+		Iterative:     usePreFilter && vectorRankMode(vecCtx) == "iterative",
+	})
 	if err != nil {
 		return 0, err
 	}

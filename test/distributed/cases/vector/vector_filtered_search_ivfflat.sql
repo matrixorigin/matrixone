@@ -1,8 +1,10 @@
--- IVFFLAT pre-filtering (#28988). mode=pre searches only the keys of the filtered rows.
--- With more than 100 keys the search probes the nearest lists in rounds until it holds
--- the candidate budget, all lists are probed, or max_nprobe is reached; with 100 keys or
--- fewer it scans the keys in every list. A filter evaluated in the index search widens
--- the same way under mode=pre. Each query is compared with mode=force.
+-- IVFFLAT filtered search modes (#28988). mode=pre and mode=iterative search only the
+-- rows that pass the filter: inside the index search when INCLUDE columns or the primary
+-- key cover it (iterative), else through the keys of the filtered rows (a membership
+-- join). mode=pre searches the nprobe nearest lists once. mode=iterative probes the
+-- nearest lists in rounds until it holds the candidate budget, all lists are probed, or
+-- max_nprobe is reached; a membership set of 100 keys or fewer is scanned in every list.
+-- mode=include is mode=iterative. Each query is compared with mode=force.
 drop database if exists vector_filtered_search_ivfflat;
 create database vector_filtered_search_ivfflat;
 use vector_filtered_search_ivfflat;
@@ -18,43 +20,54 @@ create index i using ivfflat on t(v) lists = 10 op_type 'vector_l2_ops';
 -- @separator:table
 -- @regex("Join Type: SEMI", true)
 -- @regex("round_count=[2-9]", true)
-explain analyze select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+explain analyze select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative';
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10) x;
-select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
 select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=force') x;
 
 -- max_nprobe below what the filter needs returns a short page; raised, it fills
-select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre', 'max_nprobe=2') x;
-select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre', 'nprobe=1', 'max_nprobe=10') x;
+select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'max_nprobe=2') x;
+select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'nprobe=1', 'max_nprobe=10') x;
 
 -- qualifying row counts: none, fewer than k, exactly k, more than k
-select count(*) from (select id from t where category = 9 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
-select group_concat(id order by id) from (select id from t where id in (3, 700, 999) order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
-select group_concat(id order by id) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
-select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=pre') x;
+select count(*) from (select id from t where category = 9 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t where id in (3, 700, 999) order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=iterative') x;
 select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=force') x;
 
--- a filter on the primary key alone runs in the index search: pre widens, post searches once
+-- a filter on the primary key alone runs in the index search: iterative widens, post searches once
 -- @separator:table
 -- @regex("Index Filter", true)
 -- @regex("round_count=[2-9]", true)
-explain analyze select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+explain analyze select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative';
 select count(*) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post') x;
 
 -- combined and NULL predicates
-select group_concat(id order by id) from (select id from t where category = 1 and (tag = 4 or tag is null) order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t where category = 1 and (tag = 4 or tag is null) order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=iterative') x;
 select group_concat(id order by id) from (select id from t where category = 1 and (tag = 4 or tag is null) order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=force') x;
 
 -- LIMIT with OFFSET
-select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 5 offset 5 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 5 offset 5 by rank with option 'mode=iterative') x;
 
 -- prepared LIMIT
-prepare s from 'select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=pre'') x';
+prepare s from 'select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=iterative'') x';
 set @k = 3;
 execute s using @k;
 set @k = 7;
 execute s using @k;
 deallocate prepare s;
+
+-- mode=pre searches the nprobe nearest lists once: the nearest lists hold no qualifying row
+-- @separator:table
+-- @regex("round_count=1 ", true)
+explain analyze select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t where id in (3, 700, 999) order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
+
+-- mode=include is mode=iterative
+select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
+select group_concat(id order by id) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
 
 -- a zero query vector ties every centroid under cosine: the rounds scan each list once
 create table t_cos(id bigint primary key, v vecf32(4));
@@ -63,6 +76,6 @@ create index i_cos using ivfflat on t_cos(v) lists = 16 op_type 'vector_cosine_o
 create table t_cos_ref(id bigint primary key, category int);
 insert into t_cos_ref select result, result % 2 from generate_series(1, 3000, 1) g;
 select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=include') x;
-select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=pre') x;
+select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 
 drop database vector_filtered_search_ivfflat;

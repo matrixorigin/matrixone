@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,4 +118,36 @@ func TestIndexSearchAlias(t *testing.T) {
 	require.Equal(t, "mo_hnsw_alias_0", indexSearchAlias(ctx, "mo_hnsw_alias"))
 	ctx.bindingByTable["mo_hnsw_alias_0"] = &Binding{}
 	require.Equal(t, "mo_hnsw_alias_1", indexSearchAlias(ctx, "mo_hnsw_alias"))
+}
+
+func TestHnswIterativeWidens(t *testing.T) {
+	for _, tc := range []struct {
+		mode      string
+		semi      bool
+		iterative bool
+	}{
+		{"pre", true, false},
+		{"iterative", true, true},
+		{"post", false, false},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			query := hnswAutoPlanFixture(t, `select id from hnsw_auto where category = 1
+				order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=`+tc.mode+`'`)
+			search := findNodeOfType(query, plan.Node_INDEX_SEARCH_SCAN)
+			require.NotNil(t, search)
+			opts, err := hnswplan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
+			require.NoError(t, err)
+			require.Equal(t, tc.iterative, opts.Iterative)
+			require.Equal(t, tc.semi, findNodeOfType(query, plan.Node_JOIN) != nil && findSemiJoin(query) != nil)
+		})
+	}
+}
+
+func findSemiJoin(query *plan.Query) *plan.Node {
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SEMI {
+			return node
+		}
+	}
+	return nil
 }

@@ -49,6 +49,13 @@ set @k = 7;
 execute s using @k;
 deallocate prepare s;
 
+-- mode=iterative widens the search in rounds; mode=include is ivfflat only
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'max_itopk=10') x;
+select group_concat(id order by id) from (select id from t_cos where category = 1 order by cosine_distance(v, '[1,0]') limit 10 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=iterative') x;
+select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include';
+
 -- mode=auto: ADAPTIVE_TOP over post, pre and force; the flush gives the planner the
 -- table statistics that keep auto from choosing force for a small table
 select mo_ctl('dn', 'flush', 'vector_filtered_search_hnsw.t_l2');

@@ -93,8 +93,10 @@ type searcher struct {
 	limit    uint64
 	snapshot *plan.Snapshot
 
-	// resultLimit is the row count of the query and maxLimit caps limit while a
-	// membership search widens.
+	// widen is set for mode=iterative: a membership search widens in rounds.
+	// resultLimit is the row count of the query and maxLimit caps limit while it
+	// widens.
+	widen       bool
 	resultLimit uint64
 	maxLimit    uint64
 	// membership holds the primary keys the search is restricted to, or nil.
@@ -150,6 +152,7 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		snapshot:    spec.ScanSnapshot,
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
+		widen:       opts.Iterative,
 	}
 	if req.HasMembershipFilter {
 		if err := s.setMembership(spec, req.MembershipFilter); err != nil {
@@ -250,6 +253,7 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 		OrigFuncName:    s.tblcfg.OrigFuncName,
 		Membership:      s.membership,
 		MembershipCount: s.membershipCount,
+		Widen:           s.widen,
 		ResultLimit:     uint(s.resultLimit),
 		MaxLimit:        uint(s.maxLimit),
 	}

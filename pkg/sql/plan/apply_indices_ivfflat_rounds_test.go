@@ -51,20 +51,25 @@ func ivfRoundsPlanFixture(t *testing.T, sql string) *plan.Query {
 	return p.GetQuery()
 }
 
-func TestIvfflatPreWithIndexFiltersWidens(t *testing.T) {
+func TestIvfflatIterativeWidens(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		sql    string
-		widens bool
+		name      string
+		sql       string
+		rounds    bool
+		iterative bool
 	}{
+		{"iterative, key filter", `select id from ivf_rounds where id between 3 and 9
+			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=iterative'`, true, true},
+		{"iterative, residual filter", `select id from ivf_rounds where category = 1
+			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=iterative'`, false, true},
 		{"pre, key filter", `select id from ivf_rounds where id between 3 and 9
-			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=pre'`, true},
-		{"post, key filter", `select id from ivf_rounds where id between 3 and 9
-			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=post'`, false},
-		{"no mode, key filter", `select id from ivf_rounds where id between 3 and 9
-			order by l2_distance(v,'[0,0]') limit 2`, false},
+			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=pre'`, false, false},
 		{"pre, residual filter", `select id from ivf_rounds where category = 1
-			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=pre'`, false},
+			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=pre'`, false, false},
+		{"post, key filter", `select id from ivf_rounds where id between 3 and 9
+			order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=post'`, false, false},
+		{"no mode, key filter", `select id from ivf_rounds where id between 3 and 9
+			order by l2_distance(v,'[0,0]') limit 2`, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query := ivfRoundsPlanFixture(t, tc.sql)
@@ -72,7 +77,8 @@ func TestIvfflatPreWithIndexFiltersWidens(t *testing.T) {
 			require.NotNil(t, search)
 			opts, err := ivfflatplan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
 			require.NoError(t, err)
-			require.Equal(t, tc.widens, opts.BucketExpandStep > 0)
+			require.Equal(t, tc.rounds, opts.BucketExpandStep > 0)
+			require.Equal(t, tc.iterative, opts.Iterative)
 		})
 	}
 }

@@ -33,7 +33,10 @@ type ScanOptions struct {
 	// BucketExpandStep is nonzero for a search that widens in rounds
 	// (ivfflat.AdvancedSearch); zero means one round.
 	BucketExpandStep uint32 `json:"bucket_expand_step,omitempty"`
-	ThreadsSearch    int64  `json:"threads_search,omitempty"`
+	// Iterative is set for mode=iterative: a membership search on a reader that holds
+	// the whole search widens in rounds.
+	Iterative     bool  `json:"iterative,omitempty"`
+	ThreadsSearch int64 `json:"threads_search,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.
