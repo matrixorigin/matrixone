@@ -73,10 +73,12 @@ func crc32SourceColumn(ctx context.Context, name string, sources []*planpb.ColDe
 	return crc32CopyColumn(ctx, name)
 }
 
-// A bound legacy generated expression cannot be copied onto a different input
+// A bound legacy expression cannot be copied onto a different input
 // representation. Reject before COPY mutates the catalog, and also guard the
 // internal CREATE fallback when ordinary persisted-expression replay declines it.
-func validateLegacyCRC32GeneratedInputs(ctx context.Context, expr *planpb.Expr, cols []*planpb.ColDef) error {
+// The same contract covers generated columns, DEFAULT and ON UPDATE owners of a
+// legacy CRC32 call: their ColRef types describe the hashed input representation.
+func validateLegacyCRC32ExprInputs(ctx context.Context, expr *planpb.Expr, cols []*planpb.ColDef, subject string) error {
 	if !containsLegacyCRC32(expr) {
 		return nil
 	}
@@ -86,15 +88,19 @@ func validateLegacyCRC32GeneratedInputs(ctx context.Context, expr *planpb.Expr, 
 			return nil
 		}
 		if ref.RelPos != 0 || ref.ColPos < 0 || int(ref.ColPos) >= len(cols) || cols[ref.ColPos] == nil {
-			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
+			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON "+subject+" requires an explicit table rebuild")
 		}
 		typ := cols[ref.ColPos].Typ
 		if e.Typ.Id != typ.Id || e.Typ.Width != typ.Width || e.Typ.Scale != typ.Scale || e.Typ.AutoIncr != typ.AutoIncr ||
 			e.Typ.Enumvalues != typ.Enumvalues || !e.Typ.SameCollation(typ) || e.Typ.PadSpace != typ.PadSpace {
-			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
+			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON "+subject+" requires an explicit table rebuild")
 		}
 		return nil
 	})
+}
+
+func validateLegacyCRC32GeneratedInputs(ctx context.Context, expr *planpb.Expr, cols []*planpb.ColDef) error {
+	return validateLegacyCRC32ExprInputs(ctx, expr, cols, "generated column")
 }
 
 // Older constant defaults can lack Literal.Src. Preserve their authoritative

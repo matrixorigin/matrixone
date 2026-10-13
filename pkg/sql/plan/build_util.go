@@ -871,6 +871,12 @@ func buildDefaultExprWithColumns(
 	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && preserveCRC32Default(source.Default) {
 		value := *source.Default
 		value.Expr = DeepCopyExpr(value.Expr)
+		// A retained DEFAULT may hash a referenced column. Its bound ColRef
+		// types must still describe that column, or COPY would publish a
+		// legacy CRC32 overload against a converted input representation.
+		if err := validateLegacyCRC32ExprInputs(bindCtx, value.Expr, columns, "default expression"); err != nil {
+			return nil, err
+		}
 		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
 			return nil, err
 		}

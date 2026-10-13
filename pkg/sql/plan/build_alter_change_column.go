@@ -274,15 +274,26 @@ func buildColumnAndConstraint(
 	// Attribute parsing above finalizes AutoIncr. Preserve the early representation
 	// check before binding, but do not let COPY retain an illegal final dependency.
 	for _, col := range targetTableDef.Cols {
-		expr := col.GetGeneratedCol().GetExpr()
-		if !containsLegacyCRC32(expr) {
-			continue
-		}
-		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), expr, defaultScope); err != nil {
-			return nil, err
-		}
-		if err := checkGeneratedExprReferences(ctx.GetContext(), expr, col.GetOriginCaseName(), defaultScope, make(map[int32]bool)); err != nil {
-			return nil, err
+		for _, owner := range []struct {
+			subject string
+			expr    *plan.Expr
+		}{
+			{"generated column", col.GetGeneratedCol().GetExpr()},
+			{"default expression", col.GetDefault().GetExpr()},
+			{"on-update expression", col.GetOnUpdate().GetExpr()},
+		} {
+			expr := owner.expr
+			if !containsLegacyCRC32(expr) {
+				continue
+			}
+			if err := validateLegacyCRC32ExprInputs(ctx.GetContext(), expr, defaultScope, owner.subject); err != nil {
+				return nil, err
+			}
+			if owner.subject == "generated column" {
+				if err := checkGeneratedExprReferences(ctx.GetContext(), expr, col.GetOriginCaseName(), defaultScope, make(map[int32]bool)); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if newCol.GeneratedCol != nil {
