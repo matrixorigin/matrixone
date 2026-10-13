@@ -19,7 +19,10 @@ USER and DATABASE as environment variables and MATRIXONE_PASSWORD as an environm
 secret. For analytics, also configure the second CN and local S3 endpoint, plus
 client/server shared file paths. For transport tests, configure MO_TLS_CA,
 MO_TLS_PORT and MO_PLAIN_PORT. Existing online tests may require additional fixture
-services/settings; their failures are surfaced rather than suppressed.
+services/settings; their failures are surfaced rather than suppressed. Connection
+selection uses the shared `OnlineTestConfig`; fixture-owned databases retain their
+overrides while using the configured host and credentials. Pure configuration
+validation runs offline and restores environment overrides before the next case.
 
 JUnit results report failures, errors and skips. A run with skips must not be
 reported as full online certification. No runner/environment/credentials have been
