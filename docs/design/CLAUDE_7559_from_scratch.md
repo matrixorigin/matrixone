@@ -134,4 +134,4 @@ prepare/cache 仅持不可变模板；每次 execute/retry 使用新的运行 ow
 
 ## 批准记录
 
-2026-10-13 用户在实施前批准 r1，原文：“go ahead”。实施分支为 `ck89119:issue-7559-from-scratch-main`，目标分支为 `matrixorigin:main`；PR 创建后在此补充链接。实现与验证摘要随 PR 发布，本机 TODO 和原始日志不提交。
+2026-10-13 用户在实施前批准 r1，原文：“go ahead”。实施分支为 `ck89119:issue-7559-from-scratch-main`，目标分支为 `matrixorigin:main`；实施 PR：[matrixorigin/matrixone#30116](https://github.com/matrixorigin/matrixone/pull/30116)（draft）。实现与验证摘要随 PR 发布，本机 TODO 和原始日志不提交。
