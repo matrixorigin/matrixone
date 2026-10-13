@@ -144,19 +144,42 @@ Adaptive Top  𝄀
                                 Filter Cond: (t_l2.category = 1)  𝄀
   ->  Project  𝄀
         ->  Sort  𝄀
-              Sort Key: l2_distance(t_l2.v, ) INTERNAL, t_l2.id INTERNAL  𝄀
+              Sort Key: l2_distance(t_l2.v, 0x0000000000000000) INTERNAL, t_l2.id INTERNAL  𝄀
               Limit: 10  𝄀
               ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
                     Filter Cond: (t_l2.category = 1)
-select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-501,502,503,504,505,506,507,508,509,510
-select group_concat(id order by id) from (select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-1,2,3,4,5,6,7,8,9,10
-select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-483,490,497,504,511,518
+select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+501  𝄀
+502  𝄀
+503  𝄀
+504  𝄀
+505  𝄀
+506  𝄀
+507  𝄀
+508  𝄀
+509  𝄀
+510
+select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+497  𝄀
+504  𝄀
+490  𝄀
+511  𝄀
+483  𝄀
+518
 explain select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
 -- @regex("Adaptive Top", true)
 -- @regex("Join Type: SEMI", false)
@@ -177,16 +200,55 @@ Adaptive Top  𝄀
                           Vector Index: i_l2, Metric: l2_distance, Candidate Limit: 10  𝄀
   ->  Project  𝄀
         ->  Sort  𝄀
-              Sort Key: l2_distance(t_l2.v, ) INTERNAL, t_l2.id INTERNAL  𝄀
+              Sort Key: l2_distance(t_l2.v, 0x0000000000000000) INTERNAL, t_l2.id INTERNAL  𝄀
               Limit: 10  𝄀
               ->  Table Scan on vector_filtered_search_hnsw.t_l2
-select group_concat(id order by id) from (select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-1,2,3,4,5,6,7,8,9,10
-prepare s from 'select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto'') x';
+select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+explain select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+-- @regex("Adaptive Top", false)
+-- @regex("Vector Index Scan on", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: group_concat(t_l2.id ORDER BY t_l2.id ASC SEPARATOR ',')  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(t_l2.v, 0x0000000000000000) INTERNAL, t_l2.id INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+                    Filter Cond: (t_l2.category = 1)
+explain select id, category from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- @regex("Adaptive Top", false)
+-- @regex("Vector Index Scan on", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(t_l2.v, 0x0000000000000000) INTERNAL, t_l2.id INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Table Scan on vector_filtered_search_hnsw.t_l2  𝄀
+              Filter Cond: (t_l2.category = 1)
+select id, category from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=auto';
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+501  ¦  1  𝄀
+502  ¦  1  𝄀
+503  ¦  1
+prepare s from 'select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto''';
 set @k = 4;
 execute s using @k;
-➤ group_concat(x.id order by id separator ,)[-1,536870911,0]  𝄀
-501,502,503,504
+➤ id[-5,64,0]  𝄀
+501  𝄀
+502  𝄀
+503  𝄀
+504
 deallocate prepare s;
 drop database vector_filtered_search_hnsw;

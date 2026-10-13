@@ -90,6 +90,22 @@ Project  𝄀
 select (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=4') x) <=> (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2') x) as same_post;
 ➤ same_post[-7,1,0]  𝄀
 1
+prepare s from 'select count(*) from (select id from t_ivf where category = 1 order by l2_distance(v, ''[0,0]'') limit 10 by rank with option ''mode=iterative'', ''nprobe=1'') x';
+execute s;
+➤ count(*)[-5,64,0]  𝄀
+10
+set vector_max_nprobe = 1;
+execute s;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'nprobe=1', 'max_nprobe=4') x;
+➤ count(*)[-5,64,0]  𝄀
+10
+set vector_max_nprobe = 0;
+execute s;
+➤ count(*)[-5,64,0]  𝄀
+10
+deallocate prepare s;
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4';
 not supported: nprobe on index type hnsw
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_nprobe=4';

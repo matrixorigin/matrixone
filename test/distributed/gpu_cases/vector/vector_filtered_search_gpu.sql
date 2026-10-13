@@ -28,6 +28,13 @@ explain select id from t_cagra where category = 1 and id > 0 order by l2_distanc
 -- @regex("Index Filter: id > 0", true)
 -- @regex("Index Filter: category", false)
 explain select id from t_ivfpq where category = 1 and id > 0 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=post';
+-- the default mode runs the INCLUDE filter in the search, post does not
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category = 1", true)
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10;
+-- @separator:table
+-- @regex("Index Filter", false)
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=post';
 
 -- cagra: the INCLUDE filter runs inside the graph search in pre and iterative
 select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
@@ -58,7 +65,13 @@ select mo_ctl('dn', 'flush', 'vector_filtered_search_gpu.t_ivfpq');
 -- @separator:table
 -- @regex("Adaptive Top", true)
 explain select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto', 'nprobe=1';
-select group_concat(id order by id) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto', 'nprobe=1') x;
+select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto', 'nprobe=1';
+select mo_ctl('dn', 'flush', 'vector_filtered_search_gpu.t_cagra');
+-- @separator:table
+-- @regex("Adaptive Top", true)
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
+-- @ignore:0
+select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
 
 -- include is ivfflat only
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';

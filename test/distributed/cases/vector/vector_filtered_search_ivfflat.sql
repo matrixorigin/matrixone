@@ -78,4 +78,32 @@ insert into t_cos_ref select result, result % 2 from generate_series(1, 3000, 1)
 select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=include') x;
 select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 
+-- INCLUDE columns: the default mode and iterative run the INCLUDE filter in the index
+-- search; post and pre do not; post runs a primary-key filter in the index search
+create table t_inc(id bigint primary key, category int not null, v vecf32(2));
+insert into t_inc select id, category, v from t;
+create index i_inc using ivfflat on t_inc(v) lists = 10 op_type 'vector_l2_ops' include(category);
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category", true)
+explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10;
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category", true)
+-- @regex("Join Type: SEMI", false)
+explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative';
+-- post with a filter on an INCLUDE column falls back to force when its page is short
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category", false)
+-- @regex("Adaptive Top", true)
+explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
+select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category", false)
+-- @regex("Join Type: SEMI", true)
+explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+-- @separator:table
+-- @regex("Index Filter: [^\n]*__mo_index_pri_col > 500", true)
+-- @regex("Index Filter: [^\n]*category", false)
+explain select id from t_inc where category = 1 and id > 500 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
+select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+
 drop database vector_filtered_search_ivfflat;

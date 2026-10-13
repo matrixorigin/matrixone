@@ -41,6 +41,37 @@ Project  𝄀
                     Runtime Filter Probe: t_ivfpq.id  𝄀
               ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
                     Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 10, Index Filter: id > 0
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10;
+-- @regex("Index Filter: [^\n]*category = 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cagra.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_filtered_search_gpu.t_cagra  𝄀
+                    Runtime Filter Probe: t_cagra.id  𝄀
+              ->  Vector Index Scan on i_cagra [l2_distance]  𝄀
+                    Vector Index: i_cagra, Metric: l2_distance, Candidate Limit: 10, Index Filter: category = 1
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=post';
+-- @regex("Index Filter", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cagra.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_filtered_search_gpu.t_cagra  𝄀
+                    Filter Cond: (t_cagra.category = 1)  𝄀
+                    Runtime Filter Probe: t_cagra.id  𝄀
+              ->  Vector Index Scan on i_cagra [l2_distance]  𝄀
+                    Vector Index: i_cagra, Metric: l2_distance, Candidate Limit: 10
 select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -120,13 +151,81 @@ Adaptive Top  𝄀
                           Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 10, Index Filter: category = 1  𝄀
   ->  Project  𝄀
         ->  Sort  𝄀
-              Sort Key: l2_distance(t_ivfpq.v, ) INTERNAL, t_ivfpq.id INTERNAL  𝄀
+              Sort Key: l2_distance(t_ivfpq.v, 0x0000000000000000000000000000000000000000000000000000000000000000) INTERNAL, t_ivfpq.id INTERNAL  𝄀
               Limit: 10  𝄀
               ->  Table Scan on vector_filtered_search_gpu.t_ivfpq  𝄀
                     Filter Cond: (t_ivfpq.category = 1)
-select group_concat(id order by id) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto', 'nprobe=1') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-501,502,503,504,505,506,507,508,509,510
+select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto', 'nprobe=1';
+➤ id[-5,64,0]  𝄀
+501  𝄀
+502  𝄀
+503  𝄀
+504  𝄀
+505  𝄀
+506  𝄀
+507  𝄀
+508  𝄀
+509  𝄀
+510
+select mo_ctl('dn', 'flush', 'vector_filtered_search_gpu.t_cagra');
+➤ mo_ctl(dn, flush, vector_filtered_search_gpu.t_cagra)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
+-- @regex("Adaptive Top", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Adaptive Top  𝄀
+  Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_cagra.id = #[1,0])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_filtered_search_gpu.t_cagra  𝄀
+                          Filter Cond: (t_cagra.category = 1)  𝄀
+                          Runtime Filter Probe: t_cagra.id  𝄀
+                    ->  Vector Index Scan on i_cagra [l2_distance]  𝄀
+                          Vector Index: i_cagra, Metric: l2_distance, Candidate Limit: 10  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_cagra.id = #[1,0])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_filtered_search_gpu.t_cagra  𝄀
+                          Runtime Filter Probe: t_cagra.id  𝄀
+                    ->  Vector Index Scan on i_cagra [l2_distance]  𝄀
+                          Vector Index: i_cagra, Metric: l2_distance, Candidate Limit: 10, Index Filter: category = 1  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(t_cagra.v, 0x0000000000000000000000000000000000000000000000000000000000000000) INTERNAL, t_cagra.id INTERNAL  𝄀
+              Limit: 10  𝄀
+              ->  Table Scan on vector_filtered_search_gpu.t_cagra  𝄀
+                    Filter Cond: (t_cagra.category = 1)
+select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+583  𝄀
+617  𝄀
+631  𝄀
+634  𝄀
+647  𝄀
+673  𝄀
+686  𝄀
+695  𝄀
+748  𝄀
+782
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
 not supported: mode=include on index type ivfpq
 drop database vector_filtered_search_gpu;

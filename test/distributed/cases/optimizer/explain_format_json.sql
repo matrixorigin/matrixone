@@ -82,14 +82,14 @@ explain format=json select id from vectors where l2_distance(v,'[1,1,1]') >= 1 o
 -- @regex("(?s)Vector Index Scan.*distance_lower_bound_type=EXCLUSIVE.*distance_lower_bound=1[^0-9]",true)
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') > 1 order by l2_distance(v,'[1,1,1]') limit 2;
 
--- INCLUDE-mode plans are built by the production optimizer and must expose the
--- first-round budget derived from the semantic LIMIT, not only the final k.
+-- INCLUDE-mode plans are built by the production optimizer and expose the multi-round
+-- scan and the candidate budget derived from the semantic LIMIT.
 create table vectors_include(id bigint primary key, v vecf32(3), tag varchar(10));
 insert into vectors_include values (1,'[0,0,0]','zero'),(2,'[1,1,1]','one'),(3,'[2,2,2]','two');
 create index ix_include using ivfflat on vectors_include(v) lists=1 op_type 'vector_l2_ops' include(tag);
--- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*first_round_limit=2",true)
+-- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*candidate_limit=2",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 2 by rank with option 'mode=include';
--- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*first_round_limit=3",true)
+-- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*candidate_limit=3",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 3 by rank with option 'mode=include';
 drop table vectors_include;
 set probe_limit=default;

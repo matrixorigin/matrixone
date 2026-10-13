@@ -52,6 +52,16 @@ explain select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]')
 -- post runs one search: max_nprobe does not change its rows
 select (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2', 'max_nprobe=4') x) <=> (select group_concat(id order by id) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=2') x) as same_post;
 
+-- vector_max_nprobe after PREPARE caps iterative; the BY RANK option wins; reset, it fills
+prepare s from 'select count(*) from (select id from t_ivf where category = 1 order by l2_distance(v, ''[0,0]'') limit 10 by rank with option ''mode=iterative'', ''nprobe=1'') x';
+execute s;
+set vector_max_nprobe = 1;
+execute s;
+select count(*) from (select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative', 'nprobe=1', 'max_nprobe=4') x;
+set vector_max_nprobe = 0;
+execute s;
+deallocate prepare s;
+
 -- nprobe and max_nprobe are IVF knobs
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=4';
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'max_nprobe=4';

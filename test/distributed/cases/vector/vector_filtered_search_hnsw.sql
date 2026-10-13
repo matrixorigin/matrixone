@@ -64,18 +64,29 @@ select mo_ctl('dn', 'flush', 'vector_filtered_search_hnsw.t_l2');
 -- @regex("Join Type: SEMI", true)
 explain select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
 -- post returns no row, pre returns the qualifying nearest rows
-select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
 -- post fills the page
-select group_concat(id order by id) from (select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
-select group_concat(id order by id) from (select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto') x;
+select id from t_l2 where category = 0 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+select id from t_l2 where id % 7 = 0 order by l2_distance(v, '[500,0]') limit 6 by rank with option 'mode=auto';
 -- without a filter the region has post and force only
 -- @separator:table
 -- @regex("Adaptive Top", true)
 -- @regex("Join Type: SEMI", false)
 explain select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
-select group_concat(id order by id) from (select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+select id from t_l2 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+-- inside an outer query the region runs force
+-- @separator:table
+-- @regex("Adaptive Top", false)
+-- @regex("Vector Index Scan on", false)
+explain select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto') x;
+-- more than one output column: the region runs force
+-- @separator:table
+-- @regex("Adaptive Top", false)
+-- @regex("Vector Index Scan on", false)
+explain select id, category from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=auto';
+select id, category from t_l2 where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=auto';
 -- prepared LIMIT
-prepare s from 'select group_concat(id order by id) from (select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto'') x';
+prepare s from 'select id from t_l2 where category = 1 order by l2_distance(v, ''[0,0]'') limit ? by rank with option ''mode=auto''';
 set @k = 4;
 execute s using @k;
 deallocate prepare s;
