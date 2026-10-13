@@ -151,6 +151,36 @@ func TestStarlarkOutputDeclaredTypes(t *testing.T) {
 	}
 }
 
+func TestStarlarkVectorINOUTReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  string
+		want any
+	}{
+		{"vecf32", "vecf32(2)", []float32{0, 0}},
+		{"vecf64", "vecf64(2)", []float64{0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := starlarkOutputTestSession(t)
+			interp, _ := starlarkOutputTestInterpreter(t, ses, "inout v "+tc.typ)
+			require.NoError(t, ses.SetUserDefinedVar("v", "[0,0]", ""))
+			for call := 0; call < 2; call++ {
+				require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false))
+				got, err := ses.GetUserDefinedVar("v")
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got.Value)
+			}
+		})
+	}
+}
+
+func TestStarlarkNilVectorInputRemainsUnsupported(t *testing.T) {
+	for _, value := range []any{[]float32(nil), []float64(nil)} {
+		_, err := convertToStarlarkValue(context.Background(), value)
+		require.Error(t, err)
+	}
+}
+
 func TestStarlarkOutputAtomicityAndReuse(t *testing.T) {
 	ses := starlarkOutputTestSession(t)
 	for _, aliases := range []bool{false, true} {

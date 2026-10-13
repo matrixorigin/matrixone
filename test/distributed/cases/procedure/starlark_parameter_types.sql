@@ -531,6 +531,19 @@ create or replace procedure typed_value(inout v vecf64(2)) language 'starlark' $
 set @v=99;
 call typed_value(@v);
 select @v=cast('[1,2]' as vecf64(2)) as matches;
+-- Repeated INOUT calls feed the typed SQL vector output back as its existing string input form.
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = v$$;
+set @v='[0,0]';
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf32(2)) as matches;
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf32(2)) as matches;
+create or replace procedure typed_value(inout v vecf64(2)) language 'starlark' $$out_v = v$$;
+set @v='[0,0]';
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf64(2)) as matches;
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf64(2)) as matches;
 -- INOUT vecf32(2): reject and preserve
 create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "[1,2,3]"$$;
 set @v=99;

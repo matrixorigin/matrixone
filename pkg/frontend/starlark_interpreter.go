@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,6 +45,19 @@ type starlarkInterpreter struct {
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
+	// Non-nil SQL vectors are stored as typed slices but enter Starlark through
+	// their existing SQL string representation. Keep nil slices unsupported.
+	switch v := v.(type) {
+	case []float32:
+		if v != nil {
+			return starlark.String(types.ArrayToString[float32](v)), nil
+		}
+	case []float64:
+		if v != nil {
+			return starlark.String(types.ArrayToString[float64](v)), nil
+		}
+	}
+
 	val := reflect.ValueOf(v)
 	kind := val.Kind()
 	if kind == reflect.Pointer {
