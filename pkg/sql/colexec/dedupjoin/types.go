@@ -505,6 +505,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

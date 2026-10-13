@@ -205,6 +205,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

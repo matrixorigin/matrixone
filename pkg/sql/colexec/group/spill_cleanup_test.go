@@ -17,12 +17,73 @@ package group
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type terminalRemoveErrorFS struct {
+	fileservice.MutableFileService
+	blocked atomic.Bool
+}
+
+func newCleanupTestProcess(t *testing.T) *process.Process {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	ledger := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	generation, err := ledger.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	return proc
+}
+
+func (fs *terminalRemoveErrorFS) RemoveFile(ctx context.Context, name string) error {
+	if fs.blocked.Load() {
+		return errors.New("injected terminal remove error")
+	}
+	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestGroupFreeReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		proc := newCleanupTestProcess(t)
+		baseFS, err := proc.GetSpillFileService()
+		require.NoError(t, err)
+		budget, err := proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		fault := &terminalRemoveErrorFS{MutableFileService: baseFS}
+		fault.blocked.Store(true)
+		group := NewArgument()
+		group.ctr = container{mp: mpool.MustNewZero(), budget: budget}
+		bucket := &spillBucket{name: "terminal-group-spill"}
+		require.NoError(t, group.ctr.openSpillBucket(proc, fault, bucket))
+		_, err = bucket.writer.Write([]byte("physical-spill-data"))
+		require.NoError(t, err)
+		require.NoError(t, bucket.flushWriter())
+		if distinct {
+			group.ctr.distinctSpill = &distinctSpillController{ctr: &group.ctr}
+			group.ctr.distinctSpill.root[0] = bucket
+		} else {
+			group.ctr.currentSpillBkt = []*spillBucket{bucket}
+		}
+		group.Free(proc, true, errors.New("terminal query error"))
+		group.Release()
+		require.Positive(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		fault.blocked.Store(false)
+		require.Eventually(t, func() bool { return budget.SpillDiskUsed() == 0 }, 3*time.Second, 10*time.Millisecond)
+		_, err = baseFS.OpenFile(context.Background(), bucket.name)
+		require.Error(t, err)
+		proc.Free()
+	}
+}
 
 type oneShotRemoveErrorFS struct {
 	fileservice.MutableFileService
@@ -51,7 +112,7 @@ func (fs *oneShotRemoveErrorFS) RemoveFile(ctx context.Context, name string) err
 
 func TestGroupCleanupRetriesTransientRemoveFailure(t *testing.T) {
 	for _, inject := range []bool{false, true} {
-		proc := testutil.NewProcess(t)
+		proc := newCleanupTestProcess(t)
 		baseFS, err := proc.GetSpillFileService()
 		require.NoError(t, err)
 		budget, err := proc.GetExecutionResourceBudget()
@@ -89,7 +150,7 @@ func TestGroupCleanupRetriesTransientRemoveFailure(t *testing.T) {
 }
 
 func TestDistinctCleanupRetriesTransientRemoveFailure(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newCleanupTestProcess(t)
 	defer proc.Free()
 	baseFS, err := proc.GetSpillFileService()
 	require.NoError(t, err)
@@ -117,7 +178,7 @@ func TestDistinctCleanupRetriesTransientRemoveFailure(t *testing.T) {
 
 func TestGroupRetainsFailedRemovalForLaterCleanup(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
-		proc := testutil.NewProcess(t)
+		proc := newCleanupTestProcess(t)
 		baseFS, err := proc.GetSpillFileService()
 		require.NoError(t, err)
 		budget, err := proc.GetExecutionResourceBudget()

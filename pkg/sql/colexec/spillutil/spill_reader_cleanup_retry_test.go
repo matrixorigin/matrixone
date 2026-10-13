@@ -19,6 +19,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -26,6 +27,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSpillEngineDeferredCleanupOutlivesEngine(t *testing.T) {
+	for _, owner := range []string{"reader", "queue"} {
+		t.Run(owner, func(t *testing.T) {
+			fd, err := os.CreateTemp(t.TempDir(), "terminal-engine-*")
+			require.NoError(t, err)
+			name := fd.Name()
+			require.NoError(t, fd.Close())
+			var blocked atomic.Bool
+			blocked.Store(true)
+			var released atomic.Int32
+			file := message.NewReopenableSpillFile(
+				func(context.Context) (*os.File, error) { return os.Open(name) },
+				func() error {
+					if blocked.Load() {
+						return os.ErrPermission
+					}
+					return os.Remove(name)
+				}, 1, 1, func() { released.Add(1) },
+			)
+			require.Error(t, file.Close())
+			engine := &SpillEngine{}
+			if owner == "reader" {
+				engine.probeReader.spillFile = file
+			} else {
+				engine.orphanFiles = []*message.SpillFile{file}
+			}
+			engine.DeferCleanup()
+			require.Nil(t, engine.probeReader.spillFile)
+			require.Empty(t, engine.orphanFiles)
+			engine = nil
+			require.FileExists(t, name)
+			require.Zero(t, released.Load())
+			blocked.Store(false)
+			require.Eventually(t, func() bool { return released.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+			require.NoFileExists(t, name)
+		})
+	}
+}
 
 func TestBucketReaderCloseRetainsHandedOffFileForRetry(t *testing.T) {
 	for _, block := range []bool{false, true} {
