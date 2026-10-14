@@ -261,6 +261,75 @@ func TestKafkaConnectRunnerFailsWhenArtifactRedactionFails(t *testing.T) {
 	}
 }
 
+func TestKafkaConnectRunnerUsesFreshReportBeforePreflight(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	reportDir := filepath.Join(t.TempDir(), "reports")
+	if err := os.Mkdir(reportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"report.json":        `{"status":"passed"}`,
+		"setup-failure.json": `{"status":"failed","stage":"previous-run"}`,
+		"keep-me.txt":        "unrelated evidence\n",
+	} {
+		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Keep docker out of PATH to fail in preflight before creating any owned
+	// service, while preserving the small set of tools needed to write evidence.
+	pathDir := t.TempDir()
+	for _, name := range []string{"dirname", "mkdir", "python3", "rm"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf("look up %s: %v", name, err)
+		}
+		if err := os.Symlink(path, filepath.Join(pathDir, name)); err != nil {
+			t.Fatalf("link %s: %v", name, err)
+		}
+	}
+
+	cmd := exec.Command("/bin/bash", filepath.Join(repoRoot, "optools", "kafka_connect_ci.bash"), "e2e-local")
+	for _, item := range os.Environ() {
+		if strings.HasPrefix(item, "PATH=") || strings.HasPrefix(item, "MO_KAFKA_CONNECT_REPORT_DIR=") {
+			continue
+		}
+		cmd.Env = append(cmd.Env, item)
+	}
+	cmd.Env = append(cmd.Env, "PATH="+pathDir, "MO_KAFKA_CONNECT_REPORT_DIR="+reportDir)
+	output, runErr := cmd.CombinedOutput()
+	if runErr == nil || !strings.Contains(string(output), "required command not found: docker") {
+		t.Fatalf("runner preflight error = %v, output:\n%s", runErr, output)
+	}
+	if _, err := os.Stat(filepath.Join(reportDir, "report.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale report.json remains after failed run; stat error = %v", err)
+	}
+	var failure struct {
+		Status    string `json:"status"`
+		Stage     string `json:"stage"`
+		SourceSHA string `json:"source_sha"`
+		ExitCode  int    `json:"exit_status"`
+	}
+	failureData, err := os.ReadFile(filepath.Join(reportDir, "setup-failure.json"))
+	if err != nil {
+		t.Fatalf("read current setup failure: %v; runner output:\n%s", err, output)
+	}
+	if err := json.Unmarshal(failureData, &failure); err != nil {
+		t.Fatalf("decode current setup failure: %v", err)
+	}
+	if failure.Status != "failed" || failure.Stage != "preflight" || failure.ExitCode == 0 {
+		t.Fatalf("setup-failure.json = %+v, want current failed preflight evidence", failure)
+	}
+	if got, err := os.ReadFile(filepath.Join(reportDir, "keep-me.txt")); err != nil || string(got) != "unrelated evidence\n" {
+		t.Fatalf("unrelated report artifact = %q, %v; want it preserved", got, err)
+	}
+}
+
 func TestWaitForDatabaseRetriesTransientPingFailure(t *testing.T) {
 	pinger := &sequenceDatabasePinger{}
 	if err := waitForDatabase(t.Context(), pinger); err != nil {
@@ -1094,6 +1163,72 @@ func TestOwnedConnectDockerHelpers(t *testing.T) {
 	t.Setenv("PATH", failingDockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if _, err := composeOutput(t.Context(), opts, "config"); err == nil {
 		t.Fatal("composeOutput accepted a failed docker command")
+	}
+}
+
+func TestComposeOutputResolvesRelativePathsBeforeChangingDirectory(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	originalWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWorkingDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	const relativeBase = "etc/launch-kafka-local/compose.yaml"
+	const relativeConnect = "etc/launch-kafka-local/compose.connect.yaml"
+	basePath, err := filepath.Abs(relativeBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectPath, err := filepath.Abs(relativeConnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{basePath, connectPath} {
+		if !filepath.IsAbs(path) {
+			t.Fatalf("Compose path %q is not absolute", path)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected Compose file %q to exist: %v", path, err)
+		}
+	}
+
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "docker-args.txt")
+	dockerPath := filepath.Join(dockerDir, "docker")
+	dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >\"$TEST_DOCKER_LOG\"\nprintf '%s\\n' \"$@\" >>\"$TEST_DOCKER_LOG\"\n"
+	if err := os.WriteFile(dockerPath, []byte(dockerScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_DOCKER_LOG", logPath)
+	opts := runOptions{
+		composeProject: "fixture",
+		composeBase:    relativeBase,
+		composeConnect: relativeConnect,
+	}
+	if output, err := composeOutput(t.Context(), opts, "config"); err != nil {
+		t.Fatalf("composeOutput = %q, %v", output, err)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	want := []string{filepath.Dir(basePath), "compose", "-p", "fixture", "-f", basePath, "-f", connectPath, "config"}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("docker working directory and arguments = %q, want %q", lines, want)
 	}
 }
 

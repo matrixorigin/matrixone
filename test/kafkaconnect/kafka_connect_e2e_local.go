@@ -1115,11 +1115,19 @@ func startOwnedConnect(ctx context.Context, opts runOptions) error {
 }
 
 func composeOutput(ctx context.Context, opts runOptions, args ...string) (string, error) {
+	composeBase, err := filepath.Abs(opts.composeBase)
+	if err != nil {
+		return "", fmt.Errorf("resolve base Compose path %q: %w", opts.composeBase, err)
+	}
+	composeConnect, err := filepath.Abs(opts.composeConnect)
+	if err != nil {
+		return "", fmt.Errorf("resolve Connect Compose path %q: %w", opts.composeConnect, err)
+	}
 	commandArgs := make([]string, 0, 7+len(args))
-	commandArgs = append(commandArgs, "compose", "-p", opts.composeProject, "-f", opts.composeBase, "-f", opts.composeConnect)
+	commandArgs = append(commandArgs, "compose", "-p", opts.composeProject, "-f", composeBase, "-f", composeConnect)
 	commandArgs = append(commandArgs, args...)
 	cmd := exec.CommandContext(ctx, "docker", commandArgs...)
-	cmd.Dir = filepath.Dir(opts.composeBase)
+	cmd.Dir = filepath.Dir(composeBase)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("docker %s: %w: %s", strings.Join(commandArgs, " "), err, strings.TrimSpace(string(output)))

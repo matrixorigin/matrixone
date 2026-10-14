@@ -121,6 +121,7 @@ cleanup() {
   local status=$?
   local service_pid="$MO_PID"
   set +e
+  set +u
   if ! mo_e2e_stop_service "$service_pid"; then
     record_cleanup_error "could not stop the owned MatrixOne process"
   fi
@@ -182,20 +183,22 @@ PY
 }
 
 run_e2e() {
+  mkdir -p "$REPORT_DIR"
+  rm -f -- "$REPORT_DIR/report.json" "$REPORT_DIR/setup-failure.json"
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
   require docker
   require go
   require python3
   require make
   require shasum
-  mkdir -p "$REPORT_DIR"
   HARNESS_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   SOURCE_SHA="$HARNESS_SHA"
   local tmp_root
   tmp_root="$(e2e_tmp_root)"
   TMP_DIR="$(mktemp -d "${tmp_root%/}/mo-kafka-connect-e2e.XXXXXX")"
-  trap cleanup EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
   COMPOSE_PROJECT_NAME="mo-kc-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
 
   CURRENT_STAGE="allocate_ports"
