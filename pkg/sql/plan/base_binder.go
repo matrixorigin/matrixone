@@ -8113,7 +8113,9 @@ func bindFuncExprImplByPlanExpr(
 				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
 				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
 					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
-					unbounded := false
+					// An unknown result bound (for example JSON -> TEXT) cannot
+					// be bounded by only the other argument's declared capacity.
+					unbounded := commonType.Width == 0
 					for _, idx := range []int{0, 2} {
 						if argsType[idx].Oid == types.T_blob {
 							commonType.Oid = types.T_blob

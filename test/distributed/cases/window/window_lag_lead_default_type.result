@@ -191,6 +191,53 @@ v  ¦  decimal(65,65)  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from wdecimal_max_view;
 ➤ v[3,65,65]  𝄀
 0.10000000000000000000000000000000000000000000000000000000000000000
+create table wjson (j json, d254 varchar(254), d255 varchar(255), d256 varchar(256));
+insert into wjson values (json_object('s', repeat('a',300)), '{}', '{}', '{}');
+select length(cast(j as char)) as original_length,
+length(cast(lag(j,0) over () as char)) as lag_control,
+length(cast(lead(j,0) over () as char)) as lead_control,
+length(cast(coalesce(j,d255) as char)) as coalesce_control,
+length(cast(lag(j,0,d254) over () as char)) as lag_254,
+length(cast(lag(j,0,d255) over () as char)) as lag_255,
+length(cast(lag(j,0,d256) over () as char)) as lag_256,
+length(cast(lead(j,0,d254) over () as char)) as lead_254,
+length(cast(lead(j,0,d255) over () as char)) as lead_255,
+length(cast(lead(j,0,d256) over () as char)) as lead_256 from wjson;
+➤ original_length[-5,64,0]  ¦  lag_control[-5,64,0]  ¦  lead_control[-5,64,0]  ¦  coalesce_control[-5,64,0]  ¦  lag_254[-5,64,0]  ¦  lag_255[-5,64,0]  ¦  lag_256[-5,64,0]  ¦  lead_254[-5,64,0]  ¦  lead_255[-5,64,0]  ¦  lead_256[-5,64,0]  𝄀
+309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309
+select cast(lag(j,0,d255) over () as char) = cast(j as char) as lag_equal,
+cast(lead(j,0,d255) over () as char) = cast(j as char) as lead_equal,
+json_valid(lag(j,0,d255) over ()) as lag_valid,
+json_valid(lead(j,0,d255) over ()) as lead_valid from wjson;
+➤ lag_equal[-7,1,0]  ¦  lead_equal[-7,1,0]  ¦  lag_valid[-7,1,0]  ¦  lead_valid[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select lag(j,1,d255) over () as lg, lead(j,1,d255) over () as ld from wjson;
+➤ lg[-1,16383,0]  ¦  ld[-1,16383,0]  𝄀
+{}  ¦  {}
+select length(lag(d255,1,j) over ()) as lag_default_length,
+length(lead(d255,1,j) over ()) as lead_default_length,
+json_valid(lag(d255,1,j) over ()) as lag_default_valid,
+json_valid(lead(d255,1,j) over ()) as lead_default_valid from wjson;
+➤ lag_default_length[-5,64,0]  ¦  lead_default_length[-5,64,0]  ¦  lag_default_valid[-7,1,0]  ¦  lead_default_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
+create table wjson_copy as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show create table wjson_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,80,0]  𝄀
+wjson_copy  ¦  CREATE TABLE `wjson_copy` (
+  `lg` text DEFAULT NULL,
+  `ld` text DEFAULT NULL
+)
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_copy;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
+create view wjson_view as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show columns from wjson_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';

@@ -111,6 +111,35 @@ create view wdecimal_max_view as select lead(cast(0.1 as decimal(65,65)),0,0) ov
 show columns from wdecimal_max_view;
 select * from wdecimal_max_view;
 
+-- JSON 显示容量未知，默认 VARCHAR 的宽度不能成为源值的截断上界。
+create table wjson (j json, d254 varchar(254), d255 varchar(255), d256 varchar(256));
+insert into wjson values (json_object('s', repeat('a',300)), '{}', '{}', '{}');
+select length(cast(j as char)) as original_length,
+       length(cast(lag(j,0) over () as char)) as lag_control,
+       length(cast(lead(j,0) over () as char)) as lead_control,
+       length(cast(coalesce(j,d255) as char)) as coalesce_control,
+       length(cast(lag(j,0,d254) over () as char)) as lag_254,
+       length(cast(lag(j,0,d255) over () as char)) as lag_255,
+       length(cast(lag(j,0,d256) over () as char)) as lag_256,
+       length(cast(lead(j,0,d254) over () as char)) as lead_254,
+       length(cast(lead(j,0,d255) over () as char)) as lead_255,
+       length(cast(lead(j,0,d256) over () as char)) as lead_256 from wjson;
+select cast(lag(j,0,d255) over () as char) = cast(j as char) as lag_equal,
+       cast(lead(j,0,d255) over () as char) = cast(j as char) as lead_equal,
+       json_valid(lag(j,0,d255) over ()) as lag_valid,
+       json_valid(lead(j,0,d255) over ()) as lead_valid from wjson;
+select lag(j,1,d255) over () as lg, lead(j,1,d255) over () as ld from wjson;
+select length(lag(d255,1,j) over ()) as lag_default_length,
+       length(lead(d255,1,j) over ()) as lead_default_length,
+       json_valid(lag(d255,1,j) over ()) as lag_default_valid,
+       json_valid(lead(d255,1,j) over ()) as lead_default_valid from wjson;
+create table wjson_copy as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show create table wjson_copy;
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_copy;
+create view wjson_view as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show columns from wjson_view;
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';
