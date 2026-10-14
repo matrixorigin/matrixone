@@ -319,6 +319,8 @@ cat "$UT_REPORT"
 // Exercise preparation and consumption as well as admission. Compilation
 // indices intentionally differ from execution indices after pkg/embed moves.
 func TestEmbeddedPrebuiltAdmission(t *testing.T) {
+	t.Setenv("UT_PREBUILD_EMBEDDED", "0")
+	t.Setenv("UT_HARD_TIMEOUT", "1s")
 	for _, tc := range []struct {
 		name, parallel, mode string
 	}{

@@ -118,7 +118,19 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1", "UT_EMBEDDED_BATCHES=1")
+	// Start each fixture from the runner's defaults and its own explicit overrides.
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		if strings.HasPrefix(key, "UT_") {
+			continue
+		}
+		switch key {
+		case "HEAVY_RACE_PARALLEL", "PLAN_RACE_PARALLEL", "PLAN_RACE_SHARDS", "MO_TEST_CLUSTER_ADMISSION_POOL_SIZE":
+			continue
+		}
+		cmd.Env = append(cmd.Env, value)
+	}
+	cmd.Env = append(cmd.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
 	if diagnostic != "" {

@@ -140,14 +140,24 @@ do not alter production lineage policy, reset the fixture or reorder roots.
 Also check DML's streaming result error after iteration, preserving both EXCEPT
 directions and the zero-row oracle.
 
-Before adoption, compare the complete ten-package embedded wave, including
-compilation, with identical cache starting conditions, eight CPU cores, 8 GiB,
-and no swap. Run variants sequentially. Require identical root/subtest terminal
+Before adoption, compare issues plus the complete ten-package embedded wave,
+including compilation, with identical cache starting conditions, eight CPU
+cores, 16 GiB, and no swap. CI run `38538693413` records an eight-CPU quota and
+`memory.max=17179869184`; use that actual runner budget for both variants. The
+initial 8 GiB baseline encountered memory-limit events and was stopped; its
+partial timing is not performance evidence.
+
+While the issues optimization remains in this unmerged PR, compare the original
+four serial batches with overlapping prebuild against the combined proposed
+policy. Count that complete difference once. Historical issues savings cannot
+be added again; after their merge, any further optimization needs the new
+baseline. Run variants sequentially. Require identical root/subtest terminal
 maps, retained failure propagation, lower CPU and memory occupancy, and no
-increase in whole-wave memory peak or max/OOM events. Historical issues savings
-cannot be counted again after that optimization becomes the baseline. Tests
-must cover rollback, scope subsets, budgets, TestMain cleanup failure, preparation
-fallback and undrained ownership through the existing runner harness.
+increase in whole-wave memory peak or max/OOM events. Tests must cover rollback,
+scope subsets, budgets, TestMain cleanup failure, preparation fallback and
+undrained ownership through the existing runner harness. Before delivery, also
+run the complete repository race UT through the real Make entry point and
+incremental SCA for the changed package closure.
 
 ## PR29795 amendment: optional bounded process waves
 
