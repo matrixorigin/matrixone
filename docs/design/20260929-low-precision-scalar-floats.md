@@ -122,6 +122,37 @@ GPU kernels agree on the encoding.
 - **Presentation.** On the wire and in `information_schema` the column reports its
   own type name; values render as their widened float.
 
+## Compatibility and rollout
+
+A binary without these types (the previous release, or main before them) has no size,
+codec or comparator for type IDs 73-76 (`T_bf16`, `T_float16`, `T_float8`, `T_float4`).
+It meets them only inside a cluster that mixes it with a newer binary: during a rolling
+upgrade, or after a rollback.
+
+There is no fallback. No path converts these types to a type an older binary knows, and
+no statement is rerouted, rewritten or run elsewhere to avoid an older service. A
+statement that would hand these types to an older binary is refused; once every service
+runs MORPC protocol version 113 or later, the same statement runs.
+
+- **Version.** `MORPCVersion113`. The deployment state is `MOProtocolVersion`, the lowest
+  version of the live services, together with the HAKeeper persisted-expression authoring
+  floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
+- **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`
+  included) and `ALTER TABLE ... ADD`, `MODIFY` and `CHANGE COLUMN` whose column type is one
+  of these types are refused below 113. While an older service is live no table with these
+  types exists, so no older binary reads one from the catalog, the log or object storage.
+- **Remote execution.** A pipeline whose expressions carry one of these types (a literal,
+  a column reference, a function argument or result, a CAST source or target) is refused
+  for a destination below 113. The private integer CAST 5..8 sources are one case of this
+  rule.
+- **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
+  constraint whose expression carries one of these types requires persisted-expression
+  protocol 113.
+- **Downgrade.** The upgrade is one-way. Once a table with these types exists, running
+  any service below 113 is unsupported: an older binary does not read the data.
+- **Tests.** Every refusal point has a test below 113 (refused, nothing created or sent)
+  and one at 113 (runs).
+
 ## Out of scope (separate work)
 
 - **GPU-accelerated float4/float8 compute** (distance kernels, low-precision vector

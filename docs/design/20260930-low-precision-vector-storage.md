@@ -583,6 +583,28 @@ and L2 (the square root) are not provided.
 - Merging partial states is order-independent: the final result does not depend on how
   rows were split across pipelines and CNs (ties are broken by `id`).
 
+## Compatibility and rollout
+
+The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
+`20260929-low-precision-scalar-floats.md`): there is no fallback, a statement that would hand
+an older binary something it cannot decode is refused below MORPC protocol version 113, and
+the upgrade is one-way. Here they cover:
+
+- **Types.** `vecf8` (`T_array_float8`, 230) and `vecf4` (`T_array_float4`, 231): column
+  authoring, expressions in a remote pipeline, and persisted expressions, as for the scalar
+  types. The version-1 cell header describes a cell to a binary that knows these types; it
+  does not make an older binary able to read them.
+- **Functions.** `VECTOR_MATMUL`, `VECBLOCK_JSON` and `VECBLOCK_BINARY` (598-600), and the
+  overload slots this design appends to existing functions (`IN`, `NOT IN`, `COALESCE`,
+  `VECTOR_DIMS`, `NORMALIZE_L2`): a pipeline that contains one is refused for a destination
+  below 113, and a persisted expression that contains one requires persisted-expression
+  protocol 113.
+- **Aggregate state.** The `vector_matmul` partial state (`AggIdOfVectorMatmul`) moves only
+  between pipelines of binaries at 113 or later: a pipeline that would ship it to an older
+  destination is refused by the function rule above. Its own version byte versions the state
+  among those binaries.
+- **Tests.** Every refusal point has a test below 113 (refused) and one at 113 (runs).
+
 ## Phasing
 
 - **P1 — storage (CPU):** `vecf8`/`vecf4` types, header codec, E8M0 scale codec,
