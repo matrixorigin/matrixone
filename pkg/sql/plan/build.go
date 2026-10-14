@@ -947,8 +947,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
-				Name: query.Headings[idx],
-				Typ:  expr.Typ,
+				Name:             query.Headings[idx],
+				Typ:              expr.Typ,
+				ResultColumnKind: resultColumnKind(query, query.Steps[step], expr),
 			}
 
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
@@ -1019,6 +1020,104 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+// resultColumnKind records expression provenance independently from source and
+// key metadata.  DISTINCT and set-operation nodes can intentionally discard
+// origin information even when they still carry a stored column through the
+// result, so callers must not use empty origin fields as an expression test.
+func resultColumnKind(query *plan.Query, nodeID int32, expr *plan.Expr) plan.ResultColumnKind {
+	if expr == nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_UNKNOWN
+	}
+	if expr.GetCol() == nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
+	if findResultColumnSource(query, nodeID, expr) != nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+	}
+	if resultColumnExpressionIsComputed(query, nodeID, expr, make(map[[3]int32]bool)) {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
+	return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+}
+
+// resultColumnExpressionIsComputed follows output projections through the
+// relational nodes that can hide source metadata.  It deliberately returns
+// false when a column reference cannot be resolved: retaining native BOOLEAN
+// metadata is safer than widening it merely because provenance was pruned.
+func resultColumnExpressionIsComputed(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	visited map[[3]int32]bool,
+) bool {
+	if expr == nil || expr.GetCol() == nil {
+		return expr != nil
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	ref := expr.GetCol()
+	key := [3]int32{nodeID, ref.RelPos, ref.ColPos}
+	if visited[key] {
+		return false
+	}
+	visited[key] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
+	if projected != nil {
+		if projected.GetCol() == nil {
+			return true
+		}
+		ref = projected.GetCol()
+	}
+
+	if isResultColumnSourceNode(node.NodeType) {
+		// A scan projection that remains a column reference is a stored value.
+		// Expressions in scan projections are computed values.
+		return false
+	}
+	if len(node.Children) == 0 {
+		return false
+	}
+
+	for _, childID := range node.Children {
+		childExpr := projected
+		child := query.Nodes[childID]
+		if child != nil && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
+			childExpr = child.ProjectList[projectIndex]
+		}
+		if childExpr == nil {
+			childExpr = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: ref}}
+		}
+		if resultColumnExpressionIsComputed(query, childID, childExpr, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.Expr, int) {
+	if node == nil || ref == nil {
+		return nil, -1
+	}
+	for i, expr := range node.ProjectList {
+		if expr == nil || expr.GetCol() == nil {
+			continue
+		}
+		if resultColumnRefsHaveSamePosition(ref, expr.GetCol()) || resultColumnRefsMatchByName(ref, expr.GetCol()) {
+			return expr, i
+		}
+	}
+	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		return node.ProjectList[ref.ColPos], int(ref.ColPos)
+	}
+	return nil, -1
 }
 
 type resultColumnSource struct {

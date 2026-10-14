@@ -2456,8 +2456,9 @@ func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
 
 func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
 	computed, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
-		Name: "predicate",
-		Typ:  plan2.Type{Id: int32(types.T_bool)},
+		Name:             "predicate",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
 	})
 	require.NoError(t, err)
 	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
@@ -2484,11 +2485,9 @@ func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
 	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
 
 	native, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
-		Name:          "flag",
-		TblName:       "t",
-		OriginTblName: "t",
-		OriginName:    "flag",
-		Typ:           plan2.Type{Id: int32(types.T_bool)},
+		Name:             "flag",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
 	})
 	require.NoError(t, err)
 	require.Equal(t, defines.MYSQL_TYPE_BOOL, native.ColumnType())

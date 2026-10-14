@@ -215,3 +215,27 @@ func TestGetResultColumnsFromPlanLeavesComputedOriginEmpty(t *testing.T) {
 	require.Empty(t, columns[0].OriginTblName)
 	require.Empty(t, columns[0].DbName)
 }
+
+func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind planpb.ResultColumnKind
+	}{
+		{name: "native", sql: "select with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
+		{name: "distinct native", sql: "select distinct with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
+		{name: "union native", sql: "select with_grant_option from mo_catalog.mo_role_privs union all select with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
+		{name: "derived native", sql: "select x from (select with_grant_option x from mo_catalog.mo_role_privs) u", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
+		{name: "computed", sql: "select with_grant_option = 1 from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "derived computed", sql: "select x from (select with_grant_option = 1 x from mo_catalog.mo_role_privs) u", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			cols := GetResultColumnsFromPlan(p)
+			require.Len(t, cols, 1)
+			require.Equal(t, tc.kind, cols[0].ResultColumnKind)
+		})
+	}
+}
