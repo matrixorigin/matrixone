@@ -106,6 +106,16 @@ SELECT TIMESTAMP('2024-02-29 12:34:56.123') AS string_control, TIMESTAMP('2024-0
 -- @metacmp(true)
 SELECT TIMESTAMP('invalid') AS invalid_value, TIMESTAMP(NULL) AS null_value;
 
+-- TIMESTAMP literals/functions are DATETIME; mixed-domain predicates must stay equivalent.
+CREATE TABLE timestamp_literal_copy AS SELECT TIMESTAMP '2024-02-29 12:34:56.123' AS v;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'timestamp_literal_copy';
+SET SESSION time_zone = '+08:00';
+CREATE TABLE timestamp_predicate_control (v TIMESTAMP(6) PRIMARY KEY);
+INSERT INTO timestamp_predicate_control VALUES ('2024-01-01 00:20:00.123456'), ('2024-01-01 00:30:00.654321'), ('2024-01-01 00:40:00.123456');
+SELECT CAST(v AS CHAR) AS v FROM timestamp_predicate_control WHERE v IN (TIMESTAMP '2024-01-01 00:20:00.123456', TIMESTAMP '2024-01-01 00:30:00.654321') ORDER BY v;
+SELECT CAST(v AS CHAR) AS v FROM timestamp_predicate_control WHERE v = TIMESTAMP('2024-01-01 00:20:00.123456') OR v = TIMESTAMP('2024-01-01 00:30:00.654321') ORDER BY v;
+SET SESSION time_zone = '+00:00';
+
 -- #30197: calendar rollover yields a clock, genuine durations keep hours beyond 24.
 PREPARE p_add FROM 'SELECT ADDTIME(?, ''02:00:00.000001'') AS v';
 SET @d = '2024-02-29 23:30:00.123456';
