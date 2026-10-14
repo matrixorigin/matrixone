@@ -904,6 +904,16 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	require.Nil(t, state.cluster)
 }
 
+type sharedAdmissionReporter struct {
+	namedPanicTestReporter
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (r *sharedAdmissionReporter) Helper() {
+	r.once.Do(func() { close(r.entered) })
+}
+
 func TestSharedTestClusterRunActiveUsesAdmission(t *testing.T) {
 	state := SharedTestCluster{}
 	fixture := &cluster{}
@@ -920,10 +930,12 @@ func TestSharedTestClusterRunActiveUsesAdmission(t *testing.T) {
 	<-entered
 	borrowed := make(chan struct{})
 	secondDone := make(chan struct{})
+	secondReporter := &sharedAdmissionReporter{namedPanicTestReporter: namedPanicTestReporter{name: "second"}, entered: make(chan struct{})}
 	go func() {
 		defer close(secondDone)
-		state.RunActive(namedPanicTestReporter{name: "second"}, func(Cluster) { close(borrowed) })
+		state.RunActive(secondReporter, func(Cluster) { close(borrowed) })
 	}()
+	<-secondReporter.entered
 	select {
 	case <-borrowed:
 		t.Error("borrowed callback overlapped an admitted callback")
