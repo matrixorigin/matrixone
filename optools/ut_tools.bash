@@ -107,6 +107,60 @@ function install_go_ut_analysis() {
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
 }
 
+# Partition roots from the exact race binary. Keep each root indivisible so
+# subtests, fuzz seeds and internal stress loops retain their ordinary selection.
+# Callers own shard_patterns, shard_counts and test_count in their local scope.
+# Bash dynamic scoping keeps this compatible with Bash 3.2.
+function partition_race_test_inventory() {
+    local inventory=$1 groups=$2 layout=$3
+    local name escaped meta index=0 group width duplicates
+    local -a names=()
+
+    shard_patterns=()
+    shard_counts=()
+    test_count=0
+    if ! [[ "${groups}" =~ ^[1-9][0-9]*$ ]] || (( groups > 64 )) ||
+        [[ "${layout}" != roundrobin && "${layout}" != contiguous ]] ||
+        [[ ! -r "${inventory}" ]]; then
+        return 2
+    fi
+    while IFS= read -r name || [[ -n "${name}" ]]; do
+        case "${name}" in Test*|Fuzz*|Example*) ;; *) continue ;; esac
+        if [[ "${name}" == *$'\t'* || "${name}" == *' '* ]]; then
+            echo "invalid runnable test name: ${name}" >&2
+            return 2
+        fi
+        names+=("${name}")
+    done < "${inventory}"
+    (( ${#names[@]} > 0 )) || return 2
+    duplicates=$(set -o pipefail; printf '%s\n' "${names[@]}" | LC_ALL=C sort | uniq -d) || return 2
+    if [[ -n "${duplicates}" ]]; then
+        echo "duplicate runnable test names: ${duplicates}" >&2
+        return 2
+    fi
+
+    width=$(( (${#names[@]} + groups - 1) / groups ))
+    for (( group=0; group<groups; group++ )); do
+        shard_patterns[group]='^('
+        shard_counts[group]=0
+    done
+    for name in "${names[@]}"; do
+        group=$(( index % groups ))
+        if [[ "${layout}" == contiguous ]]; then group=$(( index / width )); fi
+        # Names are literal roots, not caller-supplied regular expressions.
+        escaped=${name//\\/\\\\}
+        for meta in '.' '[' ']' '(' ')' '{' '}' '*' '+' '?' '^' '$' '|'; do
+            escaped=${escaped//"${meta}"/\\"${meta}"}
+        done
+        if (( shard_counts[group] > 0 )); then shard_patterns[group]+='|'; fi
+        shard_patterns[group]+="${escaped}"
+        shard_counts[group]=$(( shard_counts[group] + 1 ))
+        index=$((index + 1))
+    done
+    for (( group=0; group<groups; group++ )); do shard_patterns[group]+=')$'; done
+    test_count=${#names[@]}
+}
+
 # list_embedded_cluster_test_packages prints every requested test package whose
 # race test binary transitively depends on pkg/embed. Keep this derived from the
 # Go test dependency graph: a hand-maintained directory list inevitably misses

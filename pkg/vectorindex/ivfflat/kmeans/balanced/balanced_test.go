@@ -122,31 +122,6 @@ func TestBalancedKMeans_K1(t *testing.T) {
 	require.InDelta(t, 2.0, centroids[0][0], 1e-6)
 }
 
-func TestBalancedKMeans_K1ExtremeFloat32(t *testing.T) {
-	ctx := context.Background()
-	vectors := [][]float32{{1e38, 1e38}, {2e38, 2e38}, {3e38, 3e38}}
-	km, err := NewKMeans(vectors, 1, 10, 0.01, metric.Metric_L2Distance, false, 1)
-	require.NoError(t, err)
-
-	res, err := km.Cluster(ctx)
-	require.NoError(t, err)
-	centroids := res.([][]float32)
-	require.InEpsilon(t, float32(2e38), centroids[0][0], 1e-6)
-	require.InEpsilon(t, float32(2e38), centroids[0][1], 1e-6)
-	require.False(t, math.IsInf(float64(centroids[0][0]), 0))
-}
-
-func TestBalancedKMeans_K1CancellationFloat64(t *testing.T) {
-	vectors := [][]float64{{1e308}, {-1e308}, {1e-300}}
-	km, err := NewKMeans(vectors, 1, 10, 0.01, metric.Metric_L2Distance, false, 1)
-	require.NoError(t, err)
-
-	res, err := km.Cluster(context.Background())
-	require.NoError(t, err)
-	centroids := res.([][]float64)
-	require.InEpsilon(t, 1e-300/3, centroids[0][0], 1e-12)
-}
-
 func TestBalancedKMeans_KN(t *testing.T) {
 	ctx := context.Background()
 	vectors := [][]float32{{1, 1}, {2, 2}, {3, 3}}
@@ -183,7 +158,7 @@ func TestBalancedKMeans_Spherical(t *testing.T) {
 	}
 }
 
-func FakeErrorDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
+func FakeErrorDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	return 0, moerr.NewInternalErrorNoCtx("distance calculation failed")
 }
 

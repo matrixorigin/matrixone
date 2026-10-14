@@ -76,11 +76,17 @@ func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
 
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 16, 64)
 }
 
 func BinaryToInt(b string) (uint64, error) {
 	s := b[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 2, 64)
 }
 

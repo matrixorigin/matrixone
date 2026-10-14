@@ -25,7 +25,7 @@ import (
 )
 
 func TestPreparedInsertSelectKeepsWriteExpressionPhysicalType(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source := mock.ctxt.tables["nation"]
 	require.NotNil(t, source)
 	id := proto.Clone(source.Cols[0]).(*planpb.ColDef)

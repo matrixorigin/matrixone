@@ -616,7 +616,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		return err
 	}
 	defer result.Free(mp)
-	if err = result.UnmarshalWithReader(reader, mp); err != nil {
+	if err = unmarshalAggregateVector(result, reader, mp); err != nil {
 		return err
 	}
 	if !result.GetType().Eq(exec.retType) || result.Length() != int(rows) {
@@ -631,7 +631,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		return err
 	}
 	defer empty.Free(mp)
-	if err = empty.UnmarshalWithReader(reader, mp); err != nil {
+	if err = unmarshalAggregateVector(empty, reader, mp); err != nil {
 		return err
 	}
 	if !empty.GetType().Eq(types.T_bool.ToType()) || empty.Length() != int(rows) {
@@ -705,7 +705,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 			if err != nil {
 				return err
 			}
-			if err = source.UnmarshalWithReader(wire, mp); err != nil {
+			if err = unmarshalAggregateVector(source, wire, mp); err != nil {
 				source.Free(mp)
 				return err
 			}

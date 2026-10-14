@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -94,7 +95,7 @@ func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
 }
 
 func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
-	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr"} {
+	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr", "format", "makedate", "maketime"} {
 		id, ok := getFunctionIdByNameWithoutErr(name)
 		require.True(t, ok, name)
 		fn := allSupportedFunctions[id]
@@ -163,7 +164,7 @@ func TestIntegerArgumentTextBits(t *testing.T) {
 		{input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), wantErr: true},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target, []uint64{}, nil)}, NewFunctionTestResult(target, tc.wantErr, tc.want, tc.nulls), NewTextIntegerBitsCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 }
@@ -174,7 +175,7 @@ func TestIntegerArgumentYear(t *testing.T) {
 		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{0, 1901, 2155, 0}, []bool{false, false, false, true}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1901, 2155, 0}, []bool{false, false, false, true}), NewIntegerArgumentCast)
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -182,7 +183,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []int64
 	}{
 		{"nearest even", NewIntegerArgumentCast, []int64{-2, -2, -2, 0, 0, 2, 2, 2}},
@@ -193,7 +194,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{-2.5, -1.9, -1.5, -0.5, 0.5, 1.5, 1.9, 2.5}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, nil), tc.fn)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -214,6 +215,46 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	require.Equal(t, uint64(18446744073709549568), u)
 }
 
+func TestPrivateIntegerArgumentCastPreservesScalarDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	target, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 3, proc.Mp())
+	require.NoError(t, err)
+	defer target.Free(proc.Mp())
+	scalar, err := vector.NewConstFixed(types.T_float64.ToType(), 2.5, 3, proc.Mp())
+	require.NoError(t, err)
+	defer scalar.Free(proc.Mp())
+	flat := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{2.5, 2.5, 2.5}, nil)
+	defer flat.Free(proc.Mp())
+	for _, tc := range []struct {
+		name    string
+		source  *vector.Vector
+		mask    *FunctionSelectList
+		length  int
+		isConst bool
+	}{
+		{"scalar three rows", scalar, nil, 3, true},
+		{"flat equal values", flat, nil, 3, false},
+		{"scalar partial selection", scalar, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 3, false},
+		{"scalar zero rows", scalar, nil, 0, false},
+		{"scalar reused", scalar, nil, 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, result.PreExtendAndReset(tc.length))
+			require.NoError(t, NewIntegerArgumentCast([]*vector.Vector{tc.source, target}, result, proc, tc.length, tc.mask))
+			got := result.GetResultVector()
+			require.Equal(t, tc.isConst, got.IsConst())
+			require.Equal(t, tc.length, got.Length())
+			if tc.length > 0 && tc.mask == nil {
+				for i := 0; i < tc.length; i++ {
+					require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, i))
+				}
+			}
+		})
+	}
+}
+
 func TestIntegerArgumentExactDomains(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, s := range []string{"-2.5", "-1.5", "1.5", "2.5", "9007199254740993.0"} {
@@ -231,7 +272,7 @@ func TestIntegerArgumentExactDomains(t *testing.T) {
 				NewFunctionTestInput(types.New(types.T_decimal256, 40, 1), []types.Decimal256{d256}, nil),
 			} {
 				test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{expected}, nil), NewIntegerArgumentCast)
-				ok, info := test.Run()
+				ok, info := test.RunAndFree()
 				require.True(t, ok, info)
 			}
 		})
@@ -280,7 +321,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 	} {
 		t.Run(input.typ.Oid.String(), func(t *testing.T) {
 			test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2}, nil), NewIntegerArgumentCast)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -297,7 +338,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil), &FunctionSelectList{AllNull: true}, []int64{0}, []bool{true}},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	large, err := types.ParseDecimal256("10000000000000000000000000000000000000000000000000000000000000000000000", 76, 0)
@@ -306,7 +347,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		NewFunctionTestInput(types.New(types.T_decimal256, 76, 0), []types.Decimal256{large, {B0_63: 2}}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, []bool{true, false}), NewIntegerArgumentCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 	value, err := decimal256IntegerArgument(large, 0)
 	require.NoError(t, err)

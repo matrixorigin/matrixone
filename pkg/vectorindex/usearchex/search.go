@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -105,5 +106,8 @@ func FilteredSearchUnsafeWithMembership(
 	runtime.KeepAlive(f)
 	keys = keys[:resultCount]
 	distances = distances[:resultCount]
+	if err := metric.CheckFiniteDists(distances, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	return keys, distances, nil
 }

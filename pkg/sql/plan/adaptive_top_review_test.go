@@ -24,7 +24,7 @@ import (
 )
 
 func TestAdaptiveTopPreservesCandidateProjection(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(b, nil)
 	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10}}}
 	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "+", []*plan.Expr{col, makePlan2Int64ConstExprWithType(100)})
@@ -38,7 +38,7 @@ func TestAdaptiveTopPreservesCandidateProjection(t *testing.T) {
 }
 
 func TestAdaptiveTopRejectsVolatileReplayAndCopiesForceMode(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(b, nil)
 	randExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "rand", nil)
 	require.NoError(t, err)

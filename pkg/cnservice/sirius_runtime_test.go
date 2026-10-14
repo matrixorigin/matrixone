@@ -134,11 +134,15 @@ func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 }
 
 func TestSiriusBackendSelectionFailsBeforeTransportSetup(t *testing.T) {
+	embeddedError := "embedded backend is not available in this build"
+	if validateSiriusEmbeddedBuild() == nil {
+		embeddedError = "Sirius requires a native configuration path"
+	}
 	for _, tc := range []struct {
 		backend string
 		want    string
 	}{
-		{"embedded", "embedded backend is not available in this build"},
+		{"embedded", embeddedError},
 		{"unknown", "invalid Sirius backend"},
 		{"FLIGHT", "invalid Sirius backend"},
 	} {

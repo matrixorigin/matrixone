@@ -16,6 +16,8 @@ package sqlintegration
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +46,58 @@ func Test_TxnExecutorExec(t *testing.T) {
 			return nil
 		}, executor.Options{}.WithWaitCommittedLogApplied())
 		require.NoError(t, err)
+	})
+}
+
+func TestCatalogUpgradeUpdatePlanRebuild(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		require.NotNil(t, exec)
+
+		db := strings.ToLower(testutils.GetDatabaseName(t))
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		testutils.CreateTestDatabase(t, db, cn)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_, err = exec.Exec(ctx, "create table t (v int unsigned)", executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+
+		predicate := fmt.Sprintf("att_database = '%s' AND att_relname = 't' AND attname = 'v'", db)
+		readCount := func(condition string) int {
+			result, queryErr := exec.Exec(ctx, "SELECT count(*) FROM mo_catalog.mo_columns WHERE "+predicate+condition, executor.Options{})
+			require.NoError(t, queryErr)
+			defer result.Close()
+			return testutils.ReadCount(result)
+		}
+		require.Equal(t, 1, readCount(""))
+		require.Equal(t, 1, readCount(" AND att_is_unsigned = 1"))
+
+		// Simulate the stale metadata repaired by the upgrade, then verify the
+		// forced rebuild updates a real row and the committed value is visible.
+		setUnsigned := func(value int8) (executor.Result, error) {
+			sql := fmt.Sprintf("UPDATE mo_catalog.mo_columns SET att_is_unsigned = %d WHERE %s", value, predicate)
+			return exec.Exec(ctx, sql, executor.Options{}.WithForceRebuildPlan().WithStatementOption(
+				executor.StatementOption{}.WithMoColumnsUpdate()))
+		}
+		result, err := setUnsigned(0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), result.AffectedRows)
+		result.Close()
+		require.Equal(t, 1, readCount(" AND att_is_unsigned = 0"))
+
+		result, err = setUnsigned(1)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), result.AffectedRows)
+		result.Close()
+		require.Equal(t, 1, readCount(" AND att_is_unsigned = 1"))
+
+		sql := "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 0 WHERE " + predicate
+		_, err = exec.Exec(ctx, sql, executor.Options{}.WithForceRebuildPlan())
+		require.ErrorContains(t, err, "direct DML on mo_catalog.mo_columns")
+		require.Equal(t, 1, readCount(" AND att_is_unsigned = 1"))
 	})
 }
 

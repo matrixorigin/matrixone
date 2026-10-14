@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -67,6 +68,11 @@ const (
 	ErrRemoteDispatchNotRegistered uint16 = 20106
 	ErrMPoolCapacity               uint16 = 20107
 	ErrQueryTimeout                uint16 = 20108
+	// ErrContextCanceled and ErrDeadlineExceeded are made only by
+	// ConvertGoError from a context cancellation or deadline; Error.Is keeps
+	// them matching context.Canceled and context.DeadlineExceeded.
+	ErrContextCanceled  uint16 = 20109
+	ErrDeadlineExceeded uint16 = 20110
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -226,6 +232,10 @@ const (
 	// field-duplicate code introduced on main.
 	ErrWrongNumberOfColumnsInSelect uint16 = 20478
 	ErrTooLongIdent                 uint16 = 20479
+	ErrTooBigFieldLength            uint16 = 20480
+	// ErrNeedReprepare is returned when a prepared statement depends on
+	// session state that has been invalidated and must not be executed again.
+	ErrNeedReprepare uint16 = 20481
 
 	// Group 5: rpc errors
 	//
@@ -448,6 +458,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
+	ErrContextCanceled:             {ER_QUERY_INTERRUPTED, []string{"70100"}, "%s"},
+	ErrDeadlineExceeded:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{"22012"}, "division by zero"},
@@ -582,8 +594,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
+	ErrTooBigFieldLength:                        {ER_TOO_BIG_FIELDLENGTH, []string{"42000"}, "Column length too big for column '%s' (max = %d); use BLOB or TEXT instead"},
 	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
 	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
+	ErrNeedReprepare:                            {ER_NEED_REPREPARE, []string{"HY000"}, "Prepared statement needs to be re-prepared"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -768,6 +782,22 @@ func (e *Error) Error() string {
 	return e.Display()
 }
 
+// Is lets errors.Is see through ConvertGoError: an error it converted from a
+// cancellation or deadline still matches context.Canceled or
+// context.DeadlineExceeded, also after crossing RPC, because the code is what
+// is serialized.  Only the two codes ConvertGoError mints match, so errors
+// that never were context errors (a killed query, a statement timeout) are
+// unaffected.
+func (e *Error) Is(target error) bool {
+	switch e.code {
+	case ErrContextCanceled:
+		return target == context.Canceled //nolint:errorlint // matching the sentinel itself
+	case ErrDeadlineExceeded:
+		return target == context.DeadlineExceeded //nolint:errorlint // matching the sentinel itself
+	}
+	return false
+}
+
 func (e *Error) Detail() string {
 	return e.detail
 }
@@ -913,6 +943,20 @@ func ConvertGoError(ctx context.Context, err error) error {
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// if io.EOF reaches here, we believe it is not expected.
 		return NewUnexpectedEOF(ctx, err.Error())
+	}
+
+	// A cancellation or deadline, even wrapped by a library (e.g. "reading
+	// magic footer of parquet file: context canceled"), keeps its identity:
+	// callers recognise those with errors.Is (see Error.Is).  A pipeline
+	// stopped because a sibling failed must report the sibling's error, not
+	// its own cancellation; the frontend treats a canceled read-only
+	// transaction specially.  A deadline wins over a cancellation joined with
+	// it, so an independent timeout is not hidden.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return newError(ctx, ErrDeadlineExceeded, err.Error())
+	}
+	if errors.Is(err, context.Canceled) {
+		return newError(ctx, ErrContextCanceled, err.Error())
 	}
 
 	return NewInternalErrorf(ctx, "convert go error to mo error %v", err)
@@ -1215,6 +1259,10 @@ func NewCharacterSetMismatch(ctx context.Context, left, right, function string) 
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
 	return newError(ctx, ErrUnknownStmtHandler, name, operation)
+}
+
+func NewNeedReprepare(ctx context.Context) *Error {
+	return newError(ctx, ErrNeedReprepare)
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
@@ -1951,6 +1999,10 @@ func NewErrTooManyKeys(ctx context.Context, k any) *Error {
 
 func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrTooManyKeyParts, k)
+}
+
+func NewTooBigFieldLength(ctx context.Context, column string, maxLength int32) *Error {
+	return newError(ctx, ErrTooBigFieldLength, column, maxLength)
 }
 
 func NewErrWrongColumnName(ctx context.Context, k any) *Error {

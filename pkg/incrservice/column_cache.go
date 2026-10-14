@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -43,6 +44,10 @@ var (
 // it prevents an impossible residue from spinning forever while leaving
 // normal allocation behavior unchanged.
 const maxAutoIncrementAllocationsPerRow = 8
+
+// Internal key reservations follow observed demand, never planner estimates.
+// This bounds reservation span rather than allocating per-ID heap storage.
+const maxInternalAutoIDPrefetch = 1_000_000
 
 type columnCache struct {
 	sync.RWMutex
@@ -68,6 +73,10 @@ type columnCache struct {
 	allocateCount    atomic.Uint64
 	committed        bool
 	retired          bool
+	// internalConsumedRows counts successful column assignments under the
+	// mutex and saturates at maxInternalAutoIDPrefetch. Failed apply calls do
+	// not increase it; later SQL/transaction failures need not undo demand.
+	internalConsumedRows int
 }
 
 func newColumnCache(
@@ -170,19 +179,25 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_int32:
+		maxValue := uint64(math.MaxInt32)
+		typeName := "int"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<23 - 1
+			typeName = "mediumint"
+		}
 		return insertAutoValues[int32](
 			ctx,
 			tableID,
 			vec, rows,
-			math.MaxInt32,
+			int32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxInt32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int",
+					typeName,
 					"value %v",
 					v)
 			},
@@ -249,20 +264,26 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_uint32:
+		maxValue := uint64(math.MaxUint32)
+		typeName := "int unsigned"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<24 - 1
+			typeName = "mediumint unsigned"
+		}
 		return insertAutoValues[uint32](
 			ctx,
 			tableID,
 			vec,
 			rows,
-			math.MaxUint32,
+			uint32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxUint32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int unsigned",
+					typeName,
 					"value %v",
 					v)
 			},
@@ -423,7 +444,16 @@ func (col *columnCache) applyAutoValues(
 		}
 		remaining--
 	}
+	if col.adaptiveInternalPrefetch() && options.isDefault() {
+		col.internalConsumedRows += min(autoRows, maxInternalAutoIDPrefetch-col.internalConsumedRows)
+	}
 	return nil
+}
+
+func (col *columnCache) adaptiveInternalPrefetch() bool {
+	return col.col.isInternal && col.col.ColName == catalog.FakePrimaryKeyColName &&
+		col.col.Step == 1 && col.col.CacheSize == 0 &&
+		col.cfg.defaultAllocation && !col.cfg.demandOnly
 }
 
 func (col *columnCache) preAllocate(
@@ -455,6 +485,9 @@ func (col *columnCache) preAllocate(
 	col.allocatingC = make(chan error, 1)
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
+	}
+	if col.adaptiveInternalPrefetch() && col.internalConsumedRows > count {
+		count = col.internalConsumedRows
 	}
 	err := col.allocator.asyncAllocate(
 		ctx,

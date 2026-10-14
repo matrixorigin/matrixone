@@ -31,11 +31,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func persistedIntegerResultString(result *vector.Vector, row int) string {
+	if result.GetType().Oid == types.T_date {
+		return vector.GetFixedAtWithTypeCheck[types.Date](result, row).String()
+	}
+	return result.GetStringAt(row)
+}
+
 func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name, sqlType, argument string
+		callTemplate            string
 		decimal                 bool
 		want                    []string
 		overflow                bool
@@ -45,9 +53,22 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 		{name: "selected source", sqlType: "double", argument: "case when a<2 then cast(a as double) else a end", want: []string{"a", "a.b"}},
 		{name: "exact decimal", sqlType: "decimal(38,1)", argument: "a", decimal: true, want: []string{"a.b", "a.b.c"}},
 		{name: "overflow remains error", sqlType: "decimal(38,1)", argument: "a", decimal: true, overflow: true},
+		{name: "bit real column", sqlType: "double", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", want: []string{"NYNN", "NYNN"}},
+		{name: "bit exact decimal", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, want: []string{"NYNN", "YYNN"}},
+		{name: "bit overflow", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, overflow: true},
+		{name: "hex explicit real", sqlType: "double", argument: "cast(a as double)", callTemplate: "hex(%s)", want: []string{"1", "2"}},
+		{name: "makedate approximate day", sqlType: "double", argument: "a", callTemplate: "makedate(2024,%s)", want: []string{"2024-01-02", "2024-01-02"}},
+		{name: "makedate exact day", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(2024,%s)", decimal: true, want: []string{"2024-01-02", "2024-01-03"}},
+		{name: "makedate exact year", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(%s,1)", decimal: true, want: []string{"2002-01-01", "2003-01-01"}},
+		{name: "maketime approximate hour", sqlType: "double", argument: "a", callTemplate: "cast(maketime(%s,0,1.25) as varchar)", want: []string{"02:00:01.25", "02:00:01.25"}},
+		{name: "maketime exact minute", sqlType: "decimal(38,1)", argument: "a", callTemplate: "cast(maketime(1,%s,1.25) as varchar)", decimal: true, want: []string{"01:02:01.25", "01:03:01.25"}},
+		{name: "makedate overflow", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(2024,%s)", decimal: true, overflow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			call := "substring_index('a.b.c.d','.'," + tc.argument + ")"
+			if tc.callTemplate != "" {
+				call = fmt.Sprintf(tc.callTemplate, tc.argument)
+			}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fmt.Sprintf("create table t(a %s,g varchar(64) generated always as (%s) stored,check(length(%s)>=0))", tc.sqlType, call, call), 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -60,6 +81,9 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 			var loaded planpb.TableDef
 			require.NoError(t, proto.Unmarshal(wire, &loaded))
 			require.Len(t, loaded.Checks, 1)
+			features, err := planpb.RequiredRemoteExpressionFeatures(&loaded)
+			require.NoError(t, err)
+			require.True(t, features.IntegerParameterCoercion)
 			var generated *planpb.GeneratedCol
 			for _, col := range loaded.Cols {
 				if col.Name == "g" {
@@ -126,7 +150,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 						if candidate.check {
 							require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, i))
 						} else {
-							require.Equal(t, want, result.GetStringAt(i))
+							require.Equal(t, want, persistedIntegerResultString(result, i))
 						}
 					}
 				})
@@ -136,7 +160,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 }
 
 func TestPersistedIntegerArgumentDefaultOrigin(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct{ source, want string }{
 		{"1.5e0", "a.b"}, {"cast(1.5 as double)", "a"}, {"2.5", "a.b.c"},

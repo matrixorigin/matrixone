@@ -63,7 +63,7 @@ type Fulltext2Query struct {
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
 // the positional index shares the VectorIndexCache (load-once, RW-shared, TTL
 // eviction) with bm25 and the vector plugins, keyed by its storage table name.
-// Before this, fulltext2_search reloaded the whole index (LoadAllBases +
+// Before this, fulltext2 search reloaded the whole index (LoadAllBases +
 // LoadTailSegments + NewIndex) on EVERY query — ~1s per query at 50K vs bm25's ~3ms.
 // A loaded base segment's postings (docID/tf blocks + positions) are views into a
 // shared read-only mmap, not the Go heap — reclaimable OS page cache, not GC-scanned;
@@ -117,17 +117,6 @@ var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 // the first Search.
 func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
-}
-
-// EvictIdleCache drops the live cached index for indexTable IF no search is in
-// flight, so the next query reloads the just-appended cdc_tail generation. A busy
-// entry is left warm (RemoveIdle returns false) and refreshes at a later idle
-// moment or via the IsStale sweep. Called after a CDC tail flush commits, this
-// bounds the stale-empty window an index created empty (copy-alter / create on an
-// empty table, no tag=0 base) would otherwise show until the housekeeping sweep,
-// without the reader thrash a forced evict on every flush would cause.
-func EvictIdleCache(indexTable string) bool {
-	return veccache.Cache.RemoveIdle(indexTable, "cdc")
 }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the

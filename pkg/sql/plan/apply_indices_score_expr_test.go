@@ -115,10 +115,11 @@ func TestReplaceScoreFnInExprBy(t *testing.T) {
 // matchFn builds a bound fulltext_match: (pattern, mode, index-part columns...), the shape
 // equalsFullTextMatchFunc compares.
 func matchFn(pattern string, mode int64, cols ...string) *plan.Function {
-	args := []*plan.Expr{
+	args := make([]*plan.Expr, 0, 2+len(cols))
+	args = append(args,
 		makePlan2StringConstExprWithType(pattern),
 		makePlan2Int64ConstExprWithType(mode),
-	}
+	)
 	for _, c := range cols {
 		args = append(args, &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_varchar)},
@@ -506,7 +507,7 @@ func TestGetWrappedFullTextMatches(t *testing.T) {
 
 	// A projection MATCH drives too, and a bare projection position is skipped as already served.
 	proj := &plan.Node{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{
-		bodyMatch(tag, "bare"),                                  // projids says this is served
+		bodyMatch(tag, "bare"), // projids says this is served
 		scoreFn("round", bodyMatch(tag, "wrapped"), scoreLit()), // this one needs a stream
 	}}
 	exprs, _ = builder.getWrappedFullTextMatches(proj, ftScanNodeWithIndex(tag), nil, []int32{0})

@@ -42,8 +42,8 @@ func TestCheckConstraintAssert(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		flag := newVectorByType(mp, types.T_bool.ToType(), []bool{true}, &nulls.Nulls{})
-		message := newVectorByType(mp, types.T_varchar.ToType(), []string{"unused"}, &nulls.Nulls{})
 		defer flag.Free(mp)
+		message := newVectorByType(mp, types.T_varchar.ToType(), []string{"unused"}, &nulls.Nulls{})
 		defer message.Free(mp)
 
 		fn := resolve()
@@ -60,13 +60,13 @@ func TestCheckConstraintAssert(t *testing.T) {
 
 	t.Run("constraint violation", func(t *testing.T) {
 		flag := newVectorByType(mp, types.T_bool.ToType(), []bool{false}, &nulls.Nulls{})
+		defer flag.Free(mp)
 		message := newVectorByType(
 			mp,
 			types.T_varchar.ToType(),
 			[]string{"Check constraint 't_chk_1' is violated"},
 			&nulls.Nulls{},
 		)
-		defer flag.Free(mp)
 		defer message.Free(mp)
 
 		fn := resolve()
@@ -85,6 +85,48 @@ func TestCheckConstraintAssert(t *testing.T) {
 	})
 }
 
+func TestAssertODKUPKMutationErrorTag(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		condition bool
+		null      bool
+	}{
+		{name: "false"},
+		{name: "null", null: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			mp := proc.Mp()
+
+			conditionNulls := nulls.NewWithSize(1)
+			if tc.null {
+				conditionNulls.Add(0)
+			}
+			condition := newVectorByType(mp, types.T_bool.ToType(), []bool{tc.condition}, conditionNulls)
+			defer condition.Free(mp)
+			message := newVectorByType(mp, types.T_varchar.ToType(), []string{"update primary key on duplicate"}, nulls.NewWithSize(1))
+			defer message.Free(mp)
+			errorType := newVectorByType(mp, types.T_varchar.ToType(), []string{"odku_pk_mutation"}, nulls.NewWithSize(1))
+			defer errorType.Free(mp)
+
+			fn, err := GetFunctionByName(proc.Ctx, "assert", []types.Type{
+				types.T_bool.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(
+				proc, fn.GetEncodedOverloadID(), []*vector.Vector{condition, message, errorType}, 1,
+			)
+			if result != nil {
+				result.Free(mp)
+			}
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), err)
+			require.Contains(t, err.Error(), "update primary key on duplicate")
+		})
+	}
+}
+
 func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing.T) {
 	session := &numericWarningSession{}
 	proc := testutil.NewProcess(t)
@@ -94,13 +136,13 @@ func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing
 	mp := proc.Mp()
 
 	flag := newVectorByType(mp, types.T_bool.ToType(), []bool{true, false, false}, &nulls.Nulls{})
+	defer flag.Free(mp)
 	message := newVectorByType(
 		mp,
 		types.T_varchar.ToType(),
 		[]string{"Check constraint 'ck_pos' is violated."},
 		&nulls.Nulls{},
 	)
-	defer flag.Free(mp)
 	defer message.Free(mp)
 
 	fn, err := GetFunctionByName(

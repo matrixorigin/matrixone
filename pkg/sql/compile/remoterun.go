@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -93,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemoteBoundStringVariables(p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -112,8 +116,18 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+}
+
+func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteBoundStringVariables(p); err != nil {
+		return nil, err
+	}
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredVectorProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -122,53 +136,15 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
-	if features.IntegerArithmeticDomains {
-		if err = validateIntegerDomainDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
+		return nil, err
 	}
-	if features.RowDependentConvBases {
-		if err = validateConvBasesDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.IntegerParameterCoercion {
-		if err = validateIntegerArgumentDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts {
-		if err = validateIPFunctionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.StringNumericResultContracts {
-		if err = validateStringNumericResultDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.BoundedConditionalStringDomains {
-		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.SpatialDistanceSemantics {
-		if err = validateSpatialDistanceDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.DecimalLiteralSemantics {
-		if err = validateDecimalLiteralDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
+		return nil, err
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -213,9 +189,6 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -279,6 +252,12 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteBoundStringVariables(p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -689,8 +668,37 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -969,6 +977,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *merge.Merge:
@@ -1009,16 +1019,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.Attrs,
-			Rets:                   t.Rets,
-			Args:                   t.Args,
-			Params:                 t.Params,
-			Name:                   t.FuncName,
-			IsSingle:               t.IsSingle,
-			IndexReaderParam:       t.IndexReaderParam,
-			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.FulltextSourceRef,
-			FulltextIndexRef:       t.FulltextIndexRef,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 		in.Limit = t.Limit
 
@@ -1188,22 +1194,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			VectorIndexScan: t.VectorIndexScan,
+			IndexSearchScan: t.IndexSearchScan,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:                  t.TableFunction.Attrs,
-				Rets:                   t.TableFunction.Rets,
-				Args:                   t.TableFunction.Args,
-				Params:                 t.TableFunction.Params,
-				Name:                   t.TableFunction.FuncName,
-				IsSingle:               t.TableFunction.IsSingle,
-				IndexReaderParam:       t.TableFunction.IndexReaderParam,
-				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+				Attrs:    t.TableFunction.Attrs,
+				Rets:     t.TableFunction.Rets,
+				Args:     t.TableFunction.Args,
+				Params:   t.TableFunction.Params,
+				Name:     t.TableFunction.FuncName,
+				IsSingle: t.TableFunction.IsSingle,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1623,6 +1625,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
 		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -1673,10 +1681,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
-		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1838,7 +1842,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.VectorIndexScan = t.VectorIndexScan
+		arg.IndexSearchScan = t.IndexSearchScan
 		arg.VectorAttrs = t.VectorAttrs
 		arg.TxnOffset = int(t.TxnOffset)
 		if opr.TableFunction != nil {
@@ -1849,10 +1853,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		}
 		op = arg
 	case vm.MultiUpdate:
@@ -1959,12 +1959,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = plan.Type{
-			Id:      int32(t.Oid),
-			Width:   t.Width,
-			Scale:   t.Scale,
-			Charset: uint32(t.Charset),
-		}
+		result[i] = t.PlanType()
 	}
 	return result
 }
@@ -1973,7 +1968,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
+		result[i] = types.MustTypeFromPlan(t)
 	}
 	return result
 }
@@ -2207,19 +2202,57 @@ func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	if err := plan.RequireLegacyCollations(p); err != nil {
+		return err
+	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
+	return validateRemoteExpressionFeatures(proc, features)
+}
+
+// The sender reuses analysis of its current pipeline; the receiver computes
+// features independently after decoding before calling this same source fence.
+func validateRemoteExpressionFeatures(proc *process.Process, features plan.RemoteExpressionFeatures) error {
 	if !features.Any() {
 		return nil
+	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
+	}
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
+	if features.WeekSessionDefault && (proc == nil ||
+		(proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().DefaultWeekFormatSet)) {
+		return moerr.NewNotSupportedNoCtx("remote WEEK requires a default_week_format session snapshot")
 	}
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
+		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
+	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
+		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
+	}
+	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
+		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")
+	}
+	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
+		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
+	}
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("temporal expression contracts require MORPC protocol version 98")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
@@ -2285,6 +2318,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
+	if (features.JSONInputContracts || features.YearBitCast) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+		return moerr.NewNotSupportedNoCtx(
+			"versioned expression contracts require MORPC protocol version 101",
 		)
 	}
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
@@ -2857,6 +2896,16 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
+	}
+	// Transport codecs preserve known metadata, but the received batch is
+	// about to enter execution. Its opaque vectors need their own admission.
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+				bat.Clean(mp)
+				return nil, err
+			}
+		}
 	}
 	return bat, nil
 }

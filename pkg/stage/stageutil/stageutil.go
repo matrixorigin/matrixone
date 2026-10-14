@@ -43,6 +43,10 @@ import (
 // because StageLoadCatalog serves repeat lookups from proc's stage cache it spins with no SQL and
 // no I/O — the CN request hangs rather than failing (#26890).
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
+	if err := ensureStageEnabled(s); err != nil {
+		return stage.StageDef{}, err
+	}
+
 	// Stage names already expanded on this chain, in order, for both the cycle test and the error
 	// message. The walk is bounded by the number of distinct stages: every hop consumes one name.
 	visited := make(map[string]struct{})
@@ -72,6 +76,13 @@ func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, er
 	}
 
 	return s, nil
+}
+
+func ensureStageEnabled(s stage.StageDef) error {
+	if strings.EqualFold(strings.TrimSpace(s.Status), "disabled") {
+		return moerr.NewBadConfigf(context.TODO(), "stage %s is disabled", s.Name)
+	}
+	return nil
 }
 
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -104,7 +115,10 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
-		return s, nil
+		if err = ensureStageEnabled(s); err != nil {
+			return stage.StageDef{}, err
+		}
+		return cloneStageDef(s), nil
 	}
 
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
@@ -150,8 +164,24 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
-	cache.Set(stagename, reslist[0])
-	return reslist[0], nil
+	if err = ensureStageEnabled(reslist[0]); err != nil {
+		return stage.StageDef{}, err
+	}
+
+	// StageDef contains a pointer to url.URL. Keep the cached definition private
+	// from URL path joins performed during stage resolution and export filename
+	// expansion. A cached URL is shared by value copies of StageDef otherwise.
+	cached := cloneStageDef(reslist[0])
+	cache.Set(stagename, cached)
+	return cloneStageDef(cached), nil
+}
+
+func cloneStageDef(s stage.StageDef) stage.StageDef {
+	if s.Url != nil {
+		u := *s.Url
+		s.Url = &u
+	}
+	return s
 }
 
 func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {

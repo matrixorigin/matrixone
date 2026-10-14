@@ -77,3 +77,16 @@ WHERE table_schema = 'uncompress_length_warning_rows';
 -- An unselected branch must not emit the warning.
 SELECT IF(FALSE, UNCOMPRESSED_LENGTH(x'00'), 7) AS chosen;
 SHOW COUNT(*) WARNINGS;
+
+-- Function-level warning accumulators inherit max_error_count and the shared
+-- statement budget. The offset probe distinguishes a capacity above the
+-- historical 1024-record fallback from a count-only warning total.
+SET SESSION max_error_count = 2048;
+SELECT SUM(UNCOMPRESSED_LENGTH(x'00')) AS warning_rows FROM generate_series(1, 1100) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS LIMIT 1024, 1;
+SET SESSION max_error_count = 0;
+SELECT SUM(UNCOMPRESSED_LENGTH(x'00')) AS warning_rows FROM generate_series(1, 3) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = 1024;

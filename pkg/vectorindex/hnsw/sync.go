@@ -219,6 +219,10 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
 	if err != nil {
+		// DownloadAll may have committed earlier models' local files (view=false keeps them) before a
+		// later model failed. runHnsw only Destroys a non-nil sync, so those files would orphan; free
+		// them here before abandoning the sync.
+		sync.Destroy()
 		return nil, err
 	}
 
@@ -235,6 +239,11 @@ func (s *HnswSync[T]) Destroy() {
 func (s *HnswSync[T]) DownloadAll(sqlproc *sqlexec.SqlProcess) (err error) {
 
 	for _, m := range s.indexes {
+		// LoadMetadata builds models with an empty TmpDir. Point each at the directory the ISCP
+		// writer already resolved (syncSpillDir) before LoadIndex creates its local file, so
+		// view=false spills land there -- reclaimable by HostSpillDir.sweepOnce -- instead of
+		// os.TempDir(), which hnswSpillDir falls back to when the SqlContext has no Process.
+		m.TmpDir = s.tmpDir
 		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
 			return

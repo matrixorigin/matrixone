@@ -21,7 +21,6 @@ import (
 	"math"
 	"net"
 	"runtime/debug"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -44,6 +44,31 @@ type failOpenFS struct {
 	vfs.FS
 	path string
 	err  error
+}
+
+type closeOrderDataSync struct {
+	closed bool
+}
+
+func (d *closeOrderDataSync) Append(context.Context, uint64, []byte)     {}
+func (d *closeOrderDataSync) NotifyReplicaID(uint64, uint64, ChangeType) {}
+func (d *closeOrderDataSync) Close() error {
+	d.closed = true
+	return nil
+}
+
+type closeOrderRPCServer struct {
+	dataSync *closeOrderDataSync
+}
+
+func (s *closeOrderRPCServer) Start() error { return nil }
+func (s *closeOrderRPCServer) Close() error {
+	if s.dataSync.closed {
+		return errors.New("data sync closed before rpc ingress")
+	}
+	return nil
+}
+func (s *closeOrderRPCServer) RegisterRequestHandler(func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error) {
 }
 
 func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
@@ -119,6 +144,20 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+	assert.NoError(t, service.Close())
+}
+
+func TestServiceCloseStopsRPCBeforeDataSync(t *testing.T) {
+	ds := &closeOrderDataSync{}
+	service := &Service{
+		stopper:  stopper.NewStopper(t.Name()),
+		server:   &closeOrderRPCServer{dataSync: ds},
+		dataSync: ds,
+	}
+
+	require.NoError(t, service.Close())
+	require.True(t, ds.closed)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
@@ -365,6 +404,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -383,6 +428,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -426,6 +477,12 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -1307,68 +1364,15 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				// half-converged gossip state. Require complete short-suite coverage.
 				maxNotReady = 0
 			}
-			seedCount := min(nodeCount, 10)
-			gossipPorts := make([]int, nodeCount)
-			for i := range gossipPorts {
-				gossipPorts[i] = getTestGossipPort()
-			}
-			seedAddresses := make([]string, seedCount)
-			for i := range seedCount {
-				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
-			}
-			configs := make([]Config, 0, nodeCount)
-			services := make([]*Service, 0, nodeCount)
-			defer func() {
-				testLogger.Info("going to close all services")
-				var wg sync.WaitGroup
-				var closeErr error
-				var closeErrMu sync.Mutex
-				for _, s := range services {
-					if s != nil {
-						selected := s
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							if err := selected.Close(); err != nil {
-								closeErrMu.Lock()
-								closeErr = errors.Join(closeErr, err)
-								closeErrMu.Unlock()
-							}
-							testLogger.Info("closed a service")
-						}()
-					}
-				}
-				wg.Wait()
-				require.NoError(t, closeErr)
-			}()
-			for i := 0; i < nodeCount; i++ {
-				cfg := DefaultConfig()
-				cfg.FS = vfs.NewStrictMem()
-				cfg.UUID = uuid.New().String()
-				cfg.DeploymentID = 1
-				cfg.RTTMillisecond = 200
-				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = getTestServicePort()
-				cfg.RaftPort = getAvailablePort()
-				cfg.GossipPort = gossipPorts[i]
-				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
-				cfg.DisableWorkers = true
-				cfg.LogDBBufferSize = 1024 * 16
-				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-				configs = append(configs, cfg)
-
-				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-				service, err := NewService(cfg,
-					newFS(),
-					nil,
-					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-						return true
-					}),
-				)
-				require.NoError(t, err)
-				services = append(services, service)
-			}
+			configs, services, err := startGossipFixture(t, t.Context(),
+				func() ([]Config, error) { return makeGossipFixtureConfigs(t, rt, nodeCount) },
+				newGossipFixtureService,
+				func(configs []Config, services []*Service) error {
+					return closeGossipFixture(rt, configs, services)
+				},
+			)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, closeGossipFixture(rt, configs, services)) }()
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)

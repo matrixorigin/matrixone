@@ -35,7 +35,6 @@ func TestBuildBlockReadersCombinedPartitions(t *testing.T) {
 	for _, num := range []int{1, 3} {
 		t.Run(fmt.Sprintf("dop%d", num), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			e := &Engine{fs: proc.GetFileService()}
 			data := &CombinedRelData{
 				tables: []engine.RelData{partitionTestRanges(1), partitionTestRanges(2)},

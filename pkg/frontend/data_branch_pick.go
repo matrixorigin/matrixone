@@ -158,9 +158,8 @@ func pickMergeDiffs(
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
-	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	produce func(emitFunc) error,
 ) (err error) {
 
 	var (
@@ -169,7 +168,6 @@ func pickMergeDiffs(
 
 		insertIntoVals = acquireBuffer(tblStuff.bufPool)
 		deleteFromVals = acquireBuffer(tblStuff.bufPool)
-		firstErr       error
 		tmpValsBuffer  = acquireBuffer(tblStuff.bufPool)
 	)
 
@@ -210,42 +208,23 @@ func pickMergeDiffs(
 		}
 	}()
 
-	for wrapped := range retCh {
-		if firstErr != nil || ctx.Err() != nil {
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+	if err = produce(func(wrapped batchWithKind) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-
-		if err = appendPickedBatchRows(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+		if err := appendPickedBatchRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys); err != nil {
+			return false, err
 		}
-
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		return false, nil
+	}); err != nil {
+		return err
 	}
-	if firstErr == nil && len(acceptedDirectUpdateKeys) != 0 {
-		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
+	if len(acceptedDirectUpdateKeys) != 0 {
+		return moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
-
-	if err = appender.flushAll(); err != nil {
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	if firstErr != nil {
-		return firstErr
-	}
-	return
+	return appender.flushAll()
 }
 
 // appendPickedBatchRows applies the user's conflict semantics to each row
@@ -406,6 +385,8 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(rowIdx))
 	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
@@ -439,6 +420,18 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx)
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, rowIdx)
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, rowIdx)
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx)
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx)
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx)
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx)
 	default:
 		return vec.GetBytesAt(rowIdx)
 	}

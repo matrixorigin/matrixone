@@ -416,7 +416,7 @@ delete from missing_double_fail_dst where k = 1.5;
 delete from missing_double_skip_dst where k = 1.5;
 delete from missing_double_accept_dst where k = 1.5;
 data branch merge missing_double_src into missing_double_fail_dst when conflict fail;
-internal error: conflict: missing_double_src DELETE and missing_double_fail_dst DELETE on pk(1.5) with different values
+internal error: conflict: missing_double_src UPDATE and missing_double_fail_dst DELETE on pk(1.5)
 select count(*) from missing_double_fail_dst;
 ➤ count(*)[-5,64,0]  𝄀
 1

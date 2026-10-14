@@ -76,7 +76,7 @@ func TestDMLPlannerPropagatesNonMoResolveErrors(t *testing.T) {
 			for _, resolveError := range errorsToPropagate {
 				t.Run(resolveError.name, func(t *testing.T) {
 					ctx := &dmlResolveErrorCompilerContext{
-						MockCompilerContext: NewMockCompilerContext(true),
+						MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 						err:                 resolveError.err,
 					}
 					var plan *Plan
@@ -106,7 +106,7 @@ func TestDMLPlannerRoutesUnsupportedDMLToLegacyPlanner(t *testing.T) {
 		t.Run(statement.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), statement.sql, 1)
 			require.NoError(t, err)
-			ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 
 			plan, err := BuildPlan(ctx, stmt, false)
 
@@ -120,7 +120,7 @@ func TestDMLPlannerRoutesUnsupportedDMLToLegacyPlanner(t *testing.T) {
 func TestUpdatePlannerRejectsUnknownUnsupportedDML(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "update nation set n_name = 'x'", 1)
 	require.NoError(t, err)
-	ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 
 	logicPlan, err := BuildPlan(ctx, stmt, false)
 

@@ -158,6 +158,19 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return leastGreatestResolution{resultType: nonNull[0], overloadID: leastGreatestNormalOverload}, true
 	}
 
+	for _, input := range nonNull {
+		if input.Oid == types.T_uuid {
+			if target, _, ok := textStringCommonType(inputs); ok {
+				return leastGreatestResolution{
+					resultType: target,
+					castTypes:  leastGreatestCastTypes(inputs, target),
+					overloadID: leastGreatestNormalOverload,
+				}, true
+			}
+			break
+		}
+	}
+
 	if hasUnsupportedLeastGreatestMixedType(nonNull) {
 		return leastGreatestResolution{}, false
 	}
@@ -325,8 +338,7 @@ func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 			// that intermediate width become LEAST/GREATEST's result metadata: the
 			// established string overload contract uses the conservative VARCHAR
 			// capacity when the argument widths need promotion.
-			target = types.T_varchar.ToType()
-			target.Charset = mergedCharset
+			target = types.MergeStringCollationMetadata(types.T_varchar.ToType(), inputs)
 			return target, true
 		}
 		for i := range inputs {
@@ -600,8 +612,7 @@ func leastGreatestMergedStringType(inputs []types.Type, targetOID types.T) types
 	// to every applicable argument; the return-type callback receives the same
 	// target. Keep this derivation shared by every mixed-type resolver because
 	// JSON and date-bearing inputs dispatch before the ordinary string path.
-	target.Charset = types.MergeStringCharset(inputs, target.Charset)
-	return target
+	return types.MergeStringCollationMetadata(target, inputs)
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set

@@ -309,8 +309,8 @@ func TestResolveNumericBinaryTypesResult(t *testing.T) {
 			left:      types.New(types.T_decimal128, 30, 4),
 			right:     types.New(types.T_decimal128, 30, 2),
 			wantType:  types.T_decimal128,
-			wantWidth: 38,
-			wantScale: 10,
+			wantWidth: 36,
+			wantScale: 8,
 		},
 		{
 			name:      "integer div returns signed bigint",

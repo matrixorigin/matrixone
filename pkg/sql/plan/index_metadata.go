@@ -14,7 +14,11 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 // validateTableIndexDefinitions enforces the dense IndexDef invariant before an
 // operation can omit maintenance, locking, or lifecycle work for an unknown
@@ -31,5 +35,5 @@ func validateTableIndexDefinitions(tableDef *TableDef) error {
 				"nil index metadata for table %q at position %d", tableDef.Name, pos)
 		}
 	}
-	return nil
+	return validateFunctionalTable(context.Background(), tableDef)
 }

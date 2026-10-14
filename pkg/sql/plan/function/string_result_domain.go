@@ -156,6 +156,13 @@ func formattedScalarStringType(typ types.Type) types.Type {
 	return result
 }
 
+// StringResultByteBound exposes the planner's declared/formatted byte bound.
+// known distinguishes an exact zero-width result from an unbounded declaration.
+func StringResultByteBound(typ types.Type) (bytes uint64, known bool) {
+	bound := formattedStringByteBound(typ)
+	return bound.bytes, !bound.unknown
+}
+
 func binaryStringResultType(bound stringResultBound) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarBinaryLen) {
 		return types.T_blob.ToType()
@@ -380,19 +387,19 @@ func aesEncryptReturnType(parameters []types.Type) types.Type {
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarcharLen) {
-		result := types.T_text.ToType()
-		result.Charset = charset
-		return result
+		return types.NewWithCharset(types.T_text, 0, 0, charset)
 	}
 	result := types.NewWithCharset(types.T_varchar, int32(bound.bytes), 0, charset)
 	return result
 }
 
 // soundexReturnType keeps the result column large enough for Soundex's
-// variable-length output. Soundex emits ASCII, so its maximum output length
-// is bounded by the input character count (or the byte capacity of TEXT).
-// Unbounded inputs use LONGTEXT because a plain TEXT result could be too
-// narrow when the input itself comes from a widening expression.
+// variable-length output. Text Soundex preserves its first qualifying Unicode
+// character, so declared width is measured in characters while the encoded
+// result may need up to seven bytes for a four-character code. The vector
+// result grows by encoded bytes at execution time. Unbounded inputs use
+// LONGTEXT because a plain TEXT result could be too narrow when the input
+// itself comes from a widening expression.
 func soundexReturnType(parameters []types.Type) types.Type {
 	if len(parameters) != 1 {
 		return types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8)

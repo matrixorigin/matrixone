@@ -58,6 +58,9 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 	if err := config.validateBackend(); err != nil {
 		return err
 	}
+	if config.Backend == "embedded" {
+		return s.startEmbeddedSiriusRuntime(ctx)
+	}
 	if config.BenchmarkNoGC {
 		if !config.benchmarkGCDisabled {
 			return siriusInternalErrorf("substrait: Sirius benchmark-no-gc requires verified TN GC disablement")

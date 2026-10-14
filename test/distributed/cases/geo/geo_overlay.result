@@ -44,3 +44,9 @@ shared_edge_union
 32.0
 select st_union(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'));
 invalid input: overlay requires POLYGON or MULTIPOLYGON input, got POINT
+select st_astext(st_intersection(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))',0),st_geomfromtext('POLYGON((1 0,2 0,2 1,1 1,1 0))',0))) as shared_edge;
+shared_edge
+LINESTRING(1 0,1 1)
+select st_astext(st_intersection(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))',0),st_geomfromtext('POLYGON((1 1,2 1,2 2,1 2,1 1))',0))) as shared_corner;
+shared_corner
+POINT(1 1)

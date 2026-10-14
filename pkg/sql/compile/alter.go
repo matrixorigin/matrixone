@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -43,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -114,19 +112,23 @@ func alterDataBranchParticipationSQL(oldTableID uint64) string {
 
 func alterDataBranchHistoricalSourceScopeSQL(
 	accountName, databaseName, tableName string,
-	tableID uint64,
+	tableID, logicalID uint64,
 ) string {
 	accountName = sqlquote.EscapeString(accountName)
 	databaseName = sqlquote.EscapeString(databaseName)
 	tableName = sqlquote.EscapeString(tableName)
+	object := fmt.Sprintf("obj_id = %d", tableID)
+	if logicalID != 0 && logicalID != tableID {
+		object = fmt.Sprintf("obj_id in (%d,%d)", tableID, logicalID)
+	}
 	return fmt.Sprintf(
 		`(level = 'cluster' or (`+
 			`account_name = '%s' and (`+
 			`level = 'account' or `+
 			`(level = 'database' and database_name = '%s') or `+
-			`(level = 'table' and (obj_id = %d or (database_name = '%s' and table_name = '%s')))`+
+			`(level = 'table' and (%s or (database_name = '%s' and table_name = '%s')))`+
 			`)))`,
-		accountName, databaseName, tableID, databaseName, tableName,
+		accountName, databaseName, object, databaseName, tableName,
 	)
 }
 
@@ -135,7 +137,7 @@ func alterDataBranchHistoricalSnapshotSourceSQL(
 	tableID uint64,
 ) string {
 	return alterDataBranchHistoricalSnapshotSourceProbeSQL(
-		accountName, databaseName, tableName, tableID, true,
+		accountName, databaseName, tableName, tableID, true, 0,
 	)
 }
 
@@ -143,6 +145,7 @@ func alterDataBranchHistoricalSnapshotSourceProbeSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 	forUpdate bool,
+	logicalID uint64,
 ) string {
 	lockClause := ""
 	if forUpdate {
@@ -151,7 +154,7 @@ func alterDataBranchHistoricalSnapshotSourceProbeSQL(
 	return fmt.Sprintf(
 		"select 1 from %s.%s where kind = 'user' and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID, logicalID),
 		lockClause,
 	)
 }
@@ -161,7 +164,7 @@ func alterDataBranchHistoricalPitrSourceSQL(
 	tableID uint64,
 ) string {
 	return alterDataBranchHistoricalPitrSourceProbeSQL(
-		accountName, databaseName, tableName, tableID, true,
+		accountName, databaseName, tableName, tableID, true, 0,
 	)
 }
 
@@ -169,6 +172,7 @@ func alterDataBranchHistoricalPitrSourceProbeSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 	forUpdate bool,
+	logicalID uint64,
 ) string {
 	lockClause := ""
 	if forUpdate {
@@ -177,7 +181,7 @@ func alterDataBranchHistoricalPitrSourceProbeSQL(
 	return fmt.Sprintf(
 		"select 1 from %s.%s where pitr_status = 1 and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_PITR,
-		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID, logicalID),
 		lockClause,
 	)
 }
@@ -263,10 +267,10 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 			},
 			[]string{
 				alterDataBranchHistoricalSnapshotSourceProbeSQL(
-					accountName, databaseName, tableName, oldTableID, false,
+					accountName, databaseName, tableName, oldTableID, false, 0,
 				),
 				alterDataBranchHistoricalPitrSourceProbeSQL(
-					accountName, databaseName, tableName, oldTableID, false,
+					accountName, databaseName, tableName, oldTableID, false, 0,
 				),
 			},
 		)
@@ -276,9 +280,24 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"data branch lineage lifecycle writer requires a pessimistic transaction")
+	}
 	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
+}
+
+// lockDataBranchLineageOwnerLifecyclePessimistic takes the lifecycle row lock
+// before acquiring table locks. The later write barrier remains after any RC
+// snapshot advancement so lineage publication uses the refreshed snapshot.
+func (c *Compile) lockDataBranchLineageOwnerLifecyclePessimistic() error {
+	return c.runSqlWithAccountId(
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		int32(catalog.System_Account),
+	)
 }
 
 func (c *Compile) prepareAlterDataBranchLineage(
@@ -364,24 +383,7 @@ func shouldAdvanceAlterDataBranchLineageSnapshot(pessimistic, rcIsolation bool) 
 }
 
 func (c *Compile) advanceAlterDataBranchLineageSnapshot() (int64, error) {
-	op := c.proc.GetTxnOperator()
-	physicalTime := op.SnapshotTS().PhysicalTime
-	if physicalTime > math.MaxInt64-int64(time.Microsecond) {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"cannot advance ALTER data-branch lineage snapshot past the timestamp limit",
-		)
-	}
-	requested := physicalTime + int64(time.Microsecond)
-	if err := op.UpdateSnapshot(c.proc.Ctx, timestamp.Timestamp{PhysicalTime: requested}); err != nil {
-		return 0, err
-	}
-	updated := op.SnapshotTS().PhysicalTime
-	if updated <= requested {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"failed to advance ALTER data-branch lineage snapshot",
-		)
-	}
-	return updated - int64(time.Nanosecond), nil
+	return databranchutils.AdvanceLineageSnapshot(c.proc.Ctx, c.proc.GetTxnOperator())
 }
 
 type alterDataBranchQuery func(string) (executor.Result, error)
@@ -1150,20 +1152,29 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
 
+	replacementAdmission := dropLifecycleAdmission{}
 	oldId := originRel.GetTableID(c.proc.Ctx)
 	lineagePlan := alterDataBranchLineagePlan{}
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
 	lineageTxnOp := c.proc.GetTxnOperator()
-	lineageOriginalSnapshot := timestamp.Timestamp{}
-	lineageRestoreSnapshot := false
-	defer func() {
-		if lineageRestoreSnapshot {
-			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
-		}
-	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
+		if !isTemp {
+			if c.isLifecycleRC() {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId); err != nil {
+					return err
+				}
+				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+			} else {
+				// SI keeps the existing broad lifecycle and fixed snapshot.
+				if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+					return err
+				}
+			}
+		}
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -1227,6 +1238,18 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if retryErr != nil {
 			return retryErr
 		}
+		if !isTemp && c.isLifecycleRC() {
+			var added []*plan.AlterTableAddFk
+			for _, action := range qry.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					added = append(added, fk)
+				}
+			}
+			replacementAdmission.createNames, err = c.admitReplacementNames(dbName, tblName, qry.CopyTableDef.Name, originRel, added)
+			if err != nil {
+				return err
+			}
+		}
 		if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 		) {
@@ -1234,8 +1257,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			// Under RC, advance the statement snapshot while holding it so a branch
 			// that committed just before lock acquisition is visible to the lineage
 			// probe below, even when lock acquisition itself did not wait.
-			lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-			lineageRestoreSnapshot = true
 			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
 				return err
 			}
@@ -1318,13 +1339,23 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err != nil {
 		return err
 	}
+	sourceTableDef := qry.TableDef
+	if !isTemp && !plan2.IsFkBannedDatabase(dbName) || len(qry.TableDef.Cols) > plan2.TableColumnCountLimit {
+		sourceTableDef = originRel.CopyTableDef(c.proc.Ctx)
+	}
+	// A wide COPY allowance belongs to the live source generation, not the
+	// potentially stale planner definition. Locks/snapshot refresh precede this.
+	if len(qry.TableDef.Cols) > plan2.TableColumnCountLimit &&
+		(sourceTableDef.TblId != qry.TableDef.TblId || sourceTableDef.Version != qry.TableDef.Version) {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 	if !isTemp && !plan2.IsFkBannedDatabase(dbName) {
 		// Validate every potentially changed preexisting endpoint before creating
 		// the replacement; planner metadata may predate a recently committed FK.
 		// Constraints introduced by this statement are enforced while rows are
 		// inserted into the replacement relation.
 		if err = checkAlterCopyForeignKeyColumns(
-			c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
+			c, qry, sourceTableDef, sourceForeignKeys,
 			sourceRefChildTbls, oldId, dbName, tblName,
 		); err != nil {
 			return err
@@ -1335,7 +1366,24 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// those relationships are reconciled after the source relation is replaced.
 	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
-	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	err = func() error {
+		originalCtx := c.proc.Ctx
+		baseCtx := originalCtx
+		if baseCtx == nil {
+			baseCtx = c.proc.GetTopContext()
+		}
+		replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, dbName, sourceTableDef, qry.CopyTableDef)
+		if err != nil {
+			return err
+		}
+		c.proc.Ctx = replayCtx
+		defer func() { c.proc.Ctx = originalCtx }()
+		create := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
+		if !isTemp && c.isLifecycleRC() {
+			return c.withDropLifecycle(replacementAdmission, create)
+		}
+		return create()
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -1477,12 +1525,22 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if isTemp {
 		dropSql = "drop temporary table " + sqlquote.QualifiedIdent(dbName, qry.TableDef.Name)
 	}
-	if err := c.runSqlWithOptions(
-		dropSql,
-		// ALTER TABLE COPY replaces the source table internally. It is not a
-		// user-visible DROP TABLE, so keep table-level publications unchanged.
-		executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
-	); err != nil {
+	drop := func() error {
+		return c.runSqlWithOptions(
+			dropSql,
+			// ALTER TABLE COPY replaces the source table internally. It is not a
+			// user-visible DROP TABLE, so keep table-level publications unchanged.
+			executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
+		)
+	}
+	if !isTemp && c.isLifecycleRC() {
+		// G-X and the source table lock are already held. The synchronous
+		// internal DROP must not reacquire C after G or advance its snapshot.
+		err = c.withDropLifecycle(dropLifecycleAdmission{}, drop)
+	} else {
+		err = drop()
+	}
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", dbName),
 			zap.String("origin tableName", qry.GetTableDef().Name),
@@ -1890,7 +1948,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(createdDef.Cols[col.ColIndex].Typ.Id),
+			types.MustTypeFromPlan(createdDef.Cols[col.ColIndex].Typ),
 			effectiveOffset,
 		); err != nil {
 			return err

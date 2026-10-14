@@ -37,7 +37,7 @@ func TestCastIndexToValueDisplaysEnumErrorMemberAsEmptyString(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a", ""}, nil),
 		CastIndexToValue,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -74,7 +74,7 @@ func TestCastGeometryToSubtype(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastGeometryToSubtype)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -100,7 +100,7 @@ func TestCastValueToIndexConstDefinition(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_enum.ToType(), false, expected, nil)
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -113,7 +113,7 @@ func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(ignoreProc, inputs, expect, fn)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -227,7 +227,7 @@ func TestCastGeometryToSubtypeRejectMismatch(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "cannot store LINESTRING in POINT column")
 }
@@ -245,7 +245,7 @@ func TestCastGeometryToSubtypeRejectNonFinite(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
@@ -259,7 +259,7 @@ func TestCastGeometryToSubtypeRejectMalformedStructure(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
@@ -279,14 +279,14 @@ func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "max_points_in_geometry=3")
 }
 
 func TestCastJsonToArray(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`, `[127]`}
+	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`, `[127]`, `[-8388608,8388607]`, `[0,16777215]`}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nil)
 
 	testCases := []tcTemp{
@@ -314,12 +314,28 @@ func TestCastJsonToArray(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[2:3], []bool{false}),
 		},
+		{
+			info: "signed mediumint array accepts inclusive boundaries",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(mediumint)"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[3:4], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[3:4], []bool{false}),
+		},
+		{
+			info: "unsigned mediumint array accepts inclusive boundaries",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(mediumint unsigned)"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[4:5], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[4:5], []bool{false}),
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastJsonToArray)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -335,7 +351,7 @@ func TestCastJsonToArrayRejectsNonArray(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "cannot store JSON OBJECT in array(varchar(20)) column")
 }
@@ -348,6 +364,10 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 		jsonText  string
 	}{
 		{name: "string in int array", arrayType: "array(int)", jsonText: `["1"]`},
+		{name: "signed mediumint upper overflow", arrayType: "array(mediumint)", jsonText: `[8388608]`},
+		{name: "signed mediumint lower overflow", arrayType: "array(mediumint)", jsonText: `[-8388609]`},
+		{name: "unsigned mediumint overflow", arrayType: "array(mediumint unsigned)", jsonText: `[16777216]`},
+		{name: "unsigned mediumint negative", arrayType: "array(mediumint unsigned)", jsonText: `[-1]`},
 		{name: "number in varchar array", arrayType: "array(varchar(20))", jsonText: `[1]`},
 		{name: "varchar width", arrayType: "array(varchar(3))", jsonText: `["toolong"]`},
 		{name: "varbinary byte width", arrayType: "array(varbinary(3))", jsonText: "[\"\u00e9\u00e9\"]"},
@@ -364,7 +384,7 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
 
 			tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.False(t, succeed)
 			require.Contains(t, info, "cannot store JSON value with incompatible element type in "+tc.arrayType+" column")
 		})
@@ -380,4 +400,24 @@ func TestTypedArrayBinaryCompatibilityUsesRawPayloadLength(t *testing.T) {
 		spec, newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x01}))))
 	require.True(t, typedArrayElementCompatible(
 		spec, newTypedByteJson(bytejson.TpCodeBlob, "AA==")))
+}
+
+func TestEmptyDomainVectorConversions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	run := func(inputs []FunctionTestInput, expected FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc, inputs, expected, fn)
+		ok, info := tc.RunAndFree()
+		require.True(t, ok, info)
+	}
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "1", ""}, []bool{false, false, true})}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 1, 0}, []bool{false, false, true}), CastValueToIndex)
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil), NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 1, 0}, []bool{false, false, true})}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", ""}, []bool{false, false, true}), CastIndexToValue)
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{","}, nil), NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 0}, []bool{false, false, true})}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", ""}, []bool{false, false, true}), CastSetIndexToValue)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil), NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 65537, ^uint64(0)}, nil)}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 0, 0}, nil), castIntegerToEnum[uint64])
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{1, -1, 65537}, nil)}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 0, 0}, nil), castIntegerToEnum[int64])
+	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{","}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 3, -1}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 1, 1}, nil), castIntegerToSet[int64])
+
 }

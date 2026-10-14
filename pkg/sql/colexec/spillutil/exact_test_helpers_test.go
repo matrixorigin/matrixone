@@ -16,6 +16,7 @@ package spillutil
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
 
@@ -67,7 +68,23 @@ func newTestSpillFile(fd *os.File, rows int64) *message.SpillFile {
 	if err != nil {
 		panic(err)
 	}
-	return message.NewSpillFile(fd, rows, uint64(info.Size()), nil)
+	return newTestSpillFileWithSize(fd, rows, uint64(info.Size()), nil)
+}
+
+func newTestSpillFileWithSize(fd *os.File, rows int64, size uint64, release func()) *message.SpillFile {
+	name := fd.Name()
+	if err := fd.Close(); err != nil {
+		panic(err)
+	}
+	return message.NewReopenableSpillFile(
+		func(ctx context.Context) (*os.File, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return os.Open(name)
+		},
+		func() error { return os.Remove(name) }, rows, size, release,
+	)
 }
 
 type testSpillRecordBuffer struct {

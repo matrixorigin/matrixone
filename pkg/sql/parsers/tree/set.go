@@ -59,9 +59,11 @@ type VarAssignmentExpr struct {
 	// (NEXT for transaction_isolation) from SESSION/LOCAL and GLOBAL.
 	TxnScope TransactionScope
 	SetNames bool
-	Name     string
-	Value    Expr
-	Reserved Expr
+	// CharsetRequest distinguishes SET CHARACTER SET/CHARSET from @user variables.
+	CharsetRequest bool
+	Name           string
+	Value          Expr
+	Reserved       Expr
 }
 
 func (node *VarAssignmentExpr) Format(ctx *FmtCtx) {

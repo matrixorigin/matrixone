@@ -212,12 +212,9 @@ func (s *FSinkerImpl) Close() error {
 		// to the free list so the pre-warmed backing array, serialBuf and
 		// compressBuf are reused by the next FSinkerImpl.
 		s.arena.Reset()
+		// An arena left unused for a while is freed by the pool itself.
 		objectio.PutArena(s.arena)
 		s.arena = nil
-		// Debounce the idle-drain timer so pools stay warm during
-		// active CN pipeline execution.  When CN (and TN) are both
-		// idle for arenaDrainDelay the pools will drain automatically.
-		objectio.ScheduleArenaDrain()
 	}
 	return nil
 }

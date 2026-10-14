@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -180,11 +181,17 @@ func TestIntegerArgumentBoundSelection(t *testing.T) {
 }
 
 func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
+	planProc := newPlanTestProcess(t)
 	for _, tc := range []struct {
 		query     string
 		positions []int32
 	}{
 		{`select substring_index(?,".",?)`, []int32{1}},
+		{`select hex(?)`, []int32{0}},
+		{`select char(?,?)`, []int32{0, 1}},
+		{`select make_set(?,"a","b")`, []int32{0}},
+		{`select export_set(?,"Y","N","",4)`, []int32{0}},
+		{`select conv("ff",?,?)`, []int32{0, 1}},
 		{`select period_add(?,?)`, []int32{0, 1}},
 		{`select period_diff(?,?)`, []int32{0, 1}},
 		{`select ceil(1.25,?)`, []int32{0}},
@@ -218,15 +225,44 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select substring_index(?,".",2)`, nil},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_source from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, planProc), t, "prepare integer_source from '"+tc.query+"'")
 			require.NoError(t, err)
 			require.Equal(t, tc.positions, PreparedPlanNumericFallbackParamPositions(prepared.GetDcl().GetPrepare().Plan))
 		})
 	}
 }
 
+func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	prepare := buildPreparedAggregatePlan(t, "select ceil(123.456, ?)")
+	original := DeepCopyPlan(prepare.Plan)
+	for _, tc := range []struct {
+		name  string
+		value ParamValue
+	}{
+		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}},
+		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"text", ParamValue{Value: "2.5tail", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, "ceil")
+			require.NotNil(t, fn)
+			require.True(t, isIntegerArgumentCast(fn.GetF().Args[1]))
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, fn, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.NotNil(t, result)
+			require.True(t, proto.Equal(original, prepare.Plan), "execution specialization must leave the template unchanged")
+		})
+	}
+}
+
 func TestIntegerArgumentMixedPreparedSources(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	planProc := newPlanTestProcess(t)
 	for _, tc := range []struct {
 		query string
 		value any
@@ -241,7 +277,7 @@ func TestIntegerArgumentMixedPreparedSources(t *testing.T) {
 		{`select substring_index("a.b.c.d",".",?)`, nil, types.T_any, "", true},
 	} {
 		t.Run(tc.query+"/"+tc.typ.String(), func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare mixed_integer from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, planProc), t, "prepare mixed_integer from '"+tc.query+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(original))
@@ -268,11 +304,75 @@ func TestIntegerArgumentMixedPreparedSources(t *testing.T) {
 
 func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	planProc := newPlanTestProcess(t)
 	for _, tc := range []struct {
 		query  string
 		params []any
 		want   string
 	}{
+		{
+			`select hex(if(true,?,2.5e0))`,
+			[]any{ParamValue{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0), HasSourceType: true,
+			}},
+			"20000000000001",
+		},
+		{
+			`select hex(if(true,?,2.5e0))`,
+			[]any{ParamValue{
+				Value: uint64(^uint64(0)), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_uint64.ToType(),
+			}},
+			"FFFFFFFFFFFFFFFF",
+		},
+		{
+			`select hex(if(true,?,2.5e0))`,
+			[]any{ParamValue{
+				Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType(),
+			}},
+			"2",
+		},
+		{
+			`select hex(if(true,if(true,?,2.5e0),"peer"))`,
+			[]any{ParamValue{
+				Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType(),
+			}},
+			"312E35",
+		},
+		{
+			`select hex(if(true,?,"peer"))`,
+			[]any{ParamValue{
+				Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType(),
+			}},
+			"312E35",
+		},
+		{
+			`select hex(if(true,?,"peer"))`,
+			[]any{ParamValue{
+				Value: float64(-1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType(),
+			}},
+			"2D312E35",
+		},
+		{
+			`select hex(if(true,?,"peer"))`,
+			[]any{ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+			}},
+			"322E35",
+		},
+		{
+			`select hex(if(true,?,"peer"))`,
+			[]any{ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(),
+			}},
+			"312E35",
+		},
+		{
+			`select hex(if(true,?,cast(2.5 as decimal(2,1))))`,
+			[]any{ParamValue{
+				Value: "1.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+			}},
+			"2",
+		},
 		{
 			`select substring_index("a.b.c.d",".",if(true,?,?))`,
 			[]any{
@@ -324,7 +424,7 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 		},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_selector from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, planProc), t, "prepare integer_selector from '"+tc.query+"'")
 			require.NoError(t, err)
 			bound, changed, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, tc.params)
 			require.NoError(t, err)
@@ -341,7 +441,7 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 
 func TestIntegerArgumentPreparedScalarSubquery(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare integer_scalar from 'select substring_index("a.b.c.d",".",(select ? where true))'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -384,12 +484,13 @@ func TestIntegerArgumentPreparedScalarSubquery(t *testing.T) {
 
 func TestIntegerArgumentPreparedGroupedAndSetScalarSubqueries(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	planProc := newPlanTestProcess(t)
 	for _, sql := range []string{
 		`select substring_index("a.b.c.d",".",(select ? group by 1))`,
 		`select substring_index("a.b.c.d",".",(select ? union all select cast(0 as double) limit 1))`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_scalar_shape from '"+sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, planProc), t, "prepare integer_scalar_shape from '"+sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(original))

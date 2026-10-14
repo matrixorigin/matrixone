@@ -68,6 +68,70 @@ func AllocationAccountSelectionsEqual(
 		left.capacityClass == right.capacityClass
 }
 
+func allocationAccountSelectionsShareProvenance(
+	left, right *AllocationAccountSelection,
+) bool {
+	return left != nil && right != nil &&
+		left.account == right.account &&
+		left.owner == right.owner &&
+		left.dataSite == right.dataSite &&
+		left.areaSite == right.areaSite &&
+		left.nullsSite == right.nullsSite &&
+		left.groupingSite == right.groupingSite
+}
+
+// ShuffleWithAllocationAccount is Shuffle with a capacity class selected for
+// the replacement storage. The alternate selection must preserve the vector's
+// account, owner, and sites: this changes admission only, never allocation
+// provenance. Existing and replacement buffers keep their own physical leases,
+// so restoring the ordinary selection after the call cannot relabel memory.
+func (v *Vector) ShuffleWithAllocationAccount(
+	sels []int64,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) error {
+	if v == nil ||
+		!allocationAccountSelectionsShareProvenance(v.allocationAccount, selection) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if err := selection.validate(); err != nil {
+		return err
+	}
+	ordinary := v.allocationAccount
+	v.allocationAccount = selection
+	defer func() {
+		v.allocationAccount = ordinary
+	}()
+	return v.Shuffle(sels, mp)
+}
+
+// UnionBatchWithAllocationAccount is UnionBatch with an alternate capacity
+// class for allocations made by this copy only. The destination keeps its
+// ordinary selection so a downstream Dup or append cannot accidentally spend
+// the producing operator's private recovery floor.
+func (v *Vector) UnionBatchWithAllocationAccount(
+	source *Vector,
+	offset int64,
+	count int,
+	flags []uint8,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) error {
+	if v == nil ||
+		!allocationAccountSelectionsShareProvenance(v.allocationAccount, selection) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if err := selection.validate(); err != nil {
+		return err
+	}
+	ordinary := v.allocationAccount
+	v.allocationAccount = selection
+	defer func() {
+		v.allocationAccount = ordinary
+	}()
+	return v.UnionBatch(source, offset, count, flags, mp)
+}
+
 func NewAllocationAccountSelection(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,

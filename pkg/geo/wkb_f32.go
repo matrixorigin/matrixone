@@ -40,7 +40,7 @@ func WriteWKBFloat32(g Geometry) ([]byte, error) {
 	if err := validateFloat32Geometry(g, 1); err != nil {
 		return nil, err
 	}
-	return appendGeom(nil, g, true), nil
+	return appendWKB(nil, g, true), nil
 }
 
 func validateFloat32Geometry(g Geometry, depth int) error {

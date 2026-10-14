@@ -64,6 +64,21 @@ func (r *failAfterBytesReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// eofSignalReader notifies a waiting worker when the producer reaches EOF.
+type eofSignalReader struct {
+	r       io.Reader
+	eof     chan struct{}
+	eofOnce sync.Once
+}
+
+func (r *eofSignalReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.eofOnce.Do(func() { close(r.eof) })
+	}
+	return n, err
+}
+
 type waitAfterBytesReader struct {
 	r         io.Reader
 	readSoFar int64
@@ -234,11 +249,17 @@ func awsS3ErrorXML(code, message string) string {
 }
 
 func newTestAWSClient(t *testing.T, srv *httptest.Server) *AwsSDKv2 {
+	return newTestAWSClientWithTransport(t, srv, srv.Client().Transport)
+}
+
+func newTestAWSClientWithTransport(t *testing.T, srv *httptest.Server, transport http.RoundTripper) *AwsSDKv2 {
 	t.Helper()
+	httpClient := srv.Client()
+	httpClient.Transport = transport
 	cfg := aws.Config{
 		Region:      "us-east-1",
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("id", "key", "")),
-		HTTPClient:  srv.Client(),
+		HTTPClient:  httpClient,
 		Retryer: func() aws.Retryer {
 			return aws.NopRetryer{}
 		},
@@ -1177,12 +1198,84 @@ func TestCOSMultipartInitDoesNotRequireListPermission(t *testing.T) {
 	require.Equal(t, int32(1), state.initCalls.Load())
 }
 
+func TestAwsMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-worker-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
+	require.Empty(t, state.parts)
+}
+
+func TestCOSMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestCOSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	require.False(t, state.completed.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.parts)
+}
+
+func TestAwsMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-uid-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClientWithTransport(t, server, &multipartInitCancelAfterResponseTransport{
+		base:   server.Client().Transport,
+		cancel: cancel,
+	})
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
+}
+
 func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "cos-uid-canceled"
 	ctx, cancel := context.WithCancel(context.Background())
-	transport := &cosMultipartInitCancelAfterResponseTransport{
+	transport := &multipartInitCancelAfterResponseTransport{
 		base:   server.Client().Transport,
 		cancel: cancel,
 	}
@@ -1379,7 +1472,7 @@ type denyMultipartListTransport struct {
 	listCalls atomic.Int32
 }
 
-type cosMultipartInitCancelAfterResponseTransport struct {
+type multipartInitCancelAfterResponseTransport struct {
 	base   http.RoundTripper
 	cancel context.CancelFunc
 }
@@ -1423,7 +1516,7 @@ func (t *cosMultipartInitInvalidSuccessBodyTransport) RoundTrip(req *http.Reques
 	return resp, nil
 }
 
-func (t *cosMultipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *multipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err

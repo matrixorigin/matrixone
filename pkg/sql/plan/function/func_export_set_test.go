@@ -26,14 +26,13 @@ import (
 func runExportSetTestCase(t *testing.T, inputs []FunctionTestInput, wanted []string, nullList []bool) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	testCase := NewFunctionTestCase(
 		proc,
 		inputs,
 		NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, nullList),
 		ExportSet,
 	)
-	succeeded, errInfo := testCase.Run()
+	succeeded, errInfo := testCase.RunAndFree()
 	require.True(t, succeeded, errInfo)
 }
 

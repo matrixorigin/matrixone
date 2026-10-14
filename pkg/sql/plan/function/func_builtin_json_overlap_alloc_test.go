@@ -45,6 +45,7 @@ func TestJSONOverlapsAccessorWrappersAreResultScoped(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 
 	firstLeft, firstRight := newJSONOverlapOperands(testCase.parameters, testCase.result)
 	secondLeft, secondRight := newJSONOverlapOperands(testCase.parameters, testCase.result)

@@ -35,16 +35,6 @@ import (
 // GROUP_CONCAT rendering on a remote owner. No large/skewed data is required.
 func TestGroupConcatNamedTimeZoneRemoteOwner(t *testing.T) {
 	var fixtureInvalidationErr error
-	// Run holds the fixture mutex. Discard only after its callback unwinds,
-	// including when an assertion calls Goexit.
-	defer func() {
-		if fixtureInvalidationErr != nil {
-			t.Errorf("discarding shared two-CN fixture after an unverified work-state transition: %v", fixtureInvalidationErr)
-			if err := embed.CloseBaseClusterTests(); err != nil {
-				t.Errorf("failed to discard shared two-CN fixture: %v", err)
-			}
-		}
-	}()
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

@@ -460,6 +460,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
+		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
+			return nil, err
+		}
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
 		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
@@ -569,6 +572,11 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if tblInfo.typ != "update" {
+		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+			return err
+		}
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
@@ -755,7 +763,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -766,7 +774,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -777,7 +785,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return false, nil, nil, err
 	}
 
@@ -1294,6 +1302,9 @@ var ForceCastExpr = forceCastExpr
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func useAssignmentStrictCast(targetType Type) bool {
+	if isMediumIntPlanType(targetType) {
+		return true
+	}
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
@@ -1313,8 +1324,13 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
+}
+
+func isMediumIntPlanType(targetType Type) bool {
+	return (targetType.Id == int32(types.T_int32) || targetType.Id == int32(types.T_uint32)) && targetType.Width == 24
 }
 
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
@@ -1353,7 +1369,8 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return targetType.Id == int32(types.T_blob) ||
+	return isMediumIntPlanType(targetType) ||
+		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
@@ -1381,6 +1398,9 @@ func forceCastExpr2WithProcess(
 ) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
+	}
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType.Typ); err != nil {
+		return nil, err
 	}
 	var err error
 	var rewritten bool
@@ -1479,8 +1499,18 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType); err != nil {
+		return nil, err
+	}
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
 		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+}
+
+func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Process, targetType Type) error {
+	if proc == nil || (!isMediumIntPlanType(targetType) && !typedArrayTypeHasMediumInt(&targetType)) {
+		return nil
+	}
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
@@ -1512,6 +1542,11 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	targetType Type,
 	isIgnore bool,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(
+		builder.GetContext(), builder.compCtx.GetProcess(), targetType,
+	); err != nil {
+		return nil, err
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)
@@ -1941,6 +1976,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
 	}
+	// MEDIUMINT's 24-bit domain is narrower than its int32/uint32 storage.
+	// Keep the literal's original source type so assignment checking cannot be
+	// bypassed by the VALUES fast path.
+	if colType.IsMediumInt() {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	}
 	// Integer assignment must consume the literal's source type, not parse its
 	// spelling as an integer or truncate it in the VALUES fast path.
 	if colType.Oid.IsInteger() && (numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
@@ -2075,11 +2121,8 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// invalid-input error before the statement's strict/IGNORE policy and
 		// warning sink are available.
 		if numVal.ValType == tree.P_char {
-			value := numVal.String()
-			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
-				expr := MakePlan2StringConstExprWithType(value)
-				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-			}
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
@@ -2100,6 +2143,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 
 		return MakePlan2DateConstExprWithType(int32(num)), err
 	case types.T_datetime:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueDateTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2109,6 +2156,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		return MakePlan2DateTimeConstExprWithType(int64(num)), err
 	case types.T_timestamp:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTimeStamp(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2190,6 +2241,20 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
+				// Keep legacy implicit TIMESTAMP NULL semantics consistent with
+				// the main INSERT value-scan path. This must run before the
+				// literal fast path, which otherwise materializes a NULL value.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return nil, err
+					}
+					if defExpr != nil {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: defExpr})
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -2369,7 +2434,7 @@ func buildValueScan(
 	}
 
 	info.rootId = builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return nil, err
 	}
 

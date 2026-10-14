@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestIvfflatSearchDoesNotAddRowPartitionFilterToEntriesSQL(t *testing.T) {
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		PartitionCnCnt: 2,
@@ -96,7 +97,7 @@ func TestIvfflatSearchDoesNotAddRowPartitionFilterToExactPkSQL(t *testing.T) {
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.ExactPkFilter = "1,2,3"
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
@@ -129,7 +130,7 @@ func TestIvfflatSearchFloat32(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -161,7 +162,7 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -186,7 +187,13 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 // bucket-1-only routing model that pins stale results on one CN (#29011). A generation with a
 // real centroid, and a not-yet-loaded search, report false.
 func TestIvfflatEmptyGeneration(t *testing.T) {
-	mp := mpool.MustNewZero()
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	mp := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive index, process and file-service cleanup")
+	})
 
 	load := func(id int64, isNull bool) *IvfflatSearch[float32] {
 		proc := testutil.NewProcessWithMPool(t, "", mp)
@@ -243,7 +250,7 @@ func TestIvfSearchRace(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -266,7 +273,7 @@ func TestIvfSearchParserError(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -307,7 +314,7 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	idxcfg := vectorindex.IndexConfig{}
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -352,6 +359,43 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 	require.Equal(t, uint(0), rt.SearchCursor.NextBucketOffset)
 	require.Equal(t, uint(1), rt.SearchCursor.CurrentBucketCount)
 	require.Equal(t, uint(1), rt.SearchCursor.Round)
+}
+
+func TestIvfSearchFloat64Overflow(t *testing.T) {
+	oldRunSQL := runSql
+	defer func() { runSql = oldRunSQL }()
+
+	// The entries SQL computes the distance in float32, so a float64 base whose distance
+	// overflows saturates to +/-Inf. Serving that would silently corrupt the value, Top-K order,
+	// and any outer predicate (#29040 / #29050), so Search must fail fast.
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], math.Inf(1), false, sqlproc.Proc.Mp()))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	tblcfg := vectorindex.IndexTableConfig{DbName: "test_db", EntriesTable: "test_entries"}
+	rt := vectorindex.RuntimeConfig{
+		Limit:            5,
+		Probe:            1,
+		OrigFuncName:     "l2_distance",
+		SearchCursor:     &vectorindex.IvfSearchCursor{},
+		SearchRoundLimit: 3,
+	}
+
+	idx := &IvfflatSearchIndex[float64]{Version: 7}
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float64{0, 0, 0}, rt, 4)
+	require.Error(t, err)
 }
 
 func TestBuildSearchRoundSQLQuotesIdentifiers(t *testing.T) {
@@ -403,7 +447,7 @@ func TestIvfSearchIncludeModePreservesNullFlagsAndPushesIsNullFilter(t *testing.
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	idxcfg := vectorindex.IndexConfig{}
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
@@ -489,7 +533,7 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
 
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(8), false, sqlproc.Proc.Mp()))
-			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.5), false, sqlproc.Proc.Mp()))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.5000000001), false, sqlproc.Proc.Mp()))
 			bat.SetRowCount(1)
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
 		default:
@@ -498,12 +542,13 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
 
 	tblcfg := vectorindex.IndexTableConfig{
+		OrigFuncName:       metric.DistFn_L2sqDistance,
 		DbName:             "test_db",
 		EntriesTable:       "test_entries",
 		IncludeColumns:     []string{"rank"},
@@ -529,7 +574,6 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	rt2 := vectorindex.RuntimeConfig{
 		Limit:         4,
 		Probe:         1,
-		OrigFuncName:  "l2_distance",
 		IncludeResult: &vectorindex.IvfIncludeResult{},
 		SearchCursor:  &vectorindex.IvfSearchCursor{},
 	}
@@ -543,14 +587,16 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	require.NotContains(t, capturedSQL[1], " > 3")
 
 	require.Equal(t, []any{int64(7)}, keys1.([]any))
-	require.Equal(t, []float64{0.25}, distances1)
+	require.Equal(t, []float64{0.5}, distances1)
 	require.Equal(t, []string{"rank"}, rt1.IncludeResult.ColNames)
 	require.Equal(t, []any{int32(9)}, rt1.IncludeResult.Data["rank"])
 	require.Equal(t, []bool{false}, rt1.IncludeResult.Nulls["rank"])
 	require.Equal(t, uint(1), rt1.SearchCursor.Round)
 
 	require.Equal(t, []any{int64(8)}, keys2.([]any))
-	require.Equal(t, []float64{0.5}, distances2)
+	require.Equal(t, []float64{0.5000000001}, distances2)
+	require.Empty(t, rt2.OrigFuncName)
+	require.Equal(t, metric.DistFn_L2sqDistance, tblcfg.OrigFuncName)
 	require.Empty(t, rt2.IncludeResult.ColNames)
 	require.Empty(t, rt2.IncludeResult.Data)
 	require.Empty(t, rt2.IncludeResult.Nulls)
@@ -559,7 +605,7 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 
 func TestGetBloomFilterUsesRuntimeFilterPayloadForExactPk(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{UseMembershipFilter: true}}
 
@@ -585,7 +631,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 	}()
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{UseMembershipFilter: true}}
 

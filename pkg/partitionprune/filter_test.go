@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	p "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +53,30 @@ func TestFilter(t *testing.T) {
 		want     []int
 		wantErr  bool
 	}{
+		{
+			name:     "different column sharing scan position cannot prune partitions",
+			filters:  []*plan.Expr{makeNamedEqualExpr(0, "hidden_key", 1)},
+			metadata: namedRangePartitionMetadata("a"),
+			want:     []int{0, 1, 2},
+		},
+		{
+			name:     "same column at compact scan position prunes partitions",
+			filters:  []*plan.Expr{makeNamedEqualExpr(1, "range_probe.a", 1)},
+			metadata: namedRangePartitionMetadata("a"),
+			want:     []int{1},
+		},
+		{
+			name:     "dotted column name must not alias partition column",
+			filters:  []*plan.Expr{makeNamedEqualExpr(0, "t.a.b", 1)},
+			metadata: namedRangePartitionMetadata("b"),
+			want:     []int{0, 1, 2},
+		},
+		{
+			name:     "dotted alias cannot be distinguished from dotted partition column",
+			filters:  []*plan.Expr{makeNamedEqualExpr(1, "x.a.b", 1)},
+			metadata: namedRangePartitionMetadata("a.b"),
+			want:     []int{0, 1, 2},
+		},
 		{
 			name:    "empty filters",
 			filters: []*plan.Expr{},
@@ -474,6 +499,23 @@ func makeEqualExpr(colPos int32, value int64) *plan.Expr {
 					},
 				},
 			},
+		},
+	}
+}
+
+func makeNamedEqualExpr(colPos int32, name string, value int64) *plan.Expr {
+	expr := makeEqualExpr(colPos, value)
+	expr.GetF().Args[0].GetCol().Name = name
+	return expr
+}
+
+func namedRangePartitionMetadata(name string) partition.PartitionMetadata {
+	return partition.PartitionMetadata{
+		Method: partition.PartitionMethod_Range,
+		Partitions: []partition.Partition{
+			{Position: 0, Expr: newTestRangeExpr(name, 0)},
+			{Position: 1, Expr: newTestRangeExpr(name, 1)},
+			{Position: 2, Expr: newTestRangeExpr(name, 2)},
 		},
 	}
 }
@@ -1669,4 +1711,51 @@ func TestIntersectSortedSlices(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestFilterRepeatedPartitionColumn(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	literal := func(v int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}}}
+	}
+	for _, method := range []partition.PartitionMethod{partition.PartitionMethod_Range, partition.PartitionMethod_Hash, partition.PartitionMethod_Key} {
+		t.Run(method.String(), func(t *testing.T) {
+			sum := bindPartitionTestExpr(t, "+", partitionTestColumn(0), partitionTestColumn(0))
+			nested := bindPartitionTestExpr(t, "*", partitionTestColumn(0), sum)
+			metadata := partition.PartitionMetadata{Method: method, Partitions: []partition.Partition{
+				{Position: 0, Expr: bindPartitionTestExpr(t, "<", nested, literal(0))},
+				{Position: 1, Expr: bindPartitionTestExpr(t, ">=", nested, literal(0))},
+			}}
+			filter := bindPartitionTestExpr(t, "=", partitionTestColumn(0), literal(1))
+			beforeFilter := p.DeepCopyExpr(filter)
+			beforeFirst, beforeSecond := p.DeepCopyExpr(metadata.Partitions[0].Expr), p.DeepCopyExpr(metadata.Partitions[1].Expr)
+			targets, err := Filter(proc, []*plan.Expr{filter}, metadata)
+			require.NoError(t, err)
+			require.Equal(t, []int{1}, targets)
+			require.Equal(t, beforeFilter, filter)
+			require.Equal(t, beforeFirst, metadata.Partitions[0].Expr)
+			require.Equal(t, beforeSecond, metadata.Partitions[1].Expr)
+			// A later partition with another column cannot be substituted by
+			// the same value, including legacy nameless filter expressions.
+			other := partitionTestColumn(1)
+			other.GetCol().Name = "other"
+			metadata.Partitions[1].Expr = bindPartitionTestExpr(t, ">=", other, literal(0))
+			for _, name := range []string{"id", ""} {
+				filter.GetF().Args[0].GetCol().Name = name
+				targets, err = Filter(proc, []*plan.Expr{filter}, metadata)
+				require.NoError(t, err)
+				require.Equal(t, []int{0, 1}, targets)
+			}
+		})
+	}
+	root, err := mustReplaceCol(proc.Ctx, partitionTestColumn(0), literal(1))
+	require.NoError(t, err)
+	require.Equal(t, "cast", root.GetF().Func.ObjName)
+	invalid := partitionTestColumn(0)
+	invalid.Typ.Id = int32(types.T_Rowid)
+	root, err = mustReplaceCol(proc.Ctx, invalid, literal(1))
+	require.Error(t, err)
+	require.Nil(t, root)
 }

@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -216,6 +218,7 @@ type iscpTxnForTest struct {
 	committed         bool
 	rolledBack        bool
 	commitCtx         context.Context
+	commitErrAtCall   error
 	rollbackCtx       context.Context
 	rollbackErrAtCall error
 }
@@ -223,6 +226,7 @@ type iscpTxnForTest struct {
 func (t *iscpTxnForTest) Commit(ctx context.Context) error {
 	t.committed = true
 	t.commitCtx = ctx
+	t.commitErrAtCall = ctx.Err()
 	return t.commitErr
 }
 
@@ -233,42 +237,57 @@ func (t *iscpTxnForTest) Rollback(ctx context.Context) error {
 	return t.rollbackErr
 }
 
-func TestFinishISCPTransactionReturnsCommitError(t *testing.T) {
+func TestFinishISCPTransaction(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	var reports atomic.Int32
+	errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+
 	commitErr := errors.New("commit failed")
-	txn := &iscpTxnForTest{commitErr: commitErr}
-
-	err := finishISCPTransaction(context.Background(), txn, nil)
-
-	require.ErrorIs(t, err, commitErr)
-	require.True(t, txn.committed)
-	require.False(t, txn.rolledBack)
-}
-
-func TestFinishISCPTransactionRollsBackWithIndependentContext(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	cancel()
-	txn := &iscpTxnForTest{}
-
-	err := finishISCPTransaction(parent, txn, context.Canceled)
-
-	require.ErrorIs(t, err, context.Canceled)
-	require.True(t, txn.rolledBack)
-	require.False(t, txn.committed)
-	require.NotNil(t, txn.rollbackCtx)
-	require.NoError(t, txn.rollbackErrAtCall)
-}
-
-func TestFinishISCPTransactionDoesNotCommitCanceledSuccess(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	cancel()
-	txn := &iscpTxnForTest{}
-
-	err := finishISCPTransaction(parent, txn, nil)
-
-	require.ErrorIs(t, err, context.Canceled)
-	require.True(t, txn.rolledBack)
-	require.False(t, txn.committed)
-	require.NoError(t, txn.rollbackErrAtCall)
+	operationErr := errors.New("operation failed")
+	rollbackErr := errors.New("rollback failed")
+	for _, tc := range []struct {
+		name         string
+		operationErr error
+		commitErr    error
+		rollbackErr  error
+		cancelParent bool
+		wantCommit   bool
+		wantErrors   []error
+	}{
+		{name: "commit_success", wantCommit: true},
+		{name: "commit_failure", commitErr: commitErr, wantCommit: true, wantErrors: []error{commitErr}},
+		{name: "canceled_operation", operationErr: context.Canceled, cancelParent: true, wantErrors: []error{context.Canceled}},
+		{name: "canceled_success", cancelParent: true, wantErrors: []error{context.Canceled}},
+		{name: "rollback_failure", operationErr: operationErr, rollbackErr: rollbackErr, wantErrors: []error{operationErr, rollbackErr}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reports.Store(0)
+			parent, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			if tc.cancelParent {
+				cancel()
+			}
+			txn := &iscpTxnForTest{commitErr: tc.commitErr, rollbackErr: tc.rollbackErr}
+			err := finishISCPTransaction(parent, txn, tc.operationErr)
+			if len(tc.wantErrors) == 0 {
+				require.NoError(t, err)
+			}
+			for _, wantErr := range tc.wantErrors {
+				require.ErrorIs(t, err, wantErr)
+			}
+			require.Equal(t, tc.wantCommit, txn.committed)
+			require.Equal(t, !tc.wantCommit, txn.rolledBack)
+			cleanupCtx, errAtCall := txn.rollbackCtx, txn.rollbackErrAtCall
+			if tc.wantCommit {
+				cleanupCtx, errAtCall = txn.commitCtx, txn.commitErrAtCall
+			}
+			require.NotNil(t, cleanupCtx)
+			require.NoError(t, errAtCall)
+			require.ErrorIs(t, cleanupCtx.Err(), context.Canceled)
+			require.Zero(t, reports.Load())
+		})
+	}
 }
 
 func TestRunInitSQLTransactionCommitsStatementsAndStageTogether(t *testing.T) {

@@ -149,10 +149,15 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
+	tempPath := f.Name()
+	open := true
+	owned := true
 	defer func() {
-		if err != nil {
+		if open {
 			_ = f.Close()
-			_ = os.Remove(f.Name())
+		}
+		if owned {
+			_ = os.Remove(tempPath)
 		}
 	}()
 
@@ -176,8 +181,10 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 		}
 	}
 	if err := f.Close(); err != nil {
+		open = false
 		return err
 	}
+	open = false
 
 	// ensure parent dir
 	parentDir, _ := filepath.Split(nativePath)
@@ -187,9 +194,10 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	}
 
 	// move
-	if err := os.Rename(f.Name(), nativePath); err != nil {
+	if err := os.Rename(tempPath, nativePath); err != nil {
 		return err
 	}
+	owned = false
 
 	if err := l.syncDir(parentDir); err != nil {
 		return err
@@ -608,18 +616,23 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
-		}
-	}()
 
 	return &writeCloser{
 		w: f,
 		closeFunc: func() error {
+			open, owned := true, true
+			defer func() {
+				if open {
+					_ = f.Close()
+				}
+				if owned {
+					_ = os.Remove(f.Name())
+				}
+			}()
 			// close
-			if err := f.Close(); err != nil {
+			err := f.Close()
+			open = false
+			if err != nil {
 				return err
 			}
 			// ensure parent dir
@@ -631,6 +644,8 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 			if err := os.Rename(f.Name(), nativePath); err != nil {
 				return err
 			}
+			// Rename transfers ownership to the destination, even if sync fails.
+			owned = false
 			// sync parent dir
 			if err := l.syncDir(parentDir); err != nil {
 				return err

@@ -16,7 +16,9 @@ package fulltext2
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -54,6 +56,30 @@ func TestBuildAndProbeTermsAgree(t *testing.T) {
 	// path-agnostic by design
 	require.Equal(t, termsOf(t, `{"b":"XXX"}`, leafOnly),
 		termsOf(t, `{"a":{"b":"XXX"}}`, leafOnly))
+}
+
+// #29279: -0.0, 0.0, -0 and 0 are one JSON value (all compare == 0 in the SQL predicate and
+// json_extract_float64), so they MUST produce one term on both the build and probe sides. Negative
+// zero keeps its sign bit through EncodeFloat64, so without canonicalization the -0.0 document gets a
+// distinct term and an exact-zero probe joins it away, silently dropping the row.
+func TestSignedZeroTermsUnify(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+	negZero := math.Copysign(0, -1)
+	require.True(t, math.Signbit(negZero) && negZero == 0, "sanity: negZero is -0.0")
+
+	// Every zero spelling builds the SAME single term.
+	want := termsOf(t, `{"n":0}`, opt)
+	require.Len(t, want, 1)
+	for _, doc := range []string{`{"n":-0.0}`, `{"n":0.0}`, `{"n":-0}`, `{"n":0}`} {
+		require.Equal(t, want, termsOf(t, doc, opt), "doc %s must share the canonical zero term", doc)
+	}
+
+	// The probe for either zero spelling equals that build term.
+	require.Equal(t, want[0], JSONFloatTerm("n", 0))
+	require.Equal(t, want[0], JSONFloatTerm("n", negZero))
+
+	// A genuinely different value still differs (the fix only collapses signed zero).
+	require.NotEqual(t, want[0], JSONFloatTerm("n", 1))
 }
 
 // The defect being fixed: the same value under different keys must not collide.
@@ -119,6 +145,38 @@ func TestIntegerAndFloatLeavesShareOneEncoding(t *testing.T) {
 	big := `{"b":9007199254740993}` // 2^53+1
 	require.Equal(t, JSONFloatTerm("b", 9007199254740993),
 		termsOf(t, big, opt)[0])
+
+	// a number above int64 max is parsed as an UNSIGNED leaf, but it must still
+	// encode through the same float64 normalization as any other JSON number
+	require.Equal(t, JSONFloatTerm("b", float64(uint64(18446744073709551615))),
+		termsOf(t, `{"b":18446744073709551615}`, opt)[0])
+}
+
+// decimalJson builds a scalar TpCodeDecimal document carrying the decimal TEXT,
+// the layout TokenizeLeaves reads as a LeafDecimal. A decimal reaches JSON by
+// casting a SQL decimal into it, never by text parsing, so it cannot be produced
+// with ParseFromString.
+func decimalJson(s string) bytejson.ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(s))
+	n := binary.PutUvarint(data, uint64(len(s)))
+	copy(data[n:], s)
+	return bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(s)]}
+}
+
+// A DECIMAL leaf is numeric to both extractors, so it routes through the SAME
+// float64 normalization as an equal float leaf -- including #29279's signed-zero
+// collapse. An unparsable decimal text yields no term rather than a wrong one.
+func TestDecimalLeafSharesNumericEncoding(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+
+	decTerms := JSONTupleTerms(decimalJson("3.14"), opt)
+	require.Equal(t, termsOf(t, `3.14`, opt), decTerms)
+
+	// -0 decimal collapses to the same term as +0, matching the float zero.
+	require.Equal(t, termsOf(t, `0`, opt), JSONTupleTerms(decimalJson("-0"), opt))
+
+	// unparsable decimal text emits nothing.
+	require.Empty(t, JSONTupleTerms(decimalJson("not-a-number"), opt))
 }
 
 // Negative and zero values must keep ordering across the sign boundary.
@@ -662,4 +720,68 @@ func TestStreamJSONProbeRangeRespectsLeafType(t *testing.T) {
 		streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{slo, shi}}))
 	require.ElementsMatch(t, []int64{3, 4},
 		streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{nlo, nhi}}))
+}
+
+// jsonRawTermLoadedIndex builds a one-segment index from EXPLICIT per-doc terms (bypassing
+// JSONTupleTerms) and round-trips it through Serialize/Deserialize, so a test can persist the exact
+// byte encoding an older binary would have written.
+func jsonRawTermLoadedIndex(t *testing.T, docTerms map[int64][]string) *Index {
+	t.Helper()
+	pks := make([]int64, 0, len(docTerms))
+	for pk := range docTerms {
+		pks = append(pks, pk)
+	}
+	sort.Slice(pks, func(i, j int) bool { return pks[i] < pks[j] })
+
+	tdocs := make([]TokenizedDoc, 0, len(docTerms))
+	for _, pk := range pks {
+		terms := docTerms[pk]
+		pos := make([]int32, len(terms))
+		for i := range terms {
+			pos[i] = int32(i)
+		}
+		tdocs = append(tdocs, TokenizedDoc{Pk: pk, Terms: terms, Positions: pos})
+	}
+	seg, err := BuildSegmentFromTokenized("jp", int32(types.T_int64), tdocs)
+	require.NoError(t, err)
+	blob, err := seg.Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("jp", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+	return NewIndex([]*Segment{loaded}, nil)
+}
+
+// #29279 follow-up: canonicalizing writes to +0.0 must not orphan a document that persisted a -0.0
+// leaf under the OLD encoding. A zero equality probe and a `>= 0` range must reach BOTH zero keys, on
+// a loaded segment, through both the top-k (SearchJSONProbe) and streaming (StreamJSONProbe) paths.
+func TestZeroProbeCoversLegacyNegativeZeroTerm(t *testing.T) {
+	// legacy = the exact term a pre-#29279 -0.0 leaf produced; canonical = what this binary writes.
+	legacy := packProbe(func(p *types.Packer) {
+		p.EncodeStringType([]byte("n"))
+		p.EncodeFloat64(math.Copysign(0, -1))
+	})
+	canonical := JSONFloatTerm("n", 0)
+	require.NotEqual(t, legacy, canonical, "the two zero encodings must differ, else this proves nothing")
+	require.Less(t, legacy, canonical, "the legacy -0.0 key sorts just below +0.0")
+
+	_, hi := JSONNumericTermBounds("n")
+	eqZero := JSONNumericEqualProbeTerms("n", 0)
+	geZero := [][2]string{{JSONFloatLowerBoundTerm("n", 0), hi}} // n >= 0
+
+	// Mixed generation: row 1 persisted under the OLD -0.0 encoding, row 2 under the new +0.0 one.
+	mixed := jsonRawTermLoadedIndex(t, map[int64][]string{1: {legacy}, 2: {canonical}})
+	require.Equal(t, []int64{1, 2}, probeHits(t, mixed, eqZero, nil),
+		"equality = 0 must reach the legacy -0.0 row AND the canonical +0.0 row")
+	require.ElementsMatch(t, []int64{1, 2}, streamProbeHits(t, mixed, eqZero, nil),
+		"streaming equality = 0 must reach both zero encodings")
+	require.Equal(t, []int64{1, 2}, probeHits(t, mixed, nil, geZero),
+		"range >= 0 must reach the legacy -0.0 row")
+	require.ElementsMatch(t, []int64{1, 2}, streamProbeHits(t, mixed, nil, geZero),
+		"streaming range >= 0 must reach both zero encodings")
+
+	// Fresh-index control: both rows written by THIS binary; the same probes still return both.
+	fresh := jsonRawTermLoadedIndex(t, map[int64][]string{1: {canonical}, 2: {canonical}})
+	require.Equal(t, []int64{1, 2}, probeHits(t, fresh, eqZero, nil))
+	require.ElementsMatch(t, []int64{1, 2}, streamProbeHits(t, fresh, nil, geZero))
 }

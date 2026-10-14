@@ -14,6 +14,14 @@ select listagg(distinct v) within group (order by pos desc) as distinct_values
 from t_list_array_compat where g = 1;
 ➤ distinct_values[12,0,0]  𝄀
 a,b
+select length(listagg(v, NULL)) as null_delimiter_length
+from t_list_array_compat where g = 1;
+➤ null_delimiter_length[-5,64,0]  𝄀
+3
+select listagg(v, NULL) within group (order by pos) as null_delimiter_ordered
+from t_list_array_compat where g = 1;
+➤ null_delimiter_ordered[12,0,0]  𝄀
+aba
 select json_type(array_agg(v)) as result_type,
 json_length(array_agg(v)) as element_count
 from t_list_array_compat where g = 1;

@@ -156,8 +156,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if isSetOperation(parentType) && isSetOperationInputWrapper(node) {
+			// Keep the operand's positional schema boundary through identity wrappers.
+			childParentType = parentType
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -166,6 +171,12 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	replaceColumnsForNode(node, projMap)
+	if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
+		// Correlated function arguments consume the left sibling's output,
+		// rather than the function node's own children.
+		right := builder.qry.Nodes[node.Children[1]]
+		replaceColumnsForExprList(right.TblFuncExprList, projMap)
+	}
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
@@ -225,7 +236,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP || parentType == plan.Node_VECTOR_QUERY_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -281,7 +292,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
-		// with the score column produced by fulltext_index_scan.  Inlining a
+		// with the score column produced by the fulltext search scan.  Inlining a
 		// projection that contains it can move the placeholder into a WINDOW
 		// (for example through a multi-CTE query) where the fulltext rewrite
 		// cannot associate it with the source scan anymore.  Keep that PROJECT
@@ -333,6 +344,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
+	replaceColumnsForExprList(node.TblFuncExprList, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
@@ -446,7 +458,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			return DeepCopyExpr(projExpr)
+			inlined := DeepCopyExpr(projExpr)
+			if isIntegerSelector(inlined) || projectedExplicitFloatValue(inlined) {
+				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
+			}
+			return inlined
 		}
 
 	case *plan.Expr_F:
@@ -490,6 +506,18 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 	}
 	return expr
+}
+
+// A projected explicit CAST has already established the column's DOUBLE
+// domain. Inlining it must not turn that value boundary into a consumer's
+// direct CAST, whose integer conversion deliberately truncates.
+func projectedExplicitFloatValue(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return fn.SyntaxExplicitCast || overload == 1
 }
 
 func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
@@ -737,6 +765,9 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	if !node.Stats.HashmapStats.HashOnPK {
 		goto END
 	}
+	if builder.joinOwnsConstantDiagnostic(node) || builder.subtreeOwnsConstantDiagnostic(node.Children[1]) {
+		goto END
+	}
 
 	nodeID = node.Children[0]
 
@@ -780,7 +811,8 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1912,7 +1944,7 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	// source, that cast cannot reject or truncate any source value.
 	if targetID == types.T_char &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
-		source.Charset == target.Charset && source.Width > 0 &&
+		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
 		return true
 	}
@@ -2366,10 +2398,13 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
+		return rootID, err
+	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
@@ -2382,7 +2417,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID
+	return rootID, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring

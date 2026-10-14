@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -82,7 +81,6 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 				IsRemote: true,
 				DataSource: &Source{
 					TableDef:           test.tableDef,
-					FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
 					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 				},
 				NodeInfo: engine.Node{Mcpu: 1},
@@ -90,6 +88,7 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 			compile := NewMockCompile(t)
 			compile.proc = proc
 			compile.e = capture
+			configureReaderPathTest(t, compile, scope)
 
 			readers, err := scope.buildReaders(compile)
 			require.NoError(t, err)

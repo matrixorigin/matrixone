@@ -85,7 +85,7 @@ func TestIssue28469IntegerAssignment(t *testing.T) {
 			}
 		})
 		t.Run("binary_prepare", func(t *testing.T) {
-			stmt, err := conn.PrepareContext(ctx, "insert into dst values (1,?)")
+			stmt, err := conn.PrepareContext(ctx, "insert into dst values (1,?)") //nolint:sqlclosecheck // closed via defer; not tracked across closures
 			require.NoError(t, err)
 			defer stmt.Close()
 			for _, tc := range []struct {
@@ -118,7 +118,7 @@ func TestIssue28469IntegerAssignment(t *testing.T) {
 		})
 		t.Run("binary_integer_assignment_reuse", func(t *testing.T) {
 			mustExec(t, ctx, conn, "create table integer_reuse(id int primary key,v tinyint,u bigint unsigned)")
-			stmt, err := conn.PrepareContext(ctx, "insert into integer_reuse values (1,?,?)")
+			stmt, err := conn.PrepareContext(ctx, "insert into integer_reuse values (1,?,?)") //nolint:sqlclosecheck // closed via defer; not tracked across closures
 			require.NoError(t, err)
 			defer stmt.Close()
 			for _, tc := range []struct {

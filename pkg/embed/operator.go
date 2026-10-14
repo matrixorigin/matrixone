@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -53,6 +52,10 @@ type operator struct {
 	serviceType metadata.ServiceType
 	state       state
 	testing     bool
+
+	// Test-owned bootstrap handlers allow a real CN restart to cross an
+	// interrupted upgrade target without rewriting persisted upgrade records.
+	testingCNOptions []cnservice.Option
 
 	reset struct {
 		svc        service
@@ -136,7 +139,8 @@ func (op *operator) Close() error {
 	if op.state == stopped &&
 		op.reset.svc == nil &&
 		op.reset.stopper == nil &&
-		op.reset.fs == nil {
+		op.reset.fs == nil &&
+		op.reset.rt == nil {
 		return nil
 	}
 
@@ -159,6 +163,10 @@ func (op *operator) Close() error {
 	if op.reset.fs != nil {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
+	}
+	if op.reset.rt != nil {
+		runtime.CompareAndDeleteServiceBasedRuntime(op.sid, op.reset.rt)
+		op.reset.rt = nil
 	}
 	op.reset.shutdownC = nil
 	op.state = stopped
@@ -183,7 +191,8 @@ func (op *operator) needsCleanup() bool {
 func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
-		op.reset.fs != nil
+		op.reset.fs != nil ||
+		op.reset.rt != nil
 }
 
 func (op *operator) Start() error {
@@ -213,8 +222,15 @@ func (op *operator) Start() error {
 	if err := op.cfg.validateClockConfiguration(); err != nil {
 		return err
 	}
-	if err := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType); err != nil {
-		return err
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
+	}
+	if authErr != nil {
+		return authErr
 	}
 	if op.serviceType == metadata.ServiceType_CN {
 		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
@@ -305,6 +321,16 @@ func (op *operator) startTNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
 		return err
 	}
+	return op.startTNServiceAfterReadyLocked(fs)
+}
+
+// startTNServiceAfterReadyLocked is the construction handoff after the
+// HAKeeper readiness gate. Keeping the constructor path separate lets tests
+// exercise the production owner publication and rollback boundary without
+// manufacturing a second constructor flow.
+func (op *operator) startTNServiceAfterReadyLocked(
+	fs fileservice.FileService,
+) error {
 	op.cfg.initMetaCache()
 	c := op.cfg.getTNServiceConfig()
 	//notify the tn service it is in the standalone cluster
@@ -315,6 +341,7 @@ func (op *operator) startTNServiceLocked(
 		op.reset.rt,
 		fs,
 		op.reset.shutdownC,
+		func(owner tnservice.Service) { op.reset.svc = owner },
 		tnservice.WithConfigData(commonConfigKVMap),
 	)
 	if err != nil {
@@ -338,15 +365,24 @@ func (op *operator) startCNServiceLocked(
 	}
 	op.cfg.initMetaCache()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	options := []cnservice.Option{
+		cnservice.WithLogger(op.reset.logger),
+		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+		cnservice.WithConfigData(commonConfigKVMap),
+	}
+	if op.testing {
+		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
+	}
 	s, err := cnservice.NewService(
 		&c,
 		context.Background(),
 		fs,
 		op.reset.gossipNode,
-		cnservice.WithLogger(op.reset.logger),
-		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
-		cnservice.WithConfigData(commonConfigKVMap),
-		cnservice.WithTxnTraceData(filepath.Join(op.cfg.DataDir, c.Txn.Trace.Dir)),
+		func(owner cnservice.Service) { op.reset.svc = owner },
+		options...,
 	)
 	if err != nil {
 		return err

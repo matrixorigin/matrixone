@@ -471,26 +471,35 @@ func (r *taskRunner) retry(ctx context.Context) {
 			if taskFrameworkDisabled() {
 				continue
 			}
-			needRetryTasks = needRetryTasks[:0]
-			r.retryTasks.Lock()
-			now := time.Now()
-			next := 0
-			for ; next < len(r.retryTasks.s); next++ {
-				rt := r.retryTasks.s[next]
-				if rt.retryAt.After(now) {
-					break
-				}
-				needRetryTasks = append(needRetryTasks, rt)
-			}
-			remaining := copy(r.retryTasks.s, r.retryTasks.s[next:])
-			clear(r.retryTasks.s[remaining:])
-			r.retryTasks.s = r.retryTasks.s[:remaining]
-			r.retryTasks.Unlock()
-			for _, rt := range needRetryTasks {
-				r.run(rt)
-			}
+			needRetryTasks = r.retryDueTasks(time.Now(), needRetryTasks)
 		}
 	}
+}
+
+// retryDueTasks removes all retry entries whose deadline has passed and
+// dispatches them. Keeping the queue transition separate from the ticker
+// makes the retry contract deterministic for tests and keeps the scheduler
+// responsible only for choosing when to check.
+func (r *taskRunner) retryDueTasks(now time.Time, needRetryTasks []runningTask) []runningTask {
+	needRetryTasks = needRetryTasks[:0]
+	r.retryTasks.Lock()
+	next := 0
+	for ; next < len(r.retryTasks.s); next++ {
+		rt := r.retryTasks.s[next]
+		if rt.retryAt.After(now) {
+			break
+		}
+		needRetryTasks = append(needRetryTasks, rt)
+	}
+	remaining := copy(r.retryTasks.s, r.retryTasks.s[next:])
+	clear(r.retryTasks.s[remaining:])
+	r.retryTasks.s = r.retryTasks.s[:remaining]
+	r.retryTasks.Unlock()
+
+	for _, rt := range needRetryTasks {
+		r.run(rt)
+	}
+	return needRetryTasks
 }
 
 func (r *taskRunner) runTask(ctx context.Context, rt runningTask) {

@@ -416,6 +416,9 @@ message SchemaExtra {
     uint32 default_charset = 19;
     // Table-owned AUTO_INCREMENT reservation policy. Zero inherits the service default.
     uint64 auto_id_cache = 20;
+    // Zero retains legacy physical keys and text semantics.
+    uint32 key_format = 21;
+    uint32 collation_version = 22;
 }
 
 // Int64Map mainly used in unit test

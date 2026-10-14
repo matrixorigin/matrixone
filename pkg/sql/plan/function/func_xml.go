@@ -49,6 +49,8 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var program *xmlXPath
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row)) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -80,9 +82,14 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 			if update {
-				for _, p := range program.paths {
+				// MySQL resolves a terminal text() to its current XPath context
+				// when choosing the source span to replace.
+				for i := range program.paths {
+					p := &program.paths[i]
 					if p.terminalText() {
-						return moerr.NewNotSupported(proc.Ctx, "UpdateXML text() target is unsupported")
+						step := &p.steps[len(p.steps)-1]
+						step.text = false
+						step.axis = 's'
 					}
 				}
 			}
@@ -118,7 +125,7 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return err
 		}
-		if update && program.count {
+		if update && program.left != nil {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

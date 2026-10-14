@@ -42,7 +42,7 @@ type timeWinTestCase struct {
 func makeTestCases(t *testing.T) []timeWinTestCase {
 	return []timeWinTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   true,
@@ -59,7 +59,7 @@ func makeTestCases(t *testing.T) []timeWinTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   false,
@@ -76,7 +76,7 @@ func makeTestCases(t *testing.T) []timeWinTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: false,
 				WEnd:   false,
@@ -98,7 +98,7 @@ func makeTestCases(t *testing.T) []timeWinTestCase {
 func makePrepareErrorCases(t *testing.T) []timeWinTestCase {
 	return []timeWinTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   true,
@@ -137,10 +137,10 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &TimeWin{}
+	arg.String(&buf)
+	require.Equal(t, "time_window: time window", buf.String())
 }
 
 func TestTimeWin(t *testing.T) {
@@ -180,7 +180,7 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 		i:      1,
 		aggVec: [][][]*vector.Vector{{{value}}},
 	}
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	require.NoError(t, ctr.calResForInterval(&TimeWin{}, proc))
 	require.Same(t, value, ctr.bat.Vecs[0])
 	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](ctr.bat.Vecs[0]))
@@ -216,7 +216,7 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 	input.SetVector(1, value)
 	input.SetRowCount(1)
 
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &TimeWin{
 		Types:    []types.Type{types.T_int32.ToType()},
 		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},
@@ -248,7 +248,7 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 }
 
 func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &TimeWin{
 		Types: []types.Type{types.T_int32.ToType()},
 		Aggs: []aggexec.AggFuncExecExpression{
@@ -286,7 +286,7 @@ func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
 }
 
 func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &TimeWin{
 		WStart: true,
 		WEnd:   true,
@@ -353,7 +353,7 @@ func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
 		{name: "upper endpoint", config: "1", want: 1000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil, proc.Mp())
 			arg := &TimeWin{
 				Types: []types.Type{types.T_int32.ToType()},
@@ -385,7 +385,7 @@ func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
 }
 
 func TestTimeWinApproxPercentileRejectsInvalidExecutorConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &TimeWin{
 		Types: []types.Type{types.T_int32.ToType()},
 		Aggs: []aggexec.AggFuncExecExpression{
@@ -408,7 +408,7 @@ func TestTimeWinApproxPercentileRejectsInvalidExecutorConfig(t *testing.T) {
 // batch, and the flushed DISTINCT executor is freed before its replacement is
 // installed.
 func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	values := make([]int32, rows)
 	groups := make([]uint64, rows)
@@ -471,7 +471,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 }
 
 func TestTimeWinReplacementFailurePreservesOwnership(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 
 	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, true, types.T_int32.ToType())
@@ -579,7 +579,7 @@ func TestTimestampWindowStartAlignsSlidingKeyInSessionTimezone(t *testing.T) {
 }
 
 func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -656,7 +656,7 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 }
 
 func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -714,7 +714,7 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 }
 
 func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -772,7 +772,7 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 }
 
 func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -843,7 +843,7 @@ func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
 }
 
 func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -901,7 +901,7 @@ func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 }
 
 func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -964,7 +964,7 @@ func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 }
 
 func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
 	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 	normalStart := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
@@ -999,7 +999,7 @@ func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
 func TestTimestampIntervalBoundaryVectorUsesCivilDayGrid(t *testing.T) {
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.GetSessionInfo().TimeZone = zone
 	day := types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
 	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
@@ -1034,7 +1034,7 @@ func TestTimestampIntervalBoundaryVectorUsesCivilDayGrid(t *testing.T) {
 }
 
 func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
 	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 	beforeMin := types.Timestamp(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
@@ -1083,7 +1083,7 @@ func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.
 }
 
 func TestTimestampBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 	beforeMin := types.Datetime(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
 	afterMax := types.Datetime(int64(types.TimestampMaxValue) + 1)
@@ -1160,7 +1160,7 @@ func TestTimestampBoundaryVectorsFreeOnAppendFailure(t *testing.T) {
 }
 
 func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
 	base := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
 

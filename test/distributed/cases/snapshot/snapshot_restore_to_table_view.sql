@@ -195,6 +195,7 @@ select * from test01.total_department_sales;
 select * from test01.combined_sales_view;
 
 -- drop tables
+use test01;
 drop table if exists employees;
 drop table if exists departments;
 drop table if exists orders;

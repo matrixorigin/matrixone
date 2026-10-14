@@ -290,14 +290,35 @@ func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionR
 	if len(parameters) != 2 {
 		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires a value and target")
 	}
+	var err error
 	switch result.GetResultVector().GetType().Oid {
 	case types.T_int64:
-		return integerArgumentCast(parameters[0], vector.MustFunctionResult[int64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[int64](result), proc, length, selectList, truncate)
 	case types.T_uint64:
-		return integerArgumentCast(parameters[0], vector.MustFunctionResult[uint64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[uint64](result), proc, length, selectList, truncate)
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires int64 or uint64 target")
 	}
+	if err != nil {
+		return err
+	}
+	// The private conversion materializes one value per row. Its scalar source
+	// remains scalar after conversion, but only when every logical row was
+	// evaluated. A partial selection contains NULL placeholders and must stay
+	// flat; a one-row flat input is not a scalar either.
+	if length > 0 && parameters[0].IsConst() {
+		allSelected := true
+		for row := 0; row < length; row++ {
+			if functionRowSkipped(selectList, uint64(row)) {
+				allSelected = false
+				break
+			}
+		}
+		if allSelected {
+			result.GetResultVector().ToConst()
+		}
+	}
+	return nil
 }
 
 // NewTextIntegerBitsCast is shared by text-valued bit parameters, not numeric

@@ -280,14 +280,8 @@ func (builder *QueryBuilder) cteProducerEvaluationIsTotal(
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
 				return false
 			}
@@ -646,13 +640,10 @@ func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) 
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		increaseCTERefCnt(node.VectorIndexScan.QueryVector, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.CandidateLimit, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.FirstRoundLimit, colRefCnt)
-		increaseCTERefCnt(distRangeLowerBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseCTERefCnt(distRangeUpperBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseRefCntForExprList(node.VectorIndexScan.PreFilters, 1, colRefCnt)
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
+			increaseCTERefCnt(expr, colRefCnt)
+		}
 	}
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 1, colRefCnt)
@@ -867,7 +858,7 @@ func samePlanType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr && left.Width == right.Width &&
 		left.Scale == right.Scale && left.Table == right.Table &&
-		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
+		left.Enumvalues == right.Enumvalues && left.SameCollation(right)
 }
 
 func statementStableFunctionScan(node *planpb.Node) bool {
@@ -912,6 +903,18 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	// producer so an outer CTE can still be shared instead of forcing a choice
 	// between inner and outer reuse.
 	return builder.subtreeIsDeterministic(nodeID, seen, true)
+}
+
+// IndexSearchScanExprs returns every expression of scan; nil entries are kept.
+func IndexSearchScanExprs(scan *planpb.IndexSearchScan) []*planpb.Expr {
+	if scan == nil {
+		return nil
+	}
+	exprs := make([]*planpb.Expr, 0, 4+len(scan.AlgoExprs)+len(scan.PreFilters))
+	exprs = append(exprs, scan.QueryPayload, scan.CandidateLimit,
+		distRangeLowerBound(scan.DistanceRange), distRangeUpperBound(scan.DistanceRange))
+	exprs = append(exprs, scan.AlgoExprs...)
+	return append(exprs, scan.PreFilters...)
 }
 
 func distRangeLowerBound(distRange *planpb.DistRange) *planpb.Expr {
@@ -1028,14 +1031,8 @@ func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !exprCanRemoveProject(expr) {
 				return false
 			}
@@ -1145,6 +1142,12 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			nodeID            int32
 			childID           int32
 			requiresHashBuild bool
+			// inputDrained records that a blocking descendant has already
+			// consumed this occurrence completely before producing its first
+			// row. A LIMIT on a transparent ancestor cannot shorten that work,
+			// although intervening joins must still prove that the descendant is
+			// executed at all.
+			inputDrained bool
 		}
 		queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
 		for _, nodeID := range parents[occurrence.rootID] {
@@ -1161,11 +1164,21 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			}
 			seen[path] = true
 			node := builder.qry.Nodes[path.nodeID]
+			// A blocking descendant only proves that this occurrence drains after
+			// its branch starts. A partially consumed multi-input operator may never
+			// start this exact child (lazy UNION ALL is the common case). Joins are
+			// checked below with child-specific build/probe rules; every other
+			// multi-input boundary drops the carried witness until a new blocking
+			// ancestor establishes one.
+			if path.inputDrained && len(node.Children) > 1 && node.NodeType != planpb.Node_JOIN {
+				path.inputDrained = false
+			}
 			// LIMIT can stop the subtree before it completes. Only a positive
 			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
 			// compiled without its input steps, and a dynamic limit may be zero at
 			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil && !cteLimitPreservesFullInput(node) {
+			if node.Limit != nil &&
+				(!cteLimitIsPositive(node.Limit) || !path.inputDrained && !cteLimitPreservesFullInput(node)) {
 				continue
 			}
 			// APPLY may skip its right input when the left side is empty. Block
@@ -1173,6 +1186,9 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			// Neither node can carry a complete-evaluation witness upward.
 			if node.NodeType == planpb.Node_APPLY || node.NodeType == planpb.Node_SAMPLE {
 				continue
+			}
+			if node.NodeType == planpb.Node_AGG || node.NodeType == planpb.Node_SORT {
+				path.inputDrained = true
 			}
 			if node.NodeType == planpb.Node_JOIN {
 				switch node.JoinType {
@@ -1205,7 +1221,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					if path.childID == siblingID {
 						siblingID = node.Children[1]
 					}
-					if builder.subtreeContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
+					if builder.joinInputContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1213,8 +1229,8 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					}
 					requiredBuildChildByJoin[path.nodeID] = path.childID
 					path.requiresHashBuild = true
-				case planpb.Node_LEFT:
-					// Fully consuming a normal LEFT join necessarily consumes its
+				case planpb.Node_LEFT, planpb.Node_SINGLE:
+					// Fully consuming a normal LEFT/SINGLE join consumes its
 					// preserved logical-left input, even when the right build is
 					// empty. Keep walking toward the root; only the nullable/right
 					// input needs a pinned build-side proof at this boundary.
@@ -1226,7 +1242,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					// the nullable/probe side can never establish this witness.
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1237,7 +1253,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				case planpb.Node_SEMI:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.IsEquiJoin(node) {
 						continue
 					}
@@ -1249,7 +1265,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				case planpb.Node_MARK:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.cteMarkJoinBecomesHashSemi(path.nodeID, parents) {
 						continue
 					}
@@ -1277,6 +1293,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				queue = append(queue, consumerPath{
 					nodeID: parentID, childID: path.nodeID,
 					requiresHashBuild: path.requiresHashBuild,
+					inputDrained:      path.inputDrained,
 				})
 			}
 		}
@@ -1348,7 +1365,11 @@ func cteLimitPreservesFullInput(node *planpb.Node) bool {
 	if node.NodeType != planpb.Node_AGG && node.NodeType != planpb.Node_SORT {
 		return false
 	}
-	literal := node.Limit.GetLit()
+	return cteLimitIsPositive(node.Limit)
+}
+
+func cteLimitIsPositive(limit *planpb.Expr) bool {
+	literal := limit.GetLit()
 	if literal == nil || literal.Isnull {
 		return false
 	}
@@ -1789,7 +1810,7 @@ func (builder *QueryBuilder) cteMarkedHashBuildBoundary(
 	case planpb.Node_INNER:
 		return (childID == node.Children[0] || childID == node.Children[1]) &&
 			(builder.IsEquiJoin(node) || builder.cteInnerJoinGetsEquiCondition(nodeID, parents))
-	case planpb.Node_LEFT:
+	case planpb.Node_LEFT, planpb.Node_SINGLE:
 		return !node.IsRightJoin && childID == node.Children[1]
 	case planpb.Node_SEMI:
 		return !node.IsRightJoin && childID == node.Children[1] && builder.IsEquiJoin(node)

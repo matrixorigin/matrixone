@@ -310,6 +310,7 @@ type container struct {
 	// Spill support for large build sides.
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
+	autoSpill      bool
 }
 
 type DedupJoin struct {

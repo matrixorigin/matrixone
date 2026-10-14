@@ -39,6 +39,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -471,7 +472,13 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		var observedStats *pbstats.StatsInfo
+		statsCalls := 0
+		table.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(context.Context, bool) (*pbstats.StatsInfo, error) {
+				statsCalls++
+				return observedStats, nil
+			}).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
@@ -513,6 +520,53 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
+
+		workspace := newTestWorkspace()
+		txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+		ses.proc.Base.TxnOperator = txnOperator
+		tcc.execCtx.proc = ses.proc
+		obj := &plan.ObjectRef{Obj: 10, SchemaName: "abc", ObjName: "t1"}
+		tableDef := &plan.TableDef{Version: 7}
+		current := &pbstats.StatsInfo{TableName: "t1", TableCnt: 5,
+			NdvMap: map[string]float64{"v": 5}, NullCntMap: map[string]uint64{"v": 1}}
+		observedStats = current
+		got, err := tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		before := statsCalls
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before, statsCalls, "completed readonly stats retain the 3s fast path")
+		snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+		for _, count := range []float64{2, 0} {
+			historical := &pbstats.StatsInfo{TableName: "t1", TableCnt: count,
+				NdvMap: map[string]float64{"v": count}, NullCntMap: map[string]uint64{"v": 0}}
+			observedStats = historical
+			got, err = tcc.StatsWithTableDef(obj, tableDef, snapshot)
+			require.NoError(t, err)
+			require.Same(t, historical, got, "snapshot named empty keeps its completed marker")
+			wrapper := ses.GetStatsCache().Get(10)
+			require.Equal(t, historical.NdvMap, wrapper.GetStats().NdvMap, "NDV consumers use this planning pass's snapshot maps")
+			require.Empty(t, wrapper.GetStats().TableName)
+			require.Equal(t, "t1", historical.TableName, "published input is immutable")
+			observedStats = current
+			before = statsCalls
+			got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+			require.NoError(t, err)
+			require.Same(t, current, got)
+			require.Equal(t, before+1, statsCalls, "snapshot wrapper cannot serve the current 3s fast hit")
+		}
+		workspace.readonly = false
+		observedStats = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, observedStats, got, "own writes bypass old completed stats")
+		workspace.readonly = true
+		before = statsCalls
+		_, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Equal(t, before+1, statsCalls, "anonymous overlay is not cache-complete even with accurate objects")
 	})
 }
 
@@ -701,7 +755,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -742,6 +796,7 @@ func TestSession_Migrate(t *testing.T) {
 			Tenant:   GetDefaultTenant(),
 			TenantID: GetSysTenantId(),
 		}
+		session.ruleCache = map[string]string{}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)
@@ -766,6 +821,8 @@ func TestSession_Migrate(t *testing.T) {
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:                      "d1",
 			LastAffectedRows:        7,
+			LastInsertID:            13,
+			LastInsertIDExported:    true,
 			FoundRows:               11,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{
@@ -800,8 +857,14 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
 		}
+		for name, stmt := range s.prepareStmts {
+			require.NotNil(t, stmt, name)
+			require.True(t, stmt.rewritePolicyCaptured, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+		assert.Equal(t, uint64(13), s.GetLastInsertID())
+		assert.Equal(t, uint64(13), s.GetProc().GetLastInsertID())
 		assert.Equal(t, uint64(11), s.GetLastFoundRows())
 		assert.Equal(t, uint64(11), s.GetProc().GetFoundRows())
 
@@ -823,12 +886,31 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
+	t.Run("rejects missing LAST_INSERT_ID snapshot", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastInsertID(9)
+		s.GetProc().SetLastInsertID(9)
+
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.Equal(t, uint64(9), s.GetLastInsertID())
+		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
+	})
+
 	t.Run("typed user variables", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+		bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{0})] = newMrsForRewriteRules(nil)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -851,7 +933,9 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{
 			"character_set_client", "character_set_connection", "character_set_results",
 		} {
-			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			require.Error(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			// Model a snapshot created before the new-request admission policy.
+			require.NoError(t, source.restoreSessionSysVar(context.Background(), name, "latin1"))
 		}
 		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
 			context.Background(), txn.TxnIsolation_RC, false))
@@ -866,13 +950,11 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:      88,
-			DB:          exported.DB,
-			SetVarStmts: []string{"set sql_mode = @mode"},
-			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
-				Name: "pending_isolation_prepare",
-				SQL:  "select ?",
-			}),
+			ConnID:                  88,
+			DB:                      exported.DB,
+			LastInsertIDExported:    true,
+			SetVarStmts:             []string{"set sql_mode = @mode"},
+			PrepareStmts:            []*query.PrepareStmt{{Name: "pending_isolation_prepare", SQL: "select ?"}},
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
@@ -899,12 +981,16 @@ func TestSession_Migrate(t *testing.T) {
 		nextIsolation, hasNextIsolation := target.GetTxnHandler().nextTxnIsolationSnapshot()
 		require.True(t, hasNextIsolation)
 		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
+		prepared, err := target.GetPrepareStmt(context.Background(), "pending_isolation_prepare")
+		require.NoError(t, err)
+		require.Equal(t, "select ?", prepared.Sql)
 		require.Equal(t, "d1", target.GetDatabaseName())
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
 
 		invalidTarget := genSession(ctrl, "d1", nil)
 		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
 			SystemVariablesExported: true,
@@ -941,6 +1027,7 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -954,6 +1041,7 @@ func TestSession_Migrate(t *testing.T) {
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
 		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -987,7 +1075,8 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			DB: "d1",
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			TempTables: []*query.MigrateTempTable{{
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
@@ -1037,6 +1126,7 @@ func TestSession_Migrate(t *testing.T) {
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1095,6 +1185,7 @@ func TestSession_Migrate(t *testing.T) {
 		// invalidate when restoring either cache-control variable.
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1153,6 +1244,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
 		}))
@@ -1186,8 +1278,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:               88,
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -1210,7 +1303,10 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB:                   "d2",
+			LastInsertIDExported: true,
+		})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})
@@ -1227,7 +1323,11 @@ func TestSession_Migrate(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{
+			DB:                   "d3",
+			LastAffectedRows:     3,
+			LastInsertIDExported: true,
+		})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
@@ -2012,6 +2112,196 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	// safe to call again on an already-empty session
 	ses.RemoveAllPrepareStmts()
 	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	oldStmt := &PrepareStmt{Name: "old"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"old": oldStmt},
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	_, err := ses.GetPrepareStmt(ctx, "old")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
+	// Explicit cleanup remains available for an invalidated handle.
+	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, oldStmt, got)
+
+	// A fresh PREPARE replaces the invalidated handle and is executable.
+	newStmt := &PrepareStmt{Name: "old"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "old", newStmt))
+	got, err = ses.GetPrepareStmt(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, newStmt, got)
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesMandatoryRoleRulePreparedStatements(t *testing.T) {
+	stmt := &PrepareStmt{
+		Name:                  "role_rule",
+		rewritePolicyCaptured: true,
+		rewritePolicyEnabled:  true,
+	}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		ruleCache:    map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		prepareStmts: map[string]*PrepareStmt{"role_rule": stmt},
+	}
+	// Mandatory role rules remain active when the optional rewrite switch is
+	// disabled.
+	ses.rewriteEnabled.Store(false)
+
+	ses.InvalidatePrivilegeCache()
+
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+}
+
+func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	stmt := &PrepareStmt{Name: "stmt"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"stmt": stmt},
+	}
+
+	ses.InvalidatePrivilegeCache()
+
+	got, err := ses.GetPrepareStmt(ctx, "stmt")
+	require.NoError(t, err)
+	require.Same(t, stmt, got)
+}
+
+func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name            string
+		capturedEnabled bool
+		currentEnabled  bool
+		currentRoleRule bool
+		invalidated     bool
+	}{
+		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
+		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
+		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
+		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+		{name: "disabled to mandatory role rule", capturedEnabled: false, currentRoleRule: true, invalidated: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ses := &Session{
+				cache:                   &privilegeCache{},
+				ruleCache:               map[string]string{},
+				prepareStmts:            make(map[string]*PrepareStmt),
+				rewritePolicyGeneration: 1,
+			}
+			if testCase.currentRoleRule {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.rewriteEnabled.Store(testCase.currentEnabled)
+			stale := &PrepareStmt{
+				Name:                    "stale",
+				rewritePolicyCaptured:   true,
+				rewritePolicyEnabled:    testCase.capturedEnabled,
+				rewritePolicyGeneration: 0,
+			}
+			require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+			require.Equal(t, testCase.invalidated, stale.rewritePolicyInvalidated.Load())
+			got, err := ses.GetPrepareStmt(ctx, stale.Name)
+			if testCase.invalidated {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, stale, got)
+		})
+	}
+
+	ses := &Session{
+		cache:                   &privilegeCache{},
+		prepareStmts:            make(map[string]*PrepareStmt),
+		rewritePolicyGeneration: 1,
+	}
+	ses.rewriteEnabled.Store(true)
+	fresh := &PrepareStmt{
+		Name:                    "fresh",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: 1,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
+	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
+	require.NoError(t, err)
+	require.Same(t, fresh, got)
+}
+
+func TestPreparedStatementsValidateRefreshedRewritePolicy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		refreshErr error
+		generation uint64
+		invalid    bool
+	}{
+		{name: "disabled to mandatory", enabled: true, generation: 1, invalid: true},
+		{name: "disabled to disabled", generation: 1},
+		{name: "failed load", refreshErr: assert.AnError, generation: 1, invalid: true},
+		{name: "concurrent invalidation", generation: 0, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			fresh := &PrepareStmt{Name: "fresh", rewritePolicyCaptured: true, rewritePolicyGeneration: 1}
+			ses := &Session{
+				cache:        &privilegeCache{},
+				ruleCache:    map[string]string{},
+				prepareStmts: map[string]*PrepareStmt{"old": old},
+			}
+			ses.InvalidatePrivilegeCache()
+			require.False(t, old.rewritePolicyInvalidated.Load(), "disabled handle awaits the refreshed policy")
+			// Model the cache reload after an error path such as failed SET ROLE.
+			ses.ruleCache = map[string]string{}
+			if tc.enabled {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.prepareStmts["fresh"] = fresh
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+				&rewritePolicySnapshot{generation: tc.generation, enabled: tc.enabled}, tc.refreshErr)
+			got, err := ses.GetPrepareStmt(ctx, "old")
+			require.Same(t, old, got)
+			if tc.invalid {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = ses.GetPrepareStmt(ctx, "fresh")
+			if tc.refreshErr != nil || tc.generation != 1 {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err, "refresh must preserve handles captured in the current generation")
+			}
+		})
+	}
+}
+
+func TestGetPrepareStmtRejectsStaleGenerationWithCurrentMandatoryRules(t *testing.T) {
+	stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+	ses := &Session{
+		ruleCache:               map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		rewritePolicyGeneration: 1,
+		prepareStmts:            map[string]*PrepareStmt{"old": stmt},
+	}
+	got, err := ses.GetPrepareStmt(context.Background(), "old")
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	got, err = ses.getPrepareStmtAllowInvalidated(context.Background(), "old")
+	require.NoError(t, err, "explicit cleanup must remain available")
+	require.Same(t, stmt, got)
 }
 
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {

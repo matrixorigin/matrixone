@@ -190,23 +190,26 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 		return types.T_varchar.ToType()
 	}
 	source := parameters[0]
+	withRevision := func(result types.Type) types.Type {
+		return types.MergeStringCollationMetadata(result, []types.Type{source})
+	}
 	if types.StaticStringDomain(source) == types.StringDomainBinary {
-		return binaryStringResultType(declaredStringByteBound(source))
+		return withRevision(binaryStringResultType(declaredStringByteBound(source)))
 	}
 	switch source.Oid {
 	case types.T_char, types.T_varchar:
-		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
+		return withRevision(textStringResultType(declaredTextCharacterBound(source), source.Charset))
 	case types.T_text:
 		if source.Width == types.MaxTinyTextLen {
 			// Case conversion preserves rune count. Express bounded TINYTEXT as
 			// VARCHAR characters instead of inventing a non-persistable TEXT width.
-			return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
+			return withRevision(types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset))
 		}
 		// Wider TEXT families cannot express the potentially expanded byte bound
 		// with a standard persistent subtype marker. Unknown is safer than a cap.
 		result := types.T_text.ToType()
 		result.Charset = source.Charset
-		return result
+		return withRevision(result)
 	default:
 		return types.T_varchar.ToType()
 	}
@@ -284,7 +287,7 @@ func insertStringReturnType(parameters []types.Type) types.Type {
 func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
 	switch result.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		result.Charset = types.MergeStringCharset(source, result.Charset)
+		result = types.MergeStringCollationMetadata(result, source)
 	default:
 		return result
 	}
@@ -301,6 +304,10 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 			hasText = true
 			if typ.Width > maxWidth {
 				maxWidth = typ.Width
+			}
+		case types.T_uuid:
+			if width := formattedScalarStringType(typ).Width; width > maxWidth {
+				maxWidth = width
 			}
 		case types.T_text:
 			hasText = true
@@ -586,6 +593,35 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 }
 
 var supportedStringBuiltIns = []FuncNew{
+	// MySQL Performance Schema formatting functions evaluate in the DOUBLE domain.
+	{
+		functionId: FORMAT_BYTES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatBytes },
+			},
+		},
+	},
+	{
+		functionId: FORMAT_PICO_TIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatPicoTime },
+			},
+		},
+	},
 	// function `ascii`
 	{
 		functionId: ASCII,
@@ -814,9 +850,10 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `char`
 	{
-		functionId: CHAR,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    builtInCharCheck,
+		functionId:        CHAR,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter, variadic: true}},
+		layout:            STANDARD_FUNCTION,
+		checkFn:           builtInCharCheck,
 
 		Overloads: []overload{
 			{
@@ -918,7 +955,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: EXTRACT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    extractNumericTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -928,7 +965,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ExtractFromDatetime
+					return legacyExtract
 				},
 			},
 			{
@@ -938,7 +975,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_uint32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ExtractFromDate
+					return legacyExtractFromDate
 				},
 			},
 			{
@@ -948,7 +985,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ExtractFromTime
+					return legacyExtract
 				},
 			},
 			{
@@ -958,7 +995,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ExtractFromVarchar
+					return legacyExtract
 				},
 			},
 			{
@@ -966,6 +1003,56 @@ var supportedStringBuiltIns = []FuncNew{
 				args:       []types.T{types.T_varchar, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return legacyExtract
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromDatetime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_varchar, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromDate
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varchar, types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromTime
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromVarchar
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return ExtractFromTimestamp
@@ -997,10 +1084,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `make_set`
 	{
-		functionId: MAKE_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeSetCheck,
+		functionId:        MAKE_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           makeSetCheck,
 
 		Overloads: []overload{
 			{
@@ -1017,10 +1105,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `export_set`
 	{
-		functionId: EXPORT_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    exportSetCheck,
+		functionId:        EXPORT_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           exportSetCheck,
 
 		Overloads: []overload{
 			{
@@ -1223,10 +1312,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `format`
 	{
-		functionId: FORMAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    formatCheck,
+		functionId:        FORMAT,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           formatIntegerCheck,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{2, 3},
 
 		Overloads: []overload{
 			{
@@ -1248,6 +1339,18 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return FormatWith3Args
 				},
+			},
+			{
+				overloadId: FormatIntegerPrecisionOverload,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
+			},
+			{
+				overloadId: FormatIntegerPrecisionLocaleOverload,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
 			},
 		},
 	},
@@ -1796,6 +1899,28 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_agg_to_double` — internal MySQL warning-conversion
+	// boundary for SUM/AVG/VAR_*/STDDEV_* over JSON operands.
+	{
+		functionId: JSON_AGG_TO_DOUBLE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonAggToDouble
+				},
+			},
+		},
+	},
+
 	// function `json_keys`
 	{
 		functionId: JSON_KEYS,
@@ -2095,7 +2220,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ADDTIME,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    addTimeTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2162,7 +2287,7 @@ var supportedStringBuiltIns = []FuncNew{
 					if parameters[1].Scale > scale {
 						scale = parameters[1].Scale
 					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_datetime, scale, scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -2176,7 +2301,7 @@ var supportedStringBuiltIns = []FuncNew{
 					if parameters[1].Scale > scale {
 						scale = parameters[1].Scale
 					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_datetime, scale, scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -2189,7 +2314,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return AddTime
+					return legacyAddTimeString
 				},
 			},
 			{
@@ -2199,7 +2324,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return AddTime
+					return legacyAddTimeString
 				},
 			},
 			{
@@ -2207,6 +2332,36 @@ var supportedStringBuiltIns = []FuncNew{
 				args:       []types.T{types.T_text, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return legacyAddTimeString
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_char, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -2220,7 +2375,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBTIME,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    subTimeTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2287,7 +2442,7 @@ var supportedStringBuiltIns = []FuncNew{
 					if parameters[1].Scale > scale {
 						scale = parameters[1].Scale
 					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_datetime, scale, scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -2301,7 +2456,7 @@ var supportedStringBuiltIns = []FuncNew{
 					if parameters[1].Scale > scale {
 						scale = parameters[1].Scale
 					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_datetime, scale, scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -2314,7 +2469,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubTime
+					return legacySubTimeString
 				},
 			},
 			{
@@ -2324,7 +2479,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubTime
+					return legacySubTimeString
 				},
 			},
 			{
@@ -2334,7 +2489,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubTime
+					return legacySubTimeString
 				},
 			},
 			{
@@ -2344,7 +2499,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.New(types.T_datetime, 0, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubTime
+					return legacySubTimeString
 				},
 			},
 			{
@@ -2352,6 +2507,56 @@ var supportedStringBuiltIns = []FuncNew{
 				args:       []types.T{types.T_text, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return legacySubTimeString
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_char, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_varchar, 29, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -2362,10 +2567,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `conv`
 	{
-		functionId: CONV,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    convTypeCheck,
+		functionId:        CONV,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           convTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -2798,6 +3004,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array_insert`
+	{
+		functionId: JSON_ARRAY_INSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayInsert
+				},
+			},
+		},
+	},
+
 	// function `json_remove`
 	{
 		functionId: JSON_REMOVE,
@@ -2873,6 +3099,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return jsonLength
+				},
+			},
+		},
+	},
+
+	// function `json_depth`
+	{
+		functionId: JSON_DEPTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonDepthCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonDepth
 				},
 			},
 		},
@@ -3668,6 +3914,73 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `physical_serial`
+	// Internal only: index maintenance needs the persisted comparison-key
+	// representation, while generic SERIAL must preserve original values.
+	{
+		functionId: PHYSICAL_SERIAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_serial_full`
+	{
+		functionId: PHYSICAL_SERIAL_FULL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_collation_key`
+	// Internal only: materialize the one-part key used by a secondary index.
+	{
+		functionId: PHYSICAL_COLLATION_KEY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    stringDomainFixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType:    serializedTupleReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInPhysicalCollationKey
+				},
+			},
+		},
+	},
+
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
@@ -3686,7 +3999,12 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[2]
+					result := parameters[2]
+					// BINARY's -1 scale requests padding for CAST, not tuple decoding.
+					if result.Oid == types.T_binary && result.Scale == -1 {
+						result.Scale = 0
+					}
+					return result
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSerialExtract
@@ -3890,14 +4208,16 @@ var supportedStringBuiltIns = []FuncNew{
 
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
 			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
-			if t01.Oid != t02.Oid {
+			if t01.Oid.IsDecimal() && t02.Oid.IsDecimal() {
+				targets := []types.Type{t01, t1, t2}
+				aligned, ok := alignDecimalComparisonTypes(targets, inputs[:3])
+				if !ok {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				t01, t1, t2 = targets[0], targets[1], targets[2]
+				has0 = has0 || aligned
+			} else if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				t01.Scale = max(t01.Scale, t02.Scale)
-				t1.Scale = t01.Scale
-				t2.Scale = t01.Scale
 			}
 
 			if has0 || has1 {
@@ -8737,10 +9057,12 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `hex`
 	{
-		functionId: HEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    hexTypeMatch,
+		functionId:        HEX,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: numericOnlyIntegerParameter}},
+		bindingOverloads:  []int{0, 1, 2, 3, 6, 7},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9666,6 +9988,106 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `tanh`
+	{
+		functionId: TANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInTanh
+				},
+			},
+		},
+	},
+
+	// function `cosh`
+	{
+		functionId: COSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInCosh
+				},
+			},
+		},
+	},
+
+	// function `asinh`
+	{
+		functionId: ASINH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInASinh
+				},
+			},
+		},
+	},
+
+	// function `acosh`
+	{
+		functionId: ACOSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInACosh
+				},
+			},
+		},
+	},
+
+	// function `atanh`
+	{
+		functionId: ATANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInATanh
+				},
+			},
+		},
+	},
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{
@@ -9714,7 +10136,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_datetime, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return ConvertTz
@@ -10038,7 +10460,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAdd
@@ -10074,6 +10496,17 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateIntAdd
 				},
 			},
+			// Raw interval parsing is deterministic for its inputs. Keeping these
+			// overloads foldable also lets statement-constant JOIN diagnostics
+			// retain one execution owner; genuinely row-scoped inputs stay dynamic.
+			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
 		},
 	},
 
@@ -10179,7 +10612,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -10222,7 +10655,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -10293,7 +10726,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampSub
@@ -10329,6 +10762,14 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateIntSub
 				},
 			},
+			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
 		},
 	},
 
@@ -10382,6 +10823,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToDay
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar},
+				retType: func([]types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
+				},
+			},
 		},
 	},
 
@@ -10397,7 +10848,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DayOfYear
@@ -11303,7 +11754,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeToTime
@@ -11343,7 +11794,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(min(max(parameters[0].Scale, 0), 6))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Decimal128ToTime
@@ -11353,7 +11804,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11363,7 +11814,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11373,7 +11824,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11383,7 +11834,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11397,6 +11848,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToTime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToTypeWithScale(min(max(parameters[0].Scale, 0), 6))
+				},
+				newOp: func() executeLogicOfOverload {
+					return Decimal256ToTime
 				},
 			},
 		},
@@ -11414,7 +11875,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					scale := max(parameters[0].Scale, parameters[1].Scale)
+					return types.T_time.ToTypeWithScale(scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Time]
@@ -11424,9 +11886,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					t := types.T_time.ToType()
-					t.Scale = parameters[0].Scale
-					return t
+					return types.T_time.ToTypeWithScale(max(parameters[0].Scale, parameters[1].Scale))
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Datetime]
@@ -11436,7 +11896,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11446,7 +11906,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11456,7 +11916,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_varchar, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11466,7 +11926,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11476,7 +11936,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_text, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11486,7 +11946,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_varchar, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11496,7 +11956,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, 6)
+					return types.New(types.T_time, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiffString
@@ -11928,20 +12388,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_date},
+				overloadId:      0,
+				args:            []types.T{types.T_date},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_datetime},
+				overloadId:      1,
+				args:            []types.T{types.T_datetime},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -11951,7 +12413,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_date, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
@@ -11961,7 +12423,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_datetime, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -12324,7 +12786,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 func makeTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[2].Scale
-	if scale < 0 {
+	if parameters[2].Oid == types.T_float32 || parameters[2].Oid == types.T_float64 || scale < 0 {
 		scale = 6
 	} else if scale > 6 {
 		scale = 6
@@ -12343,77 +12805,13 @@ func isMakeTimeTextType(oid types.T) bool {
 	}
 }
 
-func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) != 3 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-	exactSecond := isMakeTimeTextType(inputs[2].Oid) || inputs[2].Oid.IsDecimal()
-	exactHour := inputs[0].Oid.IsDecimal()
-	exactMinute := inputs[1].Oid.IsDecimal()
-	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactHour && !exactMinute && !exactSecond {
-		return fixedTypeMatch(overloads, inputs)
-	}
-
-	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
-	if isMakeTimeTextType(inputs[0].Oid) {
-		targetOids[0] = types.T_varchar
-	} else if exactHour {
-		if inputs[0].Oid == types.T_decimal256 {
-			targetOids[0] = types.T_decimal256
-		} else {
-			targetOids[0] = types.T_decimal128
-		}
-	}
-	if isMakeTimeTextType(inputs[1].Oid) {
-		targetOids[1] = types.T_varchar
-	} else if exactMinute {
-		if inputs[1].Oid == types.T_decimal256 {
-			targetOids[1] = types.T_decimal256
-		} else {
-			targetOids[1] = types.T_decimal128
-		}
-	}
-	if exactSecond {
-		targetOids[2] = types.T_varchar
-	}
-	status, _ := tryToMatch(inputs, targetOids)
-	if status == matchFailed {
-		return fixedTypeMatch(overloads, inputs)
-	}
-
-	for i, ov := range overloads {
-		if len(ov.args) != len(targetOids) || ov.args[0] != targetOids[0] || ov.args[1] != targetOids[1] || ov.args[2] != targetOids[2] {
-			continue
-		}
-		if status == matchDirectly && !exactSecond {
-			return newCheckResultWithSuccess(i)
-		}
-		targets := make([]types.Type, len(inputs))
-		for j := range targets {
-			if inputs[j].Oid == targetOids[j] {
-				targets[j] = inputs[j]
-			} else {
-				targets[j] = targetOids[j].ToType()
-				SetTargetScaleFromSource(&inputs[j], &targets[j])
-			}
-		}
-		if exactSecond {
-			if inputs[2].Oid.IsDecimal() {
-				targets[2].Scale = inputs[2].Scale
-			} else {
-				targets[2].Scale = -1
-			}
-		}
-		return newCheckResultWithCast(i, targets)
-	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
-}
-
 func secToTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[0].Scale
 	switch parameters[0].Oid {
 	case types.T_int64, types.T_uint64:
 		scale = 0
+	case types.T_float32, types.T_float64:
+		scale = 6
 	default:
 		if scale < 0 {
 			scale = 6
@@ -12906,14 +13304,14 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: LAST_DAY,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    lastDayTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
@@ -12923,41 +13321,61 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
 				},
 			},
+			{overloadId: 2, args: []types.T{types.T_date},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
+			{overloadId: 3, args: []types.T{types.T_datetime},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
 		},
 	},
 
 	// function `MAKEDATE`
 	{
-		functionId: MAKEDATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        MAKEDATE,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{2},
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
 				newOp: func() executeLogicOfOverload {
 					return MakeDateString
 				},
+			},
+			{
+				overloadId: MakeDateIntegerOverload,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return makeDateInteger },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:      func() executeLogicOfOverload { return makeDateIntegerDate },
 			},
 		},
 	},
 
 	// function `MAKETIME`
 	{
-		functionId: MAKETIME,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeTimeCheck,
+		functionId:        MAKETIME,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           makeTimeIntegerCheck,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{0, 36, 37, 38},
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -13199,6 +13617,24 @@ var supportedControlBuiltIns = []FuncNew{
 				retType:    makeTimeReturnType,
 				newOp:      func() executeLogicOfOverload { return MakeTime },
 			},
+			{
+				overloadId: MakeTimeIntegerFloatOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: MakeTimeIntegerExactOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: MakeTimeIntegerUnsignedOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_uint64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
 		},
 	},
 
@@ -13410,6 +13846,22 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	{
+		functionId: TO_INTERVAL_MICROSECOND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 1, args: []types.T{types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 2, args: []types.T{types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 3, args: []types.T{types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 4, args: []types.T{types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 5, args: []types.T{types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 6, args: []types.T{types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 7, args: []types.T{types.T_decimal256, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+		},
+	},
 	// Internal helper used by the interval binder for dynamic string values.
 	{
 		functionId: TO_INTERVAL,
@@ -14997,6 +15449,23 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastIndexValueToIndex
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_enum.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToEnum[int64] },
+			},
+
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_varchar, types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_enum.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToEnum[uint64] },
+			},
 		},
 	},
 
@@ -15065,6 +15534,14 @@ var supportedOthersBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return CastSetIndexValueToIndex
 				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToSet[int64] },
 			},
 		},
 	},
@@ -15559,6 +16036,19 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// function `uuid_short`
+	{
+		functionId: UUID_SHORT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			volatile:   true,
+			retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+			newOp:      func() executeLogicOfOverload { return builtInUUIDShort },
+		}},
+	},
 	// function `uuid`
 	{
 		functionId: UUID,
@@ -15739,9 +16229,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
-					t := types.T_timestamp.ToType()
-					t.Scale = 6
-					return t
+					return types.New(types.T_timestamp, 6, 6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUUIDExtractTimestamp
@@ -16050,6 +16538,9 @@ var supportedOthersBuiltIns = []FuncNew{
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
 							if isNull || !flag {
+								if errType == "odku_pk_mutation" {
+									return moerr.NewUnsupportedDML(proc.Ctx, "update primary key on duplicate")
+								}
 								if errType == "fk_no_referenced_row" {
 									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
 								}
@@ -16110,6 +16601,8 @@ var supportedOthersBuiltIns = []FuncNew{
 					res := vector.MustFunctionResult[bool](result)
 					ignore := statementIgnore(proc)
 					var warnings process.WarningAccumulator
+					warnings.SetWarningRetentionForProcess(proc)
+					defer warnings.Reset()
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
@@ -16312,16 +16805,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedFunctionParametersWrong)
 		},
 
 		Overloads: []overload{

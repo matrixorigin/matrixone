@@ -1,0 +1,64 @@
+drop account if exists issue29185_txn_acc;
+create account issue29185_txn_acc
+ADMIN_NAME 'issue29185_admin' IDENTIFIED BY '111';
+create role issue29185_txn_role;
+grant connect on account * to issue29185_txn_role;
+create user issue29185_txn_user identified by '111'
+default role issue29185_txn_role;
+set global transaction_isolation = 'REPEATABLE-READ';
+set global transaction_read_only = 0;
+select @@global.transaction_isolation,
+@@global.tx_isolation,
+@@global.transaction_read_only,
+@@global.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+select @@session.transaction_isolation,
+@@session.tx_isolation,
+@@session.transaction_read_only,
+@@session.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+select @@global.transaction_isolation,
+@@global.tx_isolation,
+@@global.transaction_read_only,
+@@global.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+set session transaction_read_only = 1,
+global transaction_isolation = 'READ-COMMITTED';
+internal error: do not have privilege to execute the statement
+select @@session.transaction_isolation,
+@@session.tx_isolation,
+@@session.transaction_read_only,
+@@session.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+select @@global.transaction_isolation,
+@@global.tx_isolation,
+@@global.transaction_read_only,
+@@global.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+set global transaction_isolation = 'READ-COMMITTED',
+session transaction_read_only = 1;
+internal error: do not have privilege to execute the statement
+select @@session.transaction_isolation,
+@@session.tx_isolation,
+@@session.transaction_read_only,
+@@session.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+select @@global.transaction_isolation,
+@@global.tx_isolation,
+@@global.transaction_read_only,
+@@global.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+select @@global.transaction_isolation,
+@@global.tx_isolation,
+@@global.transaction_read_only,
+@@global.tx_read_only;
+➤ @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+REPEATABLE-READ  ¦  REPEATABLE-READ  ¦  0  ¦  0
+drop account issue29185_txn_acc;

@@ -286,6 +286,7 @@ type ShowGrants struct {
 	Username      string
 	Hostname      string
 	Roles         []*Role
+	CurrentUser   bool
 	ShowGrantType ShowGrantType
 }
 
@@ -306,7 +307,9 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 		}
 	} else {
 		ctx.WriteString("show grants")
-		if node.Username != "" {
+		if node.CurrentUser {
+			ctx.WriteString(" for current_user")
+		} else if node.Username != "" {
 			ctx.WriteString(" for ")
 			ctx.WriteString(node.Username)
 			if node.Hostname != "" {

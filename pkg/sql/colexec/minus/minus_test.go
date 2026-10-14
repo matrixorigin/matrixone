@@ -47,6 +47,8 @@ func TestMinus(t *testing.T) {
 	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
+	iterator := c.arg.ctr.iterator
+	require.NotNil(t, iterator)
 	cnt := 0
 	for {
 		end, err = vm.Exec(c.arg, c.proc)
@@ -61,8 +63,10 @@ func TestMinus(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row
+	require.Equal(t, iterator, c.arg.ctr.iterator)
 
 	c.arg.Reset(c.proc, false, nil)
+	require.Nil(t, c.arg.ctr.iterator)
 
 	setProcForTest(proc, c.arg)
 	err = c.arg.Prepare(c.proc)
@@ -88,6 +92,21 @@ func TestMinus(t *testing.T) {
 	c.arg.Free(c.proc, false, nil)
 	c.proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
+}
+
+func TestMinusMissingChildReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	arg := new(Minus)
+	arg.AppendChild(colexec.NewMockOperator())
+	require.NoError(t, arg.Prepare(proc))
+
+	_, err := vm.Exec(arg, proc)
+	require.ErrorContains(t, err, "missing child 1")
+
+	arg.GetChildren(0).Free(proc, false, err)
+	arg.Free(proc, false, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func newMinusTestCase(proc *process.Process) minusTestCase {

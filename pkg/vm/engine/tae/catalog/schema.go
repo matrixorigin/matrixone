@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -241,6 +242,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.ColumnChanged = true
 		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
+		if s.Extra.NextColSeqnum >= objectio.SEQNUM_UPPER {
+			return moerr.NewErrTooManyFields(context.Background())
+		}
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
 		logicalIdx := int(add.InsertPosition)
@@ -369,12 +373,20 @@ func (s *Schema) MustGetExtraBytes() []byte {
 }
 
 func (s *Schema) MustRestoreExtra(data []byte) {
-	s.Extra = &apipb.SchemaExtra{}
-	if err := s.Extra.Unmarshal(data); err != nil {
+	if err := s.restoreExtra(data); err != nil {
 		panic(err)
 	}
-	// Sync FromPublication from Extra after deserialization
-	s.FromPublication = s.Extra.FromPublication
+}
+
+func (s *Schema) restoreExtra(data []byte) error {
+	extra := &apipb.SchemaExtra{}
+	if err := extra.Unmarshal(data); err != nil {
+		return err
+	}
+	s.Extra = extra
+	// Sync FromPublication from Extra after deserialization.
+	s.FromPublication = extra.FromPublication
+	return nil
 }
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
@@ -439,7 +451,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	if err != nil {
 		return
 	}
-	s.MustRestoreExtra(extraData)
+	if err = s.restoreExtra(extraData); err != nil {
+		return
+	}
 	n += sn
 	colCnt := uint16(0)
 	if sn2, err = r.Read(types.EncodeUint16(&colCnt)); err != nil {
@@ -457,7 +471,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += int64(types.TSize)
-		def.Type = types.DecodeType(colBuf)
+		if def.Type, err = types.DecodeTypeChecked(colBuf); err != nil {
+			return
+		}
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
@@ -783,11 +799,12 @@ func (s *Schema) AppendSortColWithAttribute(attr engine.Attribute, sorIdx int, i
 
 func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	newcol := &ColDef{
-		Name:   col.GetOriginCaseName(),
-		Idx:    idx,
-		SeqNum: seqnum,
-		Type:   vector.ProtoTypeToType(col.Typ),
-		Hidden: col.Hidden,
+		Name:       col.GetOriginCaseName(),
+		Idx:        idx,
+		SeqNum:     seqnum,
+		Type:       vector.ProtoTypeToType(col.Typ),
+		EnumValues: col.Typ.Enumvalues,
+		Hidden:     col.Hidden,
 		// PhyAddr false
 		// Null  later
 		AutoIncrement: col.Typ.AutoIncr,
@@ -927,6 +944,17 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
+	// Preflight before appending rowid or mutating sequence maps. On initial
+	// schemas ordinals become IDs; replay preserves existing, possibly sparse IDs.
+	for idx, def := range s.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		if s.Extra.NextColSeqnum == 0 && idx >= objectio.SEQNUM_UPPER ||
+			s.Extra.NextColSeqnum != 0 && def.SeqNum >= objectio.SEQNUM_UPPER {
+			return moerr.NewErrTooManyFields(context.Background())
+		}
+	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{
 			Name:        PhyAddrColumnName,
@@ -946,9 +974,6 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// check duplicate column names
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
-		if idx == objectio.SEQNUM_COMMITTS {
-			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
-		}
 		// Check column sequence idx validility
 		if idx != def.Idx {
 			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))

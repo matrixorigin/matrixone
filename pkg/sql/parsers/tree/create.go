@@ -2178,7 +2178,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.AlgoParamVectorOpType != "" {
 		ctx.WriteString("OP_TYPE ")
-		ctx.WriteString(node.AlgoParamVectorOpType)
+		// OP_TYPE requires a STRING token regardless of the context's quoting
+		// options, including SQL reserialized for procedure execution.
+		value := node.AlgoParamVectorOpType
+		if !ctx.NoBackslashEscape() {
+			value = FormatString(value)
+		}
+		ctx.WriteByte('\'')
+		ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+		ctx.WriteByte('\'')
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
@@ -2859,11 +2867,19 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	Collate string
+	// NonCharsetSyntax distinguishes historical ALTER no-op placeholders
+	// (FORCE, KEYS, TABLESPACE, VALIDATION) from actual charset requests.
+	NonCharsetSyntax bool
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
+	if node.Collate != "" {
+		ctx.WriteString(" collate = ")
+		ctx.WriteString(node.Collate)
+	}
 }
 
 func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }

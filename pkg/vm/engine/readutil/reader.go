@@ -151,43 +151,22 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	if pkPos != -1 {
-		// For composite primary key, optimize BloomFilter filtering by using __mo_index_pri_col directly
-		// if all conditions are met (IVF entries table, has BF, last PK col is __mo_index_pri_col, query includes it).
-		if mixin.tableDef.Pkey != nil && len(mixin.tableDef.Pkey.Names) > 1 {
-			// Composite primary key: check optimization conditions.
-			lastPKColName := strings.ToLower(mixin.tableDef.Pkey.Names[len(mixin.tableDef.Pkey.Names)-1])
+		// Ordinary PK pruning always uses the physical primary key.
+		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
 
-			// Check all conditions for optimization (must all be satisfied):
-			// 1. Table type is IVF entries table.
-			isIVFEntriesTable := mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries
-			// 2. Has bloom filter.
-			hasBF := mixin.filterState.hasBF
-			// 3. Last PK column is __mo_index_pri_col.
-			isLastColPriCol := lastPKColName == strings.ToLower(catalog.IndexTablePrimaryColName)
-			// 4. Query includes __mo_index_pri_col.
-			lastPKColPos := -1
+		// IVF membership is built from the source origin PK. Bind it explicitly
+		// rather than relying on Pkey.Names, which physical copies may replace
+		// with the hidden composite key alone. Keep the common PK initialization
+		// below for workspace reads as well as persisted objects.
+		if mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && mixin.filterState.hasBF {
 			for i, col := range cols {
-				if strings.ToLower(col) == lastPKColName {
-					lastPKColPos = i
+				if i != pkPos && strings.EqualFold(col, catalog.IndexTablePrimaryColName) {
+					mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[i])
+					mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[i]}
 					break
 				}
 			}
-
-			if isIVFEntriesTable && hasBF && isLastColPriCol && lastPKColPos != -1 {
-				// All conditions met: use both PK column and __mo_index_pri_col for filtering.
-				// cacheVectors[0] will be used for PK filtering.
-				// cacheVectors[1] will be used for BF filtering (directly, no unpacking needed).
-				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos], mixin.columns.seqnums[lastPKColPos]}
-				mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[lastPKColPos]}
-			} else {
-				// Conditions not met: use composite PK column only.
-				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-				mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
-			}
-		} else {
-			// Single primary key or non-composite: use the primary key column directly.
-			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-			mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
 		}
 	}
 
@@ -687,11 +666,38 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			}
 		}
 
-		if param.OrigFuncName == metric.DistFn_L2Distance {
+		if param.OrigFuncName == metric.DistFn_L2sqDistance {
+			// l2_distance_sq exposes the squared distance itself, float32-rounded
+			// (DistanceTransformIvfflat), while this gate compares the raw float64 square. Widen
+			// the bound to the adjacent float32 so the gate stays a superset of the predicate --
+			// without squaring, since an l2sq bound is already in the squared domain. The exact
+			// source-domain post-filter removes the extra candidates.
 			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
-				if indexTop.LowerBound < 0 {
-					// L2 distance is non-negative, so a negative lower bound
-					// cannot exclude any row.
+				if indexTop.LowerBound <= 0 {
+					// see the L2 case: a squared distance is non-negative, so a bound of 0 or below
+					// excludes nothing here and the post-filter enforces an exclusive `> 0`.
+					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
+					indexTop.LowerBound = 0
+				} else {
+					indexTop.LowerBound = f32BoundOutward(indexTop.LowerBound, math.Inf(-1))
+				}
+			}
+			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
+				indexTop.UpperBound = f32BoundOutward(indexTop.UpperBound, math.Inf(1))
+			}
+		} else if param.OrigFuncName == metric.DistFn_L2Distance {
+			// Vector distances are a float32 domain for every base type (usearch/cuvs return float32,
+			// and the scalar l2_distance matches), so the L2 bound must be widened to the next float32
+			// before squaring -- otherwise the squared f64 gate is off by ~1e-6 from the float32
+			// distance a row is actually gated on and drops a boundary row (#29040).
+			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+				if indexTop.LowerBound <= 0 {
+					// L2 distance is non-negative, so a lower bound of 0 or below cannot exclude any
+					// candidate in the squared superset gate (every squared distance is >= 0). It must
+					// be treated as unbounded: widening a 0 bound outward and squaring it turns it
+					// POSITIVE (~1.96e-90), which would then reject an exact-zero distance even though
+					// `l2_distance(...) >= 0` must include it (#29040). The exact source-domain
+					// post-filter still enforces a `> 0` exclusive lower bound.
 					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
 					indexTop.LowerBound = 0
 				} else {
@@ -720,9 +726,24 @@ func (r *reader) SetExplainVectorTopStats(stats *objectio.IndexReaderTopStats) {
 
 // squareL2BoundOutward keeps the squared-distance storage gate a superset of
 // the original L2 predicate. The source-domain filter removes any boundary
-// false positives introduced by this one-ULP widening.
+// false positives introduced by this widening.
+//
+// Vector distances are a float32 domain for every base type (usearch/cuvs return
+// float32, and MO's scalar l2_distance matches), so the block distance a row is
+// gated on is float32(sqrt(sq)). The L2 bound is therefore first widened to the
+// adjacent float32 before squaring; comparing it against a squared bound nudged
+// only one float64 ULP would leave a ~1e-6 gap that drops a boundary row. The
+// exact source-domain post-filter still removes the extra candidates (#29040).
 func squareL2BoundOutward(bound, direction float64) float64 {
-	return math.Nextafter(bound*bound, direction)
+	b := f32BoundOutward(bound, direction)
+	return math.Nextafter(b*b, direction)
+}
+
+// f32BoundOutward returns the adjacent float32 outward from bound. A row is gated on a distance
+// this repo exposes in the float32 domain, so a bound compared against a raw float64 must first
+// step past that rounding.
+func f32BoundOutward(bound, direction float64) float64 {
+	return float64(math.Nextafter32(float32(bound), float32(direction)))
 }
 
 func validBoundType(boundType plan.BoundType) bool {
@@ -990,10 +1011,10 @@ func (r *reader) read(
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
 
-	var policy fileservice.Policy
+	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
-		policy = fileservice.SkipMemoryCacheWrites
+		policy |= fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
 

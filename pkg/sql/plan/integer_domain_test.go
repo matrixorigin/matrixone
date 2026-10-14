@@ -41,7 +41,7 @@ func TestBoundUnsignedDomainSurvivesParentAndPlanTransport(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 
 	for _, enabled := range []bool{false, true} {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		if enabled {
 			ctx.SetSqlModeOverride("NO_UNSIGNED_SUBTRACTION")
 		} else {

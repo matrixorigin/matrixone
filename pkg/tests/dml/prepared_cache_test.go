@@ -31,17 +31,6 @@ import (
 
 func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 	var fixtureInvalidationErr error
-	defer func() {
-		if fixtureInvalidationErr == nil {
-			return
-		}
-		if err := embed.CloseBaseClusterTests(); err != nil {
-			t.Errorf("failed to discard shared two-CN fixture after an unverified work-state transition (%v): %v", fixtureInvalidationErr, err)
-			return
-		}
-		t.Logf("discarded shared two-CN fixture after an unverified work-state transition: %v", fixtureInvalidationErr)
-	}()
-
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -86,7 +75,7 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 					// The existing test hook selects AP with two committed rows.
 					// Never force fixture DDL, transaction writes, or cleanup to AP.
 					plan.SetForceScanOnMultiCN(true)
-					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src")
+					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src") //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 					plan.SetForceScanOnMultiCN(false)
 					require.NoError(t, err)
 					defer stmt.Close()

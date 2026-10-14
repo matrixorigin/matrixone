@@ -66,7 +66,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
-		ctx, stmt, isPrepareStmt,
+		ctx, stmt, builder.isReusablePlan(),
 	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
@@ -80,6 +80,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
 	builder.skipStats = skipStats
@@ -575,11 +578,57 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
 func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+}
+
+func validateExplainOptions(ctx context.Context, options []tree.OptionElem, mode string) error {
+	seen := make(map[string]struct{}, len(options))
+	formatJSON := false
+	analyze := false
+	phyplan := false
+	check := false
+	for _, option := range options {
+		name := strings.ToLower(strings.TrimSpace(option.Name))
+		if _, exists := seen[name]; exists {
+			return moerr.NewInvalidInputf(ctx, "duplicate explain option '%s'", option.Name)
+		}
+		seen[name] = struct{}{}
+
+		value := strings.Trim(strings.TrimSpace(option.Value), "'\"")
+		switch name {
+		case tree.FormatOption:
+			formatJSON = strings.EqualFold(value, "JSON")
+		case tree.AnalyzeOption:
+			analyze = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.PhyPlanOption:
+			phyplan = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.CheckOption:
+			check = true
+		}
+	}
+	if !formatJSON {
+		return nil
+	}
+	if mode == "ANALYZE" || analyze {
+		return moerr.NewNotSupported(ctx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+	}
+	if mode == "PHYPLAN" || phyplan {
+		return moerr.NewNotSupported(ctx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+	}
+	if check {
+		return moerr.NewNotSupported(ctx, "EXPLAIN FORMAT=JSON does not support CHECK")
+	}
+	return nil
 }
 
 func selectHasExportParam(stmt tree.SelectStatement) bool {
@@ -623,7 +672,15 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+	defer func() {
+		if err == nil {
+			err = plan.RequireLegacyCollations(result)
+			if err != nil {
+				result = nil
+			}
+		}
+	}()
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
@@ -649,6 +706,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		applySQLSelectLimit(stmt.Select, queryPlan)
 		return queryPlan, nil
 	case *tree.ExplainStmt:
+		if err := validateExplainOptions(ctx.GetContext(), stmt.Options, ""); err != nil {
+			return nil, err
+		}
 		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 		if err != nil {
 			return nil, err
@@ -1004,8 +1064,8 @@ func findResultColumnSourceAtNode(
 		return nil
 	}
 
-	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		// VECTOR_INDEX_SCAN's TableDef describes the synthetic result schema
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		// INDEX_SEARCH_SCAN's TableDef describes the synthetic result schema
 		// (pkid, score, and optional included columns), not the source table.
 		// Resolve its output slots through the typed vector-index specification
 		// so a pkid or included column carries the same metadata as a regular
@@ -1020,7 +1080,7 @@ func findResultColumnSourceAtNode(
 				vectorRef = sourceExpr.GetCol()
 			}
 		}
-		return resultColumnSourceFromVectorIndexScan(node.VectorIndexScan, node.TableDef, vectorRef.ColPos)
+		return resultColumnSourceFromIndexSearchScan(node.IndexSearchScan, node.TableDef, vectorRef.ColPos)
 	}
 
 	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
@@ -1037,8 +1097,21 @@ func findResultColumnSourceAtNode(
 		}
 	}
 
+	if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+		// The provider is control input. Result provenance belongs to the
+		// preserved relational branch, not its one-column vector schema.
+		if len(node.Children) != 3 {
+			return nil
+		}
+		childRef := resultColumnJoinChildProjectionRef(query, node, 2, ref.ColPos)
+		if childRef == nil {
+			return nil
+		}
+		return findResultColumnSourceAtNode(query, node.Children[2], childRef, visited, false)
+	}
+
 	if node.NodeType == plan.Node_JOIN {
-		return findResultColumnSourceAtJoin(query, node, ref, visited)
+		return findResultColumnSourceAtJoin(query, node, ref, visited, preferLocal)
 	}
 
 	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
@@ -1057,9 +1130,14 @@ func findResultColumnSourceAtNode(
 	var found *resultColumnSource
 	for _, childID := range node.Children {
 		childPreferLocal := false
-		if node.NodeType == plan.Node_PROJECT && childID >= 0 && int(childID) < len(query.Nodes) {
+		if childID >= 0 && int(childID) < len(query.Nodes) {
 			child := query.Nodes[childID]
-			childPreferLocal = child != nil && isResultColumnTransparentNode(child.NodeType) && child.NodeType != plan.Node_PROJECT
+			// 透明节点的列引用指向 JOIN 输出槽位，不是 JOIN 两侧的
+			// 源列位置；左右两侧重排后这两种编号可能碰撞。
+			if child != nil {
+				childPreferLocal = isResultColumnTransparentNode(child.NodeType) ||
+					(child.NodeType == plan.Node_JOIN && len(child.BindingTags) == 0)
+			}
 		}
 		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited), childPreferLocal)
 		if candidate == nil {
@@ -1080,6 +1158,7 @@ func findResultColumnSourceAtJoin(
 	node *plan.Node,
 	ref *plan.ColRef,
 	visited map[int32]bool,
+	preferLocal bool,
 ) *resultColumnSource {
 	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
 		return nil
@@ -1087,7 +1166,11 @@ func findResultColumnSourceAtJoin(
 
 	projectedRef := ref
 	childIdx := -1
-	if projected := resultColumnProjectionByIdentity(node, ref); projected != nil {
+	projected := resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		projected = node.ProjectList[ref.ColPos]
+	}
+	if projected != nil {
 		if col := projected.GetCol(); col != nil {
 			projectedRef = col
 			// JOIN ProjectList entries use RelPos 0/1 to identify the
@@ -1222,18 +1305,12 @@ func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef, preferLocal
 	if node == nil || ref == nil {
 		return nil
 	}
-	if preferLocal &&
-		node.NodeType != plan.Node_PROJECT &&
-		isResultColumnTransparentNode(node.NodeType) &&
+	if preferLocal && ref.RelPos == 0 && isResultColumnTransparentNode(node.NodeType) &&
 		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		// Transparent nodes expose a local output list to their parent. The
-		// expressions in that list retain child source positions, which can
-		// collide with another local output position after pruning. Resolve the
-		// local slot first for these nodes; PROJECT nodes are handled below by
-		// source identity because their expressions define the result order.
-		if expr := node.ProjectList[ref.ColPos]; expr != nil && expr.GetCol() != nil {
-			return expr
-		}
+		// 从父节点传入的是这个节点的输出槽位；节点自己的投影表达式
+		// 才使用子节点位置。包括中间 PROJECT，且计算列不能再按位置
+		// 回退匹配到碰巧同号的真实表列。
+		return node.ProjectList[ref.ColPos]
 	}
 	return resultColumnProjectionByIdentity(node, ref)
 }

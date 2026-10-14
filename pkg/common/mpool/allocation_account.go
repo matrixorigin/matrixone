@@ -734,6 +734,71 @@ type AllocationAccountRegistry struct {
 	maxAllocations  uint64
 	liveAllocations atomic.Uint64
 	peakAllocations atomic.Uint64
+	// committedCapacity observes backing which has been allocated/pinned, not
+	// merely promised by admission. The controller remains the sole cap owner.
+	// Allocator capacity is not a resident-RSS measurement: lazy mappings and
+	// unused capacity tails can remain absent from an OS working-set sample.
+	committedCapacity atomic.Uint64
+	retiredCapacity   atomic.Uint64
+}
+
+func (r *AllocationAccountRegistry) addCommittedCapacity(size uint64) {
+	for {
+		current := r.committedCapacity.Load()
+		if size > math.MaxUint64-current {
+			panic("committed allocation capacity overflow")
+		}
+		if r.committedCapacity.CompareAndSwap(current, current+size) {
+			return
+		}
+	}
+}
+
+func (r *AllocationAccountRegistry) releaseCommittedCapacity(size uint64) {
+	for {
+		current := r.committedCapacity.Load()
+		if size > current {
+			panic("committed allocation capacity release underflow")
+		}
+		if r.committedCapacity.CompareAndSwap(current, current-size) {
+			r.retiredCapacity.Add(size)
+			return
+		}
+	}
+}
+
+// CommittedCapacity excludes acquisitions still waiting for their backing.
+func (r *AllocationAccountRegistry) CommittedCapacity() uint64 {
+	return r.committedCapacity.Load()
+}
+
+// AllocationBackingSnapshot credits only allocator backing committed before an OS
+// sample and still retained afterwards. New commits cannot replace retired
+// backing in this credit: their allocations may be absent from the OS sample.
+type AllocationBackingSnapshot struct {
+	registry  *AllocationAccountRegistry
+	committed uint64
+	retired   uint64
+}
+
+func (r *AllocationAccountRegistry) SnapshotBacking() AllocationBackingSnapshot {
+	// Read retirements first. A racing free may be deducted twice, which is
+	// conservative; the opposite order could omit that free from both reads.
+	retired := r.retiredCapacity.Load()
+	return AllocationBackingSnapshot{r, r.committedCapacity.Load(), retired}
+}
+
+func (s AllocationBackingSnapshot) RetainedCapacity() uint64 {
+	if s.registry == nil {
+		return 0
+	}
+	// Unsigned subtraction also handles a lifetime counter wrap; fewer than
+	// 2^64 bytes can be retired during the short physical-sample lifetime.
+	retired := s.registry.retiredCapacity.Load() - s.retired
+	if retired >= s.committed {
+		return 0
+	}
+	return s.committed - retired
 }
 
 func NewAllocationAccountRegistry(
@@ -871,13 +936,10 @@ func (r *AllocationAccountRegistry) publishTerminalSnapshot(
 	terminalCause = errors.Join(terminalCause, ownerErr)
 	if !current.Sealed {
 		return AllocationAccountTerminalSnapshot{
-				AllocationAccountSnapshot: current,
-				State:                     AllocationAccountTerminalInvariantFailure,
-				Owners:                    owners,
-			}, false, wrapAllocationAccountError(
-				ErrAllocationAccountInvariant,
-				"terminal account is not quiescent",
-			)
+			AllocationAccountSnapshot: current,
+			State:                     AllocationAccountTerminalInvariantFailure,
+			Owners:                    owners,
+		}, false, wrapAllocationAccountError(ErrAllocationAccountInvariant, "terminal account is not quiescent")
 	}
 	if liveCapacityControllers != 0 {
 		terminalCause = errors.Join(
@@ -1214,6 +1276,10 @@ func (l allocationLease) release(capacity uint64) {
 	if l.account == nil || l.account.registry == nil {
 		panic("invalid allocation account lease")
 	}
+	// Retire backing observation before its policy charge. A concurrent sample
+	// may count the released bytes conservatively, but must not count them as
+	// backing for another still-pending admission.
+	l.account.registry.releaseCommittedCapacity(capacity)
 	// Return finite metadata first. account.release retains the local charge
 	// until controller cleanup completes, so exact zero is a complete-release
 	// boundary.

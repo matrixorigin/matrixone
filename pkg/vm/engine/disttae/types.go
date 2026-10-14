@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,7 +47,6 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -295,6 +296,13 @@ type Engine struct {
 
 	gcPool *ants.Pool
 
+	gcMu              sync.Mutex
+	gcSchedulerCancel context.CancelFunc
+	gcSchedulerDone   chan struct{}
+
+	closeOnce sync.Once
+	closeErr  error
+
 	// XXX related to cn push model
 	pClient PushClient
 
@@ -336,9 +344,22 @@ func (e *Engine) SetService(svr string) {
 	e.service = svr
 }
 
-func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
-	e.gcPool.Release()
+func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) error {
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	if e.gcPool != nil {
+		if err := e.gcPool.ReleaseContext(context.Background()); err != nil {
+			return err
+		}
+	}
 	e.gcPool = pool
+	return nil
 }
 
 // GetCCPRTxnCache returns the CCPR transaction cache
@@ -350,8 +371,15 @@ func (txn *Transaction) String() string {
 	return fmt.Sprintf("writes %v", txn.writes)
 }
 
+type statementTransferState struct {
+	lastTransferred types.TS
+	pendingTransfer bool
+}
+
 // Transaction represents a transaction
 type Transaction struct {
+	catalogVisibilityRevision atomic.Uint64
+	catalogMutations          atomic.Int64
 	sync.Mutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
@@ -424,11 +452,10 @@ type Transaction struct {
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
-	//for RC isolation, the txn's snapshot TS for each statement.
 
 	transfer struct {
 		lastTransferred types.TS
-		timestamps      []timestamp.Timestamp
+		statements      []statementTransferState
 		pendingTransfer bool
 	}
 
@@ -442,8 +469,6 @@ type Transaction struct {
 	startStatementCalled bool
 	incrStatementCalled  bool
 	pkCount              int
-
-	adjustCount int
 
 	haveDDL             atomic.Bool
 	isCloneTxn          bool
@@ -642,6 +667,8 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 type Summary struct {
 	objBat             *batch.Batch
 	accountId          uint32
+	databaseId         uint64
+	tableId            uint64
 	tbName             string
 	dbName             string
 	autoIncrEpoch      uint32
@@ -790,7 +817,7 @@ func (txn *Transaction) PPString() string {
 		return buf.String()
 	}
 
-	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, timestamps: %v}",
+	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, transferStatements: %v}",
 		writesString,
 		stringifyMap(txn.batchSelectList, func(k, v any) string {
 			return fmt.Sprintf("%p:%v", k, len(v.([]int64)))
@@ -805,7 +832,7 @@ func (txn *Transaction) PPString() string {
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
-		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
+		stringifySlice(txn.transfer.statements, func(a any) string { return fmt.Sprintf("%+v", a) }))
 }
 
 func (txn *Transaction) StartStatement() {
@@ -814,6 +841,9 @@ func (txn *Transaction) StartStatement() {
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
+	if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+		callbacks.BeginStatementCallbacks()
+	}
 }
 
 func (txn *Transaction) EndStatement() {
@@ -826,6 +856,8 @@ func (txn *Transaction) EndStatement() {
 }
 
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 	if !commit {
@@ -853,14 +885,16 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.statementID++
 
 	if txn.op.Txn().IsRCIsolation() {
-		// each statement's start snapshot
-		// will be used by transfer than between statements
-		txn.transfer.timestamps = append(txn.transfer.timestamps, txn.op.SnapshotTS())
-
 		if txn.transfer.lastTransferred.IsEmpty() {
 			txn.start = time.Now()
-			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[0])
+			txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
 		}
+		// Save the transfer state paired with this statement's write offset,
+		// before advancing the snapshot or appending replacement tombstones.
+		txn.transfer.statements = append(txn.transfer.statements, statementTransferState{
+			lastTransferred: txn.transfer.lastTransferred,
+			pendingTransfer: txn.transfer.pendingTransfer,
+		})
 
 		updated, err := txn.handleRCSnapshot(ctx, commit)
 		if err != nil {
@@ -874,6 +908,8 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 }
 
 func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 
@@ -905,25 +941,6 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceAdjustEvent,
-		seq,
-		0,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceAdjustEvent,
-			seq,
-			0,
-			time.Since(start),
-			nil)
-	}()
-
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
@@ -936,28 +953,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	// 	return err
 	// }
 
-	txn.traceWorkspaceLocked(false)
 	return nil
-}
-
-func (txn *Transaction) traceWorkspaceLocked(commit bool) {
-	index := txn.adjustCount
-	if commit {
-		index = -1
-	}
-	idx := 0
-	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
-		txn.op,
-		index,
-		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
-			if idx == len(txn.writes) {
-				return 0, "", nil, false
-			}
-			e := txn.writes[idx]
-			idx++
-			return e.tableId, typesNames[e.typ], e.bat, true
-		})
-	txn.adjustCount++
 }
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
@@ -971,7 +967,7 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 		if writeOffset > uint64(len(txn.writes)) {
 			writeOffset = uint64(len(txn.writes))
 		}
-		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
+		compare := func(a, b Entry) int {
 			// expected in descending order
 
 			aIsCatalog := a.isCatalog()
@@ -995,7 +991,12 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 			}
 
 			return b.typ - a.typ
-		})
+		}
+		if !slices.IsSortedFunc(txn.writes[writeOffset:], compare) {
+			txn.beginCatalogMutation()
+			defer txn.endCatalogMutation()
+			slices.SortStableFunc(txn.writes[writeOffset:], compare)
+		}
 	}
 
 	return nil
@@ -1033,6 +1034,23 @@ const (
 )
 
 func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	// A cleanup request admitted before close retains ownership of all its batches.
+	e := txn.engine
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	if e.gcPool == nil {
+		return moerr.NewInvalidStateNoCtx("engine GC pool is unavailable")
+	}
+
 	if txn.isCloneTxn {
 		names = readutil.RemoveIf(names, func(name string) bool {
 			txnID := txn.op.Txn().ID
@@ -1048,63 +1066,23 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 		return nil
 	}
 
-	//getCaller := func(depth int) (str []string) {
-	//	pc := make([]uintptr, depth)
-	//	n := runtime.Callers(2, pc)
-	//	frames := runtime.CallersFrames(pc[:n])
-	//
-	//	i := 0
-	//	for {
-	//		frame, more := frames.Next()
-	//		funcName := filepath.Base(frame.Function)
-	//		str = append(str, funcName)
-	//		i++
-	//		if !more || i >= depth {
-	//			break
-	//		}
-	//	}
-	//	return
-	//}
-
-	logutil.Info("GC-WORKSPACE-FILES",
-		zap.Strings("names", names),
-		zap.String("txn-info", txn.op.Txn().DebugString()),
-		//zap.String("stack", strings.Join(getCaller(5), "<-")),
-	)
-
-	//gc the objects asynchronously.
-	//TODO:: to handle the failure when CN is down.
-	step := GCBatchOfFileCount
-	if len(names) > 0 && len(names) < step {
-		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
-			}
-		}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	for i := 0; i < len(names); i += step {
-		if i+step > len(names) {
-			step = len(names) - i
-		}
-		start := i
-		end := i + step
-		if err := txn.engine.gcPool.Submit(func() {
-			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
+	logutil.Info("GC-WORKSPACE-FILES", zap.Strings("names", names),
+		zap.String("txn-info", txn.op.Txn().DebugString()))
+	fs := e.fs
+	for start := 0; start < len(names); start += GCBatchOfFileCount {
+		end := min(start+GCBatchOfFileCount, len(names))
+		batch := append([]string(nil), names[start:end]...)
+		if err := e.gcPool.Submit(func() {
+			// Rollback cleanup must survive query cancellation. The existing helper
+			// bounds each storage attempt; engine close waits for the actual return.
+			if _, err := ioutil.DeleteUnpublishedObjects(context.Background(), fs, batch...); err != nil {
+				logutil.Warnf("failed to delete objects:%v, err:%v", batch, err)
 			}
 		}); err != nil {
 			return err
 		}
 	}
-
 	return nil
-
 }
 
 func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
@@ -1176,9 +1154,18 @@ func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (er
 	return gcFiles(txn, scope, objsName...)
 }
 
-func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	// This defer runs after the workspace mutex is released. Cache retirement
+	// can wait for allocator work that needs the workspace.
+	defer func() {
+		if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+			err = errors.Join(err, callbacks.RollbackStatementCallbacks(ctx))
+		}
+	}()
 	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
@@ -1225,14 +1212,13 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 		// transfer stuff
 		if txn.op.Txn().IsRCIsolation() {
-			txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
-
-			if txn.statementID == 0 {
-				txn.transfer.pendingTransfer = false
-				txn.transfer.lastTransferred = types.TS{}
-			} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
-				txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
-			}
+			entry := txn.transfer.statements[txn.statementID]
+			txn.transfer.statements = txn.transfer.statements[:txn.statementID]
+			txn.transfer.lastTransferred = entry.lastTransferred
+			// SnapshotTS does not rewind. Removed replacements must be recovered
+			// even when a young transaction would otherwise skip commit transfer.
+			snapshot := types.TimestampToTS(txn.op.SnapshotTS())
+			txn.transfer.pendingTransfer = entry.pendingTransfer || entry.lastTransferred.LT(&snapshot)
 		}
 	}
 	txn.assertWorkspaceAccountingLocked()
@@ -1285,9 +1271,6 @@ func (txn *Transaction) advanceSnapshot(
 // including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
 	if !commit {
-		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
-			txn.op, 0, "before execute")
-
 		return true, txn.advanceSnapshot(ctx, timestamp.Timestamp{})
 	}
 
@@ -1464,7 +1447,6 @@ type txnTable struct {
 	fake bool
 }
 
-// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM

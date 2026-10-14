@@ -90,7 +90,9 @@ type cluster struct {
 		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
+		testTCPOnly                 bool
 		allowConcurrentTestClusters bool
+		testAdmissionContext        context.Context
 		heartbeatTimeout            time.Duration
 		storeTimeout                time.Duration
 	}
@@ -174,12 +176,21 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
+		// The scheduler selects process admission at the lifecycle owner, covering
+		// both StartTestCluster and direct NewCluster(WithTesting()) callers.
 		mode := clusteradmission.Exclusive
+		if concurrentTestClusterProcessesEnabled() {
+			mode |= clusteradmission.AllowConcurrentProcesses
+		}
 		if c.options.allowConcurrentTestClusters {
-			mode = clusteradmission.AllowConcurrent
+			mode |= clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()
-		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
+		admissionCtx := c.options.testAdmissionContext
+		if admissionCtx == nil {
+			admissionCtx = context.Background()
+		}
+		admission, acquireErr := clusteradmission.Acquire(admissionCtx, mode)
 		if acquireErr != nil {
 			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr
@@ -526,9 +537,12 @@ func (c *cluster) createServiceOperators(from int) error {
 			})
 		}
 		if c.options.testing {
+			adjustTestingClusterTiming(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
-			if s.serviceType == metadata.ServiceType_CN {
-				s.Adjust(applyTestingTxnTraceBuffer)
+			if c.options.testTCPOnly && s.serviceType == metadata.ServiceType_CN {
+				s.Adjust(func(cfg *ServiceConfig) {
+					cfg.CN.Frontend.UnixSocketAddress = ""
+				})
 			}
 		}
 
@@ -538,15 +552,6 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
-}
-
-// Keep tracing functional in embedded tests without reserving four million
-// events per CN before tracing is enabled. Scenario callbacks run afterwards
-// and can override this test-only default.
-func applyTestingTxnTraceBuffer(cfg *ServiceConfig) {
-	if cfg.CN.Txn.Trace.BufferSize == 0 {
-		cfg.CN.Txn.Trace.BufferSize = 1024
-	}
 }
 
 func applyTestingHAKeeperBackendReadTimeout(cfg *ServiceConfig) {

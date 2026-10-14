@@ -35,9 +35,9 @@ var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.8",
 		MinUpgradeVersion:       "4.0.7",
-		UpgradeCluster:          versions.No,
+		UpgradeCluster:          versions.Yes,
 		UpgradeTenant:           versions.Yes,
-		VersionOffset:           uint32(len(tenantUpgEntries)),
+		VersionOffset:           uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
 		RequiredProtocolVersion: defines.MORPCVersion41,
 	},
 }
@@ -77,6 +77,11 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 }
 
 func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
+	for _, entry := range clusterUpgEntries {
+		if err := entry.Upgrade(txn, catalog.System_Account); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

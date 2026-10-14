@@ -293,7 +293,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 }
 
 func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
-	saddr := make([]string, 0)
+	saddr := make([]string, 0, len(c.HAKeeperClientConfig.ServiceAddresses))
 	saddr = append(saddr, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
 		DiscoveryAddress:   c.HAKeeperClientConfig.DiscoveryAddress,

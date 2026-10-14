@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -713,6 +714,11 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 	}
 	defer rt.mc.endOperation()
+	if !req.LastInsertIDExported {
+		// Do not consume the one-shot migration slot for a request whose source
+		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 
 	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
@@ -743,7 +749,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp *query.MigrateConnFromResponse,
 ) error {
 	return rt.migrateConnectionFromActionWithCapabilities(
-		ctx, action, true, resp,
+		ctx, action, true, true, resp,
 	)
 }
 
@@ -751,6 +757,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	ctx context.Context,
 	action query.MigrateConnFromAction,
 	tempTableMigrationSupported bool,
+	lastInsertIDMigrationSupported bool,
 	resp *query.MigrateConnFromResponse,
 ) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
@@ -779,6 +786,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		ses.userLevelLocksMigrated = false
 		return nil
 	}
+	if !lastInsertIDMigrationSupported {
+		// A legacy Proxy cannot forward the value or prove that a zero is
+		// authoritative. Keep the source session on this CN instead of allowing
+		// a successful handoff to silently reset LAST_INSERT_ID().
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
@@ -788,6 +801,14 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	// to nothing on the target. Fail closed like pending long-data below;
 	// the client can disconnect its handles and retry.
 	if ses.hasForeignConns() {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	// Invalidated prepared handles cannot be exported. Take the decision and
+	// snapshot under one session lock so the target cannot reset its statement-
+	// ID high-water mark from a concurrently changing prepared-handle set: a
+	// later PREPARE must not reuse an invalidated ID after migration.
+	prepareStmts, hasInvalidated := ses.getPrepareStmtsForMigration()
+	if hasInvalidated {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	tempTables, err := ses.snapshotTempTablesForMigration(operationCtx)
@@ -813,8 +834,20 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
-	prepareStmts := ses.GetPrepareStmts()
+	resp.LastInsertID = ses.GetLastInsertID()
+	resp.LastInsertIDExported = true
 	for _, st := range prepareStmts {
+		// Migration replays SQL against the current assignment; it does not
+		// transfer this statement's original static type and row-domain binding.
+		// Keep the connection here until the statement is deallocated.
+		if plan.HasBoundStringVariable(st.PreparePlan) {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		// A server cursor retains its result and fetch offset only on this CN.
+		// Even an empty cursor remains fetchable until the client closes it.
+		if st.cursor != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
 		// buffers are not part of the migration payload. Reject the snapshot at
 		// the authoritative session owner instead of relying on the proxy to
@@ -823,6 +856,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
 	}
+	resp.PreparedStmtCursorsChecked = true
 	resp.PreparedStmtLongDataChecked = true
 	resp.FoundRows = ses.GetLastFoundRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
@@ -868,6 +902,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.SystemVariablesExported = systemVarsExported
 	}
 	for _, st := range prepareStmts {
+		// A rewrite-policy-invalidated handle cannot be replayed on the target
+		// session: its retained SQL/AST may contain the old row predicate. The
+		// client must explicitly prepare it again under the target policy.
+		if st == nil || st.rewritePolicyInvalidated.Load() {
+			continue
+		}
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,

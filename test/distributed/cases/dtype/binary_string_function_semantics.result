@@ -202,6 +202,24 @@ execute remote_domain_stmt using @selected_text, @selected_text;
 ➤ sum(char_length(?))[3,38,0]  ¦  sum(? like ____)[-5,64,0]  𝄀
 160000  ¦  0
 deallocate prepare remote_domain_stmt;
+prepare remote_bound_stmt from
+'select min(charset(@selected_text)), sum(char_length(@selected_text)),
+min(hex(left(@selected_text, 1))) from remote_prepare_source';
+execute remote_bound_stmt;
+➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
+binary  ¦  160000  ¦  E4BDA0
+set @selected_text = X'e4bda061';
+execute remote_bound_stmt;
+➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
+binary  ¦  160000  ¦  E4BDA0
+select charset(@selected_text), char_length(@selected_text), hex(left(@selected_text, 1));
+➤ charset(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[-1,16383,0]  𝄀
+binary  ¦  4  ¦  E4
+alter table remote_prepare_source add column binding_generation int;
+execute remote_bound_stmt;
+➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
+binary  ¦  320000  ¦  E4
+deallocate prepare remote_bound_stmt;
 select concat(repeat(_binary 'a', 8998), _binary 'bxc')
 like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
 as late_binary_like;

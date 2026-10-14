@@ -204,7 +204,7 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
 
@@ -251,6 +251,46 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 			require.Equal(t, testCase.wantCharset, typ.Charset)
 		})
 	}
+}
+
+func TestGetTypeFromAstBuildsMediumIntAliases(t *testing.T) {
+	testCases := []struct {
+		definition string
+		wantOID    types.T
+		wantWidth  int32
+	}{
+		{definition: "mediumint", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "mediumint unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "int3", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "int3 unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "mediumint zerofill", wantOID: types.T_uint32, wantWidth: 24},
+		// Integer display width is not physical width and must not make INT(24)
+		// acquire MEDIUMINT semantics.
+		{definition: "int(24)", wantOID: types.T_int32, wantWidth: 32},
+		{definition: "int(24) unsigned", wantOID: types.T_uint32, wantWidth: 32},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantWidth, typ.Width)
+		})
+	}
+}
+
+func TestBuildCastToMediumIntIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT CAST(1 AS MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
 }
 
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
@@ -537,7 +577,7 @@ func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot have default value")
 }
@@ -556,7 +596,7 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, def)
 }
@@ -615,7 +655,7 @@ func TestBuildDefaultExprJSONExpressionDefaults(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -665,7 +705,7 @@ func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.wantErr)
@@ -691,7 +731,7 @@ func TestBuildDefaultExprAllowsParenthesizedUuidForStringDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, def)
 	require.NotNil(t, def.Expr)
@@ -712,7 +752,7 @@ func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(proc.Ctx, colDef, typ, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid default value for column 'a'")
 }
@@ -732,7 +772,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeDefault{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err := buildDefaultExpr(defaultCol, typ, proc)
+		_, err := buildDefaultExpr(proc.Ctx, defaultCol, typ, proc)
 		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 
@@ -743,7 +783,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err = buildOnUpdate(onUpdateCol, typ, proc)
+		_, err = buildOnUpdate(proc.Ctx, onUpdateCol, typ, proc)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
@@ -760,7 +800,7 @@ func TestBuildDefaultExprRejectsOversizedTinyText(t *testing.T) {
 		},
 	)
 
-	_, err := buildDefaultExpr(defaultCol, plan.Type{
+	_, err := buildDefaultExpr(proc.Ctx, defaultCol, plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, proc)
 	require.Error(t, err)
@@ -778,13 +818,13 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 			&tree.AttributeDefault{Expr: tree.NewNumVal("abc", "abc", false, tree.P_char)},
 		},
 	)
-	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
+	defaultValue, err := buildDefaultExpr(proc.Ctx, defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -792,9 +832,13 @@ func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	_, err := buildSingleStmt(mock, t, ddl)
-	require.ErrorContains(t, err, "protocol version 74")
+	require.ErrorContains(t, err, "protocol version 85")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	_, err = buildSingleStmt(mock, t, ddl)
+	require.ErrorContains(t, err, "protocol version 85")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 	built, err := buildSingleStmt(mock, t, ddl)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
@@ -806,14 +850,14 @@ func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 
 	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
 		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-	def, err := buildDefaultExpr(col, plan.Type{Id: int32(types.T_varchar), Width: 16}, proc)
+	def, err := buildDefaultExpr(proc.Ctx, col, plan.Type{Id: int32(types.T_varchar), Width: 16}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "1000000", def.Expr.GetLit().GetSval())
 
@@ -875,6 +919,9 @@ func TestMigrateLegacyHexFoldedDefaultWhitelist(t *testing.T) {
 			for range 2 {
 				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
 				require.Equal(t, tc.want, execution.Cols[0].Default.Expr.GetLit().GetSval())
+				features, err := plan.RequiredRemoteExpressionFeatures(execution)
+				require.NoError(t, err)
+				require.False(t, features.IntegerParameterCoercion, "v74 catalog repair must not publish a v85 private cast")
 			}
 			after, err := loaded.Marshal()
 			require.NoError(t, err)
@@ -1108,7 +1155,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.NotNil(t, genCol)
 
 	existingCols := []*ColDef{{Name: "t", Typ: plan.Type{Id: int32(types.T_text)}}}
-	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
+	gen, err := buildGeneratedExpr(proc.Ctx, genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
 	require.NoError(t, err)
 	require.NotNil(t, gen)
 	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
@@ -1117,7 +1164,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
 
 	// A non-CHAR/VARCHAR generated target keeps the generic cast.
-	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
+	genInt, err := buildGeneratedExpr(proc.Ctx, genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
 	require.NoError(t, err)
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
@@ -1162,7 +1209,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 			}
 			require.NotNil(t, genCol)
 
-			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
+			gen, err := buildGeneratedExpr(proc.Ctx, genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
 			require.NoError(t, err)
 			require.NotNil(t, gen)
 		})
@@ -1180,7 +1227,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		}
 	}
 	require.NotNil(t, genCol)
-	_, err = buildGeneratedExpr(
+	_, err = buildGeneratedExpr(proc.Ctx,
 		genCol,
 		plan.Type{Id: int32(types.T_uint64)},
 		[]*ColDef{{Name: "ip_text", Typ: plan.Type{Id: int32(types.T_varchar), Width: 39}}},
@@ -1190,7 +1237,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 }
 
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
@@ -1392,7 +1439,7 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 }
 
 func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	for _, oid := range []types.T{types.T_blob, types.T_text} {
 		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}
@@ -1435,5 +1482,37 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
 		require.NoError(t, err)
 		require.True(t, null.GetLit().GetIsnull())
+	}
+}
+
+func TestEmptyDomainTypeReplay(t *testing.T) {
+	for _, tc := range []struct {
+		ddl               string
+		oid               types.T
+		domain, formatted string
+	}{
+		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+	} {
+		t.Run(tc.ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), typ.Id)
+			require.Equal(t, tc.domain, typ.Enumvalues)
+			require.Equal(t, tc.formatted, FormatColType(typ))
+			encoded, err := typ.Marshal()
+			require.NoError(t, err)
+			var recovered plan.Type
+			require.NoError(t, recovered.Unmarshal(encoded))
+			require.Equal(t, typ, recovered)
+			replay, err := mysql.ParseOne(context.Background(), "create table replay(v "+FormatColType(recovered)+")", 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			replayType, err := getTypeFromAst(context.Background(), replay.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, typ, replayType)
+		})
 	}
 }

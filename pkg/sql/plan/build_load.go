@@ -93,9 +93,8 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			tbColToDataCol[colName] = int32(i)
 			newCols = append(newCols, newTableDef.Cols[tbColIdx])
 		case *tree.VarExpr:
-			//NOTE:variable like '@abc' will be passed by.
-			name := realCol.Name
-			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+			// Row-variable slots are recorded after target columns so referenced
+			// values can be exposed to the LOAD assignment projection.
 		default:
 			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
@@ -413,7 +412,26 @@ func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize 
 		return rowSize
 	}
 	if tableDef != nil {
-		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
+		estimateDef := tableDef
+		if param != nil && param.Format == tree.PARQUET {
+			// BLOB family widths are assignment limits, not observed payload
+			// lengths. Counting a BLOB's 65535-byte capacity as its average
+			// size underestimates input rows and can disable distributed LOAD.
+			// Keep the catalog type intact for assignment validation, using
+			// the legacy BLOB estimate until source statistics are available.
+			copyDef := *tableDef
+			copyDef.Cols = make([]*ColDef, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				copyDef.Cols[i] = col
+				if col.Typ.Id == int32(types.T_blob) && col.Typ.Width > 0 {
+					copyCol := *col
+					copyCol.Typ.Width = 0
+					copyDef.Cols[i] = &copyCol
+				}
+			}
+			estimateDef = &copyDef
+		}
+		if rowSize := GetRowSizeFromTableDef(estimateDef, true) * 0.8; rowSize > 0 {
 			return clampLoadRowsize(rowSize, inputSize)
 		}
 	}
@@ -445,6 +463,7 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 		param.ScanType == tree.INLINE ||
 		param.Local ||
 		param.Format == tree.PARQUET || param.Format == tree.ARROW ||
+		LoadFilepathHasGlob(param) ||
 		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
 		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
 		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
@@ -538,6 +557,26 @@ func loadColumnarMayListFiles(param *tree.ExternParam) bool {
 		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
 }
 
+// LoadFilepathHasGlob reports whether the LOAD source path is a shell pattern
+// that must be expanded with ReadDir instead of stat-ed verbatim.
+func LoadFilepathHasGlob(param *tree.ExternParam) bool {
+	return param != nil && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+// LoadMayListFiles reports whether the LOAD source path must be resolved
+// through ReadDir.  Every remote format is listed, not just the columnar ones,
+// so the pattern itself is the only gate: INLINE data has no path and LOAD
+// LOCAL names a client-side file the server cannot list.
+//
+// checkFileExist collapses a pattern that matched exactly one file back to that
+// plain path, so downstream a still-glob Filepath means "more than one file".
+func LoadMayListFiles(param *tree.ExternParam) bool {
+	return param != nil &&
+		!param.Local &&
+		param.ScanType != tree.INLINE &&
+		LoadFilepathHasGlob(param)
+}
+
 func loadParquetMayListFiles(param *tree.ExternParam) bool {
 	return param != nil && param.Format == tree.PARQUET && loadColumnarMayListFiles(param)
 }
@@ -575,6 +614,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
@@ -604,6 +647,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, &externalProject,
+	)
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
@@ -611,7 +658,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
+		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return nil, err
@@ -623,6 +676,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.Tail.Assignments = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -679,7 +733,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		Stats:    &plan.Stats{},
 	}
 
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, 0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex, setExpressions)
 
 	if err != nil {
 		return nil, err
@@ -699,7 +759,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// before defaults can read those assigned values, including the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
-			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
@@ -707,7 +767,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	for target, expr := range setExpressions {
+		for i, col := range originTableDef.Cols {
+			if strings.EqualFold(col.Name, target) {
+				projectNode.ProjectList[i] = expr
+				break
+			}
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions)
 	if err != nil {
 		return nil, err
 	}
@@ -854,7 +922,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	if param.ScanType == tree.S3 {
+	if param.ScanType == tree.S3 && param.StageFilepath == "" {
 		if err := InitS3Param(param); err != nil {
 			return "", err
 		}
@@ -876,7 +944,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
-	if loadColumnarMayListFiles(param) {
+	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
 		if err != nil {
@@ -884,6 +952,15 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		if len(fileList) == 0 {
 			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
+		if len(fileList) == 1 {
+			// One match is not a fanout.  Rewriting the pattern to the file it
+			// resolved to keeps the single-file paths (byte-offset split and its
+			// IGNORE-lines prescan) reachable, and makes "Filepath is still a
+			// glob" mean "at least two files" for every later decision.
+			param.Filepath = fileList[0]
+			param.FileSize = fileSize[0]
+			return param.Filepath, nil
 		}
 		param.FileSize = totalLoadFileSize(fileSize)
 		return param.Filepath, nil
@@ -901,13 +978,28 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
+func getProjectNode(
+	stmt *tree.Load,
+	ctx CompilerContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	colToIndex map[string]int32,
+	setExpressions map[string]*plan.Expr,
+) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	ifExistAutoPkCol := false
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
 
 	for i := 0; i < len(tableDef.Cols); i++ {
+		if expr, ok := setExpressions[tableDef.Cols[i].Name]; ok {
+			node.ProjectList[i] = expr
+			if _, supplied := colToIndex[tableDef.Cols[i].Name]; !supplied &&
+				tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
+				ifExistAutoPkCol = true
+			}
+			continue
+		}
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
 				Typ: tableDef.Cols[i].Typ,
@@ -940,11 +1032,17 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
-	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+	bindCtx *BindContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	supplied map[string]int32,
+	setExpressions map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
-		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if !sourceSupplied && !setSupplied && exprHasLocalColumnRef(node.ProjectList[i]) {
 			needed = true
 			break
 		}
@@ -961,7 +1059,9 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		pos := int32(i)
 		positions[pos] = pos
 		expr := DeepCopyExpr(node.ProjectList[i])
-		if _, ok := supplied[col.Name]; ok {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
 			materialize[pos] = true
@@ -987,27 +1087,37 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
+	// Binding consumes assignment expressions before serializing ExternParam.
+	// A consumed first assignment means this AST was already normalized; keep
+	// its rules when PREPARE or a transaction retry builds another plan.
+	if param.NullMap != nil && len(param.Tail.Assignments) > 0 && param.Tail.Assignments[0].Expr == nil {
+		return nil
+	}
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
 		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 		if len(expr.Exprs) != 2 {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || expr2.ColName() != "nullif" {
+		if !ok || !strings.EqualFold(expr2.ColName(), "nullif") {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
+			if _, isVariable := expr.Exprs[0].(*tree.VarExpr); isVariable {
+				param.Tail.Assignments[i].Expr = nil
+				continue
+			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
 		}
 
@@ -1044,21 +1154,34 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 }
 
 func getCompressType(param *tree.ExternParam, filepath string) string {
-	if param.CompressType != "" && param.CompressType != tree.AUTO {
-		return param.CompressType
+	return GetCompressType(param.CompressType, filepath)
+}
+
+// GetCompressType is the one place that decides how a load source is
+// compressed: an explicit compression option wins, otherwise the file name's
+// extension decides.  Planning (bind-time parallel and S3-write decisions) and
+// execution (choosing the decompressor) both call it, so they cannot disagree
+// about the same file.  The result is lower case.
+func GetCompressType(compressType string, filepath string) string {
+	if compressType != "" && !strings.EqualFold(compressType, tree.AUTO) {
+		return strings.ToLower(compressType)
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+	filepath = strings.ToLower(filepath)
+	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
+	case strings.HasSuffix(filepath, ".zst") || strings.HasSuffix(filepath, ".zstd"):
+		return tree.ZSTD
+	case strings.HasSuffix(filepath, ".zip"):
+		return tree.ZIP
 	default:
 		return tree.NOCOMPRESS
 	}
@@ -1094,7 +1217,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) {
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || isMediumIntPlanType(typ) {
 			// The following assignment projection owns both conversion and
 			// width enforcement. An ordinary TINYTEXT cast here would silently
 			// truncate before strict/IGNORE assignment can inspect the payload.

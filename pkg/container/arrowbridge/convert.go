@@ -180,6 +180,23 @@ func (p *Plan) convert(
 		stats.PinAmplificationFallbacks += columnStats.PinAmplificationFallbacks
 		stats.UnalignedFallbacks += columnStats.UnalignedFallbacks
 	}
+	// Validate logical domains only for SET columns. The existing batch defer
+	// owns both materialized and borrowed vectors on every failure.
+	for _, constraint := range p.setConstraints {
+		values := vector.GenerateFunctionFixedTypeParameter[uint64](bat.Vecs[constraint.column])
+		for row := 0; row < rows; row++ {
+			if err = checkConvertContext(ctx, row); err != nil {
+				return nil, stats, err
+			}
+			bits, isNull := values.GetValue(uint64(row))
+			if isNull {
+				continue
+			}
+			if bits&^constraint.validBitmap != 0 {
+				return nil, stats, moerr.NewInvalidInputf(ctx, "Arrow SET column %q bitmap %d exceeds domain mask %d", p.attrs[constraint.column], bits, constraint.validBitmap)
+			}
+		}
+	}
 	bat.SetRowCount(rows)
 	return bat, stats, nil
 }

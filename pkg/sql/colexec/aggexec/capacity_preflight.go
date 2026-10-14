@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
@@ -3337,23 +3338,25 @@ func (e *bmpExecCommon) preflightBitmapMerge(
 func accountedJSONValueSize(
 	vec *vector.Vector,
 	logicalRow int,
+	loc *time.Location,
 ) (int, error) {
 	row, err := preflightPhysicalRow(vec, logicalRow)
 	if err != nil {
 		return 0, err
 	}
-	return jsonAggregateValueSize(vec, uint64(row))
+	return jsonAggregateValueSize(vec, uint64(row), loc)
 }
 
 func accountedJSONArrayValueSize(
 	vec *vector.Vector,
 	logicalRow int,
+	loc *time.Location,
 ) (int, error) {
 	row, err := preflightPhysicalRow(vec, logicalRow)
 	if err != nil {
 		return 0, err
 	}
-	return jsonArrayAggregateValueSize(vec, uint64(row))
+	return jsonArrayAggregateValueSize(vec, uint64(row), loc)
 }
 
 func addJSONArgumentCapacity(
@@ -3418,7 +3421,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 		if group == GroupNotMatched {
 			continue
 		}
-		valueSize, err := accountedJSONArrayValueSize(vectors[0], offset+i)
+		valueSize, err := accountedJSONArrayValueSize(vectors[0], offset+i, exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -3435,7 +3438,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 				if err != nil {
 					return nil, err
 				}
-				return appendJSONArrayAggregateValue(dst, vectors[0], uint64(row))
+				return appendJSONArrayAggregateValue(dst, vectors[0], uint64(row), exec.timeZone)
 			})
 		if err != nil {
 			return err
@@ -3489,7 +3492,7 @@ func (exec *jsonObjectAggExec) PreflightBatchFill(
 		if err != nil {
 			return err
 		}
-		valueSize, err := accountedJSONValueSize(vectors[1], offset+i)
+		valueSize, err := accountedJSONValueSize(vectors[1], offset+i, exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -3508,7 +3511,7 @@ func (exec *jsonObjectAggExec) PreflightBatchFill(
 				if err != nil {
 					return nil, err
 				}
-				return appendJSONAggregateValue(dst, vectors[1], uint64(row))
+				return appendJSONAggregateValue(dst, vectors[1], uint64(row), exec.timeZone)
 			})
 		if err != nil {
 			return err

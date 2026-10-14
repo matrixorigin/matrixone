@@ -240,7 +240,7 @@ func (c Config) NewServer(
 }
 
 func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
-	var opts []BackendOption
+	opts := make([]BackendOption, 0, 4+len(c.BackendOptions))
 	opts = append(opts,
 		WithBackendLogger(logger),
 		WithBackendBusyBufferSize(c.BusyQueueSize),
@@ -253,7 +253,7 @@ func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
 }
 
 func (c Config) getClientOptions(logger *zap.Logger) []ClientOption {
-	var opts []ClientOption
+	opts := make([]ClientOption, 0, 3+len(c.ClientOptions))
 	opts = append(opts,
 		WithClientLogger(logger),
 		WithClientMaxBackendPerHost(c.MaxConnections),

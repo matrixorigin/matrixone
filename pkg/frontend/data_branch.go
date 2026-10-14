@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -509,13 +510,13 @@ func getCloneMutationExecutor(
 	if useTxnHandler {
 		return getLineageOwnerMutationExecutor(
 			ctx, ses, false,
-			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), false,
+			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), true,
 			getBackExecutorWithTxnHandler, opts...,
 		)
 	}
 	return getLineageOwnerMutationExecutor(
 		ctx, ses, false,
-		ses.proc.GetTxnOperator().TxnOptions().ByBegin, false,
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin, true,
 		getBackExecutor, opts...,
 	)
 }
@@ -552,6 +553,15 @@ func getLineageOwnerMutationExecutor(
 	}
 	if featureLimited {
 		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else if op := backgroundExecTxnOperator(bh); op != nil && op.Txn().IsPessimistic() && op.Txn().IsRCIsolation() {
+		// Private writers acquire C then G/X without a shared-to-exclusive upgrade.
+		var admission *lifecycleRCAdmission
+		admission, err = beginLifecycleRCAdmission(ctx, ses, bh, lock.LockMode_Exclusive)
+		if err == nil {
+			admission.proc.Free()
+			// Keep the existing lineage publication write after acquiring identity.
+			err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+		}
 	} else {
 		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
 	}
@@ -576,12 +586,8 @@ func dataBranchCreateTable(
 		cloneStmt *tree.CloneTable
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, true, &BackgroundExecOption{
-			forcePessimisticRC:             true,
-			cloneSnapshotUsesBackgroundTxn: true,
-		},
-	); err != nil {
+	var admission *lifecycleRCAdmission
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 	restoreReqCtx := installDataBranchCloneContext(
@@ -589,11 +595,7 @@ func dataBranchCreateTable(
 	)
 	defer restoreReqCtx()
 
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -615,6 +617,27 @@ func dataBranchCreateTable(
 	if opAccountID != sysAccountID && opAccountID != targetAccountID {
 		return moerr.NewInternalErrorNoCtx("only sys can clone table to another account")
 	}
+	// Normalize the same names the nested clone will consume before taking D.
+	if cloneStmt.SrcTable.SchemaName == "" {
+		cloneStmt.SrcTable.SchemaName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+	}
+	if cloneStmt.CreateTable.Table.SchemaName == "" {
+		cloneStmt.CreateTable.Table.SchemaName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+	}
+	if cloneStmt.SrcTable.SchemaName == "" || cloneStmt.CreateTable.Table.SchemaName == "" {
+		return moerr.NewNoDB(execCtx.reqCtx)
+	}
+	fromAccount := opAccountID
+	if snapshot != nil && snapshot.Tenant != nil {
+		fromAccount = snapshot.Tenant.TenantID
+	}
+	dag, admitErr := admission.admitBranchCloneRC(execCtx.reqCtx, ses, bh,
+		[]branchCloneSource{{fromAccount, cloneStmt.SrcTable.SchemaName.String(), cloneStmt.SrcTable.ObjectName.String(), snapshot}},
+		branchCloneDatabase{targetAccountID, cloneStmt.CreateTable.Table.SchemaName.String()}, cloneStmt.CreateTable.Table.ObjectName.String(), false, nil)
+	if admitErr != nil {
+		return admitErr
+	}
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, branchCloneComponentKey{}, &dag)
 	if err = checkBranchQuotaForAccount(
 		execCtx.reqCtx, ses, bh, targetAccountName, targetAccountID, 1,
 	); err != nil {
@@ -638,6 +661,9 @@ func dataBranchCreateTable(
 		return
 	}
 
+	if err = admission.lockBranchSnapshotName(execCtx.reqCtx, receipt.dstTableID); err != nil {
+		return err
+	}
 	if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipt); err != nil {
 		return
 	}
@@ -663,12 +689,8 @@ func dataBranchCreateDatabase(
 	); err != nil {
 		return
 	}
-	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, true, &BackgroundExecOption{
-			forcePessimisticRC:             true,
-			cloneSnapshotUsesBackgroundTxn: true,
-		},
-	); err != nil {
+	var admission *lifecycleRCAdmission
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 	restoreReqCtx := installDataBranchCloneContext(
@@ -676,11 +698,7 @@ func dataBranchCreateDatabase(
 	)
 	defer restoreReqCtx()
 
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
@@ -703,6 +721,23 @@ func dataBranchCreateDatabase(
 	}
 	stats.Add(&authStats)
 
+	requests := cloneDatabaseAdmissionRequests(source, &stmt.CloneDatabase)
+	dag, admitErr := admission.admitBranchCloneRC(execCtx.reqCtx, ses, bh, requests, branchCloneDatabase{source.toAccountId, stmt.DstDatabase.String()}, "", true, nil)
+	if admitErr != nil {
+		err = admitErr
+		return
+	}
+	current, readErr := collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, &cloneDatabaseAccountResolution{opAccountId: source.opAccountId, toAccountId: source.toAccountId, snapshot: source.requestSnapshot})
+	if readErr != nil {
+		err = readErr
+		return
+	}
+	if !sameBranchCloneDatabaseSource(source, current) {
+		err = moerr.NewTxnNeedRetryWithDefChanged(execCtx.reqCtx)
+		return
+	}
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, branchCloneComponentKey{}, &dag)
+
 	targetAccountName := ses.GetTenantInfo().Tenant
 	if stmt.ToAccountOpt != nil {
 		targetAccountName = stmt.ToAccountOpt.AccountName.String()
@@ -719,6 +754,9 @@ func dataBranchCreateDatabase(
 
 	for i := range receipts {
 		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
+			return
+		}
+		if err = admission.lockBranchSnapshotName(execCtx.reqCtx, receipts[i].dstTableID); err != nil {
 			return
 		}
 		if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
@@ -775,50 +813,6 @@ func lockDataBranchTargetAccount(
 	return bh.Exec(defines.AttachAccountId(ctx, sysAccountID), sql)
 }
 
-func markBranchTablesDeleted(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	accId uint32,
-	tableIDs []uint64,
-) error {
-	updateCtx := ctx
-	if accId != sysAccountID {
-		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
-	}
-
-	for start := 0; start < len(tableIDs); start += dataBranchMetadataIDBatchSize {
-		end := start + dataBranchMetadataIDBatchSize
-		if end > len(tableIDs) {
-			end = len(tableIDs)
-		}
-
-		var sqlBuilder strings.Builder
-		sqlBuilder.Grow(128 + (end-start)*20)
-		sqlBuilder.WriteString("update ")
-		sqlBuilder.WriteString(catalog.MO_CATALOG)
-		sqlBuilder.WriteByte('.')
-		sqlBuilder.WriteString(catalog.MO_BRANCH_METADATA)
-		sqlBuilder.WriteString(" set table_deleted = true where table_id in (")
-
-		for i, id := range tableIDs[start:end] {
-			if i > 0 {
-				sqlBuilder.WriteByte(',')
-			}
-			sqlBuilder.WriteString(strconv.FormatUint(id, 10))
-		}
-		sqlBuilder.WriteString(")")
-
-		updateRet, err := runSql(updateCtx, ses, bh, sqlBuilder.String(), nil, nil)
-		if err != nil {
-			return err
-		}
-		updateRet.Close()
-	}
-
-	return nil
-}
-
 func dataBranchDeleteTable(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -829,17 +823,12 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
-	); err != nil {
+	var admission *lifecycleRCAdmission
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
 	var (
 		dbName  string
 		tblName string
@@ -855,9 +844,24 @@ func dataBranchDeleteTable(
 		return
 	}
 
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName)
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Shared, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
+	}
+
 	if tblID, err = validateDataBranchDeleteTableTarget(execCtx.reqCtx, ses, bh, dbName, tblName); err != nil {
 		return
 	}
+
+	dropCtx, release := databranchutils.WithBranchDeleteTarget(execCtx.reqCtx, backgroundExecTxnOperator(bh),
+		databranchutils.BranchDeleteTarget{AccountID: accId, Database: dbName, Table: tblName, TableIDs: []uint64{tblID}})
+	defer release()
 
 	{
 		dropSQL := fmt.Sprintf(
@@ -870,18 +874,13 @@ func dataBranchDeleteTable(
 		// branch reclaim can require an RC retry after waiting for the metadata
 		// coordination lock.
 		bh.ClearExecResultSet()
-		if err = bh.Exec(execCtx.reqCtx, dropSQL); err != nil {
+		if err = bh.Exec(dropCtx, dropSQL); err != nil {
 			return
 		}
 		bh.ClearExecResultSet()
 	}
 
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
-		return
-	}
-	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
-		return
-	}
+	// Nested DROP performs synchronous mark/reclaim under the same K locks.
 
 	return nil
 }
@@ -896,17 +895,12 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
-	); err != nil {
+	var admission *lifecycleRCAdmission
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
@@ -917,14 +911,34 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
-		return
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName.String())
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Exclusive, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
+	}
+
+	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(execCtx.reqCtx, dbName.String(), backgroundExecTxnOperator(bh))
+	if err != nil {
+		return err
+	}
+	dbID, err := strconv.ParseUint(db.GetDatabaseId(execCtx.reqCtx), 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "invalid DATA BRANCH DELETE database identity")
 	}
 	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
 		execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
 	); err != nil {
 		return
 	}
+
+	dropCtx, release := databranchutils.WithBranchDeleteTarget(execCtx.reqCtx, backgroundExecTxnOperator(bh),
+		databranchutils.BranchDeleteTarget{AccountID: accId, Database: dbName.String(), DatabaseID: dbID, TableIDs: tableIDs, MembershipSQL: branchDeleteDatabaseTableIDsSQL(accId, dbName.String())})
+	defer release()
 
 	{
 		var dropRet executor.Result
@@ -933,17 +947,12 @@ func dataBranchDeleteDatabase(
 		}()
 
 		dropSQL := fmt.Sprintf("drop database %s", quoteIdentifierForSQL(dbName.String()))
-		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
+		if dropRet, err = runSql(dropCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
 	}
 
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
-		return
-	}
-	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
-		return
-	}
+	// Nested DROP performs synchronous mark/reclaim under the same K locks.
 
 	return nil
 }
@@ -985,15 +994,18 @@ func diffMergeAgency(
 	// lineage-owner lifecycle before resolving either endpoint, so their nested
 	// DDL follows the same lineage -> view-metadata -> object lock order as
 	// ordinary DROP, clone, and restore paths.
-	bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
+	bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx,
+		ses,
+		false,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	if err != nil {
 		return
 	}
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	if deferred != nil {
+		defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
+	}
 
 	ctx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
@@ -1051,8 +1063,8 @@ func diffMergeAgency(
 		done        bool
 		wg          = new(sync.WaitGroup)
 		outputErr   atomic.Value
-		retBatCh    = make(chan batchWithKind, 10)
-		stopCh      = make(chan struct{})
+		retBatCh    chan batchWithKind
+		stopCh      chan struct{}
 		stopOnce    sync.Once
 		emit        emitFunc
 		stop        func()
@@ -1071,13 +1083,6 @@ func diffMergeAgency(
 			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
-
-	emit = newEmitter(ctx, stopCh, retBatCh)
-	stop = func() {
-		stopOnce.Do(func() {
-			close(stopCh)
-		})
-	}
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
@@ -1137,41 +1142,50 @@ func diffMergeAgency(
 		}
 	}
 
+	if diffStmt == nil {
+		// The apply owner prepares stages before production and consumes each
+		// batch inline. A retry must never cancel a concurrent LCA probe.
+		copt.onlineApply = true
+		produce := func(emit emitFunc) error {
+			wg.Add(1)
+			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+		}
+		if pickStmt != nil {
+			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
+		}
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+	}
+
+	retBatCh = make(chan batchWithKind, 10)
+	stopCh = make(chan struct{})
+	emit = newEmitter(ctx, stopCh, retBatCh)
+	stop = func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
 	wg.Add(2)
 	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
-		if diffStmt != nil {
-			// 1. all rows
-			// 2. limit rows
-			// 3. count
-			// 4. as table
-			// 5. as file
+		// 1. all rows
+		// 2. limit rows
+		// 3. count
+		// 4. as table
+		// 5. as file
 
-			var err2 error
-			if outputPhase != nil {
-				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
-			} else {
-				err2 = satisfyDiffOutputOpt(
-					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-				)
-			}
-			if err2 != nil {
-				outputErr.Store(err2)
-			}
-		} else if pickStmt != nil {
-			if err2 := pickMergeDiffs(
-				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+		var err2 error
+		if outputPhase != nil {
+			err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
 		} else {
-			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+			err2 = satisfyDiffOutputOpt(
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+			)
+		}
+		if err2 != nil {
+			outputErr.Store(err2)
 		}
 	}()
 
@@ -1179,7 +1193,7 @@ func diffMergeAgency(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
 		betweenFrom, betweenTo,
 	); err != nil {
-		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
 		if retBatCh != nil {
 			close(retBatCh)
@@ -1318,9 +1332,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.NewWithCharset(
-			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-		)
+		t := types.MustTypeFromPlan(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1651,26 +1663,6 @@ func diffOnBase(
 	return
 }
 
-func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
-	if len(leftDef.Cols) != len(rightDef.Cols) {
-		return false
-	}
-	for i := range leftDef.Cols {
-		if leftDef.Cols[i].ColId != rightDef.Cols[i].ColId ||
-			!isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) ||
-			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
-			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
-			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
-			!dataBranchGeneratedColumnsEqual(
-				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
-			) {
-			return false
-		}
-	}
-	return true
-}
-
 func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []string) {
 	if tblDef == nil || tblDef.Pkey == nil {
 		return -1, nil
@@ -1864,7 +1856,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
-		left.Charset == right.Charset &&
+		left.SameCollation(right) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

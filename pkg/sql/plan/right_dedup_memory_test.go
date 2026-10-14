@@ -18,10 +18,50 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDisableMemoryUnsafeRightDedupHonorsQueryLimit(t *testing.T) {
+	const combinedMapBytes = 64*1024 + 128*1024
+	for _, tc := range []struct {
+		name         string
+		spill, limit int64
+		wantRight    bool
+	}{
+		{"auto query cap", 0, combinedMapBytes - 1, false},
+		{"row threshold does not override query cap", 3000, combinedMapBytes - 1, false},
+		{"byte threshold does not override query cap", 1 << 30, combinedMapBytes - 1, false},
+		{"cells consume query cap", 1 << 30, combinedMapBytes, false},
+		{"exact map allowance", 1 << 30, 2 * combinedMapBytes, true},
+		{"larger query cap", 1 << 30, 2*combinedMapBytes + 1, true},
+		{"no narrower query cap", 1 << 30, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joins := makeChainedRightDedupBuilder(tc.spill)
+			proc := &process.Process{Base: &process.BaseProcess{Lim: process.Limitation{Size: tc.limit}}}
+			builder.compCtx = &MockCompilerContext{GetProcessFunc: func() *process.Process { return proc }}
+			builder.disableMemoryUnsafeRightDedup(4)
+			require.Equal(t, tc.wantRight, joins[0].IsRightJoin)
+			require.Equal(t, tc.wantRight, joins[1].IsRightJoin)
+		})
+	}
+}
+
+func TestDisableMemoryUnsafeRightDedupSharesQueryLimitWithLookupOnlyMap(t *testing.T) {
+	builder, joins := makeChainedRightDedupBuilder(1 << 30)
+	proc := &process.Process{Base: &process.BaseProcess{Lim: process.Limitation{Size: 300 * 1024}}}
+	builder.compCtx = &MockCompilerContext{GetProcessFunc: func() *process.Process { return proc }}
+	joins[0].DedupInputKeysUnique = true
+	builder.qry.Nodes[1].Stats = &planpb.Stats{Outcnt: 1100}
+	builder.disableMemoryUnsafeRightDedup(4)
+	require.True(t, joins[0].IsRightJoin, "the safe lookup-only map remains resident")
+	require.False(t, joins[1].IsRightJoin, "ordinary maps must share the query cap with it")
+}
 
 func TestDisableMemoryUnsafeRightDedupUsesCombinedMapSize(t *testing.T) {
 	const combinedMapBytes = 64*1024 + 128*1024
@@ -195,4 +235,47 @@ func makeRightDedupEquality(typ types.T) *planpb.Expr {
 			{Typ: planType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
 		}}},
 	}
+}
+
+// One extra estimated target key can cross a resident-map allocation step even
+// though its relative drift is small. Admission must reach the real optimizer.
+func TestCachedRightDedupGrowthReplansAtMapBoundary(t *testing.T) {
+	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
+	cache := NewStatsCache()
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{MockCompilerContext: mock, statsCache: cache}}
+	ctx.GetProcess().Base.Lim.Size = int64(2 * hashtable.EstimateInt64HashMapSize(2048))
+	setRows := func(name string, rows float64) {
+		stats := NewStatsInfo()
+		stats.TableName, stats.TableCnt = name, rows
+		stats.AccurateObjectNumber, stats.BlockNumber = 1, 1
+		cache.Set(mock.tables[name].TblId, stats)
+	}
+	setRows("nation", 48)
+	setRows("region", 2000)
+	stmts, err := mysql.Parse(ctx.GetContext(), "insert into nation select r_regionkey % 100,r_name,r_regionkey,r_comment from region", 1)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	cached, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	findDedup := func(p *planpb.Plan) *planpb.Node {
+		for _, n := range p.GetQuery().Nodes {
+			if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+				return n
+			}
+		}
+		t.Fatal("real INSERT plan must contain DEDUP")
+		return nil
+	}
+	require.True(t, findDedup(cached).IsRightJoin, "%s", cached.String())
+	changed, err := CachedPlanStatsChanged(cached, ctx)
+	require.NoError(t, err)
+	require.False(t, changed)
+	setRows("nation", 49)
+	changed, err = CachedPlanStatsChanged(cached, ctx)
+	require.NoError(t, err)
+	require.True(t, changed)
+	fresh, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	require.False(t, findDedup(fresh).IsRightJoin, "%s", fresh.String())
+	require.True(t, findDedup(cached).IsRightJoin, "admission must not patch the borrowed generation")
 }

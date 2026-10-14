@@ -55,7 +55,7 @@ func TestImplicitInsertValueColumnsIncludeVisibleGeneratedColumns(t *testing.T) 
 }
 
 func TestStripImplicitGeneratedColumnsPreservesOrderAndSourceAST(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tableDef := &planpb.TableDef{
 		Name: "t",
 		Cols: []*planpb.ColDef{
@@ -177,7 +177,7 @@ func TestImplicitInsertValuesWithGeneratedColumns(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -234,7 +234,7 @@ func TestPreparedGeneratedInsertDoesNotMutateRetainedAST(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()

@@ -39,6 +39,7 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		key := []byte("key")
 		options := newTestRowExclusiveOptions()
 		var resolved atomic.Int32
+		resolvedC := make(chan struct{}, 1)
 
 		_, err := service.Lock(ctx, 1, [][]byte{key}, holderTxn, options)
 		require.NoError(t, err)
@@ -48,7 +49,10 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 			holderTxn,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			func() { resolved.Add(1) },
+			func() {
+				resolved.Add(1)
+				resolvedC <- struct{}{}
+			},
 		))
 
 		type lockResult struct {
@@ -74,21 +78,21 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		allocator.FinishCommit(service.serviceID, holderTxn)
 
 		var result lockResult
-		require.Eventually(t, func() bool {
-			select {
-			case result = <-resultC:
-				return true
-			default:
-				return false
-			}
-		}, 2*time.Second, 10*time.Millisecond)
+		select {
+		case result = <-resultC:
+		case <-ctx.Done():
+			t.Fatalf("waiter did not finish after allocator fence: %v", ctx.Err())
+		}
 		require.NoError(t, result.err)
 		require.True(t, result.result.HasConflict)
 		require.True(t, result.result.HasPrevCommit)
 		require.False(t, result.result.Timestamp.IsEmpty())
-		require.Eventually(t, func() bool {
-			return resolved.Load() == 1
-		}, time.Second, 10*time.Millisecond)
+		select {
+		case <-resolvedC:
+		case <-ctx.Done():
+			t.Fatalf("unknown-commit callback did not finish: %v", ctx.Err())
+		}
+		require.Equal(t, int32(1), resolved.Load())
 		require.Never(t, func() bool {
 			return resolved.Load() > 1
 		}, 100*time.Millisecond, 10*time.Millisecond)
@@ -101,15 +105,22 @@ func TestResolveCommitUnknownCompletesWhenTxnAlreadyUnlocked(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
 		service := services[0]
 		var resolved atomic.Int32
+		resolvedC := make(chan struct{}, 1)
 		require.NoError(t, service.ResolveCommitUnknown(
 			[]byte("already-unlocked"),
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			func() { resolved.Add(1) },
+			func() {
+				resolved.Add(1)
+				resolvedC <- struct{}{}
+			},
 		))
-		require.Eventually(t, func() bool {
-			return resolved.Load() == 1
-		}, time.Second, 10*time.Millisecond)
+		select {
+		case <-resolvedC:
+		case <-time.After(time.Second):
+			t.Fatal("unknown-commit callback did not finish")
+		}
+		require.Equal(t, int32(1), resolved.Load())
 		require.False(t, service.unknownCommitResolver.isPending([]byte("already-unlocked")))
 	})
 }
@@ -258,14 +269,12 @@ func TestUnknownCommitCallbackSaturationKeepsCleanupOwned(t *testing.T) {
 		// Callback ownership stayed with the caller, but lock-cleanup ownership
 		// still transferred. Its terminal signal preserves the caller's admission
 		// until cleanup finishes without exceeding the callback execution bound.
-		require.Eventually(t, func() bool {
-			return !service.unknownCommitResolver.isPending(saturatedTxn)
-		}, 5*time.Second, time.Millisecond)
 		select {
 		case <-resolutionDone:
 		case <-time.After(5 * time.Second):
 			t.Fatal("saturated callback owner did not observe terminal cleanup")
 		}
+		require.False(t, service.unknownCommitResolver.isPending(saturatedTxn))
 		require.Zero(t, unexpected.Load())
 		retainedCallback()
 		require.Equal(t, int32(1), unexpected.Load())
@@ -777,17 +786,21 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 		// Derive this after the RPC-heavy setup so its fence is still live when
 		// the resolver submits it.
 		overflowDeadline := time.Now().Add(time.Minute)
+		done := make(chan struct{})
 		require.NoError(t, service.ResolveCommitUnknown(
 			overflowTxn,
 			overflowDeadline,
 			maxPersistentFenceFrontierEntries+1,
-			nil,
+			func() { close(done) },
 		))
 
-		require.Eventually(t, func() bool {
-			return !service.activeTxnHolder.hasActiveTxn(overflowTxn) &&
-				!service.unknownCommitResolver.isPending(overflowTxn)
-		}, 2*time.Second, 10*time.Millisecond)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatalf("overflow cleanup did not finish: %v", ctx.Err())
+		}
+		require.False(t, service.activeTxnHolder.hasActiveTxn(overflowTxn))
+		require.False(t, service.unknownCommitResolver.isPending(overflowTxn))
 
 		require.Equal(t, 1, ctl.persistentFenceCount())
 	})

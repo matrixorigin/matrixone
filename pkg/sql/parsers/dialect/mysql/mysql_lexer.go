@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -137,9 +138,32 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
-func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
+		control := &parseControl{ctx: ctx, limits: limits}
+		lexer.scanner.parseControl = control
+		defer func() {
+			if failure := recover(); failure != nil {
+				abort, own := failure.(parseAbort)
+				if !own || abort.control != control {
+					panic(failure)
+				}
+				for _, statement := range lexer.stmts {
+					statement.Free()
+				}
+				statements, err = nil, abort.err
+			}
+		}()
+	}
+
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -187,6 +211,9 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 		return nil, err
 	}
 	if len(lexer.stmts) != 1 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
@@ -309,10 +336,17 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	l.scanner.parseControl.token()
 	if l.stopLexing {
 		return 0
 	}
-	typ, str := l.scanner.Scan()
+	var typ int
+	var str string
+	if l.lastToken == int('.') {
+		typ, str = l.scanner.ScanAfterDot()
+	} else {
+		typ, str = l.scanner.Scan()
+	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
@@ -371,7 +405,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// native join or whether ASOF still occupies the current table's alias slot.
 	// This preserves legacy `t asof JOIN u`, while an already completed alias or
 	// table-factor suffix makes the same phrase a native ASOF JOIN.
-	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
 
@@ -508,8 +542,9 @@ func (l *Lexer) Error(err string) {
 	var lenStr string
 	if len(near) > 1024 {
 		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
-		near = near[:1024]
+		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
+	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
 
@@ -606,8 +641,17 @@ func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]i
 
 	var ends map[int]int
 	finalSemicolonEnd := 0
+	previousToken := 0
 	for {
-		typ, _ := scanner.Scan()
+		// Match Lex's qualification context before keyword-specific lookahead
+		// so accepted names such as t.begin cannot stop this boundary rescan.
+		var typ int
+		if previousToken == int('.') {
+			typ, _ = scanner.ScanAfterDot()
+		} else {
+			typ, _ = scanner.Scan()
+		}
+		previousToken = typ
 		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
 			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
 				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {

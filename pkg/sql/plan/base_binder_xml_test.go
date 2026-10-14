@@ -31,7 +31,7 @@ func TestXMLFunctionBinding(t *testing.T) {
 		`select updatexml('<a>x</a>', '/a', '<b/>')`,
 		`select extractvalue(null, '[')`, // Must remain runtime validation, not folded NULL.
 	} {
-		p, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err, sql)
 		name := "extractvalue"
 		if sql[7] == 'u' {
@@ -47,7 +47,7 @@ func TestXMLFunctionBinding(t *testing.T) {
 		`select extractvalue('<a/>', p) from (select '/a' as p) q`,
 		`select updatexml('<a/>', p, '<b/>') from (select '/a' as p) q`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.ErrorContains(t, err, "Only constant XPATH queries are supported")
 	}
 	ctx := context.Background()

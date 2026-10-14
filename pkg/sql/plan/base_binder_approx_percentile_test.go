@@ -95,7 +95,7 @@ func TestBindApproxPercentileAcceptsFoldableConstants(t *testing.T) {
 }
 
 func TestBuildPlanApproxPercentileRejectsInvalidPercentileSQL(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []string{
 		"select approx_percentile(a, null) from select_test.bind_select",
 		"select approx_percentile(a, b) from select_test.bind_select",

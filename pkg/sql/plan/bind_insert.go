@@ -2150,13 +2150,13 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
-	visibleWidth := 0
+	materializedWidth := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
-			visibleWidth++
+		if col != nil && (!col.Hidden || col.GeneratedCol != nil || col.Name == catalog.FakePrimaryKeyColName) {
+			materializedWidth++
 		}
 	}
-	return int32(visibleWidth), true
+	return int32(materializedWidth), true
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
@@ -2674,6 +2674,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	updateColIdxList := make([]int32, 0, len(astUpdateExprs))
 	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
+	immutablePrimaryKeyCols := make(map[string]struct{})
+	// Once any assignment to a primary key is not proven immutable, a later
+	// direct literal/marker assignment cannot make the ordered stream safe again.
+	unprovenPrimaryKeyCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
@@ -2739,7 +2743,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// missing input column.
 				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
-				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				if isNullAstExpr(astExpr) {
+					updateExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, colDef)
+					if updateExpr == nil && err == nil {
+						updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+					}
+				} else {
+					updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -2758,9 +2769,39 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
+			updateExpr, err = builder.wrapLegacyTimestampAssignment(colDef, updateExpr)
+			if err != nil {
+				return 0, err
+			}
 			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
+			}
+			// MySQL clients such as NiFi's JDBC writer assign every inserted
+			// column in the ODKU arm, including a literal or prepared marker for
+			// the primary key. The value is only a no-op when it equals the row
+			// selected by the primary-key arbiter, so retain the assignment in
+			// order and validate it against the old row at execution time.
+			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
+				if isDirectODKUPKIdentityValue(astExpr) {
+					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
+						oldPrimaryKey := &plan.Expr{
+							Typ: colDef.Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: scanTag,
+								ColPos: int32(colIdx),
+							}},
+						}
+						updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
+						if err != nil {
+							return 0, err
+						}
+						immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+					}
+				} else {
+					delete(immutablePrimaryKeyCols, colDef.Name)
+					unprovenPrimaryKeyCols[colDef.Name] = struct{}{}
+				}
 			}
 			updateExprs[colDef.Name] = updateExpr
 			updateColIdxList = append(updateColIdxList, colIdx)
@@ -2795,6 +2836,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// while possiblyChangedCols describes which keys may need maintenance.
 		seedCols := make(map[string]struct{}, len(updateExprs))
 		for colName := range updateExprs {
+			if _, immutable := immutablePrimaryKeyCols[colName]; immutable {
+				continue
+			}
 			seedCols[colName] = struct{}{}
 		}
 		possiblyChangedCols, err = collectGeneratedColumnDependents(
@@ -4422,6 +4466,84 @@ func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
 }
 
+// isDirectODKUPKIdentityValue limits the runtime no-op guard to values whose
+// identity is available without evaluating an arbitrary expression. Keep
+// wrapped expressions and cross-column references on the existing unsupported
+// path; direct parentheses do not change the assignment's meaning.
+func isDirectODKUPKIdentityValue(expr tree.Expr) bool {
+	expr = unwrapParenExpr(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal, *tree.StrVal, *tree.ParamExpr:
+		return true
+	case *tree.UnaryExpr:
+		return isSignedODKUPKNumericLiteral(value)
+	default:
+		return false
+	}
+}
+
+func isSignedODKUPKNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		return isSignedODKUPKNumericLiteral(value.Expr)
+	default:
+		return false
+	}
+}
+
+func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *plan.Expr) (*plan.Expr, error) {
+	identityType := oldPrimaryKey.Typ
+	oldIdentity, err := bindPrimaryKeyIdentityExpr(builder, oldPrimaryKey, identityType)
+	if err != nil {
+		return nil, err
+	}
+	candidateIdentity, err := bindPrimaryKeyIdentityExpr(builder, candidate, identityType)
+	if err != nil {
+		return nil, err
+	}
+	samePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{candidateIdentity, oldIdentity})
+	if err != nil {
+		return nil, err
+	}
+	assertSamePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{
+		samePrimaryKey,
+		makePlan2StringConstExprWithType("update primary key on duplicate"),
+		makePlan2StringConstExprWithType("odku_pk_mutation"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Return the original key on success. Keep the unreachable NULL branch at
+	// the key's exact type: an ANY NULL would promote CHAR keys to VARCHAR in IF,
+	// which makes an unchanged key look like a changed ODKU value and can fire
+	// implicit ON UPDATE columns. NULL comparisons fail closed in assert before
+	// this branch can become an assignment.
+	nullPrimaryKey := makePlan2NullConstExprWithType()
+	nullPrimaryKey.Typ = oldPrimaryKey.Typ
+	nullPrimaryKey.Typ.NotNullable = false
+	guard, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
+		assertSamePrimaryKey,
+		DeepCopyExpr(oldPrimaryKey),
+		nullPrimaryKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// A successful assert can only return true; false or NULL comparisons fail
+	// before the IF can select its NULL branch. The old value is a primary key,
+	// so every successful evaluation returns a non-NULL value. Keep the NULL
+	// branch nullable and exactly typed above to preserve CHAR key semantics,
+	// while exposing the guard's successful-result nullability to later ODKU
+	// constraint planning.
+	guard.Typ.NotNullable = true
+	return guard, nil
+}
+
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
 // If the INSERT statement does not specify the columns, all columns except the fake primary key column
@@ -4450,6 +4572,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
 			if !ok {
+				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
+			if isFunctionalColumn(tableDef.Cols[idx]) {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -4533,6 +4658,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 				generatedColumnCount++
@@ -4697,7 +4825,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -4711,7 +4839,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -4725,7 +4853,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return 0, nil, nil, -1, err
 	}
 
@@ -4737,6 +4865,15 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // the projection the column came from, used to recognize display-value
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
+	var err error
+	projExpr, err = builder.wrapLegacyTimestampAssignment(colDef, projExpr)
+	if err != nil {
+		return nil, err
+	}
+	if sourceExpr != nil && sourceExpr.GetLit() != nil && sourceExpr.GetLit().Isnull &&
+		isLegacyImplicitTimestampColumn(builder.compCtx, colDef) {
+		return buildImplicitCurrentTimestampExpr(colDef.Typ, builder.compCtx.GetProcess())
+	}
 	typ := colDef.Typ
 	switch {
 	case isEnumPlanType(&typ):
@@ -5006,13 +5143,29 @@ func isNumericAssignmentTarget(typ Type) bool {
 	return makeTypeByPlan2Type(typ).IsNumeric()
 }
 
-func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
-	// only numeric targets may seed the numeric assignment context; a zero
-	// Type keeps the projection binder on the default binding path
+// useNumericAssignmentContext keeps IGNORE conversion at the final assignment
+// cast. A destination hint must not insert an ordinary strict cast into its
+// source expression. Functions and aggregates establish their own numeric
+// consumer contexts independently.
+func useNumericAssignmentContext(typ Type, ignore bool) bool {
+	return isNumericAssignmentTarget(typ) && !(ignore && useIgnoreConversionAssignmentCast(typ))
+}
+
+func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
+	if builder == nil || !builder.isReusablePlan() {
+		return false
+	}
+	_, ok := unwrapParenExpr(expr).(*tree.ParamExpr)
+	return ok
+}
+
+func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
+	// Numeric targets seed numeric context; ENUM targets preserve same-domain
+	// bare columns. A zero Type keeps the default binding path.
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if isNumericAssignmentTarget(typ) {
+		if useNumericAssignmentContext(typ, ignore) || isEnumPlanType(&typ) {
 			targets[i] = typ
 		}
 	}
@@ -5309,6 +5462,8 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 			e = v.Expr
 		case *tree.CastExpr:
 			e = v.Expr
+		case *tree.SerialExtractExpr:
+			return true
 		case *tree.FuncExpr:
 			// mod() is arithmetic and shares the numeric-context binder with the
 			// binary operators (see numericAstFunctionName); every other function
@@ -5458,6 +5613,21 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				// With explicit_defaults_for_timestamp=OFF, an explicit NULL
+				// assignment to the legacy implicit TIMESTAMP column has the same
+				// semantics as DEFAULT. Handle it before the literal fast path,
+				// which otherwise materializes a NULL expression and lets the
+				// NOT NULL assignment cast reject it.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return 0, nil, err
+					}
+					if defExpr != nil {
+						appendValueExpr(i, defExpr)
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -5490,7 +5660,7 @@ func (builder *QueryBuilder) buildValueScan(
 						valueBinder = funcBinder
 					}
 					boundWithNumericContext := false
-					if isNumericAssignmentTarget(col.Typ) {
+					if useNumericAssignmentContext(col.Typ, builder.isInsertIgnore) {
 						if builder.isPrepareStatement {
 							// Analyze prepared functions with the target-free binder. The
 							// explicit numeric context below supplies the assignment domain only
@@ -5505,21 +5675,12 @@ func (builder *QueryBuilder) buildValueScan(
 							if err != nil {
 								return 0, nil, err
 							}
-							// A bare marker is the source value of the assignment, not a
-							// numeric expression. Integer assignments must retain that source
-							// until execute-time numeric typing; IGNORE must retain TEXT
-							// until the outer cast_ignore runs. Otherwise the prepare-time
-							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
-							// malformed values fail before the IGNORE warning/adjustment mode
-							// is reached.  Keep numeric context for compound expressions such
-							// as ? + 1, whose operands genuinely need numeric binding.
-							directPreparedParam := false
-							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
-								directPreparedParam = true
-							}
-							if scan.hasParam && !(directPreparedParam &&
-								(types.T(col.Typ.Id).IsInteger() || (builder.isInsertIgnore &&
-									useIgnoreConversionAssignmentCast(targetTyp.Typ)))) {
+							// The target type shapes compound numeric expressions, but a
+							// bare marker is still the assignment source. Preserve it for the
+							// final assignment cast, including string-to-BIT byte semantics and
+							// IGNORE conversion warnings. Expressions such as ? + 1 still bind
+							// in the target numeric context.
+							if scan.hasParam && !isPreparedAssignmentParam(builder, r[i]) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
@@ -5537,7 +5698,7 @@ func (builder *QueryBuilder) buildValueScan(
 						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
 							valueBinder = funcBinder
 						}
-					} else if valuesExprIsFuncCall(r[i]) {
+					} else if valuesExprIsFuncCall(r[i]) || (builder.isInsertIgnore && isNumericAssignmentTarget(col.Typ)) {
 						// Geometry and other non-numeric functions need their
 						// arguments to bind independently of the destination type.
 						valueBinder = funcBinder
@@ -5564,6 +5725,10 @@ func (builder *QueryBuilder) buildValueScan(
 							return 0, nil, err
 						}
 					}
+				}
+				defExpr, err = builder.wrapLegacyTimestampAssignment(col, defExpr)
+				if err != nil {
+					return 0, nil, err
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
@@ -5686,7 +5851,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Uuid:        nodeId[:],
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return 0, nil, err
 	}
 

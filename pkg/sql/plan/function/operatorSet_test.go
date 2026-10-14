@@ -39,7 +39,7 @@ func Test_Operator_Unary_Tilde(t *testing.T) {
 			[]uint64{18446744073709551610, 4, 0}, []bool{false, false, true}),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }
 
@@ -56,7 +56,7 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 				[]int64{-5, 5, 0}, []bool{false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinus[int64])
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -71,7 +71,7 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 				[]types.Decimal64{types.Decimal64(123).Minus(), types.Decimal64(234).Minus(), types.Decimal64(345).Minus(), types.Decimal64(0)}, []bool{false, false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinusDecimal64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -98,7 +98,7 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 				[]bool{false, false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinusDecimal128)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -116,7 +116,7 @@ func Test_Operator_Unary_Plus(t *testing.T) {
 				[]int64{5, -5, 0}, []bool{false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryPlus[int64])
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -135,7 +135,7 @@ func Test_Operator_Is(t *testing.T) {
 				[]bool{true, false, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIs)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -151,7 +151,7 @@ func Test_Operator_Is(t *testing.T) {
 				[]bool{false, true, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIs)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -170,7 +170,7 @@ func Test_Operator_Is_Not(t *testing.T) {
 				[]bool{false, true, false, true, true, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -186,7 +186,7 @@ func Test_Operator_Is_Not(t *testing.T) {
 				[]bool{true, false, true, false, false, true}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -202,7 +202,7 @@ func Test_Operator_Is_Not(t *testing.T) {
 				[]bool{true}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNot)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -219,7 +219,7 @@ func Test_Operator_Is_True(t *testing.T) {
 				[]bool{true, false, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsTrue)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -236,7 +236,7 @@ func Test_Operator_Is_Not_True(t *testing.T) {
 				[]bool{false, true, true}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsNotTrue)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -253,7 +253,7 @@ func Test_Operator_Is_False(t *testing.T) {
 				[]bool{false, true, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsFalse)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -270,7 +270,7 @@ func Test_Operator_Is_Not_False(t *testing.T) {
 				[]bool{true, false, true}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorIsNotFalse)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -287,7 +287,7 @@ func Test_Operator_Is_Null(t *testing.T) {
 				[]bool{false, false, true}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNull)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -304,7 +304,7 @@ func Test_Operator_Is_Not_Null(t *testing.T) {
 				[]bool{true, true, false}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorOpIsNotNull)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -332,7 +332,7 @@ func Test_Operator_And(t *testing.T) {
 				[]bool{false, false, true, false, false, false, true, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opMultiAnd)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -360,13 +360,18 @@ func Test_Operator_Or(t *testing.T) {
 				[]bool{false, false, false, false, false, true, false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opMultiOr)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 func Test_Operator_Xor(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -388,8 +393,31 @@ func Test_Operator_Xor(t *testing.T) {
 				[]bool{false, false, true, false, false, true, true, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, xorFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		left, right FunctionTestInput
+		wanted      []bool
+		nulls       []bool
+		selection   *FunctionSelectList
+	}{
+		{"left constant", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), []bool{true, false, false}, []bool{false, false, true}, nil},
+		{"right constant", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{false, true, false}, []bool{false, false, true}, nil},
+		{"both constant broadcast", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{true, true, true}, nil, nil},
+		{"left constant null", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), []bool{false, false, false}, []bool{true, true, true}, nil},
+		{"right constant null", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), []bool{false, false, false}, []bool{true, true, true}, nil},
+		{"direct row selection", NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil), []bool{false, false}, []bool{true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.wanted, tc.nulls), xorFn).WithSelectList(tc.selection)
+			t.Cleanup(c.Free)
+			c.fnLength = len(tc.wanted)
+			ok, info := c.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -504,6 +532,50 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 			require.Equal(t, succeedMatched, result.status)
 		})
 	}
+}
+
+func TestMediumIntCommonResultTypeIsOrderIndependent(t *testing.T) {
+	medium := types.New(types.T_int32, 24, -1)
+	ordinary := types.New(types.T_int32, 32, -1)
+
+	for _, inputs := range [][]types.Type{
+		{medium, ordinary},
+		{ordinary, medium},
+		{medium, types.T_any.ToType(), ordinary},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "coalesce", inputs)
+		require.NoError(t, err)
+		require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+		require.False(t, resolved.GetReturnType().IsMediumInt())
+		targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Len(t, targets, len(inputs))
+		for _, target := range targets {
+			require.Equal(t, types.T_int32, target.Oid)
+			require.Equal(t, int32(32), target.Width)
+		}
+	}
+
+	for _, inputs := range [][]types.Type{
+		{types.T_bool.ToType(), medium, ordinary},
+		{types.T_bool.ToType(), ordinary, medium},
+	} {
+		caseResult := caseCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, caseResult.status)
+		require.Equal(t, int32(32), caseResult.finalType[1].Width)
+		require.Equal(t, int32(32), caseResult.finalType[2].Width)
+
+		ifResult := iffCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, ifResult.status)
+		require.Equal(t, int32(32), ifResult.finalType[1].Width)
+		require.Equal(t, int32(32), ifResult.finalType[2].Width)
+	}
+
+	pure, ok := CommonMediumIntType([]types.Type{medium, types.T_any.ToType(), medium})
+	require.True(t, ok)
+	require.Equal(t, int32(24), pure.Width)
+	_, ok = CommonMediumIntType([]types.Type{medium, types.T_uint32.ToType()})
+	require.False(t, ok, "mixed signedness keeps the existing integer promotion path")
 }
 
 func TestCaseCheckVectorResultTypes(t *testing.T) {
@@ -656,7 +728,7 @@ func TestCaseFnVectorResults(t *testing.T) {
 				NewFunctionTestResult(tt.typ, false, tt.want, []bool{false, false, false, true}),
 				caseFn,
 			)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -670,7 +742,7 @@ func TestCaseFnVectorResults(t *testing.T) {
 		NewFunctionTestResult(typ, false, [][]float32{{1, 2}, nil}, []bool{false, true}),
 		caseFn,
 	)
-	succeed, info := withoutElse.Run()
+	succeed, info := withoutElse.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -833,7 +905,7 @@ func TestIffFn_StringCondition(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -853,7 +925,7 @@ func TestIffFn_BinaryResults(t *testing.T) {
 				NewFunctionTestResult(typ, false, []string{"\x00\x01\xfe\xff", "\x80\x00\x7f\xff"}, nil),
 				iffFn,
 			)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -928,7 +1000,7 @@ func TestIffFn_VectorResults(t *testing.T) {
 					NewFunctionTestInput(tt.typ, falseValues, nil),
 				},
 				NewFunctionTestResult(tt.typ, false, tt.want, nil), iffFn)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -943,7 +1015,7 @@ func TestIffFn_DecimalConditionBatch(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 22}, nil), iffFn)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -956,6 +1028,7 @@ func TestIffFn_SkipsInactiveRows(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), iffFn)
+	defer tc.Free()
 
 	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 	err := iffFn(tc.parameters, tc.result, proc, tc.fnLength,
@@ -1134,6 +1207,10 @@ func TestCoalesceSignedUnsignedIntegerCommonType(t *testing.T) {
 			inputs: []types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
 		},
 		{
+			name:   "narrow unsigned and both bigint domains",
+			inputs: []types.Type{types.T_uint8.ToType(), types.T_int64.ToType(), types.T_uint64.ToType()},
+		},
+		{
 			name:   "multiple integers reversed",
 			inputs: []types.Type{types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_int64.ToType()},
 		},
@@ -1157,6 +1234,32 @@ func TestCoalesceSignedUnsignedIntegerCommonType(t *testing.T) {
 	}
 }
 
+func TestCoalesceNarrowUnsignedBigintCommonType(t *testing.T) {
+	for _, unsigned := range []types.T{types.T_uint8, types.T_uint16, types.T_uint32} {
+		for _, inputs := range [][]types.Type{
+			{unsigned.ToType(), types.T_int64.ToType()},
+			{types.T_int64.ToType(), unsigned.ToType()},
+			{types.T_any.ToType(), unsigned.ToType(), types.T_int64.ToType()},
+			{unsigned.ToType(), types.T_any.ToType(), types.T_int64.ToType(), types.T_any.ToType()},
+			{unsigned.ToType(), types.T_int64.ToType(), types.T_uint32.ToType()},
+			{types.T_int64.ToType(), unsigned.ToType(), types.T_uint16.ToType()},
+			{unsigned.ToType(), types.T_uint16.ToType(), types.T_int64.ToType()},
+		} {
+			t.Run(fmt.Sprint(inputs), func(t *testing.T) {
+				resolved, err := GetFunctionByName(context.Background(), "coalesce", inputs)
+				require.NoError(t, err)
+				require.Equal(t, types.T_int64, resolved.GetReturnType().Oid)
+				castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(inputs))
+				for _, typ := range castTypes {
+					require.Equal(t, types.T_int64, typ.Oid)
+				}
+			})
+		}
+	}
+}
+
 func TestCoalesceSignedUnsignedIntegerRequiresDecimalOverload(t *testing.T) {
 	result := coalesceCheck(
 		[]overload{
@@ -1168,6 +1271,17 @@ func TestCoalesceSignedUnsignedIntegerRequiresDecimalOverload(t *testing.T) {
 	require.Equal(t, failedFunctionParametersWrong, result.status)
 }
 
+func TestCoalesceNarrowUnsignedBigintRequiresIntegerOverload(t *testing.T) {
+	result := coalesceCheck(
+		[]overload{
+			{args: []types.T{types.T_float64}},
+			{args: []types.T{types.T_decimal128}},
+		},
+		[]types.Type{types.T_uint8.ToType(), types.T_int64.ToType()},
+	)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 	overloads := []overload{{args: []types.T{types.T_decimal128}}}
 	for _, test := range []struct {
@@ -1175,8 +1289,8 @@ func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 		inputs []types.Type
 	}{
 		{
-			name:   "without uint64",
-			inputs: []types.Type{types.T_int64.ToType(), types.T_uint32.ToType()},
+			name:   "without bigint",
+			inputs: []types.Type{types.T_int32.ToType(), types.T_uint16.ToType()},
 		},
 		{
 			name:   "without signed integer",
@@ -1189,6 +1303,14 @@ func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 		{
 			name:   "non integer branch",
 			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float64.ToType()},
+		},
+		{
+			name:   "narrow unsigned with float branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint8.ToType(), types.T_float64.ToType()},
+		},
+		{
+			name:   "narrow unsigned with decimal branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint16.ToType(), types.New(types.T_decimal64, 10, 2)},
 		},
 		{
 			name:   "decimal branch",
@@ -1741,6 +1863,54 @@ func TestConditionalTextFamilyMarkersStayBounded(t *testing.T) {
 	require.Zero(t, caseReturnType([]types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium}).Width)
 }
 
+func TestConditionalStringCollationRevisionPreserved(t *testing.T) {
+	native := types.NewWithCharset(
+		types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI,
+	)
+	// This is the ordinary general-ci literal/branch that is merged with the
+	// native column by the conditional type resolver. Its narrower width also
+	// exercises the result-type widening path.
+	general := types.New(types.T_varchar, 1, 0)
+	wantCharset := types.CharsetUTF8MB4UnicodeCI
+	wantVersion := uint8(types.CollationVersionV1)
+
+	for _, tc := range []struct {
+		name   string
+		result types.Type
+	}{
+		{
+			name:   "common conditional",
+			result: commonConditionalStringType(types.T_varchar.ToType(), []types.Type{native, general}),
+		},
+		{
+			name: "case",
+			result: caseReturnType([]types.Type{
+				types.T_bool.ToType(), native, general,
+			}),
+		},
+		{
+			name:   "if",
+			result: iffReturnType([]types.Type{types.T_bool.ToType(), native, general}),
+		},
+		{
+			name:   "coalesce",
+			result: coalesceStringReturnType(types.T_varchar, []types.Type{native, general}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, wantCharset, tc.result.Charset)
+			require.Equal(t, wantVersion, tc.result.CollationVersion)
+		})
+	}
+
+	// An untyped NULL branch must not erase the native identity either.
+	withNull := commonConditionalStringType(
+		types.T_varchar.ToType(), []types.Type{native, types.T_any.ToType()},
+	)
+	require.Equal(t, wantCharset, withNull.Charset)
+	require.Equal(t, wantVersion, withNull.CollationVersion)
+}
+
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	overloads := []overload{
 		{args: []types.T{types.T_varchar}},
@@ -2053,7 +2223,7 @@ func Test_CaseFn_Decimal256Execution(t *testing.T) {
 			[]types.Decimal256{d1, d2}, nil),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }
 
@@ -2070,7 +2240,7 @@ func Test_CaseFn_VarBinaryExecution(t *testing.T) {
 		expect: NewFunctionTestResult(retType, false, []string{"a", "bc"}, nil),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }
 
@@ -2093,7 +2263,7 @@ func Test_IffFn_Decimal256Execution(t *testing.T) {
 			[]types.Decimal256{d1, d2}, nil),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, iffFn)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }
 
@@ -2123,6 +2293,6 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	}
 
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, strCaseFn)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }

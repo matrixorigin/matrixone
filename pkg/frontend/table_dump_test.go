@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
@@ -49,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 type testTableDumpObjectCopier struct {
@@ -1389,6 +1391,10 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 		{name: "truncated-relation", data: `{"relations":[{"role":"main"`},
 		{name: "truncated-objects", data: `{"relations":[{"objects":[`},
 		{name: "truncated-auto-increment", data: `{"relations":[{"auto_increment":[`},
+		{name: "duplicate-version", data: `{"version":1,"version":2}`},
+		{name: "duplicate-relation-field", data: `{"relations":[{"role":"main","role":"index"}]}`},
+		{name: "duplicate-object-field", data: `{"relations":[{"objects":[{"name":"a","name":"b"}]}]}`},
+		{name: "duplicate-unknown-field", data: `{"unknown":{"value":1,"value":2}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := decodeTableDumpManifest([]byte(tc.data))
@@ -1667,6 +1673,196 @@ func TestInstallTableDumpObjectsCancelsWorkers(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-resultCh, context.Canceled)
 	require.Positive(t, tracked.Load(), "ambiguous partial copies must be tracked for rollback")
+}
+
+func TestTableDumpRestoredExpressionsDoesNotMutateTarget(t *testing.T) {
+	boundLiteral := func(value int64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: value},
+			}},
+		}
+	}
+	target := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "q", Typ: plan.Type{Id: int32(types.T_int64)},
+		Default: &plan.Default{OriginString: "a / b", NullAbility: true, Expr: boundLiteral(4)},
+	}}}
+	source := sqlplan.DeepCopyTableDef(target, true)
+	source.Cols[0].Default.Expr = boundLiteral(10)
+	payload, digest, err := tableDumpBoundExpressions(source)
+	require.NoError(t, err)
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, int64(4), target.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(10), restored.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.NotSame(t, target.Cols[0], restored.Cols[0])
+}
+
+func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
+	boundInt := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}},
+		}}
+	}
+	boundBool := func(value bool) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: value}},
+		}}
+	}
+	source := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a / b", Expr: boundInt(10)}},
+		// Old catalog metadata can carry an on-update expression even when current
+		// SQL syntax would not accept this declaration.
+		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a / b", Expr: boundInt(11)}},
+		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a / b", IsStored: true, Expr: boundInt(12)}},
+	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a / b > 1", Check: boundBool(true)}}}
+	target := proto.Clone(source).(*plan.TableDef)
+	target.TblId = 123
+	target.Cols[0].Default.Expr = boundInt(1)
+	target.Cols[1].OnUpdate.Expr = boundInt(2)
+	target.Cols[2].GeneratedCol.Expr = boundInt(3)
+	target.Checks[0].Check = boundBool(false)
+	before := proto.Clone(target)
+	payload, digest, err := tableDumpBoundExpressions(source)
+	require.NoError(t, err)
+	require.True(t, tableDumpMayDependOnDivision(source))
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, proto.Equal(before, target), "restoration must not mutate the target")
+	require.Equal(t, target.TblId, restored.TblId)
+	require.Equal(t, int64(10), restored.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(11), restored.Cols[1].OnUpdate.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(12), restored.Cols[2].GeneratedCol.Expr.GetLit().GetI64Val())
+	require.True(t, restored.Checks[0].Check.GetLit().GetBval())
+
+	// A valid digest does not authorize restoring bindings into a different
+	// declaration. Each mismatch must fail before changing catalog state.
+	for _, tc := range []struct {
+		name   string
+		want   string
+		change func(*plan.TableDef)
+	}{
+		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a / (b + 1)" }},
+		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a / (b + 1)" }},
+		{"generated storage", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.IsStored = false }},
+		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a / (b + 1)" }},
+		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a / b > 2" }},
+		{"check name", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].Name = "other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mismatch := proto.Clone(target).(*plan.TableDef)
+			tc.change(mismatch)
+			unchanged := proto.Clone(mismatch)
+			replacement, changed, err := tableDumpRestoredExpressions(mismatch, payload, digest)
+			require.ErrorContains(t, err, tc.want)
+			require.Nil(t, replacement)
+			require.False(t, changed)
+			require.True(t, proto.Equal(unchanged, mismatch))
+		})
+	}
+}
+
+func TestTableDumpBoundPayloadRejectsExpansionBeforeUnmarshal(t *testing.T) {
+	var columns []byte
+	for range 16_385 {
+		columns = protowire.AppendTag(columns, 4, protowire.BytesType)
+		columns = protowire.AppendBytes(columns, nil)
+	}
+	require.ErrorContains(t, preflightTableDumpBoundPayload(columns), "too many columns")
+	producer := &plan.TableDef{Cols: make([]*plan.ColDef, 16_385)}
+	for i := range producer.Cols {
+		producer.Cols[i] = &plan.ColDef{}
+	}
+	_, _, err := tableDumpBoundExpressions(producer)
+	require.ErrorContains(t, err, "too many columns")
+
+	var expr []byte
+	for range 65 {
+		var function []byte
+		function = protowire.AppendTag(function, 2, protowire.BytesType)
+		function = protowire.AppendBytes(function, expr)
+		expr = protowire.AppendTag(nil, 7, protowire.BytesType)
+		expr = protowire.AppendBytes(expr, function)
+	}
+	declaration := protowire.AppendTag(nil, 1, protowire.BytesType)
+	declaration = protowire.AppendBytes(declaration, expr)
+	column := protowire.AppendTag(nil, 7, protowire.BytesType)
+	column = protowire.AppendBytes(column, declaration)
+	table := protowire.AppendTag(nil, 4, protowire.BytesType)
+	table = protowire.AppendBytes(table, column)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(table), "nesting exceeds limit")
+}
+
+func TestTableDumpBoundPayloadRejectsMalformedWire(t *testing.T) {
+	bytesField := func(number protowire.Number, value []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, number, protowire.BytesType), value)
+	}
+	target := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "q", Typ: plan.Type{Id: int32(types.T_int64)},
+		Default: &plan.Default{OriginString: "1 / 2", Expr: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		}},
+	}}}
+	before := proto.Clone(target)
+	payload, digest, err := tableDumpBoundExpressions(target)
+	require.NoError(t, err)
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.True(t, proto.Equal(target, restored))
+
+	for _, test := range []struct {
+		name    string
+		payload []byte
+		message string
+	}{
+		{"invalid tag", []byte{0}, "invalid table dump expression wire data"},
+		{"truncated bytes", []byte{0x22, 2, 1}, "invalid table dump expression wire data"},
+		{"wrong nested wire type", []byte{0x20, 0}, "invalid table dump expression wire type"},
+		{"unexpected catalog field", bytesField(1, nil), "unexpected table dump expression metadata"},
+		{"truncated scalar", bytesField(4, []byte{0x08, 0x80}), "invalid table dump expression wire data"},
+		{"unsupported expression 8", bytesField(4, bytesField(7, bytesField(1, bytesField(8, nil)))), "unsupported table dump expression kind"},
+		{"unsupported expression 9", bytesField(4, bytesField(7, bytesField(1, bytesField(9, nil)))), "unsupported table dump expression kind"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, preflightTableDumpBoundPayload(test.payload), test.message)
+			// A matching digest must not let invalid executable metadata reach
+			// replacement preparation or mutate the existing catalog definition.
+			sum := sha256.Sum256(test.payload)
+			restored, changed, err := tableDumpRestoredExpressions(target, test.payload, fmt.Sprintf("%x", sum))
+			require.ErrorContains(t, err, test.message)
+			require.Nil(t, restored)
+			require.False(t, changed)
+			require.Equal(t, before, target)
+		})
+	}
+}
+
+func TestTableDumpBoundPayloadFieldAndCheckLimits(t *testing.T) {
+	var checks []byte
+	for range 16_384 {
+		checks = protowire.AppendBytes(protowire.AppendTag(checks, 15, protowire.BytesType), nil)
+	}
+	require.NoError(t, preflightTableDumpBoundPayload(checks))
+	checks = protowire.AppendBytes(protowire.AppendTag(checks, 15, protowire.BytesType), nil)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(checks), "too many checks")
+
+	// Repeated scalar fields can expand decoder work without adding columns.
+	// Count the enclosing column field as part of the same work budget.
+	var column []byte
+	for range 99_999 {
+		column = protowire.AppendVarint(protowire.AppendTag(column, 1, protowire.VarintType), 0)
+	}
+	wrap := func() []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, 4, protowire.BytesType), column)
+	}
+	require.NoError(t, preflightTableDumpBoundPayload(wrap()))
+	column = protowire.AppendVarint(protowire.AppendTag(column, 1, protowire.VarintType), 0)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(wrap()), "too many fields")
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {
