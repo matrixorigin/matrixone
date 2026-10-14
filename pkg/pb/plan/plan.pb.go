@@ -6,13 +6,14 @@ package plan
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
+	io "io"
+	math "math"
+	math_bits "math/bits"
+
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	io "io"
-	math "math"
-	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -12406,22 +12407,22 @@ func (m *FkColName) GetCols() []string {
 
 // ForeignKeyInfo holds the fk forward reference.
 //
-//Example: t2(b) --fk--> t1(a) but t1 defined after t2
+// Example: t2(b) --fk--> t1(a) but t1 defined after t2
 //
-//set foreign_key_checks=0;
+// set foreign_key_checks=0;
 //
-//create table t2(b int, constraint c1 foreign key (b) references
-//t1(a));
+// create table t2(b int, constraint c1 foreign key (b) references
+// t1(a));
 //
-//create table t1(a int primary key);
+// create table t1(a int primary key);
 //
-//The reason we need ForeignKeyInfo instead of using ForeignKeyDef is
-//that:
+// The reason we need ForeignKeyInfo instead of using ForeignKeyDef is
+// that:
 //
-//ForeignKeyDef only has table id, column id that does not exist
-//in handling fk forward reference. ForeignKeyDef does not have database name,
-//table name and column names, ForeignKeyInfo also has the ForeignKeyDef
-//internally that holds the child table fk definition.
+// ForeignKeyDef only has table id, column id that does not exist
+// in handling fk forward reference. ForeignKeyDef does not have database name,
+// table name and column names, ForeignKeyInfo also has the ForeignKeyDef
+// internally that holds the child table fk definition.
 type ForeignKeyInfo struct {
 	Db                   string         `protobuf:"bytes,1,opt,name=db,proto3" json:"db,omitempty"`
 	Table                string         `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
@@ -38985,7 +38986,7 @@ func (m *Type) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *MsgHeader) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -42843,7 +42844,7 @@ func (m *Expr) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.validateOwnStringLiteralForm()
 }
 func (m *FoldVal) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -45299,7 +45300,7 @@ func (m *IndexDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *ForeignKeyDef) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -47593,7 +47594,7 @@ func (m *TableDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *TableDef_DefType) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
