@@ -123,7 +123,7 @@ func validateInsertRowAlias(
 			return nil, moerr.NewErrDupFieldName(ctx, key)
 		}
 		idx, ok := lookupInsertTableColumn(tableDef, targetColumn, lowerCaseTableNames)
-		if !ok {
+		if !ok || tableDef.Cols[idx].Hidden {
 			return nil, moerr.NewBadFieldErrorf(ctx,
 				"invalid input: column '%s' does not exist", targetColumn)
 		}
@@ -163,7 +163,7 @@ func validateOndupUpdateTargets(
 			return err
 		}
 		colIdx, ok := lookupInsertTableColumn(tableDef, update.Names[0].ColName(), lowerCaseTableNames)
-		if !ok {
+		if !ok || tableDef.Cols[colIdx].Hidden {
 			return moerr.NewBadFieldErrorf(ctx,
 				"invalid input: column '%s' does not exist", update.Names[0].ColNameOrigin())
 		}
@@ -356,7 +356,7 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 				"missing FROM-clause entry for table '%s'", astExpr.TblNameOrigin())
 		}
 		idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
-		if !ok {
+		if !ok || (b.rowAlias != nil && b.tableDef.Cols[idx].Hidden) {
 			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
 				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 		}
@@ -381,7 +381,7 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 		}
 	}
 
-	if idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames); ok {
+	if idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames); ok && (b.rowAlias == nil || !b.tableDef.Cols[idx].Hidden) {
 		relPos := b.scanTag
 		if depth > 0 && b.targetCorrelationTag != 0 {
 			relPos = b.targetCorrelationTag

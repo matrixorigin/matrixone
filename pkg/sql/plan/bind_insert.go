@@ -5161,10 +5161,10 @@ func (builder *QueryBuilder) rewriteInsertSubqueryOuterTag(expr *plan.Expr, oldT
 				rewriteExpr(param.DistRange.UpperBound)
 			}
 		}
-		if scan := node.VectorIndexScan; scan != nil {
-			rewriteExpr(scan.QueryVector)
+		if scan := node.IndexSearchScan; scan != nil {
+			rewriteExpr(scan.QueryPayload)
 			rewriteExpr(scan.CandidateLimit)
-			rewriteExpr(scan.FirstRoundLimit)
+			visitExprList(scan.AlgoExprs)
 			visitExprList(scan.PreFilters)
 			if scan.DistanceRange != nil {
 				rewriteExpr(scan.DistanceRange.LowerBound)
@@ -5342,7 +5342,7 @@ func (builder *QueryBuilder) getInsertColsForRowAlias(astCols tree.IdentifierLis
 	columns := make([]string, 0, len(astCols))
 	for _, column := range astCols {
 		idx, ok := lookupInsertTableColumn(tableDef, string(column), builder.compCtx.GetLowerCaseTableNames())
-		if !ok {
+		if !ok || tableDef.Cols[idx].Hidden {
 			return nil, moerr.NewBadFieldError(builder.GetContext(), string(column), tableDef.Name)
 		}
 		columns = append(columns, tableDef.Cols[idx].Name)

@@ -704,18 +704,21 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
-		ok := binding != nil
-		if ok && db != "" && b.builder != nil && b.builder.odkuAdmission != nil {
+		if binding != nil && db != "" && b.builder != nil && b.builder.odkuAdmission != nil {
 			// A database-qualified real table cannot be impersonated by a
-			// different local table's alias. Use resolved scan identity.
-			ok = binding.nodeId >= 0 && int(binding.nodeId) < len(b.builder.qry.Nodes)
+			// different local table's alias. Database matching is already owned
+			// by resolveTableBinding; additionally check the resolved scan name.
+			ok := binding.nodeId >= 0 && int(binding.nodeId) < len(b.builder.qry.Nodes)
 			if ok {
 				node := b.builder.qry.Nodes[binding.nodeId]
-				ok = binding.db == db && node.TableDef != nil &&
+				ok = node.TableDef != nil &&
 					tree.NewCStr(node.TableDef.Name, b.ctx.lower).Compare() == table
 			}
+			if !ok {
+				binding = nil
+			}
 		}
-		if ok {
+		if binding != nil {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)

@@ -751,6 +751,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, err
 		}
 		insertColumns = aliasInsertColumns
+		if stmt.Columns == nil {
+			// The alias keeps every visible identity, but the executable source
+			// contains only writable columns. In particular, VALUES() must not
+			// supply a NULL default for a generated slot: the final projection
+			// materializes that slot from its dependencies instead.
+			_, insertColumns, _ = implicitInsertValueColumns(tableDef)
+		}
 		if effectiveColumns != nil {
 			effectiveStmt := *stmt
 			effectiveStmt.Columns = effectiveColumns

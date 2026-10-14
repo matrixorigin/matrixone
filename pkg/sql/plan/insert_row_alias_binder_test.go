@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -28,6 +29,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+// This is the internal bound-plan walk contract, not an expansion of the
+// supported row-alias RHS subquery admission boundary.
+func TestInsertRowAliasSubqueryRetargetsIndexSearchExpressions(t *testing.T) {
+	const oldTag, newTag, otherTag int32 = 11, 22, 33
+	column := func(tag, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+	query, limit, budget := column(oldTag, 0), column(oldTag, 1), column(oldTag, 2)
+	filter, lower, upper := column(oldTag, 3), column(oldTag, 4), column(otherTag, 5)
+	correlated := &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: oldTag, ColPos: 6, Depth: 1}}}
+	scan := &planpb.IndexSearchScan{
+		Index:        &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+		QueryPayload: query, CandidateLimit: limit,
+		AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*planpb.Expr{budget},
+		PreFilters:    []*planpb.Expr{filter, correlated},
+		DistanceRange: &planpb.DistRange{LowerBound: lower, UpperBound: upper},
+	}
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{{
+		NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan,
+	}}}}
+	root := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{NodeId: 0}}}
+	builder.rewriteInsertSubqueryOuterTag(root, oldTag, newTag)
+	for pos, expr := range []*planpb.Expr{query, limit, budget, filter, lower} {
+		require.Equal(t, newTag, expr.GetCol().RelPos)
+		require.Equal(t, int32(pos), expr.GetCol().ColPos)
+	}
+	require.Equal(t, otherTag, upper.GetCol().RelPos)
+	require.Equal(t, int32(5), upper.GetCol().ColPos)
+	require.Equal(t, newTag, correlated.GetCorr().RelPos)
+	require.Equal(t, int32(6), correlated.GetCorr().ColPos)
+	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+	// Repeating the walk must not alter unrelated identity or offsets.
+	builder.rewriteInsertSubqueryOuterTag(root, oldTag, newTag)
+	require.Equal(t, newTag, budget.GetCol().RelPos)
+	require.Equal(t, otherTag, upper.GetCol().RelPos)
+	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+}
 
 func testInsertAliasTable() *planpb.TableDef {
 	return &planpb.TableDef{
