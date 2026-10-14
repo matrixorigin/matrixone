@@ -165,6 +165,33 @@ func TestUserVariableAssignmentAllowsNestedReadAfterWriteProjection(t *testing.T
 	require.NoError(t, err)
 }
 
+func TestUserVariableAssignmentRejectsReadBeforeWriteInWhere(t *testing.T) {
+	for _, sql := range []string{
+		"select @a := @a + 1 where @a < 2",
+		"select @a := @b := @b + 1 where @b < 2",
+		"select @a := @b := @b + 1 where @B < 2",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(),
+				"reading a user variable in WHERE before its assignment projection")
+		})
+	}
+
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a := @a + 1 where @b < 2", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+}
+
 func TestUserVariableAssignmentRejectsViewAuthoring(t *testing.T) {
 	for _, tc := range []struct {
 		name string

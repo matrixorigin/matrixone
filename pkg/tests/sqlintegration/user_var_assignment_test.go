@@ -96,3 +96,46 @@ func TestUserVariableAssignmentNestedReadBeforeWriteIsRejected(t *testing.T) {
 		}
 	})
 }
+
+func TestUserVariableAssignmentWhereReadBeforeWriteIsRejected(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		schema := "user_var_assignment_where_29909"
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		db.SetMaxOpenConns(1)
+		defer db.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		require.NoError(t, db.PingContext(ctx))
+		_, err = db.ExecContext(ctx, "drop database if exists "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create database "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "use "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create table src (id int)")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "insert into src values (1), (2), (3), (4), (5), (6)")
+		require.NoError(t, err)
+
+		for _, statement := range []string{
+			"select @a := @a + 1 from src where @a < 2",
+			"select @a := @b := @b + 1 from src where @B < 2",
+		} {
+			_, err = db.ExecContext(ctx, "set @a = 0, @b = 0")
+			require.NoError(t, err)
+			_, err = db.ExecContext(ctx, statement)
+			require.ErrorContains(t, err,
+				"reading a user variable in WHERE before its assignment projection")
+
+			var a, b int
+			require.NoError(t, db.QueryRowContext(ctx, "select @a, @b").Scan(&a, &b))
+			require.Equal(t, 0, a)
+			require.Equal(t, 0, b)
+		}
+	})
+}
