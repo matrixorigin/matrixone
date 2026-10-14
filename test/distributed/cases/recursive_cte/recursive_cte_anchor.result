@@ -1,0 +1,57 @@
+drop database if exists recursive_cte_anchor_data;
+create database recursive_cte_anchor_data;
+use recursive_cte_anchor_data;
+create table nodes(id int primary key, parent_id int, priority int);
+insert into nodes values (1, null, 20), (2, null, 10), (11, 1, 0), (12, 2, 0);
+with recursive c(n, depth) as (
+(select id, 0 from nodes where parent_id is null order by priority, id limit 1)
+union all
+select nodes.id, c.depth + 1 from nodes join c on nodes.parent_id = c.n
+where c.depth < 1
+)
+select n, depth from c order by n desc;
+➤ n[4,32,0]  ¦  depth[-5,64,0]  𝄀
+12  ¦  1  𝄀
+2  ¦  0
+with recursive c(n, depth) as (
+(select id, 0 from nodes where parent_id is null order by priority, id limit 1 offset 1)
+union all
+select nodes.id, c.depth + 1 from nodes join c on nodes.parent_id = c.n
+where c.depth < 1
+)
+select n, depth from c order by n desc;
+➤ n[4,32,0]  ¦  depth[-5,64,0]  𝄀
+11  ¦  1  𝄀
+1  ¦  0
+with recursive c(n, depth) as (
+(select id, 0 from nodes where parent_id is null order by priority, id)
+union all
+select nodes.id, c.depth + 1 from nodes join c on nodes.parent_id = c.n
+where c.depth < 1
+)
+select n, depth from c order by n;
+➤ n[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+11  ¦  1  𝄀
+12  ¦  1
+with recursive c(n, depth) as (
+(select id, 0 from nodes where parent_id is null limit 1)
+union all
+select nodes.id, c.depth + 1 from nodes join c on nodes.parent_id = c.n
+where c.depth < 1
+)
+select depth, count(*) as row_count from c group by depth order by depth;
+➤ depth[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+0  ¦  1  𝄀
+1  ¦  1
+with recursive c(n, depth) as (
+(select id, 0 from nodes where parent_id is null order by priority, id limit 0)
+union all
+select nodes.id, c.depth + 1 from nodes join c on nodes.parent_id = c.n
+where c.depth < 1
+)
+select count(*) as row_count from c;
+➤ row_count[-5,64,0]  𝄀
+0
+drop database recursive_cte_anchor_data;
