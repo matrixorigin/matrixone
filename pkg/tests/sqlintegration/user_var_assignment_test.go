@@ -63,3 +63,36 @@ func TestUserVariableAssignmentViewAuthoringIsRejected(t *testing.T) {
 		}
 	})
 }
+
+func TestUserVariableAssignmentNestedReadBeforeWriteIsRejected(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		db.SetMaxOpenConns(1)
+		defer db.Close()
+		require.NoError(t, db.PingContext(ctx))
+
+		for _, statement := range []string{
+			"select @b as prior, @a := @b := @b + 1 as current",
+			"select @B as prior, @a := @b := @B + 1 as current",
+		} {
+			_, err = db.ExecContext(ctx, "set @b = 0")
+			require.NoError(t, err)
+			_, err = db.ExecContext(ctx, statement)
+			require.ErrorContains(t, err, "reading a user variable before its assignment projection")
+
+			var retained int
+			require.NoError(t, db.QueryRowContext(ctx, "select @b").Scan(&retained))
+			require.Equal(t, 0, retained)
+
+			var outer sql.NullString
+			require.NoError(t, db.QueryRowContext(ctx, "select @a").Scan(&outer))
+			require.False(t, outer.Valid, "the rejected admission path must not publish the outer assignment")
+		}
+	})
+}
