@@ -138,8 +138,11 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
+	if features.DateNumericResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
 	if features.LowPrecisionFloatIntegerArguments {
-		requiredVersion = defines.MORPCVersion112
+		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
 	}
 	return requiredVersion, nil
 }

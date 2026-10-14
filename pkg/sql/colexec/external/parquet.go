@@ -391,6 +391,7 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
+	h.timeAssignment = param.Extern != nil && param.Extern.ExternType == int32(plan.ExternType_LOAD)
 	if h.rowGroup == nil && h.file != nil {
 		if len(h.rowGroups) == 0 {
 			h.rowGroups = h.file.RowGroups()
@@ -995,7 +996,7 @@ func makeMediumIntMapper(st parquet.Type, unsigned bool) func(*columnMapper, par
 	}
 }
 
-func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
 	if sc == nil || sc.Type() == nil {
 		return nil
 	}
@@ -1905,14 +1906,14 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			// Support STRING to TIME conversion
 			scale := dt.Scale
+			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				if assignment {
+					return processStringToTimeAssignment(mp, page, proc, vec)
+				}
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (types.Time, error) {
-						timeVal, err := types.ParseTime(util.UnsafeBytesToString(data), scale)
-						if err != nil {
-							return 0, err
-						}
-						return timeVal, nil
+						return types.ParseTime(util.UnsafeBytesToString(data), scale)
 					},
 					types.Time(0),
 				)
@@ -1935,6 +1936,11 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			if lt.Timestamp != nil {
 				scale := dt.Scale
+				if h.timeAssignment {
+					// Preserve microseconds until assignment resolves rounding versus
+					// TIME_TRUNCATE_FRACTIONAL at the target precision.
+					scale = 6
+				}
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					loc := parquetSessionLocation(proc)
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Time(0), func(v parquet.Value) (types.Time, error) {
@@ -2732,6 +2738,40 @@ func processStringToFixed[T any](
 	zeroVal T,
 ) error {
 	return processStringToFixedWithTrim(ctx, mp, page, proc, vec, parseFunc, zeroVal, true)
+}
+
+// A STRING may describe a valid TIME beyond the internal int64 duration range.
+// Preserve its spelling for the same assignment owner used by native DML,
+// while keeping the Parquet scan's declared TIME vector stable. All staging is
+// scoped to this already bounded page slice; typed Parquet sources stay typed.
+func processStringToTimeAssignment(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+	// This is transport staging, not a VARCHAR target. A declared VARCHAR
+	// capacity must not reject a long TIME spelling before assignment sees it.
+	text := vector.NewVec(types.New(types.T_varchar, -1, 0))
+	defer text.Free(proc.Mp())
+	if err := processParquetValuesToBytes(proc.Ctx, mp, page, proc, text, func(v parquet.Value) ([]byte, error) {
+		return bytes.TrimSpace(v.ByteArray()), nil
+	}); err != nil {
+		return err
+	}
+	result := vector.NewFunctionResultWrapper(*vec.GetType(), proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(text.Length()); err != nil {
+		return err
+	}
+	cast := function.NewAssignCast
+	if proc.GetStmtProfile().GetStatementIgnore() {
+		cast = function.NewAssignIgnoreCast
+	}
+	if err := cast([]*vector.Vector{text, vec}, result, proc, text.Length(), nil); err != nil {
+		return err
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	if err := vec.UnionBatch(result.GetResultVector(), 0, text.Length(), nil, proc.Mp()); err != nil {
+		vec.RollbackAppend(checkpoint, text.Length())
+		return err
+	}
+	return nil
 }
 
 // SET display strings require the original bytes; numeric/date conversions
@@ -5243,6 +5283,27 @@ func (h *ParquetHandler) fillIcebergDMLMetadataColumns(
 	return nil
 }
 
+// Parquet TIME assignment emits diagnostics while mapping a candidate page
+// slice. Keep them local until the same slice passes byte-budget admission.
+// The accumulator bounds retained payload while preserving count-only warnings.
+type parquetAssignmentWarnings struct {
+	process.WarningAccumulator
+}
+
+func (w *parquetAssignmentWarnings) AppendWarningDiagnostic(code uint16, message string) {
+	w.Add(code, message)
+}
+
+func (w *parquetAssignmentWarnings) mappingProcess(proc *process.Process) *process.Process {
+	w.SetWarningRetentionForProcess(proc)
+	// Borrow immutable execution state without replacing the caller's attempt
+	// sink or creating a new context/cancellation owner.
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = w
+	return child
+}
+
 func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
@@ -5253,6 +5314,12 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 	}
 	if len(h.dataColIndices) == 0 {
 		return moerr.NewInternalError(param.Ctx, "parquet page mode has no physical data columns")
+	}
+	var warnings parquetAssignmentWarnings
+	mappingProc := proc
+	if h.timeAssignment {
+		mappingProc = warnings.mappingProcess(proc)
+		defer warnings.Reset()
 	}
 
 	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
@@ -5292,7 +5359,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 		}
 
 		batchBytesBefore := h.physicalBatchSize(bat)
-		checkpoints, err := h.mapCurrentPageRows(bat, param, proc, toRead)
+		checkpoints, err := h.mapCurrentPageRows(bat, param, mappingProc, toRead)
 		if err != nil {
 			return h.closePagesOnError(param.Ctx, err)
 		}
@@ -5303,10 +5370,11 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			accepted = int64(acceptedRows - length)
 			if accepted < toRead {
 				h.rollbackPageAppend(bat, checkpoints, int(toRead))
+				warnings.Reset()
 				if accepted == 0 {
 					break
 				}
-				if _, err = h.mapCurrentPageRows(bat, param, proc, accepted); err != nil {
+				if _, err = h.mapCurrentPageRows(bat, param, mappingProc, accepted); err != nil {
 					return h.closePagesOnError(param.Ctx, err)
 				}
 			}
@@ -5314,6 +5382,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 
 		h.advanceCurrentPages(accepted)
 		length += int(accepted)
+		warnings.Flush(proc)
 	}
 
 	bat.SetRowCount(length)

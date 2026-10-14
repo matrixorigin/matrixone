@@ -92,6 +92,15 @@ type vectorSortContext struct {
 	hasMembership    bool
 }
 
+// resolveVectorNprobe chooses the query's base probe count without consulting
+// the session when an override is present. AUTO may still widen this base.
+func (builder *QueryBuilder) resolveVectorNprobe(option *plan.RankOption, fallback int64) (int64, error) {
+	if option != nil && option.Nprobe != 0 {
+		return option.Nprobe, nil
+	}
+	return builder.resolveInt64Variable("probe_limit", fallback)
+}
+
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
 	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
 		return builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], depth)
