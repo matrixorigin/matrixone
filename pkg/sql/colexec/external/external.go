@@ -260,7 +260,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		// from Attrs, so output position and table-column position differ.
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
-			typ := makeType(&param.Cols[colIndex].Typ, flag)
+			colType := &param.Cols[colIndex].Typ
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
 			if external.OutputAllocation != nil {
 				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
 				if err != nil {
@@ -1618,6 +1619,12 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 	return nil
 }
 
+func loadTimeTextInput(param *ExternalParam, id types.T) bool {
+	return id == types.T_time && param.Extern != nil &&
+		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
+}
+
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
 	colIdx := attr.ColIndex
 	colName := attr.ColName
@@ -1695,7 +1702,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if param.ParallelLoad && !isDirectParallelLoadType(id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err
