@@ -381,7 +381,8 @@ select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('0000
 ➤ greatest_uuid_same_oid[12,-1,0]  𝄀
 00000000-0000-0000-0000-000000000002
 select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
-invalid argument function greatest, bad value [UUID VARCHAR]
+➤ greatest(cast(00000000-0000-0000-0000-000000000001 as uuid), x)[12,36,0]  𝄀
+x
 select greatest(__mo_rowid, __mo_rowid) = __mo_rowid as greatest_rowid_same_oid from greatest_least_supported_oid;
 ➤ greatest_rowid_same_oid[-7,1,0]  𝄀
 1

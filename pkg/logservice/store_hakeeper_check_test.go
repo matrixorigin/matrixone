@@ -1237,7 +1237,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 				_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
 					UUID: "remote-recovery-coordinator",
 					ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-						walRecoveryStatusConfigKey: {
+						pb.WALRecoveryStatusConfigKey: {
 							CurrentValue: walRecoveryStatusPending,
 						},
 					}},
@@ -1263,7 +1263,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 					_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
 						UUID: "remote-recovery-coordinator",
 						ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-							walRecoveryStatusConfigKey: {
+							pb.WALRecoveryStatusConfigKey: {
 								CurrentValue: walRecoveryStatusComplete,
 							},
 						}},

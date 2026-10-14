@@ -334,16 +334,9 @@ func floatToUint64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
-			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
-		}
-		var converted uint64
-		if rounded < 0 {
-			converted = uint64(int64(rounded))
-		} else {
-			converted = uint64(rounded)
+		converted, err := explicitFloatToUint64(floatValue)
+		if err != nil {
+			return err
 		}
 		if err := to.Append(converted, false); err != nil {
 			return err
@@ -366,16 +359,72 @@ func floatToInt64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
-			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
+		converted, err := explicitFloatToInt64(floatValue)
+		if err != nil {
+			return err
 		}
-		if err := to.Append(int64(rounded), false); err != nil {
+		if err := to.Append(converted, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func explicitFloatToUint64(value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
+		return 0, moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	if rounded < 0 {
+		return uint64(int64(rounded)), nil
+	}
+	return uint64(rounded), nil
+}
+
+func explicitFloatToInt64(value float64) (int64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return int64(rounded), nil
+}
+
+func preparedFloatToUint64(input string) (uint64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToUint64(value)
+}
+
+func preparedFloatToInt64(input string) (int64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToInt64(value)
+}
+
+func isPreparedNumericCastOutOfRange(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrOutOfRange) || errors.Is(err, strconv.ErrRange)
+}
+
+func preparedDecimalToUint64(input string) (uint64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return explicitUint64FromIntegerString(rounded)
+}
+
+func preparedDecimalToInt64(input string) (int64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return decimalInt64Explicit(rounded)
 }
 
 func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
@@ -1013,6 +1062,87 @@ func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWr
 }
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
+	err := newCastWithoutMediumIntBounds(parameters, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
+	if err != nil || !mode.isAssignment() || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
+		return err
+	}
+	return enforceMediumIntAssignmentBounds(
+		proc, *parameters[1].GetType(), result.GetResultVector(), length, selectList, mode)
+}
+
+func enforceMediumIntAssignmentBounds(
+	proc *process.Process,
+	targetType types.Type,
+	result *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+	mode castMode,
+) error {
+	min, max, ok := targetType.MediumIntBounds()
+	if !ok {
+		return nil
+	}
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	strict := !mode.isAssignment() || mode.strictStringWidth() ||
+		(mode == castModeAssignment && isStrictSqlMode(proc))
+
+	if targetType.Oid == types.T_int32 {
+		values := vector.MustFixedColWithTypeCheck[int32](result)
+		for row := 0; row < length; row++ {
+			if result.IsNull(uint64(row)) ||
+				(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+				continue
+			}
+			value := int64(values[row])
+			if value >= min && value <= max {
+				continue
+			}
+			if strict {
+				return moerr.NewOutOfRangef(ctx, "mediumint", "value '%d'", value)
+			}
+			if value < min {
+				values[row] = int32(min)
+			} else {
+				values[row] = int32(max)
+			}
+			appendMediumIntRangeWarning(proc, row)
+		}
+		return nil
+	}
+
+	values := vector.MustFixedColWithTypeCheck[uint32](result)
+	for row := 0; row < length; row++ {
+		if result.IsNull(uint64(row)) ||
+			(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+			continue
+		}
+		value := uint64(values[row])
+		if value <= uint64(max) {
+			continue
+		}
+		if strict {
+			return moerr.NewOutOfRangef(ctx, "mediumint unsigned", "value '%d'", value)
+		}
+		values[row] = uint32(max)
+		appendMediumIntRangeWarning(proc, row)
+	}
+	return nil
+}
+
+func appendMediumIntRangeWarning(proc *process.Process, row int) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
+			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", row+1))
+	}
+}
+
+func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
 	var err error
 	execProc := proc
 	// Cast Parameter1 as Type Parameter2
@@ -4878,7 +5008,11 @@ func timeToTime(
 		} else {
 			result := v
 			// Truncate to target scale if needed
-			if targetScale < 6 {
+			// A value at least one second beyond the endpoint cannot re-enter
+			// the assignment domain at any FSP. Preserve its sign before rounding
+			// can overflow int64; near-boundary values still normalize first.
+			const irrecoverableTime = types.MySQLTimeMax + types.MicroSecsPerSec
+			if targetScale < 6 && !(mode.isAssignment() && (v >= irrecoverableTime || v <= -irrecoverableTime)) {
 				if truncate {
 					result = result.TruncateToScaleWithoutRounding(targetScale)
 				} else {
@@ -4906,7 +5040,15 @@ func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Ti
 		appendTimeRangeWarning(proc, value, scale)
 		return types.ClampMySQLTimeForScale(value, scale), nil
 	}
-	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
+	var label string
+	if value == types.Time(math.MinInt64) {
+		// ClockFormat negates negative durations; MinInt64 has no positive
+		// int64 counterpart. Keep the original value truthful in write errors.
+		label = strconv.FormatInt(int64(value), 10) + " microseconds"
+	} else {
+		label = value.String2(scale)
+	}
+	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, label, value < 0, row)
 }
 
 func mysqlTimeOutOfRangeForCast(
@@ -6856,6 +6998,27 @@ func strToSignedWithProc[T constraints.Signed](
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var r int64
+					var err error
+					if kind == vector.PrepareParamFloat {
+						r, err = preparedFloatToInt64(s)
+					} else {
+						r, err = preparedDecimalToInt64(s)
+					}
+					if err != nil {
+						if isPreparedNumericCastOutOfRange(err) {
+							return moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					if err = to.Append(T(r), false); err != nil {
+						return err
+					}
+					continue
+				}
 				var r int64
 				var err error
 				var integerPrefix string
@@ -7820,6 +7983,26 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var value uint64
+					if kind == vector.PrepareParamFloat {
+						value, tErr = preparedFloatToUint64(s)
+					} else {
+						value, tErr = preparedDecimalToUint64(s)
+					}
+					if tErr != nil {
+						if isPreparedNumericCastOutOfRange(tErr) {
+							return moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to uint64", s)
+					}
+					if tErr = to.Append(T(value), false); tErr != nil {
+						return tErr
+					}
+					continue
+				}
 				res = &s
 				if len(explicit) > 1 && explicit[1] {
 					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =
@@ -8757,25 +8940,7 @@ func strToDate(proc *process.Process,
 // assignment/IGNORE diagnostics. Trimming here preserves ParseDatetime's
 // accepted trailing whitespace while still preventing scale-6 rounding.
 func truncateTemporalFractionForParse(s string, scale int32) string {
-	s = strings.TrimSpace(s)
-	dot := strings.LastIndexByte(s, '.')
-	if dot < 0 {
-		return s
-	}
-	end := dot + 1
-	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
-		end++
-	}
-	if end == dot+1 || end != len(s) {
-		return s
-	}
-	if end-dot-1 <= int(scale) {
-		return s
-	}
-	if scale == 0 {
-		return s[:dot]
-	}
-	return s[:dot+1+int(scale)]
+	return types.TruncateTemporalFractionForParse(s, scale)
 }
 
 func strToTime(
@@ -9306,6 +9471,11 @@ func strToStr(
 			if padSetOperationChar {
 				v = padVarlenaToRuneWidth(v, destLen)
 			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
+			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
@@ -9321,6 +9491,11 @@ func strToStr(
 			}
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
+			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
 			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err

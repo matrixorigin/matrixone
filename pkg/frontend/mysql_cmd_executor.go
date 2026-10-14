@@ -205,22 +205,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
-		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
-		if len(execSql) != 0 {
-			bb := strings.Builder{}
-			bb.WriteString(envStmt)
-			bb.WriteString(" // ")
-			bb.WriteString(execSql)
-			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		} else {
-			// ignore envStmt == ""
-			// case: exec `set @t = 2;` will trigger an internal query with the same session.
-			// If you need real sql, can try:
-			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-			//	+ cw.GetAst().Format(fmtCtx)
-			//  + envStmt = fmtCtx.String()
-			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		}
+		text = makeExecuteSql(ctx, ses, statement, binExec, prepareName, envStmt,
+			int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	} else {
 		u, _ := util.FastUuid()
 		stmID = uuid.UUID(u)
@@ -2623,7 +2609,7 @@ func writeExplainResult(
 	if err != nil {
 		return err
 	}
-	if explainSchedulingEnabled(ses) {
+	if es.Format != explain.EXPLAIN_FORMAT_JSON && explainSchedulingEnabled(ses) {
 		if rawSQL == "" {
 			rawSQL = ses.GetSql()
 		}
@@ -2647,6 +2633,9 @@ func writeExplainResult(
 	//2. fill the result set
 	//column
 	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		explainColName = "EXPLAIN"
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName(explainColName)
@@ -2803,9 +2792,16 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 	if scanner.CommentFlag {
 		scanner.TakeExecutableCommentEnd()
 		var commentEnd int
+		previousToken := mysql.FROM
 		for commentEnd == 0 {
 			previousPos := scanner.Pos
-			token, _ := scanner.Scan()
+			var token int
+			if previousToken == int('.') {
+				token, _ = scanner.ScanAfterDot()
+			} else {
+				token, _ = scanner.Scan()
+			}
+			previousToken = token
 			commentEnd = scanner.TakeExecutableCommentEnd()
 			if commentEnd == 0 &&
 				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
@@ -2842,6 +2838,13 @@ func doPrepareStmtInSession(
 	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(owner))
 	if err != nil {
 		return nil, err
+	}
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		// Background/procedure PREPARE has raw SQL but no frontend request
+		// snapshot. Reparse it under the owner's policy before planning; the
+		// caller's old AST must not be stamped with a newly captured generation.
+		return doPrepareStringWithParamTypes(owner, executionSes, execCtx,
+			&tree.PrepareString{Name: st.Name, Sql: originSql}, paramTypes)
 	}
 	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, originSql, st, st.Stmt)
 	if err != nil {
@@ -2899,9 +2902,62 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 }
 
 func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
+	return doPrepareStringWithParamTypes(owner, executionSes, execCtx, st, nil)
+}
+
+func preparedOwnerPolicyCaptured(execCtx *ExecCtx) bool {
+	return execCtx.input != nil && execCtx.input.rewritePolicy != nil && execCtx.input.rewritePolicy.captured
+}
+
+// capturePreparedOwnerPolicy closes the producer boundary for background SQL
+// without changing the immutable snapshot of an existing frontend request.
+// Catalog I/O stays outside the session locks. The temporary context belongs
+// only to this PREPARE, not to later statements in a procedure.
+func capturePreparedOwnerPolicy(execCtx *ExecCtx, owner *Session) (bool, func(), error) {
+	if preparedOwnerPolicyCaptured(execCtx) {
+		return false, func() {}, nil
+	}
+	if execCtx.input != nil && execCtx.input.rewritePolicyMaterialized {
+		return false, nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement has materialized SQL without a captured owner policy")
+	}
+	policy, err := captureRewritePolicy(execCtx.reqCtx, owner)
+	if err != nil {
+		return false, nil, err
+	}
+	previousInput, previousEnabled, previousRemap := execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb
+	input := &UserInput{}
+	if previousInput != nil {
+		*input = *previousInput
+	}
+	input.rewritePolicy = policy
+	execCtx.input, execCtx.rewriteEnabled = input, policy.enabled
+	return true, func() {
+		execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb = previousInput, previousEnabled, previousRemap
+	}, nil
+}
+
+func doPrepareStringWithParamTypes(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString, paramTypes []byte) (*PrepareStmt, error) {
+	capturedNow, restore, err := capturePreparedOwnerPolicy(execCtx, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql ||
 		statementSQLSource(st.Sql, sessionSQLModeForParser(owner)) == constant.CloudNoUserSql
-	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, owner, st.Sql)
+	var rewritten string
+	var innerStmt tree.Statement
+	var remapDb map[string]string
+	if capturedNow {
+		// A materialized outer hint does not exist on this producer. Apply the
+		// actual owner snapshot to the raw inner SQL, including mandatory rules
+		// when the optional enable_remap_hint switch is disabled.
+		rewritten, err = execCtx.input.rewritePolicy.rewrite(execCtx.reqCtx, st.Sql, sessionSQLModeForParser(owner))
+		if err == nil {
+			rewritten, innerStmt, remapDb, err = parsePreparedStatement(execCtx, owner, rewritten)
+		}
+	} else {
+		rewritten, innerStmt, remapDb, err = prepareStringStatement(execCtx, owner, st.Sql)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2921,6 +2977,9 @@ func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *E
 		return nil, err
 	}
 	prepareStmt.IsCloudNonuser = nonuser
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 
 	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
@@ -2944,7 +3003,10 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			return sql, nil, nil, err
 		}
 	}
+	return parsePreparedStatement(execCtx, ses, rewritten)
+}
 
+func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (string, tree.Statement, map[string]string, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return rewritten, nil, nil, err
@@ -3001,6 +3063,11 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// Every executable handle must prove which policy actually participated
+	// in planning. Publication cannot repair missing provenance afterward.
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		return nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement requires a captured owner policy before planning")
+	}
 	// Nested planning may change the session's current statement. Capture the
 	// owner statement now; neighboring statements in the request are irrelevant.
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql
@@ -3123,6 +3190,12 @@ func createPrepareStmtInSession(
 		schedulingSQLMode:          schedulingSQLMode,
 	}
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
+		execCtx.input.rewritePolicy.captured {
+		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
+		prepareStmt.rewritePolicyCaptured = true
+		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
+	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3209,10 +3282,15 @@ func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *Exec
 }
 
 func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
-	prepareStmt, err := ses.GetPrepareStmt(ctx, string(st.Name))
+	// RESET is a cleanup operation. It must remain reachable for an
+	// invalidated handle so clients can discard LONG_DATA and close a retained
+	// cursor before preparing a replacement. Execution paths continue to use
+	// the checked lookup and still reject the handle.
+	prepareStmt, err := ses.getPrepareStmtAllowInvalidated(ctx, string(st.Name))
 	if err != nil {
 		return err
 	}
+	prepareStmt.closeCursor()
 	prepareStmt.resetBinaryParamState()
 	return nil
 }
@@ -3951,43 +4029,85 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
 		return es, nil
-	} else {
-		for _, v := range options {
-			if strings.EqualFold(v.Name, tree.VerboseOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Verbose = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Verbose = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.AnalyzeOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Analyze = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Analyze = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.FormatOption) {
-				if strings.EqualFold(v.Value, "TEXT") {
-					es.Format = explain.EXPLAIN_FORMAT_TEXT
-				} else if strings.EqualFold(v.Value, "JSON") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else if strings.EqualFold(v.Value, "DOT") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.CheckOption) {
-				if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
-				}
-			} else {
+	}
+
+	seen := make(map[string]struct{}, len(options))
+	phyplan := false
+	check := false
+	for _, v := range options {
+		name := strings.ToLower(strings.TrimSpace(v.Name))
+		if _, ok := seen[name]; ok {
+			return nil, moerr.NewInvalidInputf(reqCtx, "duplicate explain option '%s'", v.Name)
+		}
+		seen[name] = struct{}{}
+
+		switch name {
+		case "verbose":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
 				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
+			es.Verbose = value
+		case "analyze":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			es.Analyze = value
+		case "phyplan":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			phyplan = value
+		case "format":
+			value := strings.Trim(strings.TrimSpace(v.Value), "'")
+			value = strings.Trim(value, string('"'))
+			value = strings.ToUpper(value)
+			switch value {
+			case "TEXT":
+				es.Format = explain.EXPLAIN_FORMAT_TEXT
+			case "JSON":
+				es.Format = explain.EXPLAIN_FORMAT_JSON
+			case "DOT":
+				return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
+			default:
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+		case "check":
+			check = true
+			if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
+			}
+		default:
+			return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 		}
-		return es, nil
+	}
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		if es.Analyze {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+		}
+		if phyplan {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+		}
+		if check {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN FORMAT=JSON does not support CHECK")
+		}
+	}
+	return es, nil
+}
+
+func parseExplainBool(value string) (bool, bool) {
+	value = strings.Trim(strings.TrimSpace(value), "'")
+	value = strings.Trim(value, string('"'))
+	value = strings.ToUpper(value)
+	switch value {
+	case "TRUE", "NULL":
+		return true, true
+	case "FALSE":
+		return false, true
+	default:
+		return false, false
 	}
 }
 
@@ -4397,6 +4517,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		execCtx.input.genSqlSourceType(ses)
+		// Binary execute carries the prepared plan directly in UserInput. Check
+		// the owning handle before the plan reaches privilege checks or Compile;
+		// parsing the packet already checks this in the normal protocol path, but
+		// this guard also covers internal callers that construct UserInput.
+		if execCtx.input.isBinaryProtExecute {
+			if _, err := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); err != nil {
+				return nil, err
+			}
+		}
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
@@ -5339,6 +5468,10 @@ func executeStmtWithTxn(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
+	// The process survives across statements, including statements handled
+	// directly by the frontend. Stage definitions are only valid within one
+	// statement's catalog snapshot, so discard entries before planning/dispatch.
+	execCtx.proc.GetStageCache().Clear()
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, statsArr, execCtx)
 	} else {
@@ -5346,6 +5479,12 @@ func executeStmtWithTxn(ses FeSession,
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
 		execCtx.proc.Base.TxnOperator = txnOp
+
+		// Derived execution borrows the caller's workspace statement. A retry
+		// must be returned to its owner rather than rolling back only this child.
+		wasDisabled := execCtx.proc.IncrStatementDisabled()
+		execCtx.proc.SetIncrStatementDisabled(true)
+		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5445,6 +5584,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		// initExecuteStmtParam recorded its binding database before authorization.
 		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 	}
+	execCtx.effectiveTxnStatement = effectiveStmt
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
@@ -5600,6 +5740,14 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if err != nil || hasRecovered {
 		return err
 	}
+	// Frontend statements have no physical Compile to establish their workspace
+	// boundary. Capture it after prior-statement maintenance, before any child
+	// execution can reorder writes or fail. Engine statements retain their
+	// existing NewCompile/Reset owner.
+	if execCtx.effectiveTxnStatement.StmtKind().ExecLocation() == tree.EXEC_IN_FRONTEND {
+		txnOp.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
+
 	stats := statistic.StatsInfoFromContext(newCtx)
 	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -5668,11 +5816,10 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	return nil
 }
 
-func dispatchStmt(ses FeSession,
-	statsArr *statistic.StatsArray,
-	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(FPDispatchStmt)
-	defer ses.ExitFPrint(FPDispatchStmt)
+// checkCachedStatementPlan admits or replaces a cached generation before
+// physical compilation. Keeping this phase separate from Run lets compile-only
+// consumers validate the same generation boundary without publishing results.
+func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
@@ -5687,10 +5834,21 @@ func dispatchStmt(ses FeSession,
 			}
 		}
 		if flag {
-			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
+			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func dispatchStmt(ses FeSession,
+	statsArr *statistic.StatsArray,
+	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(FPDispatchStmt)
+	defer ses.ExitFPrint(FPDispatchStmt)
+	if err = checkCachedStatementPlan(ses, execCtx); err != nil {
+		return err
 	}
 
 	//6. execute stmt within txn
@@ -5801,8 +5959,12 @@ func executeStmt(ses *Session,
 				txnCw.completeCompileExecution(c, err)
 			}
 
-			// Serialize the execution plan as json
-			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
+			// Capture detached diagnostics before the current generation is released.
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				_ = txnCw.recordExecPlan(execCtx.reqCtx, phyPlan, err)
+			} else {
+				_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
+			}
 			c.Release()
 		}
 	}()
@@ -6844,12 +7006,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		// Closing an invalidated handle must remain possible. Execution paths use
+		// GetPrepareStmt, which rejects the handle before any retained state is
+		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -6878,7 +7044,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
 			// This early return never reaches doComQuery, so set the state here.
@@ -6886,6 +7052,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -6906,7 +7073,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
+		status := ses.GetTxnHandler().GetServerStatus()
+		if ses.GetResponser().MysqlRrWr().GetU32(CAPABILITY)&CLIENT_DEPRECATE_EOF == 0 {
+			return NewResponse(EoFResponse, 0, 0, 0, status, int(COM_SET_OPTION), nil), nil
+		}
+		return NewGeneralOkResponse(COM_SET_OPTION, status), nil
 
 	default:
 		markRowCountFailed(ses, ses.GetProc())
@@ -6927,7 +7098,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	if preStmt.longDataErr != nil {
 		return "", preStmt, preStmt.longDataErr
@@ -6972,6 +7143,9 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
 	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
 	if err != nil {
+		if stmt != nil {
+			stmt.closeCursor()
+		}
 		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
 	}
 	if stmt.cursor == nil || stmt.cursor.result == nil {
@@ -7028,12 +7202,18 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) (e
 	pos += 4
 
 	stmtName := getPrepareStmtName(stmtID)
-	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	preStmt, err := ses.getPrepareStmtAllowInvalidated(reqCtx, stmtName)
 	if err != nil {
 		// MySQL silently discards long data for an unknown statement id.
 		return nil
 	}
 	if preStmt.longDataErr != nil {
+		return nil
+	}
+	if err = preStmt.checkRewritePolicy(reqCtx); err != nil {
+		// COM_STMT_SEND_LONG_DATA has no response packet. An invalidated
+		// handle cannot accept the upload, but the client must remain aligned
+		// for the following COM_STMT_EXECUTE, which reports ER_NEED_REPREPARE.
 		return nil
 	}
 	defer func() {
@@ -7199,7 +7379,11 @@ type jsonPlanHandler struct {
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
+	return newJsonPlanHandler(ctx, stmt, ses, plan, phyPlan, nil, opts...)
+}
+
+func newJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, runErr error, opts ...marshalPlanOptions) *jsonPlanHandler {
+	h := newMarshalPlanHandler(ctx, stmt, plan, phyPlan, runErr, opts...)
 	statsBytes, stats := h.Stats(ctx, ses)
 	var staticJSON []byte
 	if h.marshalPlan == nil && (h.schedulingTrace == nil || !h.schedulingTrace.PersistStandalone()) {
@@ -7223,7 +7407,11 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	}
 }
 
-func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace, waitActiveCost time.Duration) *jsonPlanHandler {
+	if motrace.UseCompactStatementDiagnostics() {
+		d := &models.StatementDiagnostics{Version: models.DiagnosticsVersion, Level: 1, CapturedLevel: 1, Reasons: 1 << 9, Outcome: "failed", Scheduling: projectDiagnosticScheduling(&trace), Detail: models.DiagnosticDetail{Capture: "compile_failed"}}
+		return &jsonPlanHandler{statsBytes: statistic.DefaultStatsArray, persistSchedulingTrace: true, marshalHandler: &marshalPlanHandler{marshalPlan: &models.ExplainData{StatementDiagnostics: d}, marshalPlanConfig: marshalPlanConfig{waitActiveCost: waitActiveCost}}}
+	}
 	trace = trace.Clone()
 	h := &marshalPlanHandler{
 		marshalPlanConfig: marshalPlanConfig{
@@ -7267,6 +7455,7 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanConfig struct {
+	// Negative means the transaction admission measurement is unavailable.
 	waitActiveCost          time.Duration
 	schedulingTrace         *schedule.Trace
 	schedulingTraceRecorder *schedule.TraceRecorder
@@ -7329,19 +7518,24 @@ func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, p *plan.Plan, op
 // SetResourceSummary injects an already sealed summary into a materialized
 // explain plan. It intentionally does not touch the live resource root.
 func (h *marshalPlanHandler) SetResourceSummary(summary resource.StatementResourceSummary) {
-	if h == nil || h.marshalPlan == nil {
+	if h == nil || h.marshalPlan == nil || h.marshalPlan.StatementDiagnostics != nil {
 		return
 	}
 	h.marshalPlan.PhyPlan.Resource = &summary
 }
 
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
+	return newMarshalPlanHandler(ctx, stmt, plan, phyPlan, nil, opts...)
+}
+
+func newMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, runErr error, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
 	h := &marshalPlanHandler{
-		stmt: stmt,
-		uuid: uuid,
+		stmt:              stmt,
+		uuid:              uuid,
+		marshalPlanConfig: marshalPlanConfig{waitActiveCost: -1},
 	}
 	for _, opt := range opts {
 		opt(&h.marshalPlanConfig)
@@ -7352,9 +7546,18 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	needFullPlan := h.query != nil && h.needMarshalPlan()
 	h.resolveSchedulingTrace(needFullPlan)
 
+	// A short ordinary query with no resource preview cannot admit diagnostics.
+	// Keep the existing placeholder path out of the projection/policy calls.
+	if h.query != nil && !needFullPlan && runErr == nil && !h.persistSchedulingTrace && (phyPlan == nil || phyPlan.Resource == nil) {
+		return h
+	}
+	if motrace.UseCompactStatementDiagnostics() {
+		h.captureStatementDiagnostics(ctx, phyPlan, runErr)
+		return h
+	}
 	if needFullPlan {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+		h.marshalPlan.NewPlanStats.SetWaitActiveCost(max(0, h.waitActiveCost))
 		if phyPlan != nil {
 			h.marshalPlan.PhyPlan = *phyPlan.CloneForExport()
 		}
@@ -7383,7 +7586,7 @@ func (h *marshalPlanHandler) resolveSchedulingTrace(includeNormalLocal bool) {
 // check longQueryTime, need after StatementInfo.MarkResponseAt
 // MoLogger NOT record ExecPlan
 func (h *marshalPlanHandler) needMarshalPlan() bool {
-	return (h.stmt.Duration-h.waitActiveCost) > motrace.GetLongQueryTime() &&
+	return (max(0, h.stmt.Duration)-max(0, h.waitActiveCost)) > motrace.GetLongQueryTime() &&
 		!h.stmt.IsMoLogger()
 }
 
@@ -7411,7 +7614,10 @@ func getMarshalPlanBufferPool() *bytes.Buffer {
 }
 
 func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
-	marshalPlanBufferPool.Put(b)
+	// A legacy full plan must not inflate the buffers retained by compact rows.
+	if b.Cap() <= 64<<10 {
+		marshalPlanBufferPool.Put(b)
+	}
 }
 
 // allocBufferIfNeeded should call just right before needed.
@@ -7424,6 +7630,14 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
+	if h.marshalPlan != nil && h.marshalPlan.StatementDiagnostics != nil {
+		h.allocBufferIfNeeded()
+		if err = h.marshalPlan.StatementDiagnostics.WriteJSON(h.buffer); err != nil {
+			h.buffer.Reset()
+			return buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrInternal, err.Error())
+		}
+		return h.buffer.Next(h.buffer.Len())
+	}
 	if h.marshalPlan != nil {
 		sanitizeNonFiniteFloatValues(h.marshalPlan)
 		h.allocBufferIfNeeded()
@@ -7528,7 +7742,7 @@ func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	statsByte.Reset()
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
@@ -7567,9 +7781,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 		(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 	if totalTime < 0 {
-		if !h.isInternalSubStmt && ses != nil && h.stmt != nil {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s", uuid.UUID(h.stmt.StatementID).String(), h.stmt.StatementType)
-		}
 		v2.GetTraceNegativeCUCounter("cpu").Inc()
 	} else {
 		statsByte.WithTimeConsumed(float64(totalTime))

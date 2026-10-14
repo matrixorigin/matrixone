@@ -29,8 +29,10 @@ func TestAdvertisedCollationsAreExecutable(t *testing.T) {
 		"binary":             {charset: "binary", padAttribute: "NO PAD"},
 		"utf8_bin":           {charset: "utf8", padAttribute: "PAD SPACE"},
 		"utf8_general_ci":    {charset: "utf8", padAttribute: "PAD SPACE"},
+		"utf8_unicode_ci":    {charset: "utf8", padAttribute: "PAD SPACE"},
 		"utf8mb4_bin":        {charset: "utf8mb4", padAttribute: "PAD SPACE"},
 		"utf8mb4_general_ci": {charset: "utf8mb4", padAttribute: "PAD SPACE"},
+		"utf8mb4_unicode_ci": {charset: "utf8mb4", padAttribute: "PAD SPACE"},
 		"utf8mb4_0900_ai_ci": {charset: "utf8mb4", padAttribute: "PAD SPACE"},
 	}
 	defaults := map[string]string{

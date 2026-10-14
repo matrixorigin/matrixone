@@ -31,32 +31,6 @@ func normalizeGroupByName(name *tree.UnresolvedName) {
 	}
 }
 
-func resolveGroupByColumnIdentity(ctx *BindContext, name *tree.UnresolvedName) (*Binding, int32, bool) {
-	if ctx == nil || name == nil || name.Star || name.NumParts == 0 {
-		return nil, 0, false
-	}
-
-	col := name.ColName()
-	var binding *Binding
-	if table := name.TblName(); table != "" {
-		binding = ctx.bindingByTable[table]
-		if binding == nil && name.DbName() != "" {
-			binding = ctx.bindingByTable[name.DbName()+"."+table]
-		}
-	} else {
-		binding = ctx.bindingByCol[col]
-	}
-	if binding == nil {
-		return nil, 0, false
-	}
-
-	colPos := binding.FindColumn(col)
-	if colPos == NotFound || colPos == AmbiguousName {
-		return nil, 0, false
-	}
-	return binding, colPos, true
-}
-
 // canonicalGroupByAstKey folds identifiers and function names through their
 // comparison form. Resolved columns are represented by relation tag and column
 // position, so col, tbl.col, and db.tbl.col match only when they resolve to the
@@ -73,7 +47,7 @@ func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 			if _, isFunctionName := functionNames[node]; isFunctionName {
 				return true
 			}
-			if binding, colPos, ok := resolveGroupByColumnIdentity(ctx, node); ok {
+			if binding, colPos, ok := resolveColumnIdentity(ctx, node); ok {
 				node.NumParts = 1
 				node.CStrParts = tree.CStrParts{}
 				node.CStrParts[0] = tree.NewCStr("__mo_resolved_group_by_column", 0)
@@ -100,6 +74,9 @@ func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {
 	if pos, ok := ctx.groupByAst[astKey]; ok {
 		return pos, true
+	}
+	if len(ctx.groupByCanonicalAst) == 0 {
+		return 0, false
 	}
 	pos, ok := ctx.groupByCanonicalAst[canonicalGroupByAstKey(ctx, astExpr)]
 	return pos, ok
@@ -228,7 +205,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		reusesProjection = true
 		if int(pos) < len(b.ctx.numericProjectionTypes) {
 			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id != 0 {
+			if isNumericAssignmentTarget(target) {
 				numericTarget = &target
 			}
 		}
@@ -249,7 +226,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				astExpr = b.selectList[colPos-1].Expr
 				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
 					target := b.ctx.numericProjectionTypes[colPos-1]
-					if target.Id != 0 {
+					if isNumericAssignmentTarget(target) {
 						numericTarget = &target
 					}
 				}

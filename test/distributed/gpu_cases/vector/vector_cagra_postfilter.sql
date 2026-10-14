@@ -4,7 +4,7 @@
 -- GPU REQUIRED. A WHERE predicate on a column that is NOT in the index INCLUDE
 -- list cannot be pushed into the GPU bitset pre-filter. Instead the planner runs
 -- the ANN search to get a candidate window, then JOINs + filters the predicate
--- at the database (post-filter). See the plan: cagra_search (candidate window)
+-- at the database (post-filter). See the plan: cagra index search scan (candidate window)
 -- INNER JOIN (table scan Filter: <non-include pred>) -> Sort -> Limit.
 --
 -- Methodology: first take the UNFILTERED ranked result, then verify the

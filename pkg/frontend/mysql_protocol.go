@@ -155,7 +155,9 @@ const (
 	// DefaultCollationID is utf8mb4_bin(46)
 	utf8mb4BinCollationID uint8 = 46
 
-	Utf8mb4CollationID uint8 = 45
+	Utf8mb4CollationID        uint8 = 45
+	utf8UnicodeCollationID    uint8 = 192
+	utf8mb4UnicodeCollationID uint8 = 224
 
 	AuthNativePassword string = "mysql_native_password"
 
@@ -317,6 +319,8 @@ func (mp *MysqlProtocolImpl) SetU32(id PropertyID, v uint32) {
 	switch id {
 	case CONNID:
 		mp.connectionID = v
+	case CAPABILITY:
+		mp.SetCapability(v)
 	default:
 	}
 }
@@ -1423,7 +1427,9 @@ func (mp *MysqlProtocolImpl) appendIntLenEnc(value uint64) error {
 // read the count of bytes from the buffer at the position
 // return bytes slice ; position + count ; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readCountOfBytes(data []byte, pos int, count int) ([]byte, int, bool) {
-	if pos+count-1 >= len(data) {
+	// count may come from a client-supplied length-encoded integer; reject
+	// negative values (uint64 > MaxInt64 converted to int) before slicing.
+	if count < 0 || pos < 0 || pos > len(data) || count > len(data)-pos {
 		return nil, 0, false
 	}
 	return data[pos : pos+count], pos + count, true
@@ -1502,10 +1508,12 @@ func (mp *MysqlProtocolImpl) readStringLenEnc(data []byte, pos int) (string, int
 	if !ok {
 		return "", 0, false
 	}
-	sLength := int(value)
-	if pos+sLength-1 >= len(data) {
+	// Compare as uint64 before converting: a length above MaxInt64 would
+	// become a negative int and pass a signed bounds check.
+	if pos > len(data) || value > uint64(len(data)-pos) {
 		return "", 0, false
 	}
+	sLength := int(value)
 	return string(data[pos : pos+sLength]), pos + sLength, true
 }
 
@@ -2704,11 +2712,15 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Preserve raw bytes for binary values, including legacy vectors
-		// described as MYSQL_TYPE_VARCHAR.
+			// Preserve raw bytes for binary values, including legacy vectors
+			// described as MYSQL_TYPE_VARCHAR.
+		case defines.MYSQL_TYPE_GEOMETRY:
+			if err := mp.appendGeometryValue(mrs, rowIdx, i, mysqlColumn.geometrySourceType()); err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
-			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
@@ -2967,11 +2979,15 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Preserve raw bytes for binary values, including legacy vectors
-		// described as MYSQL_TYPE_VARCHAR.
+			// Preserve raw bytes for binary values, including legacy vectors
+			// described as MYSQL_TYPE_VARCHAR.
+		case defines.MYSQL_TYPE_GEOMETRY:
+			if err := mp.appendGeometryValue(mrs, r, i, mysqlColumn.geometrySourceType()); err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
-			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
@@ -3810,11 +3826,7 @@ func (mp *MysqlProtocolImpl) writeResultSetRow2(
 				err = mp.appendResultSetTextRow2(mrs, colSlices, i)
 			}
 			if err != nil {
-				//ERR_Packet in case of error
-				err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
-				if err1 != nil {
-					return err1
-				}
+				// The statement handler writes the terminal error response.
 				return err
 			}
 		}
@@ -4266,4 +4278,25 @@ func formatDateForMySQL(d types.Date) string {
 		return "0000-00-00"
 	}
 	return d.String()
+}
+
+func (mp *MysqlProtocolImpl) appendGeometryValue(mrs *MysqlResultSet, row, col uint64, typ types.Type) error {
+	value, err := mrs.GetValue(mp.ctx, row, col)
+	if err != nil {
+		return err
+	}
+	var payload []byte
+	switch v := value.(type) {
+	case []byte:
+		payload = v
+	case string:
+		payload = []byte(v)
+	default:
+		return moerr.NewInvalidInputNoCtx("invalid geometry result value")
+	}
+	wire, err := encodeMySQLGeometry(payload, typ)
+	if err != nil {
+		return err
+	}
+	return AppendCountOfBytesLenEnc(mp, wire)
 }

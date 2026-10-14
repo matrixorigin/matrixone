@@ -2141,10 +2141,8 @@ rowLoop:
 		// build all values
 		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
 		for j := 2; j < len(parameters); j += 2 {
-			// Unlike JSON_SET/INSERT/REPLACE, JSON_ARRAY_APPEND returns SQL
-			// NULL when any value argument is SQL NULL.  The other JSON
-			// modification functions intentionally convert SQL NULL values to
-			// the JSON null literal, so keep this check local to ARRAY_APPEND.
+			// Preserve the existing ARRAY_APPEND NULL behavior. Other modifiers,
+			// including ARRAY_INSERT, convert SQL NULL values to JSON null.
 			if jsonFuncType == bytejson.JsonModifyArrayAppend && parameters[j].IsNull(i) {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err

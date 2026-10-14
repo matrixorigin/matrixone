@@ -78,6 +78,45 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
+func TestIndexUsesUnicodeCollationDisablesCovering(t *testing.T) {
+	table := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"s": 0, "n": 1},
+		Cols: []*planpb.ColDef{
+			{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+			{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	require.True(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"s", "n"}}, table))
+	require.False(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"n"}}, table))
+	require.False(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"missing"}}, table))
+	require.False(t, indexUsesUnicodeCollation(nil, table))
+}
+
+func TestUnicodeHintedCoveringFallsBackToBaseRows(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	tag := builder.genNewBindTag()
+	node := &planpb.Node{
+		BindingTags: []int32{tag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{"s": 0, "n": 1},
+			Cols: []*planpb.ColDef{
+				{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+				{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+		},
+	}
+	idx := &IndexDef{
+		IndexName:      "idx_unicode",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_unicode",
+		Parts:          []string{"s", "n"},
+		TableExist:     true,
+	}
+	id, err := builder.tryHintedCoveringIndexScan(idx, node, map[[2]int32]int{{tag, 0}: 1, {tag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), id)
+}
+
 func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
 	floatTypes := []types.T{types.T_float32, types.T_float64}
 	for _, typ := range floatTypes {
@@ -306,6 +345,33 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 		mapped := indexNode.FilterList[0].GetF().Args[0]
 		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
 		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("Unicode serialized part stays on the base scan", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeStringEqFilterExpr(baseTag, 1, "Alpha")
+		filter.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		filter.GetF().Args[1].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Empty(t, indexNode.FilterList)
 	})
 
 	t.Run("all serialized residuals", func(t *testing.T) {
@@ -4596,6 +4662,25 @@ func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
 }
 
+func TestUnicodeIndexDoesNotUseIndexOnlyScan(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "Alpha")
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_id"},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000, Outcnt: 100, Selectivity: 0.1, Cost: 1_000},
+		map[int32]int{2: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Cols[2].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	_, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.False(t, ok, "Unicode index keys are not recoverable original values")
+}
+
 func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	filter := makeStringEqFilterExpr(0, 2, "joce")
 	filter.Selectivity = 0.1
@@ -5274,8 +5359,8 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
 	functionScan := collectFullTextFunctionScans(builder, joinNode.Children[0])[0]
-	require.Nil(t, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.Nil(t, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	require.Nil(t, functionScan.IndexSearchScan.SourceTable.GetPubInfo())
+	require.Nil(t, functionScan.IndexSearchScan.HiddenTables[0].GetObject().GetPubInfo())
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
 	require.Len(t, joinNode.OnList, 1)
 }
@@ -5358,12 +5443,14 @@ func TestFullTextJoinRewriteCarriesPublisherReferences(t *testing.T) {
 	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
 	require.Len(t, functionScans, 1)
 	functionScan := functionScans[0]
-	require.Equal(t, "`pub``db`.`source``table`", functionScan.TblFuncExprList[0].GetLit().GetSval())
-	require.Equal(t, "`pub``db`.`index``table`", functionScan.TblFuncExprList[1].GetLit().GetSval())
-	require.Equal(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.Equal(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
-	require.NotSame(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.NotSame(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	opts := fullTextScanOptions(t, functionScan)
+	require.Equal(t, "`pub``db`.`source``table`", opts.SourceTable)
+	require.Equal(t, "`pub``db`.`index``table`", opts.IndexTable)
+	spec := functionScan.IndexSearchScan
+	require.Equal(t, scan.ObjRef, spec.SourceTable)
+	require.Equal(t, indexRef, spec.HiddenTables[0].Object)
+	require.NotSame(t, scan.ObjRef, spec.SourceTable)
+	require.NotSame(t, indexRef, spec.HiddenTables[0].Object)
 }
 
 func TestFullTextJoinRewriteBothChildren(t *testing.T) {
@@ -5454,7 +5541,7 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(15), fulltextScanLimit(functions[0]).GetLit().GetU64Val())
 	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
 	require.Nil(t, scan.Limit)
@@ -5476,8 +5563,8 @@ func TestFullTextCandidateLimitWithoutResidualFilterKeepsDynamicLimit(t *testing
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.NotNil(t, functions[0].Limit.GetP())
-	require.Equal(t, int32(0), functions[0].Limit.GetP().Pos)
+	require.NotNil(t, fulltextScanLimit(functions[0]).GetP())
+	require.Equal(t, int32(0), fulltextScanLimit(functions[0]).GetP().Pos)
 }
 
 func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T) {
@@ -5497,7 +5584,7 @@ func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T)
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Nil(t, functions[0].Limit,
+	require.Nil(t, fulltextScanLimit(functions[0]),
 		"the full-text TVF must not truncate candidates before FOUND_ROWS counting")
 	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
@@ -5590,14 +5677,14 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 			functions := collectFullTextFunctionScans(builder, newID)
 			require.Len(t, functions, 1)
 			if tc.classicIndex {
-				require.Equal(t, fulltext_index_scan_func_name, functions[0].TableDef.TblFunc.Name)
+				require.True(t, isFullTextSearchScan(functions[0]))
 			} else {
-				require.Equal(t, fulltext2_search_func_name, functions[0].TableDef.TblFunc.Name)
+				require.True(t, isFulltext2SearchScan(functions[0]))
 			}
 			if tc.wantCandidateK {
-				require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+				require.Equal(t, uint64(15), fulltextScanLimit(functions[0]).GetLit().GetU64Val())
 			} else {
-				require.Nil(t, functions[0].Limit)
+				require.Nil(t, fulltextScanLimit(functions[0]))
 			}
 		})
 	}
@@ -5632,7 +5719,7 @@ func TestFullTextCandidateLimitRejectsVolatileResidualFilter(t *testing.T) {
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Nil(t, functions[0].Limit,
+	require.Nil(t, fulltextScanLimit(functions[0]),
 		"a volatile residual must not receive a filter-dependent candidate bound")
 
 	var volatileScanNodes int
@@ -5696,8 +5783,8 @@ func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 2)
 	for _, functionNode := range functions {
-		require.Equal(t, fulltext2_search_func_name, functionNode.TableDef.TblFunc.Name)
-		require.Nil(t, functionNode.Limit)
+		require.True(t, isFulltext2SearchScan(functionNode))
+		require.Nil(t, fulltextScanLimit(functionNode))
 	}
 }
 
@@ -6085,12 +6172,8 @@ func collectFullTextFunctionScans(builder *QueryBuilder, nodeID int32) []*planpb
 	}
 
 	var nodes []*planpb.Node
-	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
-		node.TableDef != nil && node.TableDef.TblFunc != nil {
-		name := node.TableDef.TblFunc.Name
-		if name == fulltext_index_scan_func_name || name == fulltext2_search_func_name {
-			nodes = append(nodes, node)
-		}
+	if isFullTextSearchScan(node) || isFulltext2SearchScan(node) {
+		nodes = append(nodes, node)
 	}
 	for _, childID := range node.Children {
 		nodes = append(nodes, collectFullTextFunctionScans(builder, childID)...)

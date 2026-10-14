@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -396,14 +397,15 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		}
 
 		if ctr.allocationAccount == nil {
-			sort.SortByVectors(
-				ctr.resultOrderList, ctr.sortVectors, ctr.desc, ctr.nullsLast)
+			sort.SortByVectorsWithTypes(
+				ctr.resultOrderList, ctr.sortVectors, ctr.desc, ctr.nullsLast, ctr.sortTypes)
 		} else {
-			sort.SortByVectorsWithScratch(
+			sort.SortByVectorsWithTypesAndScratch(
 				ctr.resultOrderList,
 				ctr.sortVectors,
 				ctr.desc,
 				ctr.nullsLast,
+				ctr.sortTypes,
 				&ctr.sortScratch,
 			)
 		}
@@ -519,6 +521,10 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 			ctr.desc = nil
 			ctr.nullsLast = nil
 			return err
+		}
+		ctr.sortTypes = make([]types.Type, len(order.OrderBySpec))
+		for i, spec := range order.OrderBySpec {
+			ctr.sortTypes[i] = types.MustTypeFromPlan(spec.Expr.Typ)
 		}
 	}
 

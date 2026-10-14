@@ -190,6 +190,76 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestHashPartitionCompositeVariableLengthKeysAreFramed(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	varchar := types.T_varchar.ToType()
+	varchar.Width = 2
+	input := batch.New([]string{"k1", "k2", "v"})
+	input.Vecs = []*vector.Vector{
+		vector.NewVec(varchar),
+		vector.NewVec(varchar),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	key1 := [][]byte{
+		[]byte("a"), []byte("ab"),
+		[]byte("x\x00"), []byte("x"),
+		[]byte("é"), []byte("éø"),
+		[]byte("n"), []byte("n"), []byte("n"),
+		[]byte("t"), []byte("t"),
+	}
+	key2 := [][]byte{
+		[]byte("bc"), []byte("c"),
+		[]byte(""), []byte("\x00"),
+		[]byte("ø"), []byte(""),
+		[]byte(""), []byte(""), []byte(""),
+		[]byte("tail"), []byte("tail"),
+	}
+	nulls1 := []bool{false, false, false, false, false, false, false, false, false, true, true}
+	nulls2 := []bool{false, false, false, false, false, false, true, true, false, false, false}
+	ids := make([]int64, len(key1))
+	for i := range ids {
+		ids[i] = int64(i)
+	}
+	require.NoError(t, vector.AppendBytesList(input.Vecs[0], key1, nulls1, proc.Mp()))
+	require.NoError(t, vector.AppendBytesList(input.Vecs[1], key2, nulls2, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input.Vecs[2], ids, nil, proc.Mp()))
+	input.SetRowCount(len(ids))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := &Partition{
+		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:  1 << 30,
+		OrderBySpecs: []*plan.OrderBySpec{
+			{Expr: newExpression(0, types.T_varchar)},
+			{Expr: newExpression(1, types.T_varchar)},
+		},
+	}
+	arg.OrderBySpecs[0].Expr.Typ.Width = 2
+	arg.OrderBySpecs[1].Expr.Typ.Width = 2
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, arg.hash.isStrHash, "short varlena composites must use framed string hashing")
+	var groups [][]int64
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			break
+		}
+		require.NotNil(t, result.Batch)
+		values := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+		groups = append(groups, append([]int64(nil), values...))
+	}
+	require.Equal(t, [][]int64{
+		{0}, {1}, {2}, {3}, {4}, {5}, {6, 7}, {8}, {9, 10},
+	}, groups)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestHashPartitionTreatsGroupingSentinelAsNull(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeHashPartitionBatch(t, proc,
@@ -474,6 +544,134 @@ func BenchmarkHashPartition(b *testing.B) {
 	}
 }
 
+// BenchmarkUnicodeCollationHashConsumers measures the hash window-partition
+// consumer, including expression evaluation, collation-aware hash-key
+// normalization, grouping, and final materialization. It deliberately uses
+// the same size/row matrix as the sort and shuffle consumer benchmarks.
+func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
+	for _, size := range []int{8, 64, 1024} {
+		rows := 256
+		if size == 1024 {
+			rows = 64
+		}
+		for _, tc := range []struct {
+			name    string
+			charset uint8
+		}{
+			{name: "legacy", charset: types.CharsetLegacy},
+			{name: "binary", charset: types.CharsetBinary},
+			{name: "unicode", charset: types.CharsetUTF8MB4UnicodeCI},
+		} {
+			b.Run(fmt.Sprintf("%s/%dB/%drows", tc.name, size, rows), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				proc := testutil.NewProcessWithOwnedMPool(nil, "", mp)
+				fileService := proc.Base.FileService
+				b.Cleanup(func() {
+					proc.Free()
+					fileService.Close(context.Background())
+					mpool.DeleteMPool(mp)
+				})
+				b.ReportAllocs()
+				b.SetBytes(int64(size * rows))
+				for b.Loop() {
+					input := makeStringHashPartitionBatch(b, proc, size, rows, tc.charset)
+					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+					arg := newStringHashPartitionArgument(size, tc.charset)
+					arg.AppendChild(child)
+					require.NoError(b, arg.Prepare(proc))
+					for {
+						result, err := arg.Call(proc)
+						require.NoError(b, err)
+						if result.Status == vm.ExecStop {
+							break
+						}
+					}
+					arg.Free(proc, false, nil)
+					child.Free(proc, false, nil)
+					if got := mp.CurrNB(); got != 0 {
+						b.Fatalf("hash consumer retained %d bytes after operator release", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUnicodeCollationHashConsumerRelease(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4UnicodeCI} {
+		for repeat := 0; repeat < 16; repeat++ {
+			func() {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				proc := testutil.NewProcessWithOwnedMPool(nil, "", mp)
+				fileService := proc.Base.FileService
+				defer fileService.Close(context.Background())
+				input := makeStringHashPartitionBatch(t, proc, 64, 64, charset)
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+				arg := newStringHashPartitionArgument(64, charset)
+				arg.AppendChild(child)
+				require.NoError(t, arg.Prepare(proc))
+				for {
+					result, err := arg.Call(proc)
+					require.NoError(t, err)
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				arg.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, mp.CurrNB(), "hash consumer retained bytes for charset %d", charset)
+			}()
+		}
+	}
+}
+
+func makeStringHashPartitionBatch(t testing.TB, proc *process.Process, size, rows int, charset uint8) *batch.Batch {
+	t.Helper()
+	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
+	bat := batch.New([]string{"k", "v"})
+	key := vector.NewVec(typ)
+	values := make([][]byte, rows)
+	for row := range values {
+		value := make([]byte, size)
+		for i := range value {
+			value[i] = byte('a' + (row+i)%26)
+		}
+		value[size-1] = byte('a' + row%26)
+		values[row] = value
+	}
+	require.NoError(t, vector.AppendBytesList(key, values, nil, proc.Mp()))
+	payload := vector.NewVec(types.T_int64.ToType())
+	ids := make([]int64, rows)
+	for row := range ids {
+		ids[row] = int64(row)
+	}
+	require.NoError(t, vector.AppendFixedList(payload, ids, nil, proc.Mp()))
+	bat.Vecs = []*vector.Vector{key, payload}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func newStringHashPartitionArgument(size int, charset uint8) *Partition {
+	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
+	return &Partition{
+		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:  1 << 30,
+		OrderBySpecs: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				Typ: plan.Type{
+					Id:               int32(typ.Oid),
+					Width:            typ.Width,
+					Charset:          uint32(typ.Charset),
+					CollationVersion: uint32(typ.CollationVersion),
+				},
+			},
+		}},
+	}
+}
+
 func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 	// This measures the Partition prerequisite itself. The SQL BVT covers the
 	// downstream Window contract independently; it would be misleading to claim
@@ -496,6 +694,22 @@ func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 				}
 			}
 		}
+	}
+}
+
+func BenchmarkWindowPartitionCommentCase(b *testing.B) {
+	// This mirrors the issue benchmark: 65,536 rows, one INT32 partition key,
+	// and 64 distinct values. It compares the blocking partition prerequisite;
+	// the SQL BVT remains the independent Window-consumer correctness oracle.
+	const rows, ndv = 1 << 16, 64
+	for _, algorithm := range []string{"sort", "hash"} {
+		b.Run(algorithm, func(b *testing.B) {
+			var peak int64
+			for i := 0; i < b.N; i++ {
+				peak = max(peak, runWindowPartitionBenchmark(b, rows, ndv, 1, false, algorithm == "hash"))
+			}
+			b.ReportMetric(float64(peak), "peak-mpool-B")
+		})
 	}
 }
 

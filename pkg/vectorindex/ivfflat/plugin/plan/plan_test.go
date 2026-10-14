@@ -100,6 +100,16 @@ func indexOn(colName string) *tree.Index {
 	return &tree.Index{KeyParts: []*tree.KeyPart{{ColName: un}}}
 }
 
+func ivfIndexWithInclude(vecCol string, includeCols ...string) *tree.Index {
+	index := indexOn(vecCol)
+	index.IndexOption = &tree.IndexOption{}
+	for _, col := range includeCols {
+		index.IndexOption.IncludeColumns = append(index.IndexOption.IncludeColumns,
+			tree.NewUnresolvedName(tree.NewCStr(col, 0)))
+	}
+	return index
+}
+
 // --- schema.go: BuildSecondaryIndexDefs -----------------------------------
 
 // The happy path builds the three IVFFLAT tables (metadata, centroids, entries).
@@ -154,6 +164,36 @@ func TestBuildSecondaryIndexDefs_F64Base(t *testing.T) {
 	colMap["vec"].Typ.Id = int32(types.T_array_float64)
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.NoError(t, err)
+}
+
+func TestBuildSecondaryIndexDefs_PreservesEnumMetadata(t *testing.T) {
+	ctx := newStubCompilerContext(t)
+	indexInfo := ivfIndexWithInclude("vec", "status")
+	colMap := vecColMap("id", "vec")
+	colMap["status"] = &planpb.ColDef{
+		Name: "status",
+		Typ: planpb.Type{
+			Id:         int32(types.T_enum),
+			Enumvalues: "cold,hot",
+		},
+	}
+	colMap["id"].Typ.AutoIncr = true
+
+	_, tableDefs, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
+	require.NoError(t, err)
+	entries := tableDefs[2]
+	require.Equal(t, "cold,hot", entries.Cols[4].Typ.Enumvalues)
+	// Copying the physical type must not carry source-table auto-increment or
+	// constraint state into the hidden entries relation.
+	require.False(t, entries.Cols[2].Typ.AutoIncr)
+
+	pkMap := map[string]*planpb.ColDef{
+		"status": colMap["status"],
+		"vec":    colMap["vec"],
+	}
+	_, pkTables, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexOn("vec"), pkMap, nil, "status")
+	require.NoError(t, err)
+	require.Equal(t, "cold,hot", pkTables[2].Cols[2].Typ.Enumvalues)
 }
 
 // --- schema.go: BuildFullTextIndexDefs ------------------------------------

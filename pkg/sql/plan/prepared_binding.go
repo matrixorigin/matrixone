@@ -219,6 +219,136 @@ func integerDomainFits(source, target types.T) bool {
 	return source.IsUnsignedInt() && !target.IsUnsignedInt() && source.TypeLen() < target.TypeLen()
 }
 
+// Only an injective integer cast chain can reuse the marker's exact spelling.
+// Keep the chain executable: an explicit cast still owns its SQL semantics.
+func preparedDecimalIntegerParam(peer *Expr) *Expr {
+	if peer == nil || !types.T(peer.Typ.Id).IsInteger() {
+		return nil
+	}
+	for peer.GetP() == nil {
+		fn := peer.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+			fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil ||
+			fn.Args[1].Typ.Id != peer.Typ.Id {
+			return nil
+		}
+		id, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+		if id != planfunction.CAST || overload > 1 ||
+			!integerDomainFits(types.T(fn.Args[0].Typ.Id), types.T(peer.Typ.Id)) {
+			return nil
+		}
+		peer = fn.Args[0]
+	}
+	return peer
+}
+
+// Integer peers share one exact DECIMAL admission before overload resolution.
+// Lists and ranges publish their conversion guards only after every peer fits;
+// a failed attempt retains the original predicate and its value dependency.
+func bindPreparedDecimalIntegerArguments(ctx context.Context, name string, args []*Expr) ([]*Expr, bool, error) {
+	state := preparedBindingState(ctx)
+	if state == nil || !state.selectStatement {
+		return args, false, nil
+	}
+	side := 0
+	var peers []*Expr
+	switch {
+	case isDecimalComparisonOperator(name) && len(args) == 2:
+		if args[0] == nil || args[0].GetCol() == nil || !types.T(args[0].Typ.Id).IsDecimal() {
+			side = 1
+		}
+		peers = []*Expr{args[1-side]}
+	case (name == "in" || name == "not_in") && len(args) == 2 && args[1].GetList() != nil:
+		peers = args[1].GetList().List
+	case name == "between" && len(args) == 3:
+		peers = args[1:]
+	default:
+		return args, false, nil
+	}
+	column := args[side]
+	if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsDecimal() || len(peers) == 0 {
+		return args, false, nil
+	}
+	sources := make([]*Expr, len(peers))
+	hasParam := false
+	for i, peer := range peers {
+		if peer == nil || !types.T(peer.Typ.Id).IsInteger() {
+			return args, false, nil
+		}
+		if peer.GetLit() != nil && staticIntegerComparisonPeer(peer) {
+			continue
+		}
+		source := preparedDecimalIntegerParam(peer)
+		if source == nil {
+			return args, false, nil
+		}
+		binding, ok := state.bindingForPosition(source.GetP().Pos)
+		if !ok || binding.Type.Oid != types.T(source.Typ.Id) || !binding.Type.Oid.IsInteger() {
+			return args, false, nil
+		}
+		sources[i], hasParam = source, true
+	}
+	if !hasParam {
+		return args, false, nil
+	}
+	wasValueDependent := state.valueDependent
+	converted := make([]*Expr, len(peers))
+	guards := make([]*Expr, 0, len(peers))
+	for i, peer := range peers {
+		source := sources[i]
+		if source == nil {
+			digits, exact := decimalIntegerWidth(peer, makeTypeByPlan2Expr(peer))
+			if !exact || digits > column.Typ.Width-column.Typ.Scale {
+				return args, false, nil
+			}
+		} else {
+			value, present := preparedConfigurationValue(ctx, source)
+			if !present || value == nil {
+				return args, false, nil
+			}
+			witness, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, preparedNumericValueSpelling(value))
+			if err != nil {
+				return nil, false, err
+			}
+			if !exact {
+				return args, false, nil
+			}
+			target, fits := mergeExactDecimalComparisonType(column.Typ, witness.Typ)
+			if !fits || !sameDecimalComparisonType(target, column.Typ) {
+				return args, false, nil
+			}
+			// Integer-to-DECIMAL execution does not check declared precision.
+			// The original spelling is equivalent only under the chain proof.
+			transport := DeepCopyExpr(source)
+			transport.Typ = makeSimplePlan2Type(types.T_text)
+			guard, err := makePlan2CastExpr(ctx, transport, column.Typ)
+			if err != nil {
+				return nil, false, err
+			}
+			guards = append(guards, guard)
+		}
+		var err error
+		converted[i], err = makePlan2CastExpr(ctx, DeepCopyExpr(peer), column.Typ)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	result := append([]*Expr(nil), args...)
+	switch {
+	case name == "in" || name == "not_in":
+		result[1] = DeepCopyExpr(args[1])
+		result[1].Typ = column.Typ
+		result[1].GetList().List = converted
+	case name == "between":
+		copy(result[1:], converted)
+	default:
+		result[1-side] = converted[0]
+	}
+	state.diagnosticCandidates = append(state.diagnosticCandidates, guards...)
+	state.valueDependent = wasValueDependent
+	return result, true, nil
+}
+
 // Direct signed integer consumers share this admission. Keep the full cast
 // before rewrites can remove the consumer; the existing per-EXECUTE diagnostic
 // probe guards reuse while the executable expression retains its ParamRef.
@@ -437,6 +567,11 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		return args, nil
 	}
 	name = strings.ToLower(name)
+	if converted, admitted, err := bindPreparedDecimalIntegerArguments(ctx, name, args); err != nil {
+		return nil, err
+	} else if admitted {
+		return converted, nil
+	}
 	if name == "between" {
 		converted, admitted, err := bindPreparedIntegerBetween(ctx, args)
 		if err != nil {
@@ -478,42 +613,6 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
 				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
 			continue
-		}
-		if len(args) == 2 && state.selectStatement && isDecimalComparisonOperator(name) &&
-			binding.Type.Oid.IsInteger() && args[1-i] != nil && args[1-i].GetCol() != nil &&
-			types.T(args[1-i].Typ.Id).IsDecimal() {
-			// Reuse the column's exact domain only while the current integer
-			// fits it. The existing conversion probe guards future EXECUTEs;
-			// wide fallbacks must not replace a reusable native plan.
-			wasValueDependent := state.valueDependent
-			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
-				witness, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, preparedNumericValueSpelling(value))
-				if err != nil {
-					return nil, err
-				}
-				if exact {
-					column := args[1-i]
-					target, fits := mergeExactDecimalComparisonType(column.Typ, witness.Typ)
-					if fits && sameDecimalComparisonType(target, column.Typ) {
-						converted, err := makePlan2CastExpr(ctx, source, column.Typ)
-						if err != nil {
-							return nil, err
-						}
-						// Integer-to-DECIMAL conversion does not check declared
-						// precision. Probe the exact transport spelling instead.
-						transport := DeepCopyExpr(source)
-						transport.Typ = makeSimplePlan2Type(types.T_text)
-						guard, err := makePlan2CastExpr(ctx, transport, column.Typ)
-						if err != nil {
-							return nil, err
-						}
-						state.diagnosticCandidates = append(state.diagnosticCandidates, guard)
-						state.valueDependent = wasValueDependent
-						args[i] = converted
-						continue
-					}
-				}
-			}
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&

@@ -248,6 +248,12 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 	if h.rowReader == nil {
 		return moerr.NewInternalError(proc.Ctx, "parquet hybrid mode has no row reader")
 	}
+	var warnings parquetAssignmentWarnings
+	mappingProc := proc
+	if h.timeAssignment {
+		mappingProc = warnings.mappingProcess(proc)
+		defer warnings.Reset()
+	}
 
 	batchLimit := int(h.batchCnt)
 	rowStart := h.offset
@@ -346,7 +352,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 				return err
 			}
 		}
-		if _, err := h.mapCurrentPageRows(bat, param, proc, int64(n)); err != nil {
+		if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(n)); err != nil {
 			rollbackRows(checkpoints, n)
 			return h.closePagesOnError(param.Ctx, err)
 		}
@@ -361,6 +367,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 			}
 			if accepted < n {
 				rollbackRows(checkpoints, n)
+				warnings.Reset()
 				if accepted > 0 {
 					for _, row := range rowBuf[:accepted] {
 						if err := h.processNestedRow(row, bat, param, proc); err != nil {
@@ -368,7 +375,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 							return err
 						}
 					}
-					if _, err := h.mapCurrentPageRows(bat, param, proc, int64(accepted)); err != nil {
+					if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(accepted)); err != nil {
 						rollbackRows(checkpoints, accepted)
 						return h.closePagesOnError(param.Ctx, err)
 					}
@@ -386,6 +393,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 
 		h.advanceCurrentPages(int64(accepted))
 		length += accepted
+		warnings.Flush(proc)
 		if accepted < n || h.parquetBatchAtByteBudget(bat, length, param) {
 			batchBoundary = true
 		}
@@ -687,7 +695,7 @@ func appendLeafValue(
 		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
-		return vector.AppendBytes(vec, v.ByteArray(), false, proc.Mp())
+		return appendParquetVarlenValue(proc.Ctx, vec, v.ByteArray(), false, proc, types.MustTypeFromPlan(def.Typ))
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
@@ -734,8 +742,7 @@ func (h *ParquetHandler) processNestedValue(
 			"failed to reconstruct nested column %s: %v", col.Name(), err)
 	}
 
-	targetType := types.T(def.Typ.Id)
-	return writeNestedToVector(nested, targetType, vec, proc)
+	return writeNestedToVector(nested, types.MustTypeFromPlan(def.Typ), vec, proc)
 }
 
 func validateParquetNestedValues(ctx context.Context, col *parquet.Column, values []parquet.Value) error {
@@ -1415,13 +1422,13 @@ func parquetValueToGo(v parquet.Value) any {
 }
 
 // writeNestedToVector writes nested structure to vector
-func writeNestedToVector(nested any, targetType types.T, vec *vector.Vector, proc *process.Process) error {
+func writeNestedToVector(nested any, targetType types.Type, vec *vector.Vector, proc *process.Process) error {
 	bj, err := bytejson.CreateByteJSON(nested)
 	if err != nil {
 		return moerr.NewInternalErrorf(proc.Ctx, "failed to create JSON: %v", err)
 	}
 
-	switch targetType {
+	switch targetType.Oid {
 	case types.T_json:
 		jsonBytes, err := types.EncodeJson(bj)
 		if err != nil {
@@ -1430,8 +1437,8 @@ func writeNestedToVector(nested any, targetType types.T, vec *vector.Vector, pro
 		return vector.AppendBytes(vec, jsonBytes, false, proc.Mp())
 	case types.T_text, types.T_varchar, types.T_char:
 		jsonStr := bj.String()
-		return vector.AppendBytes(vec, []byte(jsonStr), false, proc.Mp())
+		return appendParquetVarlenValue(proc.Ctx, vec, []byte(jsonStr), false, proc, targetType)
 	default:
-		return moerr.NewInternalErrorf(proc.Ctx, "unsupported target type: %s", targetType.String())
+		return moerr.NewInternalErrorf(proc.Ctx, "unsupported target type: %s", targetType.Oid.String())
 	}
 }

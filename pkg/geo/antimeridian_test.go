@@ -34,7 +34,7 @@ func TestProjectGeodeticPairAcrossAntimeridian(t *testing.T) {
 	got := projector.Unproject(result).(Polygon)
 
 	want := [][]Coord{{
-		{179.5, 0.5}, {179.5, -0.5}, {-179.5, -0.5}, {-179.5, 0.5}, {179.5, 0.5},
+		{179.5, -0.5}, {-179.5, -0.5}, {-179.5, 0.5}, {179.5, 0.5}, {179.5, -0.5},
 	}}
 	requirePolygonCoordinatesNear(t, want, got.Rings, 1e-12)
 }
@@ -294,7 +294,7 @@ func TestProjectGeodeticPairOverlayCreatesGreatCircleIntersections(t *testing.T)
 	a := mustParse(t, "POLYGON((179 -2,-179 -2,-179 2,179 2,179 -2))")
 	b := mustParse(t, "POLYGON((178 0,-178 0,-178 3,178 3,178 0))")
 	want := [][]Coord{{
-		{179, 2}, {179, 0}, {-179, 0}, {-179, 2}, {179, 2},
+		{179, 0}, {-179, 0}, {-179, 2}, {179, 2}, {179, 0},
 	}}
 	run := func(left, right Geometry) Geometry {
 		projector, projectedLeft, projectedRight, err := ProjectGeodeticPair(left, right)
@@ -514,6 +514,34 @@ func requirePolygonCoordinatesNear(t *testing.T, want, got [][]Coord, delta floa
 		for j := range want[i] {
 			require.InDelta(t, want[i][j].X, got[i][j].X, delta)
 			require.InDelta(t, want[i][j].Y, got[i][j].Y, delta)
+		}
+	}
+}
+
+func TestGeodeticOverlayIntersectionContacts(t *testing.T) {
+	a := mustParse(t, "POLYGON((0 0,1 0,1 1,0 1,0 0))")
+	for _, tc := range []struct {
+		wkt    string
+		kind   Subtype
+		points []Coord
+	}{
+		{"POLYGON((1 0,2 0,2 1,1 1,1 0))", LINESTRING, []Coord{{1, 0}, {1, 1}}},
+		{"POLYGON((1 1,2 1,2 2,1 2,1 1))", POINT, []Coord{{1, 1}}},
+	} {
+		b := mustParse(t, tc.wkt)
+		for _, pair := range [][2]Geometry{{a, b}, {b, a}} {
+			projector, left, right, err := ProjectGeodeticPair(pair[0], pair[1])
+			require.NoError(t, err)
+			result, err := projector.Overlay(left, right, OpIntersection)
+			require.NoError(t, err)
+			result = projector.Unproject(result)
+			require.Equal(t, tc.kind, result.Type())
+			switch v := result.(type) {
+			case LineString:
+				require.ElementsMatch(t, tc.points, v.Points)
+			case Point:
+				require.Equal(t, tc.points[0], v.Coord())
+			}
 		}
 	}
 }

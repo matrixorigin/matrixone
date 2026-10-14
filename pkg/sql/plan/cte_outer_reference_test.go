@@ -382,6 +382,43 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 	}
 }
 
+func TestLocalCTEDemandBarrierRequiresParameterization(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		subquery string
+		barrier  bool
+	}{
+		{"ordinary scalar", `select max(n_regionkey) from tpch.nation`, false},
+		{"independent producer", `with q as (select n_regionkey from tpch.nation)
+			select max(n_regionkey) from q`, false},
+		{"nested independent producers", `with q as (select n_regionkey from tpch.nation),
+			r as (select n_regionkey from q) select max(n_regionkey) from r`, false},
+		{"predicate-only correlation", `with q as (select a.n_regionkey from tpch.nation a
+			where a.n_nationkey=p.n_nationkey) select max(n_regionkey) from q`, false},
+		{"projected outer reference", `with q(n) as (select p.n_regionkey) select n from q`, true},
+		{"nested projected outer reference", `with q(n) as (select p.n_regionkey),
+			r(n) as (select n from q) select n from r`, true},
+		{"independent recursive producer", `with recursive q(n) as
+			(select 1 union all select n+1 from q where n<2) select count(*) from q`, false},
+		{"recursive seed predicate", `with recursive q(n) as
+			(select a.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey
+			union all select n+1 from q where n<2) select count(*) from q`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				`select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and (`+tc.subquery+`)>0`)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			assertReachablePlanHasNoCorrelatedExpr(t, query)
+			barrier := false
+			for id := range cteReachablePlanNodes(query) {
+				barrier = barrier || query.Nodes[id].FilterIsBarrier
+			}
+			require.Equal(t, tc.barrier, barrier, "only a parameterized CTE needs a demand-domain barrier")
+		})
+	}
+}
+
 func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
 	ctx := NewBindContext(builder, nil)

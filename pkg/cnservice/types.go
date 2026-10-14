@@ -766,6 +766,7 @@ const (
 )
 
 type service struct {
+	rt             moruntime.Runtime
 	metadata       metadata.CNStore
 	cfg            *Config
 	responsePool   *sync.Pool

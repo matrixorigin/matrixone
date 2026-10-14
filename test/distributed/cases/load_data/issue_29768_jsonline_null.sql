@@ -1,0 +1,25 @@
+drop table if exists issue_29768_object_serial;
+drop table if exists issue_29768_object_parallel;
+drop table if exists issue_29768_array_serial;
+drop table if exists issue_29768_array_parallel;
+
+create table issue_29768_object_serial(i int, d decimal(39,10), b bool);
+load data infile {'filepath'='$resources/load_data/issue_29768_jsonline_null_object.jl','format'='jsonline','jsondata'='object'} into table issue_29768_object_serial;
+select i, d, b from issue_29768_object_serial order by i is null, i;
+
+create table issue_29768_object_parallel(i int, d decimal(39,10), b bool);
+load data infile {'filepath'='$resources/load_data/issue_29768_jsonline_null_object.jl','format'='jsonline','jsondata'='object'} into table issue_29768_object_parallel parallel 'true';
+select i, d, b from issue_29768_object_parallel order by i is null, i;
+
+create table issue_29768_array_serial(i int, d decimal(39,10), b bool);
+load data infile {'filepath'='$resources/load_data/issue_29768_jsonline_null_array.jl','format'='jsonline','jsondata'='array'} into table issue_29768_array_serial;
+select i, d, b from issue_29768_array_serial order by i is null, i;
+
+create table issue_29768_array_parallel(i int, d decimal(39,10), b bool);
+load data infile {'filepath'='$resources/load_data/issue_29768_jsonline_null_array.jl','format'='jsonline','jsondata'='array'} into table issue_29768_array_parallel parallel 'true';
+select i, d, b from issue_29768_array_parallel order by i is null, i;
+
+drop table issue_29768_object_serial;
+drop table issue_29768_object_parallel;
+drop table issue_29768_array_serial;
+drop table issue_29768_array_parallel;

@@ -1130,7 +1130,7 @@ func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
 				}
 			}, txnOperator)
 
-			completed, err := b.performUpgrade(context.Background(), txnExecutor)
+			completed, err := b.performUpgrade(context.Background(), b.getFinalVersionHandle().Metadata(), txnExecutor)
 			require.NoError(t, err)
 			require.False(t, completed)
 		},

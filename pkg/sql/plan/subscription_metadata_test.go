@@ -363,6 +363,10 @@ func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "database-qualified projection",
+			sql:  "select information_schema.statistics.index_name from information_schema.statistics",
+		},
+		{
 			name: "account wide",
 			sql:  "select table_schema, index_name from information_schema.statistics where table_name = 'nation'",
 		},

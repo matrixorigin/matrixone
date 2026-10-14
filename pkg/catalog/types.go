@@ -633,13 +633,13 @@ const (
 	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
 	FullText2Index_TblCol_Metadata_Build_Ts  = "build_ts"
 
-	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
+	// fulltext2 index search scan RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
 	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
-	// the fulltext2_search TVF (its storage is segments, not a doc_id column). The covered
+	// the fulltext2 search scan (its storage is segments, not a doc_id column). The covered
 	// fast path emits INCLUDE columns as sibling outputs and the runtime classifies the
 	// output batch BY NAME, so the pk/relevance outputs must use names no user INCLUDE
 	// column can equal — hence the reserved "__mo_ft_" prefix. Referenced by the coldef
-	// builders (tablefunc.go, apply_indices_fulltext2.go) and the classifier (fulltext2_search.go).
+	// builder (apply_indices_fulltext2.go) and the classifier (fulltext2/plugin/search).
 	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
 	FullText2Search_OutCol_Score = "__mo_ft_score"
 
@@ -929,7 +929,7 @@ var (
 	}
 	MoDatabaseAllColsString  = strings.Join(append([]string{Row_ID}, MoDatabaseSchema...), ",")
 	MoDatabaseAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE,
 		SystemDBAttr_AccID, SystemDBAttr_Name)
 
@@ -944,7 +944,7 @@ var (
 		SystemDBAttr_AccID)
 
 	MoDatabaseRowidQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		Row_ID, MO_CATALOG, MO_DATABASE,
 		SystemDBAttr_AccID, SystemDBAttr_Name)
 
@@ -977,7 +977,7 @@ var (
 		fmt.Sprintf("`%s`", SystemRelAttr_Constraint),
 		-1)
 	MoTablesAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
 		MoTablesAllColsString, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
@@ -987,12 +987,12 @@ var (
 		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID, MO_RESERVED_MAX)
 
 	MoTablesInDBQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		SystemRelAttr_Name, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName)
 
 	MoTablesRowidQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
 		Row_ID, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
@@ -1032,7 +1032,7 @@ var (
 	}
 	MoColumnsAllColsString  = strings.Join(append([]string{Row_ID}, MoColumnsSchema...), ",")
 	MoColumnsAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s and %s = %%d",
 		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID)
 
@@ -1043,7 +1043,7 @@ var (
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d order by %s",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s and %s = %%d order by %s",
 		Row_ID, MO_CATALOG, MO_COLUMNS,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID, SystemColAttr_Num)
 

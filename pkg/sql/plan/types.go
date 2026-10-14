@@ -335,6 +335,12 @@ type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
 }
 
+// UserVariableRegexpCastResolver provides assignment result-category history
+// exclusively for binary CAST declaration compatibility, not execution types.
+type UserVariableRegexpCastResolver interface {
+	ResolveVariableRegexpStringResult(varName string) (bool, error)
+}
+
 // UserVariableStringDomainResolver exposes the assigned value's domain override
 // at binding time. A variable expression captures that domain in its VarRef,
 // independently of its static Type. It does not rewrite the session value or
@@ -515,7 +521,7 @@ type QueryBuilder struct {
 	jsonProbeFtNodes map[int32]bool
 
 	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
-	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// async index must SELF-COMPLETE: the fulltext2 search reader binds the generation it actually
 	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
 	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
 	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by
@@ -894,6 +900,9 @@ type BindContext struct {
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
 	cteName string
+	// cteDatabase is the exposed namespace of a view or rewritten table.
+	// It belongs to this relation root; ordinary CTEs/subqueries leave it empty.
+	cteDatabase string
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string

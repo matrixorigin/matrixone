@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
@@ -191,10 +192,24 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveAppendableStats := objectio.NewObjectStatsWithObjectID(
 		&liveAppendableID, true, false, false)
 	require.NoError(t, objectio.SetObjectStatsSize(liveAppendableStats, 1))
-	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
-		ObjectStats: *liveAppendableStats,
-		CreateTime:  types.BuildTS(5, 0),
-	}, false))
+	// Feed a live logtail object-list event, not the checkpoint callback.
+	liveBatch := batch.NewWithSize(10)
+	defer liveBatch.Clean(mp)
+	var err error
+	for i := range liveBatch.Vecs {
+		liveBatch.Vecs[i], err = vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 1, mp)
+		require.NoError(t, err)
+	}
+	liveBatch.Vecs[2].Free(mp)
+	liveBatch.Vecs[2], err = vector.NewConstBytes(types.T_binary.ToType(), liveAppendableStats.Marshal(), 1, mp)
+	require.NoError(t, err)
+	liveBatch.Vecs[6].Free(mp)
+	liveBatch.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
+	require.NoError(t, err)
+	liveBatch.SetRowCount(1)
+	liveProto, err := batch.BatchToProtoBatch(liveBatch)
+	require.NoError(t, err)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveProto}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 

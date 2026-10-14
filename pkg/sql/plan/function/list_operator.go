@@ -32,7 +32,39 @@ func bitwiseBinaryReturnType(parameters []types.Type) types.Type {
 	return binaryStringResultType(unknownStringResultBound())
 }
 
+// integerComparisonDomain contains the full declared domains, independent of
+// operand order. Arithmetic deliberately retains its own coercion rules.
+func integerComparisonDomain(inputs []types.Type) (types.Type, bool) {
+	signedWidth, unsignedWidth := 0, 0
+	for _, input := range inputs {
+		switch input.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			signedWidth = max(signedWidth, input.Oid.TypeLen())
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			unsignedWidth = max(unsignedWidth, input.Oid.TypeLen())
+		default:
+			return types.Type{}, false
+		}
+	}
+	if signedWidth == 0 {
+		for _, oid := range []types.T{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64} {
+			if oid.TypeLen() >= unsignedWidth {
+				return oid.ToType(), true
+			}
+		}
+	}
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64} {
+		if oid.TypeLen() >= signedWidth && oid.TypeLen() > unsignedWidth {
+			return oid.ToType(), true
+		}
+	}
+	return types.New(types.T_decimal128, 38, 0), true
+}
+
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if target, ok := integerComparisonDomain([]types.Type{left, right}); ok {
+		return left.Oid != target.Oid || right.Oid != target.Oid, target, target
+	}
 	if isDatetimeTimestampComparison(left, right) {
 		return false, left, right
 	}
@@ -64,6 +96,22 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	}
 	castLeft.Charset = charset
 	castRight.Charset = charset
+	// A string cast changes only the physical representation.  Keep the
+	// revision of the selected native Unicode collation on both operands;
+	// otherwise a derived expression such as LOWER(col) is rebuilt with
+	// revision zero and the executor cannot resolve its comparison key.
+	version := uint8(types.CollationVersionLegacy)
+	if types.IsUnicodeCollation(charset) {
+		version = uint8(types.CollationVersionV1)
+		for _, operand := range []types.Type{left, right} {
+			if operand.Charset == charset && operand.CollationVersion != 0 {
+				version = operand.CollationVersion
+				break
+			}
+		}
+	}
+	castLeft.CollationVersion = version
+	castRight.CollationVersion = version
 	// CHAR values may carry PAD_CHAR_TO_FULL_LENGTH representation padding.
 	// Compare them in the VARCHAR domain so the implicit cast removes that
 	// padding before scalar comparisons and hash-key construction.
@@ -467,6 +515,15 @@ var supportedOperators = []FuncNew{
 			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
 				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			if target, ok := integerComparisonDomain(inputs); ok {
+				for _, input := range inputs {
+					if input.Oid != target.Oid {
+						return newCheckResultWithCast(0, []types.Type{target, target, target})
+					}
+				}
+				return newCheckResultWithSuccess(0)
 			}
 
 			has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
@@ -3840,7 +3897,7 @@ var supportedOperators = []FuncNew{
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
-		types.T_uint32:
+		types.T_int32, types.T_uint32:
 		return true
 	default:
 		return false

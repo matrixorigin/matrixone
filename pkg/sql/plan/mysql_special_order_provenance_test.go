@@ -400,8 +400,20 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 	}
 	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select s + 0 from set_empty_member_t group by s")
 	require.ErrorContains(t, err, "without retained storage identity")
-	_, err = runOneStmt(newMySQLSpecialOrderMock(t), t, "select sum(v) from enum_order_t")
-	require.Error(t, err, "ordinary VARCHAR aggregate rejection remains unchanged")
+	for _, name := range []string{"sum", "avg"} {
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select "+name+"(v) from enum_order_t")
+		require.NoError(t, err)
+		fn := findPlanFunctionExpr(p, name)
+		require.NotNil(t, fn)
+		arg := fn.GetF().Args[0]
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id,
+			"ordinary VARCHAR must use numeric conversion, not ENUM/SET storage identity")
+		require.True(t, isCastOverload(arg, 0))
+		require.Equal(t, int32(types.T_varchar), arg.GetF().Args[0].Typ.Id)
+		require.Empty(t, arg.GetF().Args[0].Typ.Enumvalues)
+		require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+		require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+	}
 }
 
 func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {

@@ -12,6 +12,8 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/Dockerfile.ci"
+      - "optools/images/test_go_toolchain.py"
       - "optools/images/gpu/**"
       - "optools/run_ut.sh"
       - "optools/gpu/**"
@@ -30,6 +32,8 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/Dockerfile.ci"
+      - "optools/images/test_go_toolchain.py"
       - "optools/images/gpu/**"
       - "optools/run_ut.sh"
       - "optools/gpu/**"
@@ -60,6 +64,7 @@ jobs:
       - name: Validate native state, staging, and Make DAG
         run: |
           python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
+          python3 -m unittest discover -s optools/images -p 'test_go_toolchain.py' -v
           python3 -m unittest discover -s optools/gpu -p 'test_sync_sirius_mo.py' -v
           if [ "$RUNNER_OS" = Linux ]; then
             python3 -m unittest discover -s optools/images/gpu -p 'test_stage_runtime_libs.py' -v

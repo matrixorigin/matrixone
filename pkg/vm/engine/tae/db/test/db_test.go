@@ -9358,28 +9358,79 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	msg := fmt.Sprintf("%s-checkpoint-chaos", t.Name())
-	rmFn, err := objectio.InjectCheckpointSave(msg)
-	assert.NoError(t, err)
+	// Hold publication after the GCKP objects have been written. A caller
+	// deadline/cancellation does not stop this executor-owned job.
+	rmSave, err := objectio.InjectWait(objectio.FJ_CheckpointSave)
+	require.NoError(t, err)
+	defer rmSave()
+	probe := t.Name() + "/save-waiters"
+	require.NoError(t, fault.AddFaultPoint(ctx, probe, ":::", "getwaiters", 0,
+		objectio.FJ_CheckpointSave, false))
+	defer fault.RemoveFaultPoint(context.Background(), probe)
+	notify := t.Name() + "/save-notify"
+	rmNotify, err := objectio.InjectNotify(notify, objectio.FJ_CheckpointSave)
+	require.NoError(t, err)
+	defer rmNotify()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
-	defer cancel()
+	callerCtx, callerCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer callerCancel()
 	maxICKP := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
 	filesBeforeFailure := snapshotFileService(t, tae.Runtime.Fs)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0)
-	assert.Error(t, err)
+	result := make(chan error, 1)
+	callerDone := make(chan struct{})
+	go func() {
+		defer close(callerDone)
+		result <- tae.DB.ForceGlobalCheckpoint(callerCtx, maxICKP.GetEnd(), 0)
+	}()
+	joined := false
+	defer func() {
+		if joined {
+			return
+		}
+		callerCancel()
+		objectio.NotifyInjected(notify)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		select {
+		case <-callerDone:
+		case <-cleanupCtx.Done():
+			assert.NoError(t, context.Cause(cleanupCtx))
+		}
+		assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(cleanupCtx, true))
+	}()
+	require.Eventually(t, func() bool {
+		waiters, _, ok := fault.TriggerFault(probe)
+		return ok && waiters == 1
+	}, 20*time.Second, time.Millisecond, "GCKP must reach the save barrier")
+	callerCancel()
+	select {
+	case err = <-result:
+		require.ErrorIs(t, err, context.Cause(callerCtx))
+	case <-time.After(20 * time.Second):
+		t.Fatal("cancelled GCKP caller did not return")
+	}
+	require.NotEqual(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
+		"held publication must expose the temporary objects before rollback")
+	cancelledWait, cancelWait := context.WithCancel(context.Background())
+	cancelWait()
+	require.ErrorIs(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(cancelledWait, true),
+		context.Canceled, "caller return must not be mistaken for executor completion")
+
+	// Notify without removing the fault: the resumed save must still fail.
+	objectio.NotifyInjected(notify)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	require.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true))
+	joined = true
 	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
 		"failed GCKP publication must roll back its data and table-ID objects")
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Nilf(t, maxGCKP, maxGCKP.String())
 
-	ok, err := rmFn()
+	ok, err := fault.RemoveFaultPoint(context.Background(), objectio.FJ_CheckpointSave)
 	require.True(t, ok)
 	require.NoError(t, err)
 
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
-	defer cancel()
-	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true))
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0)
 	assert.NoError(t, err)
 	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
@@ -15130,4 +15181,66 @@ func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
 	}
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
+}
+
+// The legacy batch bypasses SQL typing deliberately: existing catalog/WAL data
+// can contain unresolved columns even after new producers are corrected.
+func TestFlushLegacyAnyReturnsErrorAndWorkerContinues(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	ownedMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(ownedMP)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+	worker := ops.NewOpWorker(ctx, "legacy-any-flush")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "legacy_any"
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
+	txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	metas := testutil.GetAllBlockMetas(rel, false)
+	require.Len(t, metas, 1)
+	legacy := containers.NewBatch()
+	allocated := containers.MakeVector(types.T_int64.ToType(), ownedMP)
+	allocated.Append(int64(7), false)
+	legacy.AddVector("supported", allocated)
+	legacy.AddVector("unresolved", containers.NewConstNullVector(types.T_any.ToType(), 1, ownedMP))
+	transferred := false
+	defer func() {
+		if !transferred {
+			legacy.Close()
+		}
+	}()
+	task := jobs.NewFlushObjTask(tasks.WaitableCtx, 0, []uint16{0, 1}, tae.Runtime.Fs, metas[0], legacy, t.Name())
+	before := snapshotObjectFiles(t, tae.Runtime.Fs)
+	require.Positive(t, ownedMP.CurrNB(), "input owns a real allocation before transfer")
+	transferred = worker.SendOp(task)
+	require.True(t, transferred)
+	err := task.WaitDone(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Zero(t, ownedMP.CurrNB())
+	require.Equal(t, before, snapshotObjectFiles(t, tae.Runtime.Fs), "rejected flush publishes no object")
+	require.NoError(t, txn.Rollback(ctx))
+
+	txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	metas = testutil.GetAllBlockMetas(rel, false)
+	tombstones := testutil.GetAllBlockMetas(rel, true)
+	valid, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, metas, tombstones, tae.Runtime)
+	require.NoError(t, err)
+	require.True(t, worker.SendOp(valid))
+	require.NoError(t, valid.WaitDone(ctx), "same worker remains able to flush supported data")
+	require.NoError(t, txn.Commit(ctx))
+	txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(bat.Vecs[2].Get(0)), 2)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, bat.Vecs[2].Get(0), value)
+	database, err := txn.GetDatabase("db")
+	require.NoError(t, err)
+	_, err = database.DropRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
 }

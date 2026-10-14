@@ -108,6 +108,8 @@ func (e *blockingWatermarkSQLExecutor) Exec(
 }
 
 type watermarkProgressExecutor struct {
+	mu         sync.Mutex
+	onQuery    func()
 	watermark  string
 	generation string
 	queryErr   error
@@ -116,9 +118,15 @@ type watermarkProgressExecutor struct {
 
 type watermarkReadExecutor struct {
 	watermark string
+	onQuery   func()
+	onExec    func()
+	missing   bool
 }
 
 func (m *watermarkReadExecutor) Exec(context.Context, string, ie.SessionOverrideOptions) error {
+	if m.onExec != nil {
+		m.onExec()
+	}
 	return nil
 }
 
@@ -127,9 +135,14 @@ func (m *watermarkReadExecutor) Query(
 	_ string,
 	_ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
-	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{
-		{"7", "task", "db", "tbl", m.watermark},
-	}}}
+	if m.onQuery != nil {
+		m.onQuery()
+	}
+	rows := [][]interface{}{}
+	if !m.missing {
+		rows = append(rows, []interface{}{"7", "task", "db", "tbl", m.watermark})
+	}
+	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: rows}}
 }
 
 func (m *watermarkReadExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -139,21 +152,22 @@ func (m *watermarkProgressExecutor) Exec(context.Context, string, ie.SessionOver
 }
 
 func (m *watermarkProgressExecutor) Query(
-	_ context.Context,
-	sql string,
-	_ ie.SessionOverrideOptions,
+	_ context.Context, sql string, _ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
+	m.mu.Lock()
 	m.lastQuery = sql
-	if m.queryErr != nil {
-		return &InternalExecResultForTest{err: m.queryErr}
-	}
+	err := m.queryErr
 	data := make([][]interface{}, 0, 1)
 	if m.watermark != "" {
 		data = append(data, []interface{}{m.watermark, m.generation})
 	}
-	return &InternalExecResultForTest{
-		resultSet: &MysqlResultSetForTest{Data: data},
+	callback := m.onQuery
+	m.onQuery = nil
+	m.mu.Unlock()
+	if callback != nil {
+		callback()
 	}
+	return &InternalExecResultForTest{err: err, resultSet: &MysqlResultSetForTest{Data: data}}
 }
 
 func (m *watermarkProgressExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -452,7 +466,7 @@ func TestWatermarkUpdater_BoundedBatchPartialFailureRetriesWithoutRegression(t *
 func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("delete-task", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -571,7 +585,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerPreservesReplacement(t *tes
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -617,7 +631,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -651,7 +665,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -767,7 +781,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 	// DELETE specifically so this test remains distinct from flush failures.
 	exec := &retryableMockExecutor{failOnCall: 2}
 	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -793,7 +807,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 func TestWatermarkUpdater_GetOrAddCommittedRejectsDeletedTask(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-deleted", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	key := &WatermarkKey{AccountId: 4, TaskId: "deleted-task", DBName: "db", TableName: "table"}
 	updater.MarkTaskDeleted(key.TaskId)
@@ -889,7 +903,7 @@ func TestWatermarkUpdater_ForceFlushWaitsForEarlierGuardedProgressWrite(t *testi
 		}
 		return err
 	}
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(exec.releaseWrite) }) }
@@ -1162,7 +1176,7 @@ func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("remove-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1214,7 +1228,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *testing.T) {
 	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	key := WatermarkKey{
@@ -1258,7 +1272,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *test
 func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("update-errmsg-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1289,7 +1303,7 @@ func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 func TestWatermarkUpdater_GetOrAddCommitted_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1326,7 +1340,7 @@ func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
 		u.customized.cronJob = func(ctx context.Context) {}
 	}
 	updater := NewCDCWatermarkUpdater("helper-circuit", exec, syncOption)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -1589,7 +1603,7 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		WithExportStatsInterval(time.Hour),
 	)
 	u.stats.lastExportTime = time.Now()
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	wg1.Wait()
 	assert.GreaterOrEqual(t, cronJobExecNum.Load(), int32(3))
@@ -1956,6 +1970,84 @@ func TestCDCWatermarkUpdaterLegacyReadMaintainsProgressTupleInvariant(t *testing
 		_, hasGeneration := updater.cacheCommittedGeneration[*key]
 		require.False(t, hasGeneration)
 	})
+	for _, old := range []types.TS{types.BuildTS(5, 0), types.BuildTS(50, 0)} {
+		t.Run("ACK supersedes delayed legacy read "+old.ToString(), func(t *testing.T) {
+			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var scratchSurvived bool
+			var updater *CDCWatermarkUpdater
+			exec := &watermarkReadExecutor{watermark: old.ToString(), onQuery: func() {
+				close(entered)
+				<-release
+				_, scratchSurvived = updater.readKeysBuffer[*key]
+			}}
+			updater = NewCDCWatermarkUpdater(t.Name(), exec)
+			fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+			updater.activeWatermarkFence[*key] = fence
+			job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			go func() { defer close(done); updater.onJobs(job) }()
+			t.Cleanup(func() {
+				unblock()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("watermark worker did not finish")
+				}
+			})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not start")
+			}
+			replay := types.BuildTS(20, 0)
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+			unblock()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not finish")
+			}
+			require.True(t, scratchSurvived, "ACK must not mutate worker scratch")
+			require.NoError(t, job.GetResult().Err)
+			require.Equal(t, replay, job.GetResult().Res)
+			require.Equal(t, replay, updater.cacheCommitted[*key])
+			require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+			require.Same(t, fence, updater.activeWatermarkFence[*key])
+			require.Empty(t, updater.readKeysBuffer)
+		})
+	}
+
+	t.Run("ACK supersedes completed legacy insert", func(t *testing.T) {
+		exec := &watermarkReadExecutor{missing: true}
+		updater := NewCDCWatermarkUpdater(t.Name(), exec)
+		fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+		updater.activeWatermarkFence[*key] = fence
+		replay := types.BuildTS(20, 0)
+		exec.onExec = func() {
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+		}
+		job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+		updater.onJobs(job)
+		require.NoError(t, job.GetResult().Err)
+		require.Equal(t, replay, job.GetResult().Res)
+		require.Equal(t, replay, updater.cacheCommitted[*key])
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
+	t.Run("closed queue preserves owned progress", func(t *testing.T) {
+		updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
+		updater.Start(context.Background())
+		updater.Stop()
+		replay, later := types.BuildTS(20, 0), types.BuildTS(50, 0)
+		updater.cacheCommitted[*key] = replay
+		updater.cacheCommittedGeneration[*key] = 42
+		actual, err := updater.GetOrAddCommitted(t.Context(), key, &later)
+		require.NoError(t, err)
+		require.Equal(t, replay, actual)
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
 }
 
 func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
@@ -1964,6 +2056,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 	t.Run("missing row is retryable", func(t *testing.T) {
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
 
@@ -1971,6 +2064,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 		backendErr := errors.New("catalog unavailable")
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{queryErr: backendErr})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, backendErr)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -1980,6 +2074,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 			queryErr: context.Canceled,
 		})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, context.Canceled)
 		require.False(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -1991,6 +2086,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 				generation: "19",
 			})
 			_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+			require.Empty(t, updater.progressReads)
 			require.Error(t, err)
 			require.False(t, IsRetryableSnapshotEpochError(err))
 		})
@@ -2218,7 +2314,7 @@ func TestCDCWatermarkUpdaterRejectsOwnerErrorWithoutDurableGeneration(t *testing
 func TestCDCWatermarkUpdaterOwnedErrorDoesNotReadMissingProgress(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), exec, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2347,7 +2443,7 @@ func TestCDCWatermarkUpdaterReplacementDropsPreviousErrorRetryState(t *testing.T
 func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	t.Cleanup(u.Stop)
 
 	key := &WatermarkKey{
@@ -2406,7 +2502,7 @@ func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing
 
 func TestCDCWatermarkUpdaterErrorMetricClassificationIsExclusive(t *testing.T) {
 	u := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2485,7 +2581,7 @@ func TestCDCWatermarkUpdater_GuardedWatermarkSQLSplitsOnBytes(t *testing.T) {
 func TestCDCWatermarkUpdater_ErrorMessageRespectsCatalogBound(t *testing.T) {
 	executor := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), executor, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "table"}
 	u.cacheCommitted[*key] = types.BuildTS(1, 1)
@@ -2713,7 +2809,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	)
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
-	u.Start()
+	u.Start(context.Background())
 	defer func() {
 		// Release a blocked persistence before waiting for the queue worker. This
 		// keeps timeout/failure cleanup from waiting on its own test barrier.
@@ -2894,7 +2990,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{
@@ -2957,7 +3053,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	key := &WatermarkKey{
@@ -2980,7 +3076,7 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 // TestCDCWatermarkUpdater_MarkUnmarkTaskPaused tests pause state management
 func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-pause"
@@ -3015,7 +3111,7 @@ func TestCDCWatermarkUpdater_DeletedTaskDominatesConcurrentPause(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-block"
@@ -3068,7 +3164,7 @@ func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	task1 := "task-1"
@@ -3117,7 +3213,7 @@ func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseRestartCycle(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "lifecycle-task"
@@ -4115,4 +4211,123 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 	_, exists := updater.cacheCommitted[key]
 	updater.RUnlock()
 	require.True(t, exists)
+}
+
+func TestDurableProgressConcurrentReadersDrainIndependently(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retire=%t", retire), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(cancel)
+			key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
+			exec := &watermarkProgressExecutor{watermark: "100-0", generation: "11"}
+			u := NewCDCWatermarkUpdater(t.Name(), exec)
+			owner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+			u.Lock()
+			require.True(t, u.activateWatermarkFenceLocked(*key, owner))
+			u.Unlock()
+			entered, release := make(chan struct{}), make(chan struct{})
+			exec.onQuery = func() {
+				close(entered)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			done := make(chan error, 1)
+			joined := false
+			t.Cleanup(func() {
+				unblock()
+				if !joined {
+					<-done
+				}
+			})
+			go func() {
+				watermark, generation, err := u.GetWatermarkProgress(ctx, key)
+				if retire {
+					if !IsRetryableSnapshotEpochError(err) {
+						err = fmt.Errorf("retired read returned %s/%d: %v", watermark.ToString(), generation, err)
+					} else {
+						err = nil
+					}
+				} else if err == nil && (watermark != types.BuildTS(20, 0) || generation != 12) {
+					err = fmt.Errorf("delayed read returned %s/%d", watermark.ToString(), generation)
+				}
+				done <- err
+			}()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if retire {
+				u.Lock()
+				u.retireWatermarkProgressLocked(*key)
+				u.Unlock()
+				// Hold the replacement observation open while the retired reader exits.
+				replacementEntered, replacementRelease, replacementDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.onQuery = func() {
+					close(replacementEntered)
+					select {
+					case <-replacementRelease:
+					case <-ctx.Done():
+					}
+				}
+				exec.mu.Unlock()
+				var replacementOnce sync.Once
+				unblockReplacement := func() { replacementOnce.Do(func() { close(replacementRelease) }) }
+				replacementJoined := false
+				t.Cleanup(func() {
+					unblockReplacement()
+					if !replacementJoined {
+						<-replacementDone
+					}
+				})
+				go func() { _, _, err := u.GetWatermarkProgress(ctx, key); replacementDone <- err }()
+				select {
+				case <-replacementEntered:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				unblock()
+				err := <-done
+				joined = true
+				require.NoError(t, err)
+				u.RLock()
+				observation := u.progressReads[*key]
+				readers := 0
+				if observation != nil {
+					readers = observation.readers
+				}
+				u.RUnlock()
+				require.Equal(t, 1, readers, "retired release must retain the replacement observation")
+				unblockReplacement()
+				err = <-replacementDone
+				replacementJoined = true
+				require.NoError(t, err)
+			} else {
+				// The second reader finishes while the first still owns an observation.
+				_, _, err := u.GetWatermarkProgress(ctx, key)
+				require.NoError(t, err)
+				u.RLock()
+				readers := u.progressReads[*key].readers
+				u.RUnlock()
+				require.Equal(t, 1, readers)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.mu.Unlock()
+				require.NoError(t, u.finishTargetAcknowledgement(ctx, key, owner, types.BuildTS(20, 0), 12))
+				unblock()
+				err = <-done
+				joined = true
+				require.NoError(t, err)
+			}
+			require.Empty(t, u.progressReads)
+			require.Equal(t, types.BuildTS(20, 0), u.cacheCommitted[*key])
+			require.Equal(t, uint64(12), u.cacheCommittedGeneration[*key])
+		})
+	}
 }

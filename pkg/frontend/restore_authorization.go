@@ -39,11 +39,18 @@ type partialRestoreSource struct {
 	sortedViews []string
 }
 
+func newPartialRestoreSource(tables []*tableInfo) *partialRestoreSource {
+	source := &partialRestoreSource{tables: tables, byName: make(map[restoreObjectName]*tableInfo, len(tables))}
+	for _, info := range tables {
+		source.byName[restoreObjectName{info.dbName, info.tblName}] = info
+	}
+	return source
+}
+
 func preparePartialRestoreSource(ctx context.Context, ses *Session, bh BackgroundExec, label string, snapshot *plan.Snapshot, tables []*tableInfo, source, target uint32) (*partialRestoreSource, map[restoreObjectName]struct{}, error) {
-	resolved := &partialRestoreSource{tables: tables, byName: make(map[restoreObjectName]*tableInfo, len(tables))}
+	resolved := newPartialRestoreSource(tables)
 	views := make(map[string]*tableInfo)
 	for _, info := range tables {
-		resolved.byName[restoreObjectName{info.dbName, info.tblName}] = info
 		if info.typ == view {
 			views[genKey(info.dbName, info.tblName)] = info
 		}

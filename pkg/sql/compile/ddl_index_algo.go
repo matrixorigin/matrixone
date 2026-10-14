@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -80,27 +81,69 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 	if err != nil {
 		return "", err
 	}
-	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
-	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
-	if len(indexDef.Parts) > 1 {
-		nullChecks := make([]string, 0, len(indexDef.Parts))
-		for _, part := range indexDef.Parts {
-			part = catalog.ResolveAlias(part)
-			partExpr := quoteMySQLQualifiedIdent(part)
-			if length := prefixLengths[part]; length > 0 {
-				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
-			}
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
-		}
-		nullCheckExpr = strings.Join(nullChecks, " AND ")
+	partsExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
+	keyExpr := partsExpr
+	if indexDef.KeyFormat == collation.KeyFormatV1 {
+		withPKey := tableDef != nil && tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != ""
+		keyExpr = indexBackfillKeyExpr(
+			partsExpr,
+			indexDef.KeyFormat,
+			true,
+			len(indexDef.Parts) == 1,
+			indexSinglePartNeedsPhysicalKey(tableDef, indexDef),
+			withPKey,
+		)
 	}
-	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
-		groupExpr,
-		quoteMySQLIdent(dbName),
-		quoteMySQLIdent(tableDef.Name),
+	nullCheckExpr := buildUniqueIndexNullCheckExpr(indexDef.Parts, prefixLengths)
+	if keyExpr == partsExpr {
+		return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+			partsExpr,
+			quoteMySQLIdent(dbName),
+			quoteMySQLIdent(tableDef.Name),
+			nullCheckExpr,
+			partsExpr,
+		), nil
+	}
+
+	// The V1 backfill stores keyExpr, not the source expressions. Grouping by
+	// source values here could therefore miss a collation-equivalent collision
+	// (or reject values that the backfill would keep distinct). Keep the source
+	// expressions in the result for a useful duplicate diagnostic, and use a
+	// nested query for the physical-key grouping so the query remains valid with
+	// ONLY_FULL_GROUP_BY enabled.
+	tableName := fmt.Sprintf("%s.%s", quoteMySQLIdent(dbName), quoteMySQLIdent(tableDef.Name))
+	duplicateKeys := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+		keyExpr,
+		tableName,
 		nullCheckExpr,
-		groupExpr,
+		keyExpr,
+	)
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s AND %s IN (%s) LIMIT 1",
+		partsExpr,
+		tableName,
+		nullCheckExpr,
+		keyExpr,
+		duplicateKeys,
 	), nil
+}
+
+func buildUniqueIndexNullCheckExpr(parts []string, prefixLengths map[string]int) string {
+	if len(parts) == 1 {
+		partExpr := partsToIndexExprStr(parts, prefixLengths)
+		return fmt.Sprintf("%s IS NOT NULL", partExpr)
+	}
+
+	nullChecks := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = catalog.ResolveAlias(part)
+		partExpr := quoteMySQLQualifiedIdent(part)
+		if length := prefixLengths[part]; length > 0 {
+			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+		}
+		nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
+	}
+	return strings.Join(nullChecks, " AND ")
 }
 
 func (c *Compile) precheckAndInsertUniqueIndexTable(
