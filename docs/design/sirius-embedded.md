@@ -266,7 +266,7 @@ incorporates the delivered prerequisites and the owner-approved native split.
 
 | PR | Repository | Closure | Dependencies | Merge evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Sirius | Sync newest upstream dev into upstream-dev-merge, retain TAE/evidence/quiescence and regenerate Pixi lock | none | Build, TAE fixtures, task-lifetime and multi-stream checks |
+| 1 | Sirius | Sync newest upstream dev into perf/embedded-mo-scan, retain TAE/evidence/quiescence and regenerate Pixi lock | none | Build, TAE fixtures, task-lifetime and multi-stream checks |
 | 2 | MO | This design, narrow backend/execution contract, Flight adapter and selector | approved design | CPU contract/config tests, unchanged Flight behavior, fake backend lifecycle |
 | 3 | Sirius | Static target, C ABI, native leases, query lifecycle, errors/cancel/join/health | 1 and contract from 2 | Linked native consumer, partial init, cancel-before-start, queued GPU failure, safe reuse |
 | 4 | Sirius | Bounded MO-native ingestion on unified scan path | 3 | Capacity/ownership, bitmap/NULL varlena, GPU conversion, full-window cancellation |
@@ -287,7 +287,7 @@ cutover evidence. PR 10 preserves independently useful DuckDB/TAE tools and
 historical benchmark records.
 
 Use existing directories and dedicated branches in the user's forks. Sirius
-integration PRs target `matrixorigin/sirius:upstream-dev-merge`; MO and sidecar
+integration PRs target `matrixorigin/sirius:perf/embedded-mo-scan`; MO and sidecar
 target their `main` branches. Pin MO artifacts to merged Sirius commits, not
 moving branch names. Do not mark dependent PRs ready with unresolved contracts
 or cumulative unmerged diffs. Optional later submissions of reusable patches
