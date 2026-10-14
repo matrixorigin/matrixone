@@ -55,6 +55,7 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 						{"unsigned", "select d div u as q from src where id=1", "int unsigned"},
 						{"folded", "select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q", "int"},
 						{"derived", "select q from (select d div i as q from src) s", "int"},
+						{"ordered", "select d div i as q from src order by id desc limit 1", "int"},
 						{"signed_threshold", "select cast(d as decimal(11,3)) div i as q from src", "bigint"},
 						{"unsigned_threshold", "select cast(d as decimal(11,3)) div u as q from src where id=1", "int unsigned"},
 					} {
@@ -66,8 +67,33 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 						var q int64
 						require.NoError(t, conn.QueryRowContext(ctx, "select q from "+name+" limit 1").Scan(&q))
 						require.Equal(t, int64(2), q, name)
+						if object == "view" {
+							for _, consumer := range []string{"table", "view"} {
+								outer := consumer + "_via_" + name
+								exec("create " + consumer + " " + outer + " as select q from " + name)
+								require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='q'", schema, outer).Scan(&got))
+								require.Equal(t, tc.want, got, outer)
+								require.NoError(t, conn.QueryRowContext(ctx, "select q from "+outer+" limit 1").Scan(&q))
+								require.Equal(t, int64(2), q, outer)
+							}
+						}
 					}
 				}
+				exec("insert into src values(3,null,null,2,2)")
+				for _, peer := range []string{"i", "u"} {
+					name := "null_" + peer
+					exec("create view " + name + " as select d div " + peer + " as q from src where id=3")
+					for _, consumer := range []string{"table", "view"} {
+						outer := consumer + "_via_" + name
+						exec("create " + consumer + " " + outer + " as select q from " + name)
+						var isNull bool
+						require.NoError(t, conn.QueryRowContext(ctx, "select q is null from "+outer).Scan(&isNull))
+						require.True(t, isNull, outer)
+					}
+				}
+				exec("create view negative_unsigned as select d div u as q from src where id=2")
+				var negative int64
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "select q from negative_unsigned").Scan(&negative), "out of range")
 				for _, mode := range []string{"", "NO_UNSIGNED_SUBTRACTION"} {
 					exec("set session sql_mode='" + mode + "'")
 					var q int64
