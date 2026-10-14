@@ -5029,7 +5029,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		return projectList
 	}
 	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
-		return builder.buildPadSpacePhysicalKeyList(projectList, setOperationKeyRequired)
+		return buildSetOperationPhysicalKeys(builder.GetContext(), projectList, setOperationKeyRequired)
 	}
 	appendSetOperationNode := func(
 		nodeType plan.Node_NodeType,

@@ -2395,6 +2395,82 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestSetOperationFloatKeyKeepsRepresentativesAcrossSpill(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		for _, spill := range []bool{false, true} {
+			t.Run(fmt.Sprintf("mixed=%v/spill=%v", mixed, spill), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				defer func() {
+					require.Zero(t, proc.Mp().CurrNB())
+					bytes, objects := proc.Mp().OnHeapOutstanding()
+					require.Zero(t, bytes)
+					require.Zero(t, objects)
+				}()
+				fn, err := function.GetFunctionByName(t.Context(), "set_operation_float_key", []types.Type{types.T_float64.ToType()})
+				require.NoError(t, err)
+				key := &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_uint64)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "set_operation_float_key"},
+						Args: []*plan.Expr{colExpr(0, types.T_float64)},
+					}},
+				}
+				g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_float64), key}, nil)
+				defer func() {
+					g.Free(proc, false, nil)
+				}()
+				g.GroupByHashKey = []int32{1}
+				g.ProjectList = []*plan.Expr{colExpr(0, types.T_float64)}
+				if spill {
+					g.SpillMem = 1 // The existing test seam counts groups below 10000.
+				}
+				input := batch.NewWithSize(1)
+				defer input.Clean(proc.Mp())
+				values := []float64{math.Copysign(0, -1), 0, math.Copysign(0, -1), 0}
+				var inputNulls []uint64
+				if mixed {
+					values = append(values, 0, 1.25, 1.25)
+					inputNulls = []uint64{4}
+				}
+				input.Vecs[0] = testutil.MakeFloat64Vector(values, inputNulls, proc.Mp())
+				input.SetRowCount(len(values))
+				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+				require.NoError(t, g.Prepare(proc))
+				var bits []uint64
+				nullCount := 0
+				for {
+					result, err := vm.Exec(g, proc)
+					require.NoError(t, err)
+					if result.Status == vm.ExecStop || result.Batch == nil {
+						break
+					}
+					require.Len(t, result.Batch.Vecs, 1, "hidden equality key must not become output")
+					require.Equal(t, types.T_float64, result.Batch.Vecs[0].GetType().Oid)
+					for row, value := range vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[0]) {
+						if result.Batch.Vecs[0].GetNulls().Contains(uint64(row)) {
+							nullCount++
+							continue
+						}
+						bits = append(bits, math.Float64bits(value))
+					}
+				}
+				want := []uint64{0, 1 << 63}
+				if mixed {
+					want = append(want, math.Float64bits(1.25))
+					require.Equal(t, 1, nullCount)
+				} else {
+					require.Zero(t, nullCount)
+				}
+				require.ElementsMatch(t, want, bits)
+				if spill {
+					require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
+				}
+			})
+		}
+	}
+}
+
 func TestGroupedOrderedPercentileSpill(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

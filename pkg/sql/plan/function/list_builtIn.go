@@ -4006,6 +4006,38 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// Internal equality key for FLOAT/DOUBLE set-operation membership.
+	{
+		functionId: SET_OPERATION_FLOAT_KEY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				switch inputs[0].Oid {
+				case types.T_float32:
+					return newCheckResultWithSuccess(0)
+				case types.T_float64:
+					return newCheckResultWithSuccess(1)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float32},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return setOperationFloat32Key },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return setOperationFloat64Key },
+			},
+		},
+	},
+
 	// function `physical_collation_key`
 	// Internal only: materialize the one-part key used by a secondary index.
 	{

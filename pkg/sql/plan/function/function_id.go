@@ -930,13 +930,17 @@ const (
 	// renumbering is safe.
 	QUANTILE_EXACT_WEIGHTED = 619
 
+	// The set-only key follows all released function identities.
+	SET_OPERATION_FLOAT_KEY = 620
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 620
+	FUNCTION_END_NUMBER = 621
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
+	"set_operation_float_key":      SET_OPERATION_FLOAT_KEY,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
