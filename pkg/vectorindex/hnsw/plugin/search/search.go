@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -180,45 +179,10 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 }
 
 // setMembership builds the exact primary-key filter of the serialized key vector payload.
-func (s *searcher) setMembership(spec *plan.IndexSearchScan, payload []byte) error {
-	if len(payload) == 0 {
-		s.emptyMembership = true
-		return nil
-	}
-	var keys vector.Vector
-	if err := keys.UnmarshalBinary(payload); err != nil {
-		return err
-	}
-	defer keys.Free(nil)
-	if keys.Length() == 0 {
-		s.emptyMembership = true
-		return nil
-	}
-	pk := spec.SourceTableDef.GetPkey()
-	if pk == nil {
-		return moerr.NewInvalidInputNoCtx("hnsw membership search source has no primary key")
-	}
-	pos, ok := spec.SourceTableDef.Name2ColIndex[pk.PkeyColName]
-	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) || keys.HasNull() ||
-		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(spec.SourceTableDef.Cols[pos].Typ.Id)) ||
-		!docfilter.SupportsBitset(*keys.GetType()) {
-		return moerr.NewInvalidInputNoCtx("hnsw membership key type does not match the source primary key")
-	}
-	admission := docfilter.AdmissionForService(s.proc.GetService())
-	built, err := docfilter.BuildWithMemoryAdmission(&keys, admission)
-	if err != nil {
-		return err
-	}
-	membership, err := docfilter.NewWithMemoryAdmission(built, admission)
-	if err != nil {
-		return err
-	}
-	if !membership.Exact() {
-		membership.Free()
-		return moerr.NewInvalidStateNoCtx("hnsw membership filter is not exact")
-	}
-	s.membership, s.membershipCount = membership, uint64(keys.Length())
-	return nil
+func (s *searcher) setMembership(spec *plan.IndexSearchScan, payload []byte) (err error) {
+	s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
+		s.proc.GetService(), "hnsw", spec.SourceTableDef, payload)
+	return err
 }
 
 // Next returns the whole result as one chunk.

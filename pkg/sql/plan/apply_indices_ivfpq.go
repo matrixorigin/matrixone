@@ -133,6 +133,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingIvfpqWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfpqWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -143,20 +147,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 	if vectorRankMode(vecCtx) == "auto" {
-		// pre differs from post only through filters on INCLUDE columns.
-		includeCols, err := parseIncludedColumnsFromParams(ivfpqCtx.idxDef.IndexAlgoParams)
-		if err != nil {
-			return nodeID, err
-		}
+		// pre differs from post with any filter but a distance range predicate: INCLUDE
+		// and primary-key filters run in the search, any other through membership. Under
+		// a MATCH filter post already runs the PRE shape.
 		branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
-			return builder.applyIndicesForSortUsingIvfpq(root, branchCtx, multiTableIndex, branchMap)
+			return builder.applyIndicesForSortUsingIvfpqWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
 		}
-		includePreds, _, _, err := buildFilterPredicateJSON(
-			vecCtx.scanNode.FilterList, vecCtx.scanNode, includeCols, "", false)
-		if err != nil {
-			return nodeID, err
-		}
-		withPre := includePreds != ""
+		withPre := hasNonDistFnFilter(vecCtx.scanNode.FilterList, ivfpqCtx.partPos, ivfpqCtx.origFuncName, ivfpqCtx.vecLitArg) &&
+			!builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
 		return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
 	}
 
@@ -173,6 +171,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		partPos:      ivfpqCtx.partPos,
 		pkPos:        ivfpqCtx.pkPos,
 		pkType:       ivfpqCtx.pkType,
+		colRefCnt:    colRefCnt,
 		algoOptions: func(filterJSON string, iterative bool) ([]byte, error) {
 			return ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{
 				ThreadsSearch:      ivfpqCtx.nThread,

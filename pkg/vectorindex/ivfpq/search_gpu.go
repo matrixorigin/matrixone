@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -90,6 +91,15 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if s.Overflow != nil {
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
+	service := ""
+	if sqlproc != nil {
+		service = sqlproc.GetService()
+	}
+	release, err := vectorindex.AdmitFilterMask(docfilter.AdmissionForService(service), rt, cardinality)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
 	if rt.Iterative {
 		return s.searchIterative(anyquery, rt, cardinality)
 	}
@@ -128,8 +138,12 @@ func (s *IvfpqSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfi
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
 	}
-	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	mem, err := docfilter.CExactMembershipOf(rt.Membership)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rt.FilterJSON != "" || rt.Membership != nil {
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON, mem)
 	} else {
 		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
@@ -834,7 +848,7 @@ func (s *IvfpqSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.Runtime
 		CandidateBudget: uint64(rt.Limit),
 		MaxNprobe:       uint64(rt.MaxProbe),
 	}
-	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: uint64(s.Idxcfg.CuvsIvfpq.Lists)}
+	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: uint64(s.Idxcfg.CuvsIvfpq.Lists), Members: uint64(rt.MembershipCount)}
 	policy := IterativeSearch{}
 	round := policy.StartRound(spec, req, stats)
 	for {

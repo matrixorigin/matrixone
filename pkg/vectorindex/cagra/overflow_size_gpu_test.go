@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -31,7 +32,7 @@ type stubOverflow[B cuvs.VectorType] struct{ n uint64 }
 func (s *stubOverflow[B]) SearchQuantizeAsync([]B, uint64, uint32, uint32) (uint64, error) {
 	return 0, nil
 }
-func (s *stubOverflow[B]) SearchQuantizeWithFilterAsync([]B, uint64, uint32, uint32, string) (uint64, error) {
+func (s *stubOverflow[B]) SearchQuantizeWithFilterAsync([]B, uint64, uint32, uint32, string, docfilter.CMembership) (uint64, error) {
 	return 0, nil
 }
 func (s *stubOverflow[B]) SearchWait(uint64, uint64, uint32) ([]int64, []float32, error) {

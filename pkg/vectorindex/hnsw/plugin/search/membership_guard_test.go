@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -100,6 +101,27 @@ func TestNewReaderMembership(t *testing.T) {
 	require.Error(t, err)
 
 	require.True(t, Hooks{}.SupportsMembership())
+
+	// the reader builds a C membership: cbitmap for dense keys, CRoaring for keys one in
+	// 100 apart, C sorted64 for keys one in 2^32 apart
+	for _, tc := range []struct {
+		step int64
+		kind byte
+	}{{1, docfilter.TagCbitmap}, {100, docfilter.TagCRoaring}, {1 << 32, docfilter.TagSorted64}} {
+		r = req
+		r.HasMembershipFilter, r.MembershipFilterRequired = true, true
+		r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
+			for i := int64(0); i < 5000; i++ {
+				require.NoError(t, vector.AppendFixed(v, 7+i*tc.step, false, proc.Mp()))
+			}
+		})
+		s, err = newSearcher(proc, membershipSpec(), r)
+		require.NoError(t, err)
+		cf, ok := s.membership.(docfilter.CFilter)
+		require.True(t, ok, "step %d", tc.step)
+		require.Equal(t, tc.kind, cf.CKind(), "step %d", tc.step)
+		require.NoError(t, s.Close())
+	}
 
 	// the iterative scan option makes the membership search widen
 	r = f32Request([]float32{1, 2}, 10)

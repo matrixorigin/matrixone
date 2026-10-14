@@ -19,6 +19,7 @@
 package cuvs
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -30,7 +31,7 @@ import (
 // overflow quantizes B -> OB inside cuVS, so OB never appears in any signature.
 type BruteForceOverflow[B VectorType] interface {
 	SearchQuantizeAsync(queries []B, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
-	SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error)
+	SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) (uint64, error)
 	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
 	Cap() uint64
 	Len() uint64
@@ -582,7 +583,7 @@ func mergeMultiResults(allNeighbors [][]int64, allDistances [][]float32, numQuer
 // base (B==half, query was []Float16) — they differ only in the concrete query
 // slice the caller asserts to []B. Both async via the worker pool; works
 // overflow-only (no main index, small data).
-func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
+func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -593,9 +594,9 @@ func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, mem)
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return idx.(*GpuCagra[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+			return idx.(*GpuCagra[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON, mem)
 		}})
 }
 
@@ -611,14 +612,14 @@ func (mi *MultiGpuIvfFlat[B, Q]) SearchQuantizeWithFilter(queries []B, numQuerie
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, docfilter.CMembership{})
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
 			return idx.(*GpuIvfFlat[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
 		}})
 }
 
 // SearchQuantizeWithFilter — see MultiGpuCagra.SearchQuantizeWithFilter.
-func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) ([]int64, []float32, error) {
+func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -629,8 +630,8 @@ func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, mem)
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return idx.(*GpuIvfPq[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+			return idx.(*GpuIvfPq[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON, mem)
 		}})
 }

@@ -24,6 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -566,6 +569,52 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	found, err := idx.Contains(42)
 	require.NoError(t, err)
 	require.True(t, found)
+}
+
+// SearchWithMembership keeps only the keys of a C membership: a CRoaring bitmap (keys one
+// in 100 apart) and a C sorted64 (keys one in 2^32 apart).
+func TestSearchWithCMembership(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+	idx, err := NewHnswModelForBuild[float32]("membership-test", cfg, 1, 4096, "")
+	require.NoError(t, err)
+	defer idx.Destroy()
+	for i := int64(0); i < 2000; i++ {
+		require.NoError(t, idx.Add(i*100, []float32{float32(i), 0, 0}))
+	}
+	mp := mpool.MustNewZero()
+	build := func(keys []int64) docfilter.MembershipFilter {
+		v := vector.NewVec(types.T_int64.ToType())
+		defer v.Free(mp)
+		for _, k := range keys {
+			require.NoError(t, vector.AppendFixed(v, k, false, mp))
+		}
+		f, err := docfilter.NewForC(v, nil)
+		require.NoError(t, err)
+		return f
+	}
+
+	var roaringKeys []int64
+	for i := int64(500); i < 2000; i += 1 {
+		roaringKeys = append(roaringKeys, i*100)
+	}
+	roaring := build(roaringKeys)
+	defer roaring.Free()
+	require.Equal(t, docfilter.TagCRoaring, roaring.(docfilter.CFilter).CKind())
+	keys, _, err := idx.SearchWithMembership([]float32{0, 0, 0}, 5, roaring)
+	require.NoError(t, err)
+	require.Len(t, keys, 5)
+	for _, k := range keys {
+		require.GreaterOrEqual(t, int64(k), int64(500*100), "key %d is not a member", k)
+	}
+	require.Equal(t, usearch.Key(500*100), keys[0])
+
+	sorted := build([]int64{700 * 100, 1 << 40, 1 << 50})
+	defer sorted.Free()
+	require.Equal(t, docfilter.TagSorted64, sorted.(docfilter.CFilter).CKind())
+	keys, _, err = idx.SearchWithMembership([]float32{0, 0, 0}, 5, sorted)
+	require.NoError(t, err)
+	require.Equal(t, []usearch.Key{700 * 100}, keys)
 }
 
 // TestLoadIndex_EmptyChecksum covers the "checksum is empty" guard (lines 657-660).

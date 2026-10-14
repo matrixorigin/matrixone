@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -504,7 +505,7 @@ func (gb *GpuBruteForce[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBi
 }
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
-func (gb *GpuBruteForce[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, predsJSON string) ([]int64, []float32, error) {
+func (gb *GpuBruteForce[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	if gb.cIndex == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
@@ -523,6 +524,7 @@ func (gb *GpuBruteForce[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, 
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -548,7 +550,7 @@ func (gb *GpuBruteForce[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, 
 
 // SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B) queries;
 // cuVS quantizes B -> storage Q internally.
-func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string) ([]int64, []float32, error) {
+func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	if gb.cIndex == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
@@ -567,6 +569,7 @@ func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -595,7 +598,7 @@ func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 // SearchQuantizeAsync + the predicate-eval semantics of SearchQuantizeWithFilter.
 // cuVS quantizes B -> storage Q internally. Used by the multi-index brute-force
 // fallback so it runs in parallel with the primary IVF/CAGRA shards.
-func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error) {
+func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) (uint64, error) {
 	if gb.cIndex == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
@@ -614,6 +617,7 @@ func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQue
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -630,7 +634,7 @@ func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQue
 // queries and returns a job_id; collect the result with SearchWait. Native
 // counterpart of SearchFloatWithFilterAsync (no widening) — lets the filtered
 // overflow stay in the base element type T (e.g. half).
-func (gb *GpuBruteForce[B, Q]) SearchWithFilterAsync(queries []Q, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error) {
+func (gb *GpuBruteForce[B, Q]) SearchWithFilterAsync(queries []Q, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) (uint64, error) {
 	if gb.cIndex == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
@@ -649,6 +653,7 @@ func (gb *GpuBruteForce[B, Q]) SearchWithFilterAsync(queries []Q, numQueries uin
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)

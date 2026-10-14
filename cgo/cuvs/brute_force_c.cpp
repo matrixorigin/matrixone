@@ -407,7 +407,7 @@ gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_for
                                                                     const void* queries_data,
                                                                     uint64_t num_queries, uint32_t query_dimension,
                                                                     uint32_t limit, const char* preds_json,
-                                                                    void* errmsg) {
+                                                                    mo_membership_t membership, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         brute_force_search_params_t sp;
@@ -415,7 +415,7 @@ gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_for
         auto cpp_res = std::make_unique<brute_force_search_result_t>();
         brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [&](auto* idx) {
             using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
-            *cpp_res = idx->search_with_filter(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+            *cpp_res = idx->search_with_filter(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, sp, preds, membership);
         });
         return static_cast<gpu_brute_force_search_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
@@ -431,7 +431,7 @@ gpu_brute_force_search_result_c gpu_brute_force_search_quantize_with_filter(gpu_
                                                                           const void* queries_data,
                                                                           uint64_t num_queries, uint32_t query_dimension,
                                                                           uint32_t limit, const char* preds_json,
-                                                                          void* errmsg) {
+                                                                          mo_membership_t membership, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         brute_force_search_params_t sp;
@@ -439,7 +439,7 @@ gpu_brute_force_search_result_c gpu_brute_force_search_quantize_with_filter(gpu_
         auto cpp_res = std::make_unique<brute_force_search_result_t>();
         brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [&](auto* idx) {
             using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
-            *cpp_res = idx->search_quantize_with_filter(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+            *cpp_res = idx->search_quantize_with_filter(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds, membership);
         });
         return static_cast<gpu_brute_force_search_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
@@ -455,14 +455,14 @@ uint64_t gpu_brute_force_search_quantize_with_filter_async(gpu_brute_force_c ind
                                                          const void* queries_data,
                                                          uint64_t num_queries, uint32_t query_dimension,
                                                          uint32_t limit, const char* preds_json,
-                                                         void* errmsg) {
+                                                         mo_membership_t membership, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         brute_force_search_params_t sp;
         std::string preds = preds_json ? preds_json : "";
         return brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [&](auto* idx) -> uint64_t {
             using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
-            return idx->search_quantize_with_filter_async(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+            return idx->search_quantize_with_filter_async(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds, membership);
         });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_quantize_with_filter_async", e.what());
@@ -480,14 +480,14 @@ uint64_t gpu_brute_force_search_with_filter_async(gpu_brute_force_c index_c,
                                                   const void* queries_data,
                                                   uint64_t num_queries, uint32_t query_dimension,
                                                   uint32_t limit, const char* preds_json,
-                                                  void* errmsg) {
+                                                  mo_membership_t membership, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         brute_force_search_params_t sp;
         std::string preds = preds_json ? preds_json : "";
         return brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [&](auto* idx) -> uint64_t {
             using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
-            return idx->search_with_filter_async(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+            return idx->search_with_filter_async(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, sp, preds, membership);
         });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_with_filter_async", e.what());

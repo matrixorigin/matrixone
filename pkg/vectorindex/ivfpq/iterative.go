@@ -24,7 +24,8 @@ import (
 // NProbe lists and requests ITopK keys, the candidate budget; the filter runs inside
 // the search, so every key returned qualifies. The first round probes the scan's
 // nprobe lists; each further round doubles them, up to max_nprobe (every list when
-// unset). A round that returns LIMIT rows, or probes the cap, is the last. cuVS
+// unset). A round that returns LIMIT rows (every member of a smaller membership), or
+// probes the cap, is the last. cuVS
 // ivf_pq::search takes no list subset, so every round searches the lists again.
 type IterativeSearch struct{}
 
@@ -43,7 +44,7 @@ func (IterativeSearch) StartRound(spec *plan.IndexSearchScan, req searchplugin.R
 // NextRound returns the round after prev, which returned got rows.
 func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
 	capLists := iterativeListCap(req, stats)
-	if got >= max(req.ResultLimit, 1) || (capLists != 0 && prev.NProbe >= capLists) {
+	if got >= iterativeTarget(req, stats) || (capLists != 0 && prev.NProbe >= capLists) {
 		return prev, false
 	}
 	next := prev.NProbe * 2
@@ -51,6 +52,16 @@ func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Reque
 		next = min(next, capLists)
 	}
 	return searchplugin.Round{ITopK: prev.ITopK, NProbe: next}, true
+}
+
+// iterativeTarget is the row count that ends the widening: LIMIT, or the membership
+// size when fewer keys qualify.
+func iterativeTarget(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
+	target := max(req.ResultLimit, 1)
+	if stats.Members != 0 {
+		target = min(target, stats.Members)
+	}
+	return target
 }
 
 // iterativeListCap is the most lists a round probes: max_nprobe, at most the index

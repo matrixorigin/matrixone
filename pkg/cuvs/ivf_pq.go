@@ -28,6 +28,7 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -1119,7 +1120,7 @@ func (gi *GpuIvfPq[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap 
 }
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
-func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1140,6 +1141,7 @@ func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -1167,7 +1169,7 @@ func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 
 // SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B)
 // queries; the index converts B to storage T (copy / quantize / f32->f16 cast).
-func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1188,6 +1190,7 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -1218,7 +1221,7 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 // SearchQuantizeAsyncWithParams + the predicate-eval semantics of
 // SearchQuantizeWithFilter. Used by MultiGpuIvfPq to dispatch per-shard
 // filtered searches in parallel. The index converts B to storage T.
-func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1239,6 +1242,7 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)

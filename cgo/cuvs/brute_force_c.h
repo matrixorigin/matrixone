@@ -17,6 +17,7 @@
 #ifndef BRUTE_FORCE_C_H
 #define BRUTE_FORCE_C_H
 
+#include "../membership.h"
 #include "helper.h"
 #include "cuvs_types.h"
 
@@ -83,17 +84,19 @@ void gpu_brute_force_add_filter_chunk(gpu_brute_force_c index_c, uint32_t col_id
 // Filtered search variants. preds_json is a JSON predicate array;
 // passing NULL or "" yields unfiltered behavior (delegates to the deletes-only
 // fast path internally if any rows are tombstoned).
+// membership: primary keys ANDed into the filter mask (cbitmap, CRoaring or sorted64,
+// see ../membership.h); a NULL filter is none, any other kind is an error.
 gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_force_c index_c,
                                                                     const void* queries_data,
                                                                     uint64_t num_queries, uint32_t query_dimension,
                                                                     uint32_t limit, const char* preds_json,
-                                                                    void* errmsg);
+                                                                    mo_membership_t membership, void* errmsg);
 
 gpu_brute_force_search_result_c gpu_brute_force_search_quantize_with_filter(gpu_brute_force_c index_c,
                                                                           const void* queries_data,
                                                                           uint64_t num_queries, uint32_t query_dimension,
                                                                           uint32_t limit, const char* preds_json,
-                                                                          void* errmsg);
+                                                                          mo_membership_t membership, void* errmsg);
 
 // Async variant of gpu_brute_force_search_quantize_with_filter. Returns a job_id
 // that is collected with the existing gpu_brute_force_search_wait.
@@ -101,7 +104,7 @@ uint64_t gpu_brute_force_search_quantize_with_filter_async(gpu_brute_force_c ind
                                                          const void* queries_data,
                                                          uint64_t num_queries, uint32_t query_dimension,
                                                          uint32_t limit, const char* preds_json,
-                                                         void* errmsg);
+                                                         mo_membership_t membership, void* errmsg);
 
 // Native-typed (T) async variant of gpu_brute_force_search_with_filter: the
 // query stays in the index element type T (f32 or f16), no widening. Returns a
@@ -111,7 +114,7 @@ uint64_t gpu_brute_force_search_with_filter_async(gpu_brute_force_c index_c,
                                                   const void* queries_data,
                                                   uint64_t num_queries, uint32_t query_dimension,
                                                   uint32_t limit, const char* preds_json,
-                                                  void* errmsg);
+                                                  mo_membership_t membership, void* errmsg);
 
 // Returns the capacity of the index buffer
 uint64_t gpu_brute_force_cap(gpu_brute_force_c index_c);

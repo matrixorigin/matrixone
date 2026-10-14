@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
@@ -40,6 +41,7 @@ var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.IndexFilterHooks = Hooks{}
+var _ searchplugin.MembershipHooks = Hooks{}
 var _ searchplugin.IterativeSearchHooks = Hooks{}
 var _ searchplugin.InternalTopKLimitHooks = Hooks{}
 
@@ -59,6 +61,10 @@ func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, sta
 // SupportsIndexFilter reports true: the search applies the INCLUDE and
 // primary-key predicates of its filter inside the index search.
 func (Hooks) SupportsIndexFilter() bool { return true }
+
+// SupportsMembership reports true: the search ANDs the membership key set into its
+// filter mask on the device.
+func (Hooks) SupportsMembership() bool { return true }
 
 // ExplainSettings returns the filter the search applies on the device as SQL ("Index
 // Filter"), and on detailed output the static settings first. Compact output prints
@@ -112,16 +118,19 @@ func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
 }
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
-	// The search does not apply a membership key set, so a request whose candidate
-	// limit is only valid under one is refused rather than answered without it.
-	if req.MembershipFilterRequired {
-		return nil, moerr.NewNotSupported(proc.Ctx, "cagra index search with a required membership filter")
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "cagra index search requires a membership filter that is missing")
 	}
 	s, err := newSearch(proc, spec, req)
 	if err != nil {
 		return nil, err
 	}
-	return newReader(s)
+	r, err := newReader(s)
+	if err != nil {
+		s.freeMembership()
+		return nil, err
+	}
+	return r, nil
 }
 
 // search is one cagra search: the index and table configuration, the query
@@ -141,6 +150,19 @@ type search struct {
 	resultLimit uint64
 	maxLimit    uint64
 	maxProbe    uint64
+	// membership holds the primary keys the search is restricted to, or nil.
+	// emptyMembership is an exact empty key set: the search returns no rows.
+	membership      docfilter.MembershipFilter
+	membershipCount uint64
+	emptyMembership bool
+}
+
+// freeMembership frees the membership filter of s; s may be nil.
+func (s *search) freeMembership() {
+	if s != nil && s.membership != nil {
+		s.membership.Free()
+		s.membership = nil
+	}
 }
 
 func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*search, error) {
@@ -190,7 +212,7 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("cagra index search is missing its hidden tables")
 	}
-	return &search{
+	s := &search{
 		proc:        proc,
 		idxcfg:      idxcfg,
 		tblcfg:      tblcfg,
@@ -203,5 +225,12 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
 		maxProbe:    req.MaxNprobe,
-	}, nil
+	}
+	if req.HasMembershipFilter {
+		if s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
+			proc.GetService(), "cagra", spec.SourceTableDef, req.MembershipFilter); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }

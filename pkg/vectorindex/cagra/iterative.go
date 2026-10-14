@@ -29,8 +29,9 @@ const DefaultMaxInternalTopK = MaxInternalTopK
 // IterativeSearch is the CAGRA widening policy of mode=iterative. A round requests
 // ITopK keys (cuVS itopk_size is at least the request); the filter runs inside the
 // search, so every key returned qualifies. The first round requests the candidate
-// budget; each further round doubles it. A round that returns LIMIT rows, or
-// requests the cap or every indexed row, is the last. cuVS cannot resume a search,
+// budget; each further round doubles it. A round that returns LIMIT rows (every
+// member of a smaller membership), or requests the cap or every indexed row, is the
+// last. cuVS cannot resume a search,
 // so every round searches again.
 type IterativeSearch struct{}
 
@@ -45,10 +46,20 @@ func (IterativeSearch) StartRound(_ *plan.IndexSearchScan, req searchplugin.Requ
 // NextRound returns the round after prev, which returned got rows.
 func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
 	capITopK := iterativeCap(req, stats)
-	if got >= max(req.ResultLimit, 1) || prev.ITopK >= capITopK {
+	if got >= iterativeTarget(req, stats) || prev.ITopK >= capITopK {
 		return prev, false
 	}
 	return searchplugin.Round{ITopK: min(prev.ITopK*2, capITopK)}, true
+}
+
+// iterativeTarget is the row count that ends the widening: LIMIT, or the membership
+// size when fewer keys qualify.
+func iterativeTarget(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
+	target := max(req.ResultLimit, 1)
+	if stats.Members != 0 {
+		target = min(target, stats.Members)
+	}
+	return target
 }
 
 // iterativeCap is the largest ITopK of a round: max_itopk (DefaultMaxInternalTopK when

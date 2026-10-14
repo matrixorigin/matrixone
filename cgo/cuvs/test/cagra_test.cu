@@ -903,3 +903,78 @@ TEST(GpuCagraTest, DeletesLeavingFewerThanKPadWithSentinels) {
     expect_only_allowed_cagra(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
     index.destroy();
 }
+
+// sorted64 membership payload: [count][sorted uint64 keys].
+static std::vector<uint64_t> cagra_sorted64(std::vector<int64_t> keys) {
+    std::sort(keys.begin(), keys.end());
+    std::vector<uint64_t> payload{static_cast<uint64_t>(keys.size())};
+    for (auto k : keys) payload.push_back(static_cast<uint64_t>(k));
+    return payload;
+}
+
+// A membership of external ids is ANDed with the predicates and the delete bitset in
+// the search mask; with fewer members than k the rest of the page is sentinels.
+TEST(GpuCagraTest, FilteredSearchAppliesMembership) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 5000 + 3 * (int64_t)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[2] = 2;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                    DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);  // nearest rows 0, 1, 2, ...
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto payload = cagra_sorted64({ids[2], ids[5], ids[9], 4});  // 4 is not an id of the index
+    const mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+
+    // membership only: rows 2, 5, 9 in distance order
+    auto r = index.search_with_filter(query.data(), 1, dimension, 3, sp, "", mem);
+    ASSERT_EQ(r.neighbors[0], ids[2]);
+    ASSERT_EQ(r.neighbors[1], ids[5]);
+    ASSERT_EQ(r.neighbors[2], ids[9]);
+
+    // membership AND cat = 1 drops row 2; deleting row 5 leaves row 9; a page of 3 pads
+    index.delete_id(ids[5]);
+    const uint32_t limit = 3;
+    auto r2 = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                       "[{\"col\":0,\"op\":\"=\",\"val\":1}]", mem);
+    expect_only_allowed_cagra(r2.neighbors, r2.distances, limit, {ids[9]});
+    ASSERT_EQ(r2.neighbors[0], ids[9]);
+
+    // the quantize (base-typed) async entry takes the same membership
+    auto job = index.search_quantize_with_filter_async(query.data(), 1, dimension, 1, sp, "", mem);
+    auto r3 = index.search_wait(job);
+    ASSERT_EQ(r3.neighbors[0], ids[2]);
+
+    // a CRoaring membership: rows 9 and 40 in distance order (row 5 is deleted)
+    std::vector<int64_t> keys = {ids[5], ids[9], ids[40]};
+    void* roaring = mo_croaring_create();
+    ASSERT_TRUE(mo_croaring_add_fixed(roaring, keys.data(), keys.size() * 8, 8, keys.size(), nullptr, 0));
+    const mo_membership_t croaring{roaring, MO_MEMBERSHIP_CROARING};
+    auto r4 = index.search_with_filter(query.data(), 1, dimension, 3, sp, "", croaring);
+    expect_only_allowed_cagra(r4.neighbors, r4.distances, 3, {ids[9], ids[40]});
+    ASSERT_EQ(r4.neighbors[0], ids[9]);
+    ASSERT_EQ(r4.neighbors[1], ids[40]);
+    mo_croaring_free(roaring);
+
+    // ids that do not cover every row reject the mask
+    index.host_ids.resize(count - 1);
+    ASSERT_THROW(index.search_with_filter(query.data(), 1, dimension, 3, sp, "", mem), std::exception);
+    ASSERT_THROW(index.search_with_filter(query.data(), 1, dimension, 3, sp,
+                                          "[{\"col\":-1,\"op\":\"=\",\"val\":5000}]", mo_membership_t{}),
+                 std::exception);
+    index.destroy();
+}

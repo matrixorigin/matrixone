@@ -802,12 +802,15 @@ public:
     host_mask_bundle_t
     build_filter_host_mask(const std::string& preds_json,
                            uint64_t start_row,
-                           uint64_t shard_sz) {
+                           uint64_t shard_sz,
+                           const mo_membership_t& mem = {}) {
         host_mask_bundle_t out;
 
         std::vector<PredOp> preds;
         if (!preds_json.empty()) preds = parse_preds(preds_json);
-        const bool has_user = !preds.empty();
+        validate_membership(mem);
+        // A membership is a user filter: it always builds a mask.
+        const bool has_user = !preds.empty() || membership_active(mem);
 
         uint64_t del_count;
         {
@@ -836,7 +839,8 @@ public:
         // that's the one input that can race with concurrent extend()
         // reallocating host_ids. Otherwise snapshot the deleted_bitset_ slice
         // under a brief shared_lock and run the eval unlocked.
-        bool needs_host_ids = false;
+        // A membership tests host_ids, so it takes the locked path too.
+        bool needs_host_ids = membership_active(mem);
         for (const auto& p : preds) {
             if (p.col_idx == kHostIdColIdx) { needs_host_ids = true; break; }
         }
@@ -867,6 +871,12 @@ public:
             std::shared_lock<std::shared_mutex> lock(mutex_);
             HostIdsView hv;
             if (!this->host_ids.empty()) {
+                if (this->host_ids.size() < start_row + shard_sz) {
+                    throw std::runtime_error(
+                        "build_filter_host_mask: ids for " + std::to_string(this->host_ids.size()) +
+                        " rows do not cover rows [" + std::to_string(start_row) + ", " +
+                        std::to_string(start_row + shard_sz) + ")");
+                }
                 static_assert(std::is_same_v<IdT, int64_t>,
                     "PK filter path assumes IdT == int64_t; update HostIdsView.type dispatch");
                 hv.data  = this->host_ids.data();
@@ -876,7 +886,7 @@ public:
             snapshot_del_slice();
             host_mask = eval_filter_bitmap_cpu_fused(
                 this->filter_host_, preds, start_row, shard_sz,
-                del_slice.empty() ? nullptr : &del_slice, hv, pc);
+                del_slice.empty() ? nullptr : &del_slice, hv, mem, pc);
         } else {
             // Fast path: snapshot delete slice under a brief lock, then run
             // the fused eval unlocked. eval reads filter_host_ which is
@@ -889,7 +899,7 @@ public:
             HostIdsView hv;  // unused on this path
             host_mask = eval_filter_bitmap_cpu_fused(
                 this->filter_host_, preds, start_row, shard_sz,
-                del_slice.empty() ? nullptr : &del_slice, hv, pc);
+                del_slice.empty() ? nullptr : &del_slice, hv, mo_membership_t{}, pc);
         }
 
         out.mask       = std::move(host_mask);
@@ -1058,7 +1068,7 @@ public:
 
     // SHARDED: one bundle per shard, sized [start_row(rank), shard_sizes_[rank]).
     std::vector<std::shared_ptr<host_mask_bundle_t>>
-    build_filter_shard_masks(const std::string& preds_json) {
+    build_filter_shard_masks(const std::string& preds_json, const mo_membership_t& mem = {}) {
         const int num_shards = static_cast<int>(this->devices_.size());
         std::vector<std::shared_ptr<host_mask_bundle_t>> shard_masks(num_shards);
         for (int rank = 0; rank < num_shards; ++rank) {
@@ -1066,16 +1076,16 @@ public:
             uint64_t start_row = 0;
             for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             shard_masks[rank] = std::make_shared<host_mask_bundle_t>(
-                this->build_filter_host_mask(preds_json, start_row, shard_sz));
+                this->build_filter_host_mask(preds_json, start_row, shard_sz, mem));
         }
         return shard_masks;
     }
 
     // SINGLE_GPU / REPLICATED: a single bundle covering [0, count).
     std::shared_ptr<host_mask_bundle_t>
-    build_filter_single_mask(const std::string& preds_json) {
+    build_filter_single_mask(const std::string& preds_json, const mo_membership_t& mem = {}) {
         return std::make_shared<host_mask_bundle_t>(
-            this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count));
+            this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count, mem));
     }
 
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {

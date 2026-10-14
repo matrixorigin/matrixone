@@ -310,8 +310,8 @@ type RuntimeConfig struct {
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 
-	// Membership, when non-nil, restricts an HNSW search to the primary keys it
-	// holds; MembershipCount is the number of keys. With Iterative (mode=iterative)
+	// Membership, when non-nil, restricts an HNSW, CAGRA or IVF-PQ search to the
+	// primary keys it holds; MembershipCount is the number of keys. With Iterative (mode=iterative)
 	// an HNSW membership search, or a CAGRA / IVF-PQ search, widens in rounds: ResultLimit is the
 	// number of rows the query returns, MaxLimit caps Limit (0 = the algorithm's
 	// default) and MaxProbe caps Probe (0 = every list).

@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "../membership.h"
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -84,6 +86,21 @@ struct HostIdsView {
     FilterColType type  = FilterColType::INT64;
     uint64_t      count = 0;
 };
+
+// A membership (mo_membership_t, cgo/membership.h) of external ids (primary keys),
+// from the SEMI-join runtime filter of a PRE plan. A row passes when host_ids[row] is
+// in the set; an index with implicit ids has no primary keys to test, so a membership
+// on it is an error. A NULL filter is no membership.
+inline bool membership_active(const mo_membership_t& m) { return m.filter != nullptr; }
+
+// validate_membership throws for a kind the mask cannot test (cbitmap, CRoaring and
+// sorted64 only): an unknown membership must not run unfiltered.
+inline void validate_membership(const mo_membership_t& m) {
+    if (!membership_active(m)) return;
+    if (!mo_membership_is_exact_kind(m.kind)) {
+        throw std::invalid_argument("membership filter kind " + std::to_string(m.kind) + " is not supported");
+    }
+}
 
 inline uint32_t filter_col_elem_size(FilterColType t) {
     switch (t) {
@@ -941,6 +958,62 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
 // eval_filter_bitmap_cpu if you don't need popcount or the AND-merge.
 // -----------------------------------------------------------------------------
 
+namespace detail {
+// membership_probe_t tests external ids against a membership without allocating: a
+// cbitmap is read in place with an inline bit test; CRoaring and sorted64 use their
+// contains (a roaring lookup, a binary search).
+class membership_probe_t {
+public:
+    explicit membership_probe_t(const mo_membership_t& m) : mem_(m) {
+        if (membership_active(m) && m.kind == MO_MEMBERSHIP_CBITMAP) {
+            mo_cbitmap_view(const_cast<void*>(m.filter), &base_, &nbits_, &bits_);
+            dense_ = true;
+        }
+    }
+
+    bool contains(uint64_t key) const {
+        if (dense_) {
+            // key - base_ wraps for a key below base_, so one compare checks the span;
+            // an out-of-span key reads word 0 and is masked off without a branch.
+            const uint64_t off = key - base_;
+            const uint64_t in  = off < nbits_;
+            const uint64_t at  = in ? off : 0;
+            return in & (nbits_ != 0) & (bits_ != nullptr ? (bits_[at >> 6] >> (at & 63)) : 0);
+        }
+        return mo_membership_exact_contains(&mem_, key);
+    }
+
+private:
+    mo_membership_t mem_;
+    bool            dense_ = false;
+    uint64_t        base_  = 0;
+    uint64_t        nbits_ = 0;
+    const uint64_t* bits_  = nullptr;  // the cbitmap's words
+};
+
+// member_word returns the bits of `want` (rows base_row + k) whose host_ids key is in
+// the membership. Only the rows set in want are probed.
+inline uint32_t member_word(const membership_probe_t& probe, const int64_t* ids,
+                            uint64_t base_row, uint32_t want) {
+    uint32_t bits = 0;
+    if (want == 0xFFFFFFFFu) {
+        for (uint32_t k = 0; k < 32; ++k) {
+            bits |= static_cast<uint32_t>(probe.contains(static_cast<uint64_t>(ids[base_row + k]))) << k;
+        }
+        return bits;
+    }
+    while (want != 0) {
+        const uint32_t k = static_cast<uint32_t>(__builtin_ctz(want));
+        want &= want - 1;
+        if (probe.contains(static_cast<uint64_t>(ids[base_row + k]))) bits |= 1u << k;
+    }
+    return bits;
+}
+}  // namespace detail
+
+// `mem` ANDs a membership of external ids into the mask; with an active membership,
+// hv must view a non-empty host_ids and the caller holds the lock that keeps host_ids
+// stable.
 inline std::vector<uint32_t>
 eval_filter_bitmap_cpu_fused(const FilterStore& fs,
                              const std::vector<PredOp>& preds,
@@ -948,6 +1021,7 @@ eval_filter_bitmap_cpu_fused(const FilterStore& fs,
                              uint64_t num_rows,
                              const std::vector<uint32_t>* del_slice,
                              HostIdsView hv,
+                             const mo_membership_t& mem,
                              uint64_t& out_popcount) {
     const uint64_t nwords = (num_rows + 31) / 32;
     std::vector<uint32_t> mask(nwords, 0);
@@ -955,13 +1029,25 @@ eval_filter_bitmap_cpu_fused(const FilterStore& fs,
     if (nwords == 0) return mask;
 
     const bool has_del = (del_slice != nullptr && !del_slice->empty());
+    validate_membership(mem);
+    const bool has_mem = membership_active(mem);
+    if (has_mem && (hv.count == 0 || hv.type != FilterColType::INT64)) {
+        throw std::invalid_argument("membership filter requires the index's int64 host_ids");
+    }
+    const int64_t* ids = has_mem ? static_cast<const int64_t*>(hv.data) : nullptr;
+    const detail::membership_probe_t probe(mem);
 
-    // Empty preds: all-ones with tail masked. AND-merge deletes if present,
-    // popcount the result. Matches the original eval_filter_bitmap_cpu shape.
+    // Empty preds: all-ones with tail masked. AND-merge the membership and deletes
+    // if present, popcount the result. Matches the original eval_filter_bitmap_cpu shape.
     if (preds.empty()) {
         std::fill(mask.begin(), mask.end(), 0xFFFFFFFFu);
         const uint32_t tail_bits = static_cast<uint32_t>(num_rows & 31);
         if (tail_bits) mask.back() = (1u << tail_bits) - 1u;
+        if (has_mem) {
+            for (uint64_t w = 0; w < nwords; ++w) {
+                mask[w] = detail::member_word(probe, ids, start_row + w * 32, mask[w]);
+            }
+        }
         if (has_del) {
             for (uint64_t w = 0; w < nwords; ++w) mask[w] &= (*del_slice)[w];
         }
@@ -984,6 +1070,7 @@ eval_filter_bitmap_cpu_fused(const FilterStore& fs,
         for (const auto& p : preds) {
             bits &= detail::eval_pred_word(fs, p, start_row + base, 32, hv);
         }
+        if (has_mem && bits != 0) bits = detail::member_word(probe, ids, start_row + base, bits);
         if (has_del) bits &= (*del_slice)[w];
         mask[w] = bits;
         total_pc += static_cast<uint64_t>(__builtin_popcount(bits));
@@ -999,6 +1086,7 @@ eval_filter_bitmap_cpu_fused(const FilterStore& fs,
         for (const auto& p : preds) {
             bits &= detail::eval_pred_word(fs, p, start_row + base, tail, hv);
         }
+        if (has_mem && bits != 0) bits = detail::member_word(probe, ids, start_row + base, bits);
         if (has_del) bits &= (*del_slice)[full_words];
         mask[full_words] = bits;
         total_pc += static_cast<uint64_t>(__builtin_popcount(bits));

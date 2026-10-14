@@ -76,6 +76,9 @@ func (s *gpuSearcher) Next(ctx context.Context) (planreader.Chunk, bool, error) 
 	if err := ctx.Err(); err != nil {
 		return planreader.Chunk{}, false, err
 	}
+	if s.emptyMembership {
+		return planreader.Chunk{}, false, nil
+	}
 	var query any
 	var dims int
 	if s.queryType == types.T_array_float16 {
@@ -102,13 +105,15 @@ func (s *gpuSearcher) Next(ctx context.Context) (planreader.Chunk, bool, error) 
 		cacheKey = veccache.SnapshotKey(s.tblcfg.IndexTable, *ets)
 	}
 	rt := vectorindex.RuntimeConfig{
-		Limit:        uint(s.limit),
-		Probe:        uint(s.tblcfg.Nprobe),
-		OrigFuncName: s.tblcfg.OrigFuncName,
-		FilterJSON:   s.filterJSON,
-		Iterative:    s.iterative,
-		ResultLimit:  uint(s.resultLimit),
-		MaxProbe:     uint(s.maxProbe),
+		Limit:           uint(s.limit),
+		Probe:           uint(s.tblcfg.Nprobe),
+		OrigFuncName:    s.tblcfg.OrigFuncName,
+		FilterJSON:      s.filterJSON,
+		Membership:      s.membership,
+		MembershipCount: s.membershipCount,
+		Iterative:       s.iterative,
+		ResultLimit:     uint(s.resultLimit),
+		MaxProbe:        uint(s.maxProbe),
 	}
 	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
 	if err != nil {
@@ -121,4 +126,7 @@ func (s *gpuSearcher) Next(ctx context.Context) (planreader.Chunk, bool, error) 
 	return planreader.Chunk{Keys: ids, Scores: distances}, false, nil
 }
 
-func (*gpuSearcher) Close() error { return nil }
+func (s *gpuSearcher) Close() error {
+	s.freeMembership()
+	return nil
+}

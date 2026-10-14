@@ -829,8 +829,8 @@ public:
     search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
                                        uint32_t query_dimension, uint32_t limit,
                                        const ivf_pq_search_params_t& sp,
-                                       const std::string& preds_json) {
-        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+                                       const std::string& preds_json, const mo_membership_t& mem = {}) {
+        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json, mem);
         return this->search_wait(job_id);
     }
 
@@ -865,7 +865,7 @@ public:
     uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
                                       uint32_t query_dimension, uint32_t limit,
                                       const ivf_pq_search_params_t& sp,
-                                      const std::string& preds_json) {
+                                      const std::string& preds_json, const mo_membership_t& mem = {}) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -885,7 +885,7 @@ public:
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            auto shard_masks = this->build_filter_shard_masks(preds_json);
+            auto shard_masks = this->build_filter_shard_masks(preds_json, mem);
             auto shard_search_task = [this, num_queries, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
                 return this->search_internal(gpu_handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
@@ -894,7 +894,7 @@ public:
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
         }
 
-        auto mask = this->build_filter_single_mask(preds_json);
+        auto mask = this->build_filter_single_mask(preds_json, mem);
         auto task = [this, num_queries, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", mask.get());
         };
@@ -1187,8 +1187,8 @@ public:
     search_result_t search_quantize_with_filter(const B* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const ivf_pq_search_params_t& sp,
-                                             const std::string& preds_json) {
-        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+                                             const std::string& preds_json, const mo_membership_t& mem = {}) {
+        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json, mem);
         return this->search_wait(job_id);
     }
 
@@ -1202,7 +1202,7 @@ public:
     uint64_t search_quantize_with_filter_async(const B* queries_data, uint64_t num_queries,
                                             uint32_t query_dimension, uint32_t limit,
                                             const ivf_pq_search_params_t& sp,
-                                            const std::string& preds_json) {
+                                            const std::string& preds_json, const mo_membership_t& mem = {}) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -1227,7 +1227,7 @@ public:
             // Bitmap eval runs on the caller's (Go) thread; per-shard searches
             // hit their device queues directly; merge runs in search_wait().
             // See plan .claude/plans/effervescent-hatching-dewdrop.md.
-            auto shard_masks = this->build_filter_shard_masks(preds_json);
+            auto shard_masks = this->build_filter_shard_masks(preds_json, mem);
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
                 return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
@@ -1240,7 +1240,7 @@ public:
         // and the GPU search goes through worker->submit so concurrent calls
         // can be auto-batched in the device queue. Wrapping in submit_main
         // would force serialization through main_thread_ and lose batching.
-        auto mask = this->build_filter_single_mask(preds_json);
+        auto mask = this->build_filter_single_mask(preds_json, mem);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_quantize_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };

@@ -547,8 +547,9 @@ func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsIndexWithoutMemb
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes = newVectorJoinTableDef(true, false).Indexes
 	require.NotNil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode), "hnsw supports membership")
+	// an algorithm without the membership capability (here unregistered) is not used
 	for _, def := range tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes {
-		def.IndexAlgo = catalog.MoIndexCagraAlgo.ToString()
+		def.IndexAlgo = "no_membership_algo"
 	}
 	require.Nil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode))
 }

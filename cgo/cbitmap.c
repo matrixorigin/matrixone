@@ -134,6 +134,13 @@ bool mo_cbitmap_contain(void *f, uint64_t val) {
   return bitmap_test(b->words, idx);
 }
 
+void mo_cbitmap_view(void *f, uint64_t *base, uint64_t *nbits, const uint64_t **words) {
+  mo_cbitmap_t *b = (mo_cbitmap_t *)f;
+  *base = b ? b->base : 0;
+  *nbits = b ? b->nbits : 0;
+  *words = b ? b->words : NULL;
+}
+
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap,
                            size_t nullmaplen, void *result) {

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -55,6 +56,20 @@ func findNodeOfType(query *plan.Query, typ plan.Node_NodeType) *plan.Node {
 	for _, node := range query.Nodes {
 		if node.NodeType == typ {
 			return node
+		}
+	}
+	return nil
+}
+
+// findNodeUnder returns the first node of type typ in the subtree of root.
+func findNodeUnder(query *plan.Query, root int32, typ plan.Node_NodeType) *plan.Node {
+	node := query.Nodes[root]
+	if node.NodeType == typ {
+		return node
+	}
+	for _, child := range node.Children {
+		if found := findNodeUnder(query, child, typ); found != nil {
+			return found
 		}
 	}
 	return nil
@@ -156,6 +171,14 @@ func findSemiJoin(query *plan.Query) *plan.Node {
 
 func cagraPlanFixture(t *testing.T, sql string) *plan.Query {
 	t.Helper()
+	return cuvsPlanFixture(t, catalog.MoIndexCagraAlgo.ToString(),
+		[]string{catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage}, sql)
+}
+
+// cuvsPlanFixture plans sql over table cagra_iter with an index of algo whose hidden
+// tables have roles.
+func cuvsPlanFixture(t *testing.T, algo string, roles []string, sql string) *plan.Query {
+	t.Helper()
 	ctx := newVectorJoinMockCtx(t)
 	table := newVectorJoinTableDef(false, true)
 	table.Name, table.TblId = "cagra_iter", 971
@@ -167,9 +190,9 @@ func cagraPlanFixture(t *testing.T, sql string) *plan.Query {
 	table.Name2ColIndex["category"] = 2
 	table.Name2ColIndex["note"] = 3
 	params := `{"op_type":"vector_l2_ops","included_columns":"category"}`
-	for i, role := range []string{catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage} {
+	for i, role := range roles {
 		def := &plan.IndexDef{
-			IndexName: "idx_cagra_v", IndexAlgo: catalog.MoIndexCagraAlgo.ToString(), IndexAlgoTableType: role,
+			IndexName: "idx_cagra_v", IndexAlgo: algo, IndexAlgoTableType: role,
 			IndexTableName: "cagra_" + role, Parts: []string{"v"}, IndexAlgoParams: params, TableExist: true,
 		}
 		table.Indexes = append(table.Indexes, def)
@@ -188,16 +211,22 @@ func cagraPlanFixture(t *testing.T, sql string) *plan.Query {
 
 func TestCagraFilterPushdownByMode(t *testing.T) {
 	for _, tc := range []struct {
-		name, filter, mode string
-		iterative, pushed  bool
+		name, filter, mode     string
+		iterative, pushed, pre bool
 	}{
-		{"covered, iterative", "category = 1", "iterative", true, true},
-		{"covered, pre", "category = 1", "pre", false, true},
-		{"covered, no mode", "category = 1", "", false, true},
-		{"covered, post", "category = 1", "post", false, false},
-		{"primary key, post", "id < 5", "post", false, true},
-		{"residual, iterative", "category = 1 and note = 2", "iterative", false, true},
-		{"no filter, iterative", "", "iterative", true, false},
+		{"covered, iterative", "category = 1", "iterative", true, true, false},
+		{"covered, pre", "category = 1", "pre", false, true, false},
+		{"covered, no mode", "category = 1", "", false, true, false},
+		{"covered, post", "category = 1", "post", false, false, false},
+		{"primary key, post", "id < 5", "post", false, true, false},
+		{"residual, iterative", "category = 1 and note = 2", "iterative", true, true, true},
+		{"residual only, pre", "note = 2", "pre", false, false, true},
+		{"residual, no mode", "category = 1 and note = 2", "", false, true, false},
+		{"residual, post", "note = 2", "post", false, false, false},
+		{"no filter, iterative", "", "iterative", true, false, false},
+		{"distance only, pre", "l2_distance(v,'[0,0]') < 1", "pre", false, false, false},
+		{"distance only, iterative", "l2_distance(v,'[0,0]') < 1", "iterative", false, false, false},
+		{"distance and residual, pre", "note = 2 and l2_distance(v,'[0,0]') < 1", "pre", false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			where := ""
@@ -216,26 +245,54 @@ func TestCagraFilterPushdownByMode(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.iterative, opts.Iterative)
 			require.Equal(t, tc.pushed, opts.FilterJSON != "")
+			// a filter outside the search goes through membership: the PRE shape,
+			// whose producer applies every filter, and no post-filter over-fetch
+			semi := findSemiJoin(query)
+			require.Equal(t, tc.pre, semi != nil)
+			if tc.pre {
+				require.False(t, search.IndexSearchScan.PostFilterOverFetch)
+				require.Len(t, search.RuntimeFilterProbeList, 1)
+				require.True(t, search.RuntimeFilterProbeList[0].UseMembershipFilter)
+				producer := findNodeUnder(query, semi.Children[1], plan.Node_TABLE_SCAN)
+				require.NotNil(t, producer)
+				// distance range predicates move to the search node, not the producer
+				want := 0
+				for _, term := range strings.Split(tc.filter, " and ") {
+					if !strings.HasPrefix(term, "l2_distance") {
+						want++
+					}
+				}
+				require.Len(t, producer.FilterList, want)
+			}
 		})
 	}
 }
 
-func TestCagraAutoBuildsAdaptiveTop(t *testing.T) {
+func TestCuvsAutoBuildsAdaptiveTop(t *testing.T) {
 	for _, tc := range []struct {
 		name, filter string
 		branches     int
 	}{
 		{"include filter", " where category = 1", 3},
-		{"no include filter", " where note = 2", 2},
+		{"no include filter", " where note = 2", 3},
 		{"no filter", "", 2},
+		{"distance filter only", " where l2_distance(v,'[0,0]') < 1", 2},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			query := cagraPlanFixture(t, "select id from cagra_iter"+tc.filter+
-				" order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=auto'")
-			adaptive := findNodeOfType(query, plan.Node_ADAPTIVE_TOP)
-			require.NotNil(t, adaptive)
-			require.Len(t, adaptive.Children, tc.branches)
-		})
+		for _, idx := range []struct {
+			algo  string
+			roles []string
+		}{
+			{catalog.MoIndexCagraAlgo.ToString(), []string{catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage}},
+			{catalog.MoIndexIvfpqAlgo.ToString(), []string{catalog.Ivfpq_TblType_Metadata, catalog.Ivfpq_TblType_Storage}},
+		} {
+			t.Run(idx.algo+"/"+tc.name, func(t *testing.T) {
+				query := cuvsPlanFixture(t, idx.algo, idx.roles, "select id from cagra_iter"+tc.filter+
+					" order by l2_distance(v,'[0,0]') limit 2 by rank with option 'mode=auto'")
+				adaptive := findNodeOfType(query, plan.Node_ADAPTIVE_TOP)
+				require.NotNil(t, adaptive)
+				require.Len(t, adaptive.Children, tc.branches)
+			})
+		}
 	}
 }
 

@@ -56,7 +56,7 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -fopenmp"
 # objects on the next make. Overbuilds vs. true compiler-tracked deps (.d
 # files), but doesn't need a prior compile to populate dep info and never
 # misses a header — touch a .hpp and the next `make` rebuilds.
-HEADERS := $(wildcard *.h *.hpp)
+HEADERS := $(wildcard *.h *.hpp) ../membership.h ../cbitmap.h ../croaring.h ../sorted64.h
 
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
@@ -65,6 +65,10 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
+# The membership probes filter.hpp calls (cgo/cbitmap.c, cgo/croaring.c,
+# cgo/sorted64.c, with the vendored CRoaring). libmo.so links the cgo/ objects; the
+# shared library and the standalone binaries here link these copies.
+MO_C_OBJS := obj/mo_c/cbitmap.o obj/mo_c/croaring.o obj/mo_c/sorted64.o ../../thirdparties/install/lib/libroaring.a
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 .PHONY: all clean debug asan release test
@@ -117,6 +121,13 @@ obj/test/%.o: test/%.cu $(HEADERS)
 	@mkdir -p $(@D)
 	@echo "NVCC $<"
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
+obj/mo_c/%.o: ../%.c ../%.h ../bitmap.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=c11 -O3 -fPIC -I../../thirdparties/install/include -c $< -o $@
+
+libmocuvs.so test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+bench_hostview bench_wiki88 bench_upload_cost: $(MO_C_OBJS)
 
 test_cuvs_worker: $(TEST_OBJS) $(OBJS)
 	@echo "Linking $@"

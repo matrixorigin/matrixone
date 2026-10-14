@@ -105,14 +105,14 @@ func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.Vecto
 func (builder *QueryBuilder) ApplyIndicesForSortUsingCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingCagra(nodeID, vc, m, opts.IdxColMap)
+	newID, err := builder.applyIndicesForSortUsingCagraWithColRefCnt(nodeID, vc, m, opts.ColRefCnt, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
 func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vc, m, opts.IdxColMap)
+	newID, err := builder.applyIndicesForSortUsingIvfpqWithColRefCnt(nodeID, vc, m, opts.ColRefCnt, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 

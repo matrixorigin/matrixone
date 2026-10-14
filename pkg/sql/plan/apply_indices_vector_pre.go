@@ -43,6 +43,14 @@ type vectorPreFilterInput struct {
 	annotateRequiredDomain func(tableFuncNode *plan.Node, requiredDomain bool) error
 }
 
+// membershipJoinBuildable reports whether the membership join of vecCtx is a SEMI join
+// whose left child is the scan, the shape buildVectorPreFilterJoin copies.
+func (builder *QueryBuilder) membershipJoinBuildable(vecCtx *vectorSortContext) bool {
+	node := builder.qry.Nodes[vecCtx.membershipNodeID]
+	return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SEMI &&
+		len(node.Children) == 2 && node.Children[0] == vecCtx.scanNode.NodeId
+}
+
 // buildVectorPreFilterJoin builds the PRE plan of an index search:
 //
 //	JOIN(scan, SEMI(index search, PROJECT pk(copied filtered scan [JOIN membership])))
@@ -79,11 +87,10 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 
 	var originalMembershipNode *plan.Node
 	if vecCtx.hasMembership {
-		originalMembershipNode = builder.qry.Nodes[vecCtx.membershipNodeID]
-		if originalMembershipNode.NodeType != plan.Node_JOIN || originalMembershipNode.JoinType != plan.Node_SEMI ||
-			len(originalMembershipNode.Children) != 2 || originalMembershipNode.Children[0] != scanNode.NodeId {
+		if !builder.membershipJoinBuildable(vecCtx) {
 			return 0, false, nil
 		}
+		originalMembershipNode = builder.qry.Nodes[vecCtx.membershipNodeID]
 	}
 
 	if builder.canApplyRegularIndex(secondScanNode) {

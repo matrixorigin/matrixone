@@ -28,6 +28,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Build status codes for mo_cbitmap_build_fixed. They disambiguate the reasons
 // a build produces no filter so the Go caller reacts correctly: RANGE_TOO_LARGE
 // -> select the sparse exact representation; OOM / INVALID_INPUT -> surface an
@@ -64,6 +68,11 @@ void mo_cbitmap_free(void *f);
 // Single membership test (value already decoded to uint64).
 bool mo_cbitmap_contain(void *f, uint64_t val);
 
+// Borrow the dense layout of f: bit i of words (bit i & 63 of words[i >> 6]) is the
+// value base + i, for i < nbits. words is NULL when nbits is 0. The view is valid
+// while f is.
+void mo_cbitmap_view(void *f, uint64_t *base, uint64_t *nbits, const uint64_t **words);
+
 // Test a fixed-width integer column; result[i] = 1 if present, 0 if absent/null.
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap,
@@ -81,5 +90,9 @@ bool mo_cbitmap_serialize_into(void *f, uint8_t *buf, size_t len);
 
 // Deserialize a buffer produced by mo_cbitmap_serialize; returns NULL on error.
 void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // MO_CBITMAP_H
