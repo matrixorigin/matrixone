@@ -189,7 +189,7 @@ const (
 	// wire semantics and cannot serve as a fallback for new controllers.
 	Method_BeginDrain Method = 23
 	Method_QueryDrain Method = 24
-	// TryLock and ForwardTryLock fail closed on owners without the v112
+	// TryLock and ForwardTryLock fail closed on owners without the v113
 	// nonblocking row-lock admission contract.
 	Method_TryLock        Method = 25
 	Method_ForwardTryLock Method = 26

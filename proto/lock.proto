@@ -156,7 +156,7 @@ enum Method {
   // wire semantics and cannot serve as a fallback for new controllers.
   BeginDrain = 23;
   QueryDrain = 24;
-  // TryLock and ForwardTryLock fail closed on owners without the v112
+  // TryLock and ForwardTryLock fail closed on owners without the v113
   // nonblocking row-lock admission contract.
   TryLock = 25;
   ForwardTryLock = 26;

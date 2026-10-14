@@ -438,7 +438,7 @@ func TestRollbackReadOnly(t *testing.T) {
 // fatalNoWaitFenceLockService turns a real remote partial-prefix conflict into
 // the fatal bind-fence response that can arrive when protocol admission changes
 // after the owner has acquired rows. The lockservice package separately tests
-// that exact V112->V111 race and that its production response carries only the
+// that exact V113->V112 race and that its production response carries only the
 // cleanup route; this adapter lets the txn client exercise rollback end to end.
 type fatalNoWaitFenceLockService struct {
 	lockservice.LockService
