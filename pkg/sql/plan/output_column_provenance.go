@@ -139,7 +139,8 @@ func (bc *BindContext) markViewCTASDefaultBoundary() {
 			provenance.Source = &source
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
-		provenance.DecimalDivDisplayLength = 0 // A completed view is a schema boundary.
+		// The executable view boundary has already restored its schema domain.
+		provenance.DecimalDivDisplayLength = 0
 		bc.setOutputColumnProvenance(int32(i), provenance)
 	}
 }
