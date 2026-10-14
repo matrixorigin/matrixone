@@ -10,6 +10,8 @@ repo_root=$(cd "$1" && pwd)
 mkdir -p "$2" "${repo_root}/coverage"
 report_dir=$(cd "$2" && pwd)
 coverage_dir=$(cd "${repo_root}/coverage" && pwd)
+# A rerun must not accept a previous success if the client cannot write JSON.
+rm -f "${report_dir}/functional.json" "${report_dir}/failure.json" "${report_dir}/multi-cn.json"
 
 cn_dsn() {
     local endpoint port
