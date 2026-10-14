@@ -2691,7 +2691,19 @@ func (e *SpillEngine) DeferCleanup() {
 	}
 }
 
-// Cleanup releases all engine resources.
+// Close is the terminal teardown before discarding an engine. It releases query
+// memory and FDs synchronously, then transfers failed removals (and their disk
+// reservations) to the independent retry owner. No later operator call is needed.
+func (e *SpillEngine) Close(proc *process.Process) {
+	if e == nil {
+		return
+	}
+	e.Cleanup(proc)
+	e.DeferCleanup()
+}
+
+// Cleanup releases query resources, retaining failed removals in the engine for
+// another attempt. Call Close instead when the engine itself will be discarded.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
 	if len(e.orphanFiles) > 0 {
 		pending := e.orphanFiles

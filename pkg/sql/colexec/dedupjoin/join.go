@@ -473,7 +473,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				engine.Close(proc)
 				ctr.spillEngine = nil
 				return err
 			}

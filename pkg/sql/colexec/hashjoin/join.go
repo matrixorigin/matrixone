@@ -559,7 +559,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				engine.Close(proc)
 				ctr.spillEngine = nil
 				return err
 			}
