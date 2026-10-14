@@ -755,7 +755,8 @@ func typeInList(typ types.T, supported []types.T) bool {
 // interpretation of old BIT partial states or treating BIT width as precision.
 func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
-		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+		// MySQL consumes ENUM ordinals in the approximate aggregate domain.
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	}
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
