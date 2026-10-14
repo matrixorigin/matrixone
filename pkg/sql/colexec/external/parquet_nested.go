@@ -248,6 +248,12 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 	if h.rowReader == nil {
 		return moerr.NewInternalError(proc.Ctx, "parquet hybrid mode has no row reader")
 	}
+	var warnings parquetAssignmentWarnings
+	mappingProc := proc
+	if h.timeAssignment {
+		mappingProc = warnings.mappingProcess(proc)
+		defer warnings.Reset()
+	}
 
 	batchLimit := int(h.batchCnt)
 	rowStart := h.offset
@@ -346,7 +352,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 				return err
 			}
 		}
-		if _, err := h.mapCurrentPageRows(bat, param, proc, int64(n)); err != nil {
+		if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(n)); err != nil {
 			rollbackRows(checkpoints, n)
 			return h.closePagesOnError(param.Ctx, err)
 		}
@@ -361,6 +367,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 			}
 			if accepted < n {
 				rollbackRows(checkpoints, n)
+				warnings.Reset()
 				if accepted > 0 {
 					for _, row := range rowBuf[:accepted] {
 						if err := h.processNestedRow(row, bat, param, proc); err != nil {
@@ -368,7 +375,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 							return err
 						}
 					}
-					if _, err := h.mapCurrentPageRows(bat, param, proc, int64(accepted)); err != nil {
+					if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(accepted)); err != nil {
 						rollbackRows(checkpoints, accepted)
 						return h.closePagesOnError(param.Ctx, err)
 					}
@@ -386,6 +393,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 
 		h.advanceCurrentPages(int64(accepted))
 		length += accepted
+		warnings.Flush(proc)
 		if accepted < n || h.parquetBatchAtByteBudget(bat, length, param) {
 			batchBoundary = true
 		}

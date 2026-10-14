@@ -520,7 +520,10 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 }
 
 type ParquetHandler struct {
-	annotations    map[*parquet.Column]*format.LogicalType
+	annotations map[*parquet.Column]*format.LogicalType
+	// LOAD owns a subsequent assignment projection; foreign reads retain their
+	// existing target-scale conversion policy.
+	timeAssignment bool
 	file           *parquet.File
 	rowGroup       parquet.RowGroup
 	rowGroups      []parquet.RowGroup

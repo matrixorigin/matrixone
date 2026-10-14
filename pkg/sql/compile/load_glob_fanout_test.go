@@ -607,10 +607,10 @@ func TestFileFanoutHonorsMaxDop(t *testing.T) {
 		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
 	}
 
-	require.Len(t, newCompile(0).getHiveFileFanoutNodes(extTable, 6), 6)
-	require.Len(t, newCompile(3).getHiveFileFanoutNodes(extTable, 6), 3)
-	require.Len(t, newCompile(1).getHiveFileFanoutNodes(extTable, 6), 1)
-	require.Equal(t, 1, newCompile(1).parquetLoadFileFanoutDOP(extTable))
+	require.Len(t, newCompile(0).getHiveFileFanoutNodes(nil, extTable, 6), 6)
+	require.Len(t, newCompile(3).getHiveFileFanoutNodes(nil, extTable, 6), 3)
+	require.Len(t, newCompile(1).getHiveFileFanoutNodes(nil, extTable, 6), 1)
+	require.Equal(t, 1, newCompile(1).parquetLoadFileFanoutDOP(nil, extTable))
 
 	n := &plan.Node{
 		TableDef: &plan.TableDef{},
@@ -634,11 +634,11 @@ func TestFileFanoutHonorsMaxDop(t *testing.T) {
 	c := newCompile(2)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 8}, {Addr: "cn2:6001", Mcpu: 8}}
-	nodes := c.getHiveFileFanoutNodes(&s3, 16)
+	nodes := c.getHiveFileFanoutNodes(nil, &s3, 16)
 	perCN := make(map[string]int)
 	for _, node := range nodes {
 		perCN[node.Addr]++
 	}
 	require.Equal(t, map[string]int{"cn1:6001": 2, "cn2:6001": 2}, perCN)
-	require.Equal(t, len(nodes), c.parquetLoadFileFanoutDOP(&s3))
+	require.Equal(t, len(nodes), c.parquetLoadFileFanoutDOP(nil, &s3))
 }

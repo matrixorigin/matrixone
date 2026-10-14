@@ -307,6 +307,10 @@ func (e *evalCondResult) GetColumnCount() uint64 {
 	return 1
 }
 
+func (e *evalCondResult) ColumnIsNull(context.Context, uint64, uint64) (bool, error) {
+	return false, nil
+}
+
 func (e *evalCondResult) GetString(context.Context, uint64, uint64) (string, error) {
 	return "1", nil
 }
