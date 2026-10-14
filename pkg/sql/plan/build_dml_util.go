@@ -391,12 +391,22 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 // Implicit FK actions originate from the final ordinary row image, not an UPDATE
 // binder that has already expanded generated assignments. Preserve the old-row
-// prefix for index deletion and append new hidden values for replacement insertion.
+// prefix for index deletion and append generated dependency values for replacement insertion.
 func appendForeignKeyFunctionalRowImage(builder *QueryBuilder, bindCtx *BindContext, ctx *dmlPlanCtx, lastNodeID int32) (int32, error) {
 	if !ctx.isFkRecursionCall {
 		return lastNodeID, nil
 	}
 	table := ctx.tableDef
+	hasFunctional := false
+	for _, col := range table.Cols {
+		if isFunctionalColumn(col) {
+			hasFunctional = true
+			break
+		}
+	}
+	if !hasFunctional {
+		return lastNodeID, nil
+	}
 	projection := getProjectionByLastNode(builder, lastNodeID)
 	replacements := make(map[int32]*Expr, len(ctx.updateColPosMap))
 	for i, col := range table.Cols {
@@ -412,7 +422,7 @@ func appendForeignKeyFunctionalRowImage(builder *QueryBuilder, bindCtx *BindCont
 	}
 	originalLength := len(projection)
 	for i, col := range table.Cols {
-		if !isFunctionalColumn(col) {
+		if col.GeneratedCol == nil {
 			continue
 		}
 		if replacement, ok := replacements[int32(i)]; ok {

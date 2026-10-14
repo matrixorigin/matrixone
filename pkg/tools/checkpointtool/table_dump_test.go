@@ -3398,3 +3398,37 @@ func TestFunctionalCheckpointCatalogCallerRejectsOrphan(t *testing.T) {
 	tables := &LogicalTableView{Headers: []string{"object", "block", "row", "rel_id", "relname", catalog.SystemRelAttr_Constraint}, Rows: [][]string{{"o", "0", "0", "42", "fi", ""}}}
 	require.Empty(t, createTableDDLFromCatalogViews(42, tables, columns), "catalog fallback must not drop orphan invalid state with an empty key list")
 }
+
+func TestLogicalCSVJSONVisibleRoundTrip(t *testing.T) {
+	columnTypes := []types.Type{types.T_json.ToType(), types.T_blob.ToType()}
+	for _, tc := range []struct{ input, visible string }{
+		{`{"a":1}`, `{"a": 1}`}, {`[1,"x"]`, `[1, "x"]`},
+		{`null`, `null`}, {`"NULL"`, `"NULL"`}, {`256`, `256`},
+		{`"quote\"slash\\"`, `"quote\"slash\\"`},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			bj, err := types.ParseStringToByteJson(tc.input)
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(bj)
+			require.NoError(t, err)
+			row := []string{string(encoded), string(encoded)}
+			require.NoError(t, renderLogicalCSVJSON(row, columnTypes, []bool{false, false}))
+			require.Equal(t, tc.visible, row[0])
+			require.Equal(t, string(encoded), row[1], "binary storage remains bytes")
+			view := &LogicalTableView{Headers: []string{"object", "block", "row", "col_0"}, Rows: [][]string{{"obj", "0", "0", string(encoded)}, {"obj", "0", "1", "NULL"}}}
+			schema := &TableSchema{Columns: []TableColumn{{Name: "j", SQLType: "JSON", Position: 1, PhysicalPosition: 0}}}
+			for _, order := range []CSVRowOrder{CSVRowOrderStorage, CSVRowOrderLexical} {
+				var out bytes.Buffer
+				require.NoError(t, WriteCSV(&out, schema, view, WithCSVHeader(false), WithCSVMetaComments(false), WithCSVRowOrder(order)))
+				require.Contains(t, out.String(), "\""+escapeSQLLoadString(tc.visible, '"')+"\"\n")
+				require.Contains(t, out.String(), "\\N\n")
+				require.Equal(t, string(encoded), view.Rows[0][3], "raw caller view is immutable")
+			}
+		})
+	}
+	row := []string{"ignored NULL storage", "bytes"}
+	require.NoError(t, renderLogicalCSVJSON(row, columnTypes, []bool{true, false}))
+	for _, malformed := range []string{"", "bad", "\x01"} {
+		require.Error(t, renderLogicalCSVJSON([]string{malformed}, columnTypes, []bool{false}))
+	}
+}

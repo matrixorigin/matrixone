@@ -1663,19 +1663,46 @@ func (builder *QueryBuilder) recomputeForeignKeyFunctionalColumns(
 	if err != nil {
 		return err
 	}
-	for i, col := range table.Cols {
-		if !isFunctionalColumn(col) {
-			continue
+	// Catalog/COPY column order is not a dependency order. Evaluate affected
+	// generated sources before their dependents, retaining each result once.
+	state := make([]uint8, len(table.Cols))
+	var recompute func(int32) error
+	recompute = func(pos int32) error {
+		if pos < 0 || int(pos) >= len(table.Cols) {
+			return moerr.NewInternalError(builder.GetContext(), "invalid foreign key generated dependency")
+		}
+		col := table.Cols[pos]
+		if col.GeneratedCol == nil {
+			return nil
 		}
 		if _, affected := changed[col.Name]; !affected {
-			continue
+			return nil
+		}
+		if state[pos] == 2 {
+			return nil
+		}
+		if state[pos] == 1 || col.GeneratedCol.Expr == nil {
+			return moerr.NewInternalError(builder.GetContext(), "invalid foreign key generated dependency")
+		}
+		state[pos] = 1
+		for _, dependency := range collectRefColPos(col.GeneratedCol.Expr) {
+			if err := recompute(dependency); err != nil {
+				return err
+			}
 		}
 		expr, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), false)
 		if err != nil {
 			return err
 		}
-		inputs[i] = substituteColRefsInExpr(expr, inputs, 0)
-		replacements[int32(i)] = inputs[i]
+		inputs[pos] = substituteColRefsInExpr(expr, inputs, 0)
+		replacements[pos] = inputs[pos]
+		state[pos] = 2
+		return nil
+	}
+	for i := range table.Cols {
+		if err := recompute(int32(i)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

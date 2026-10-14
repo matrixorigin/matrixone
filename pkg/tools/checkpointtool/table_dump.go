@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2153,6 +2155,9 @@ func (r *CheckpointReader) streamTableCSV(
 	onRow := func(_ string, _ int, _ int, values []string, nulls []bool) error {
 		row := projectCSVRow(values, physicalPositions)
 		rowNulls := projectCSVNulls(nulls, physicalPositions)
+		if err := renderLogicalCSVJSON(row, projectedTypes, rowNulls); err != nil {
+			return err
+		}
 		if options.RowOrder == CSVRowOrderLexical {
 			lexicalRows = append(lexicalRows, exportedCSVRow{values: row, nulls: rowNulls})
 			return nil
@@ -2874,20 +2879,53 @@ func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView, opts ...
 		}
 	}
 
-	rows := merged.Rows
-	if options.RowOrder == CSVRowOrderLexical {
-		rows = make([][]string, len(merged.Rows))
-		for i, row := range merged.Rows {
-			rows[i] = append([]string(nil), row...)
+	// Logical views contain storage bytes for JSON. Copy before rendering so
+	// writing CSV does not change the caller's raw materialized view.
+	rows := make([]exportedCSVRow, len(merged.Rows))
+	for i, row := range merged.Rows {
+		rows[i].values = append([]string(nil), row...)
+		rows[i].nulls = make([]bool, len(row))
+		for j, value := range row {
+			// The materialized reader has no bitmap; only its JSON NULL
+			// sentinel is unambiguous because non-NULL JSON stays encoded.
+			rows[i].nulls[j] = j < len(projectedTypes) && projectedTypes[j].Oid == types.T_json && value == "NULL"
 		}
-		sort.SliceStable(rows, func(i, j int) bool {
-			return compareCSVRowsLexical(rows[i], rows[j]) < 0
-		})
-	}
-	for _, row := range rows {
-		if err := writeSQLLoadCSVRow(w, projectedTypes, row, nil); err != nil {
+		if err := renderLogicalCSVJSON(rows[i].values, projectedTypes, rows[i].nulls); err != nil {
 			return err
 		}
+	}
+	if options.RowOrder == CSVRowOrderLexical {
+		sortCSVRowsLexical(rows)
+	}
+	for _, row := range rows {
+		if err := writeSQLLoadCSVRow(w, projectedTypes, row.values, row.nulls); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderLogicalCSVJSON converts only the raw JSON fields supplied by the
+// logical checkpoint reader. The generic CSV writer also accepts already-visible
+// text and must not decode it a second time.
+func renderLogicalCSVJSON(row []string, columnTypes []types.Type, nulls []bool) error {
+	for i, value := range row {
+		if i >= len(columnTypes) || columnTypes[i].Oid != types.T_json {
+			continue
+		}
+		// Both callers resolve SQL NULL before decoding; JSON null and the
+		// JSON string "NULL" remain non-NULL encoded values.
+		if i < len(nulls) && nulls[i] {
+			continue
+		}
+		if len(value) == 0 {
+			return moerr.NewInternalErrorNoCtx("invalid checkpoint JSON value")
+		}
+		document := bytejson.ByteJson{Type: bytejson.TpCode(value[0]), Data: []byte(value[1:])}
+		if _, err := bytejson.StorageCompatibleDataSizeWithLimit(context.Background(), document, math.MaxInt); err != nil {
+			return err
+		}
+		row[i] = document.String()
 	}
 	return nil
 }

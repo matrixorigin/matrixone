@@ -272,3 +272,116 @@ func TestFunctionalJSONForeignKeyFinalRowImage(t *testing.T) {
 		}
 	}
 }
+
+func TestFunctionalJSONForeignKeyGeneratedDependencyRowImage(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(false, proc)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+		}
+	})
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table child(id int primary key,pid int,doc json,g json generated always as (cast(pid as json)) stored,h json generated always as (g) stored,index dep((cast(h ->> '$' as char(20)))),index doc_key((cast(doc ->> '$.kind' as char(20)))))", 1)
+	require.NoError(t, err)
+	ddl, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	for scenario := 0; scenario < 4; scenario++ {
+		conditional := scenario%2 != 0
+		table := DeepCopyTableDef(ddl.GetDdl().GetCreateTable().TableDef, true)
+		ensureName2ColIndexForReplace(table)
+		if scenario >= 2 {
+			g, h := table.Name2ColIndex["g"], table.Name2ColIndex["h"]
+			table.Cols[g], table.Cols[h] = table.Cols[h], table.Cols[g]
+			for _, col := range table.Cols {
+				if col.GeneratedCol == nil {
+					continue
+				}
+				require.NoError(t, pb.VisitExprTree(col.GeneratedCol.Expr, func(e *Expr) error {
+					if ref := e.GetCol(); ref != nil {
+						if ref.ColPos == g {
+							ref.ColPos = h
+						} else if ref.ColPos == h {
+							ref.ColPos = g
+						}
+					}
+					return nil
+				}))
+			}
+			table.Name2ColIndex = nil
+			ensureName2ColIndexForReplace(table)
+		}
+		builder := NewQueryBuilder(pb.Query_UPDATE, ctx, false, false)
+		bindCtx := NewBindContext(builder, nil)
+		projection := make([]*Expr, 0, len(table.Cols)+1)
+		insertPos := make([]int, 0)
+		for i, col := range table.Cols {
+			projection = append(projection, &Expr{Typ: col.Typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: int32(i)}}})
+			if !col.Hidden || isFunctionalColumn(col) {
+				insertPos = append(insertPos, i)
+			}
+		}
+		pid := table.Name2ColIndex["pid"]
+		target := &Expr{Typ: table.Cols[pid].Typ, Expr: &pb.Expr_Lit{Lit: &Const{Isnull: true}}}
+		if conditional {
+			target, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*Expr{makePlan2BoolConstExprWithType(true), target, DeepCopyExpr(projection[pid])})
+			require.NoError(t, err)
+		}
+		replacementPos := len(projection)
+		projection = append(projection, target)
+		source := builder.appendNode(&Node{NodeType: pb.Node_PROJECT, ProjectList: projection}, bindCtx)
+		action := &dmlPlanCtx{tableDef: table, isFkRecursionCall: true, updateColLength: 1, updateColPosMap: map[string]int{"pid": replacementPos}, insertColPos: insertPos}
+		last, err := appendForeignKeyFunctionalRowImage(builder, bindCtx, action, source)
+		require.NoError(t, err)
+		require.NotEqual(t, source, last)
+		dependent := functionalIndexColumn(table, table.Indexes[0])
+		unrelated := functionalIndexColumn(table, table.Indexes[1])
+		pos, changed := action.updateColPosMap[dependent.Name]
+		require.True(t, changed)
+		require.Equal(t, len(projection)+2, pos)
+		require.Equal(t, 4, action.updateColLength)
+		for _, generated := range []string{"g", "h"} {
+			gpos, ok := action.updateColPosMap[generated]
+			require.True(t, ok, "visible generated dependency is rewritten")
+			refs := collectRefColPos(builder.qry.Nodes[last].ProjectList[gpos])
+			require.NotContains(t, refs, table.Name2ColIndex["g"])
+			require.NotContains(t, refs, table.Name2ColIndex["h"])
+		}
+		require.NotContains(t, collectRefColPos(builder.qry.Nodes[last].ProjectList[pos]), table.Name2ColIndex["h"])
+		_, changed = action.updateColPosMap[unrelated.Name]
+		require.False(t, changed)
+		for i, e := range getProjectionByLastNode(builder, source) {
+			require.True(t, proto.Equal(e, builder.qry.Nodes[last].ProjectList[i]), "old-row/delete prefix preserved")
+		}
+		refs := collectRefColPos(builder.qry.Nodes[last].ProjectList[pos])
+		require.Contains(t, refs, int32(replacementPos))
+		require.NotContains(t, refs, pid, "functional image uses final ordinary replacement")
+		colMap := make(map[string]*ColDef)
+		positions := make(map[string]int)
+		for i, col := range table.Cols {
+			colMap[col.Name] = col
+			positions[col.Name] = i
+		}
+		rewrite, err := indexNeedsRewriteForUpdate(table, table.Indexes[0], action.updateColPosMap, positions, colMap)
+		require.NoError(t, err)
+		require.True(t, rewrite)
+		rewrite, err = indexNeedsRewriteForUpdate(table, table.Indexes[1], action.updateColPosMap, positions, colMap)
+		require.NoError(t, err)
+		require.False(t, rewrite)
+		visible := 0
+		for _, col := range table.Cols {
+			if col.Hidden && !isFunctionalColumn(col) {
+				continue
+			}
+			if col.Name == dependent.Name {
+				require.Equal(t, pos, action.insertColPos[visible])
+			}
+			visible++
+		}
+	}
+}
