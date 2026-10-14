@@ -290,7 +290,8 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 		if !ok {
 			return nil, false
 		}
-		if i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num {
+		if (i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num) ||
+			(i1.tp == numberIndices && i2.tp == numberIndices && i1.num > i2.num) {
 			return nil, false
 		}
 		legs = append(legs, subPath{

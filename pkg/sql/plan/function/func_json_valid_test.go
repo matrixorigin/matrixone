@@ -203,6 +203,7 @@ func TestJsonKeys(t *testing.T) {
 	})
 
 	t.Run("path controls preserve existing semantics", func(t *testing.T) {
+		allocatedBefore := proc.Mp().CurrNB()
 		fcTC := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -230,6 +231,10 @@ func TestJsonKeys(t *testing.T) {
 				},
 				[]bool{false, false, false, true, true, true, true, true}),
 			JsonKeys)
+		t.Cleanup(func() {
+			fcTC.Free()
+			require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+		})
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
@@ -264,6 +269,7 @@ func TestJsonKeys(t *testing.T) {
 							{name: "const path", newPath: NewFunctionTestConstInput},
 						} {
 							t.Run(pathInput.name, func(t *testing.T) {
+								allocatedBefore := proc.Mp().CurrNB()
 								fcTC := NewFunctionTestCase(proc,
 									[]FunctionTestInput{
 										NewFunctionTestInput(doc.typ, []string{doc.value}, []bool{false}),
@@ -271,6 +277,10 @@ func TestJsonKeys(t *testing.T) {
 									},
 									NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
 									JsonKeys)
+								t.Cleanup(func() {
+									fcTC.Free()
+									require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+								})
 								require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 								_, err := fcTC.DebugRun()
 								require.Error(t, err)
@@ -309,6 +319,7 @@ func TestJsonKeys(t *testing.T) {
 					{name: "json", typ: types.T_json.ToType(), value: mustJsonBinaryString(t, `{"a":{"x":1}}`)},
 				} {
 					t.Run(doc.name, func(t *testing.T) {
+						allocatedBefore := proc.Mp().CurrNB()
 						fcTC := NewFunctionTestCase(proc,
 							[]FunctionTestInput{
 								NewFunctionTestInput(doc.typ, []string{doc.value, doc.value}, []bool{false, false}),
@@ -316,6 +327,10 @@ func TestJsonKeys(t *testing.T) {
 							},
 							NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
 							JsonKeys)
+						t.Cleanup(func() {
+							fcTC.Free()
+							require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+						})
 						require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 						_, err := fcTC.DebugRun()
 						require.Error(t, err)
@@ -331,6 +346,7 @@ func TestJsonKeys(t *testing.T) {
 	})
 
 	t.Run("masked wildcard path is not evaluated", func(t *testing.T) {
+		allocatedBefore := proc.Mp().CurrNB()
 		fcTC := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -344,17 +360,26 @@ func TestJsonKeys(t *testing.T) {
 			AnyNull:    true,
 			SelectList: []bool{true, false},
 		})
+		t.Cleanup(func() {
+			fcTC.Free()
+			require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+		})
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
 
 	t.Run("invalid JSON takes precedence over wildcard path", func(t *testing.T) {
+		allocatedBefore := proc.Mp().CurrNB()
 		fcTC := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`}, []bool{false}),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.*`}, []bool{false}),
 			},
 			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), JsonKeys)
+		t.Cleanup(func() {
+			fcTC.Free()
+			require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+		})
 		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 		_, err := fcTC.DebugRun()
 		require.Error(t, err)
@@ -362,6 +387,28 @@ func TestJsonKeys(t *testing.T) {
 		require.ErrorAs(t, err, &moErr)
 		require.Equal(t, moerr.ErrInvalidArg, moErr.ErrorCode())
 	})
+	t.Run("malformed range precedes wildcard validation", func(t *testing.T) {
+		for _, path := range []string{`$[1 to 0]`, `$[2 to 1]`, `$[last to last-1]`} {
+			t.Run(path, func(t *testing.T) {
+				allocatedBefore := proc.Mp().CurrNB()
+				fcTC := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{`[{},{}]`}, []bool{false}),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{path}, []bool{false}),
+					},
+					NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), JsonKeys)
+				t.Cleanup(func() {
+					fcTC.Free()
+					require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+				})
+				require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+				_, err := fcTC.DebugRun()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg))
+				require.Contains(t, err.Error(), "invalid path expression")
+			})
+		}
+	})
+
 }
 
 func TestJsonPretty(t *testing.T) {

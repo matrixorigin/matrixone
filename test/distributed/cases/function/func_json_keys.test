@@ -22,6 +22,10 @@ select json_keys('{"a": 1}', '$[*]');
 select json_keys('{"a": {"x": 1}}', '$**.x');
 select json_keys('[{"a": 1}, {"b": 2}]', '$[0 to 1]');
 
+-- malformed range is a syntax error before wildcard rejection
+select json_keys('[{},{}]', '$[1 to 0]');
+select json_keys('[{},{}]', '$[0 to 0]');
+
 -- quoted wildcard is a literal key
 select json_keys('{"*": {"x": 1}}', '$."*"');
 

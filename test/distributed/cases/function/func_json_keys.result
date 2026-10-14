@@ -36,6 +36,10 @@ select json_keys('{"a": {"x": 1}}', '$**.x');
 In this situation, path expressions may not contain the * and ** tokens or an array range.
 select json_keys('[{"a": 1}, {"b": 2}]', '$[0 to 1]');
 In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('[{},{}]', '$[1 to 0]');
+invalid argument json_keys, bad value invalid path expression
+select json_keys('[{},{}]', '$[0 to 0]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
 select json_keys('{"*": {"x": 1}}', '$."*"');
 json_keys({"*": {"x": 1}}, $."*")
 ["x"]
