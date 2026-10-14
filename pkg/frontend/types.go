@@ -1900,6 +1900,13 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
 
+	oldWindowPartitionAlgorithm := ""
+	if name == "window_partition_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldWindowPartitionAlgorithm, _ = old.(string)
+		}
+	}
+
 	def, ok := gSysVarsDefs[name]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
@@ -2023,6 +2030,13 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			ses.invalidateCachedPlans(true)
 		}
 	}
+	if err == nil && name == "window_partition_algorithm" {
+		if newValue, ok := val.(string); ok && oldWindowPartitionAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForWindowPartitionAlgorithmChange()
+		}
+	}
+
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
