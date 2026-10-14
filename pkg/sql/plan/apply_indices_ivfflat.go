@@ -534,15 +534,14 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		}
 		nProbe = val
 	}
-	explicitNprobe := vecCtx.rankOption != nil && vecCtx.rankOption.Nprobe > 0
-	if explicitNprobe {
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Nprobe > 0 {
 		nProbe = int64(vecCtx.rankOption.Nprobe)
 	}
 
-	// Dynamically amplify nprobe for auto mode.
-	// Only applied if mode is "post" (pushdown disabled), totalLists is available and
-	// nprobe is not given by the BY RANK option.
-	if isAutoMode && mode == "post" && totalLists > 0 && !explicitNprobe {
+	// Dynamically amplify nprobe for auto mode, from the BY RANK nprobe when given,
+	// else from probe_limit.
+	// Only applied if mode is "post" (pushdown disabled) and totalLists is available.
+	if isAutoMode && mode == "post" && totalLists > 0 {
 		oldNProbe := nProbe
 		nProbe = builder.calculateAdaptiveNprobe(
 			nProbe,

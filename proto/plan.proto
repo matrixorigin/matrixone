@@ -2409,9 +2409,9 @@ message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
   // Index search knobs (0 = unset). itopk/max_itopk apply to every vector index;
   // nprobe/max_nprobe to IVF indexes only.
-  uint64 itopk = 2;
-  uint64 max_itopk = 3;
-  uint64 nprobe = 4;
+  uint64 nprobe = 2;
+  uint64 itopk = 3;
+  uint64 max_itopk = 4;
   uint64 max_nprobe = 5;
 }
 

@@ -2712,11 +2712,15 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Preserve raw bytes for binary values, including legacy vectors
-		// described as MYSQL_TYPE_VARCHAR.
+			// Preserve raw bytes for binary values, including legacy vectors
+			// described as MYSQL_TYPE_VARCHAR.
+		case defines.MYSQL_TYPE_GEOMETRY:
+			if err := mp.appendGeometryValue(mrs, rowIdx, i, mysqlColumn.geometrySourceType()); err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
-			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
@@ -2975,11 +2979,15 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Preserve raw bytes for binary values, including legacy vectors
-		// described as MYSQL_TYPE_VARCHAR.
+			// Preserve raw bytes for binary values, including legacy vectors
+			// described as MYSQL_TYPE_VARCHAR.
+		case defines.MYSQL_TYPE_GEOMETRY:
+			if err := mp.appendGeometryValue(mrs, r, i, mysqlColumn.geometrySourceType()); err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
-			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
@@ -4270,4 +4278,25 @@ func formatDateForMySQL(d types.Date) string {
 		return "0000-00-00"
 	}
 	return d.String()
+}
+
+func (mp *MysqlProtocolImpl) appendGeometryValue(mrs *MysqlResultSet, row, col uint64, typ types.Type) error {
+	value, err := mrs.GetValue(mp.ctx, row, col)
+	if err != nil {
+		return err
+	}
+	var payload []byte
+	switch v := value.(type) {
+	case []byte:
+		payload = v
+	case string:
+		payload = []byte(v)
+	default:
+		return moerr.NewInvalidInputNoCtx("invalid geometry result value")
+	}
+	wire, err := encodeMySQLGeometry(payload, typ)
+	if err != nil {
+		return err
+	}
+	return AppendCountOfBytesLenEnc(mp, wire)
 }
