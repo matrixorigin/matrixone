@@ -174,6 +174,85 @@ func TestConfigIsNonReservedIdentifier(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSubscriptionAliases(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		aliases []string
+	}{
+		{"explicit", "select c_sub as subscription from dmz_org", []string{"subscription"}},
+		{"implicit", "select c_sub subscription from dmz_org", []string{"subscription"}},
+		{"mixed case", "select c_sub as SuBsCrIpTiOn from dmz_org", []string{"SuBsCrIpTiOn"}},
+		{"quoted control", "select c_sub as `subscription` from dmz_org", []string{"subscription"}},
+		{"plural control", "select c_sub as subscriptions from dmz_org", []string{"subscriptions"}},
+		{"native projection", "select coalesce(c_authconfig,JSON_UNQUOTE('{}')) as authconfig, coalesce(c_sub,JSON_UNQUOTE('{}')) as subscription from dmz_org", []string{"authconfig", "subscription"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.IsType(t, &tree.Select{}, stmt)
+			clause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+			require.Len(t, clause.Exprs, len(tt.aliases))
+			for i, alias := range tt.aliases {
+				require.Equal(t, alias, clause.Exprs[i].As.Origin())
+			}
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			roundTrip, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			t.Cleanup(roundTrip.Free)
+			require.Equal(t, formatted, tree.StringWithOpts(roundTrip, dialect.MYSQL, tree.WithSingleQuoteString()))
+		})
+	}
+}
+
+func TestSubscriptionIdentifiers(t *testing.T) {
+	for _, input := range []string{
+		"create database subscription",
+		"create table subscription (subscription int)",
+		"select subscription.subscription from subscription as subscription",
+	} {
+		t.Run(input, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), input, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.Equal(t, input, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSubscriptionCommands(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want tree.Statement
+	}{
+		{"show ccpr subscription 'task-1'", &tree.ShowCcprSubscriptions{TaskId: "task-1"}},
+		{"show ccpr subscriptions", &tree.ShowCcprSubscriptions{}},
+		{"drop ccpr subscription if exists 'task-1'", &tree.DropCcprSubscription{TaskID: "task-1", IfExists: true}},
+		{"pause ccpr subscription 'task-1'", &tree.PauseCcprSubscription{TaskID: "task-1"}},
+		{"resume ccpr subscription 'task-1'", &tree.ResumeCcprSubscription{TaskID: "task-1"}},
+		{"show subscriptions", &tree.ShowSubscriptions{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.Equal(t, tt.want, stmt)
+		})
+	}
+	for _, input := range []string{
+		"show ccpr subscription", "drop ccpr subscription",
+		"pause ccpr subscription", "resume ccpr subscription",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), input, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
