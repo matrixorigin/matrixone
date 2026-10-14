@@ -27,7 +27,8 @@ import (
 )
 
 // PreparedFieldTypes is an immutable snapshot owned by one prepared generation.
-// It contains types, never values, AST nodes, vectors, or executable expressions.
+// It contains declaration types and provenance, never values, AST nodes, vectors,
+// or executable expressions.
 // A nil snapshot is unresolved; a populated text type is a resolved fact.
 type PreparedFieldTypes struct {
 	revision uint64
@@ -36,7 +37,8 @@ type PreparedFieldTypes struct {
 }
 
 type preparedFieldCaseType struct {
-	result types.Type
+	result         types.Type
+	inferredBinary bool
 }
 
 type preparedFieldParameter struct {
@@ -364,6 +366,7 @@ func (b *preparedFieldTypeBinding) resolve(r *preparedFieldStringResolver, expr 
 			return r.common(values)
 		}
 		fact.result = fieldDomainType(domain, makeTypeByPlan2Expr(expr))
+		fact.inferredBinary = domain.inferredBinary
 		if b.actual == nil {
 			// The candidate's parameter map is private until result() is published.
 			if !b.dirty {
@@ -395,6 +398,7 @@ func (b *preparedFieldTypeBinding) resolve(r *preparedFieldStringResolver, expr 
 		result.kind = fieldStringNull
 	}
 	result.resolved = fact.result
+	result.inferredBinary = fact.inferredBinary
 	result.parameter = true
 	result.history = true
 	return result
