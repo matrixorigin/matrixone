@@ -146,16 +146,36 @@ func TestJSONNumericAggResolutionRejectsInvalidShapes(t *testing.T) {
 	}
 }
 
-func TestMySQLNumericAggSupportsDecimal256(t *testing.T) {
-	input := types.New(types.T_decimal256, 65, 30)
+func TestMySQLStatisticalAggResultDomain(t *testing.T) {
+	for _, input := range []types.Type{
+		types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 18),
+		types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 38),
+		types.New(types.T_decimal256, 65, 30), types.T_float64.ToType(), types.T_int64.ToType(),
+	} {
+		for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+			t.Run(name+"/"+input.String(), func(t *testing.T) {
+				got, err := GetFunctionByName(t.Context(), name, []types.Type{input})
+				require.NoError(t, err)
+				require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+				_, cast := got.ShouldDoImplicitTypeCast()
+				require.False(t, cast, "native numeric input must retain its exact domain")
+			})
+		}
+	}
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
-		t.Run(name, func(t *testing.T) {
-			got, err := GetFunctionByName(context.Background(), name, []types.Type{input})
+		for _, input := range []types.Type{types.T_date.ToType(), types.New(types.T_time, 0, 6), types.New(types.T_datetime, 0, 6), types.New(types.T_timestamp, 0, 6)} {
+			got, err := GetFunctionByName(t.Context(), name, []types.Type{input})
 			require.NoError(t, err)
 			require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
-			_, shouldCast := got.ShouldDoImplicitTypeCast()
-			require.False(t, shouldCast)
-		})
+			casts, cast := got.ShouldDoImplicitTypeCast()
+			require.True(t, cast)
+			require.Equal(t, types.New(types.T_decimal128, 38, input.Scale), casts[0])
+		}
+	}
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(t.Context(), name, []types.Type{types.New(types.T_decimal128, 38, 18)})
+		require.NoError(t, err)
+		require.True(t, got.GetReturnType().Oid.IsDecimal(), "exact SUM/AVG domain is independent")
 	}
 }
 
