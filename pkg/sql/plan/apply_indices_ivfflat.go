@@ -545,15 +545,9 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, err
 	}
 
-	nProbe := int64(5)
-	if nProbeIf, err := builder.compCtx.ResolveVariable("probe_limit", true, false); err != nil {
+	nProbe, err := builder.resolveVectorNprobe(vecCtx.rankOption, 5)
+	if err != nil {
 		return nil, err
-	} else if nProbeIf != nil {
-		val, ok := nProbeIf.(int64)
-		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx("ResolveVariable: probe_limit is not int64")
-		}
-		nProbe = val
 	}
 
 	// Dynamically amplify nprobe for auto mode.

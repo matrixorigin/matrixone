@@ -56,6 +56,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Trigger | Read |
 |---|---|
 | Every non-trivial review: change map, R0-R3 routing, evidence reuse, efficient validation | [../mo-dev/references/validation-evidence.md](../mo-dev/references/validation-evidence.md) |
+| PR description review, PR/issue creation or body update; Mergify description/commit-message failure | [../mo-dev/references/github-delivery.md](../mo-dev/references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [../mo-dev/references/race-validation.md](../mo-dev/references/race-validation.md) |
 | Large/complex feature or major refactor; design document (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
@@ -203,6 +204,7 @@ partial-output, or surviving-process runs are not green.
 □ each finding has a concrete path or objective gate failure and source re-read
 □ decisions logged, severity calibrated last, zero unresolved blockers for PASS
 □ final delivery diff/generated artifacts checked in self mode
+□ PR description/template checked where applicable; delivery body preflight passed before publication, remote readback afterward
 ```
 
 For index-plugin changes, additionally run the linked section-9 candidate
