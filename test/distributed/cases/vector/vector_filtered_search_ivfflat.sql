@@ -111,6 +111,11 @@ select group_concat(id order by id) from (select id from t_inc where category = 
 explain select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre';
 select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre', 'nprobe=10') x;
 select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=force') x;
+-- pre runs a filter on INCLUDE columns and the primary key in one search of the nprobe
+-- lists, not as an exact membership set: 10 qualifying rows outside those lists are not
+-- found; iterative widens and finds them
+select count(*) from (select id from t_inc where category = 1 and id > 990 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t_inc where category = 1 and id > 990 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
 -- @separator:table
 -- @regex("Index Filter: [^\n]*__mo_index_pri_col > 500", true)
 -- @regex("Index Filter: [^\n]*category", false)

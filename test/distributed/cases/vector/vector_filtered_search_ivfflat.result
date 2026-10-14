@@ -39,7 +39,7 @@ Project  𝄀
                           Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1000 outputRows=500 (min=500, max=500) InputSize=11.72 KiB OutputSize=3.91 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16.60 KiB (min=16.60 KiB, max=16.60 KiB)  𝄀
                           Filter Cond: (t.category = 1)  𝄀
   Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=10 bucket_windows=0:5, 5:10 row_limits=50, 50 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=1807368 centroid_blocks=1 centroid_rows=10 centroid_time_ns=1598421 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=50 entry_time_ns=584954 storage_filter_rows=0:0 vector_rows_scored=500 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=50 output_rows=50
+  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=1752473 centroid_blocks=1 centroid_rows=10 centroid_time_ns=1689132 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=50 entry_time_ns=630151 storage_filter_rows=0:0 vector_rows_scored=500 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=50 output_rows=50
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10) x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -84,7 +84,7 @@ Project  𝄀
               Analyze: timeConsumed=0ms waitTime=1ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=320 bytes (min=320 bytes, max=320 bytes)  𝄀
               Vector Index: i, Metric: l2_distance, Candidate Limit: 10, NProbe: 5, Index Filter: __mo_index_pri_col BETWEEN 991 AND 1000  𝄀
   Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=10 bucket_windows=0:5, 5:10 row_limits=10, 10 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=82978 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=10 entry_time_ns=610886 storage_filter_rows=0:0 vector_rows_scored=10 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=10 output_rows=10
+  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=89487 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=10 entry_time_ns=702490 storage_filter_rows=0:0 vector_rows_scored=10 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=10 output_rows=10
 select count(*) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post') x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -138,7 +138,7 @@ Project  𝄀
                           Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1000 outputRows=500 (min=500, max=500) InputSize=11.72 KiB OutputSize=3.91 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16.60 KiB (min=16.60 KiB, max=16.60 KiB)  𝄀
                           Filter Cond: (t.category = 1)  𝄀
   Vector Index Search Summary: search_count=1 round_count=1 buckets_searched=5 bucket_windows=0:5 row_limits=50 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=1 metadata_blocks=1 metadata_rows=1 metadata_time_ns=77524 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=1 entry_blocks_read=0 entry_output_rows=0 entry_time_ns=190572 storage_filter_rows=0:0 vector_rows_scored=0 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=0 output_rows=0
+  Vector Index Execution: search_count=1 readers=1 metadata_blocks=1 metadata_rows=1 metadata_time_ns=75136 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=1 entry_blocks_read=0 entry_output_rows=0 entry_time_ns=155432 storage_filter_rows=0:0 vector_rows_scored=0 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=0 output_rows=0
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -259,6 +259,12 @@ select group_concat(id order by id) from (select id from t_inc where category = 
 select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=force') x;
 ➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
 514,524,544,554,574
+select count(*) from (select id from t_inc where category = 1 and id > 990 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
+➤ count(*)[-5,64,0]  𝄀
+0
+select group_concat(id order by id) from (select id from t_inc where category = 1 and id > 990 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+991,992,993,994,995,996,997,998,999,1000
 explain select id from t_inc where category = 1 and id > 500 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 -- @regex("Index Filter: [^\n]*__mo_index_pri_col > 500", true)
 -- @regex("Index Filter: [^\n]*category", false)

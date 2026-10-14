@@ -35,22 +35,25 @@ type ResolveVariable func(name string, isSystemVar, isGlobalVar bool) (any, erro
 
 // StampSessionKnobs fills the unset knobs of spec from the session variables, only
 // the knobs the index algorithm of spec uses: itopk and max_itopk for a vector index,
-// max_nprobe for an index that probes lists. The coordinator stamps the copy of spec
-// it sends to a CN that runs the scan without the session.
+// max_nprobe for an index that probes lists. A session itopk or max_itopk above the
+// algorithm's internal top-k limit is lowered to it. The coordinator stamps the copy of
+// spec it sends to a CN that runs the scan without the session.
 func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) error {
 	if spec == nil || resolve == nil {
 		return nil
 	}
 	algo := spec.GetIndex().GetIndexAlgo()
 	vector := indexplugin.IsVectorIndexAlgo(algo)
+	topKLimit := indexplugin.MaxInternalTopKLimit(algo)
 	for _, knob := range []struct {
-		name string
-		dst  *uint64
-		used bool
+		name  string
+		dst   *uint64
+		used  bool
+		limit uint64
 	}{
-		{SessionVarITopK, &spec.InternalTopk, vector},
-		{SessionVarMaxITopK, &spec.MaxInternalTopk, vector},
-		{SessionVarMaxNprobe, &spec.MaxNprobe, vector && indexplugin.SupportsProbeKnobs(algo)},
+		{SessionVarITopK, &spec.InternalTopk, vector, topKLimit},
+		{SessionVarMaxITopK, &spec.MaxInternalTopk, vector, topKLimit},
+		{SessionVarMaxNprobe, &spec.MaxNprobe, vector && indexplugin.SupportsProbeKnobs(algo), 0},
 	} {
 		if *knob.dst != 0 || !knob.used {
 			continue
@@ -67,6 +70,9 @@ func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) erro
 			return moerr.NewInternalErrorNoCtxf("session variable %s is not a non-negative integer", knob.name)
 		}
 		*knob.dst = uint64(n)
+		if knob.limit != 0 && *knob.dst > knob.limit {
+			*knob.dst = knob.limit
+		}
 	}
 	return nil
 }
@@ -74,9 +80,14 @@ func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) erro
 // ApplySearchKnobs sets the internal top-k, its cap and the IVF probe cap of req from
 // spec, and the knobs spec leaves unset from the session variables through resolve
 // (nil where the scan runs without the session). A set internal top-k is the candidate
-// budget, lowered to its cap and raised to the result limit. An internal top-k or cap
-// above the algorithm's internal top-k limit is an error.
+// budget, lowered to its cap and raised to the result limit. A BY RANK internal top-k
+// or cap above the algorithm's internal top-k limit is an error; a session one is
+// lowered to the limit.
 func ApplySearchKnobs(req *searchplugin.Request, spec *plan.IndexSearchScan, resolve ResolveVariable) error {
+	if err := indexplugin.CheckInternalTopK(context.Background(), spec.GetIndex().GetIndexAlgo(),
+		spec.GetInternalTopk(), spec.GetMaxInternalTopk()); err != nil {
+		return err
+	}
 	knobs := &plan.IndexSearchScan{
 		Index:           spec.GetIndex(),
 		InternalTopk:    spec.GetInternalTopk(),
@@ -89,9 +100,6 @@ func ApplySearchKnobs(req *searchplugin.Request, spec *plan.IndexSearchScan, res
 	itopk, maxITopK := knobs.InternalTopk, knobs.MaxInternalTopk
 	if maxITopK != 0 && itopk > maxITopK {
 		itopk = maxITopK
-	}
-	if err := indexplugin.CheckInternalTopK(context.Background(), spec.GetIndex().GetIndexAlgo(), itopk, maxITopK); err != nil {
-		return err
 	}
 	req.InternalTopK, req.MaxInternalTopK, req.MaxNprobe = itopk, maxITopK, knobs.MaxNprobe
 	if itopk != 0 {

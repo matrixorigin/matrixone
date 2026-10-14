@@ -191,8 +191,10 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   key the mode admits) AND not-deleted. Other filters run after the search, in the join. cagra
   applies no membership set and needs no C ABI change.
 - Knob mapping: `itopk_size = max(itopk, LIMIT)`; `filtering_rate` stays auto.
-- Limit: one cuVS CAGRA search returns at most 1024 keys. `itopk` or `max_itopk` above 1024,
-  from the SQL option or the session variable, is an error; the `iterative` default cap is 1024.
+- Limit: one cuVS CAGRA search returns at most 1024 keys. `itopk` or `max_itopk` above 1024 as
+  a SQL option is an error; a session `vector_itopk` or `vector_max_itopk` above 1024 is lowered
+  to 1024, so a value set for hnsw does not fail cagra queries. The `iterative` default cap is
+  1024.
 - `iterative` (`ScanOptions.Iterative`, set when `FilterJSON` holds every filter):
   `cagra.IterativeSearch` (`pkg/vectorindex/cagra/iterative.go`) restarts with `itopk × 2` up to
   `max_itopk`, bounded by the indexed rows. With another filter it searches once.
@@ -272,7 +274,7 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 | hnsw | the filter rejects more candidates than the one search returned | the one search misses qualifying nearest rows | `max_itopk` reached first | never | never |
 | cagra | as hnsw | the one search misses qualifying rows, or a filter outside the INCLUDE columns rejects them | `max_itopk` reached, or a filter outside the INCLUDE columns (one search) | as hnsw | never |
 | ivfpq | as hnsw, over `nprobe` lists | the `nprobe` lists hold too few qualifying rows, or a filter outside the INCLUDE columns rejects them | `max_nprobe < n_lists` reached, or a filter outside the INCLUDE columns (one search) | as hnsw | never |
-| ivfflat | as ivfpq; with a filter on an INCLUDE column, never empty in a bare top-k | the `nprobe` lists hold too few qualifying rows; never for 100 keys or fewer | `max_nprobe < n_lists` reached, or the search split across readers; never for 100 keys or fewer | as hnsw | never |
+| ivfflat | as ivfpq; with a filter on an INCLUDE column, never empty in a bare top-k | the `nprobe` lists hold too few qualifying rows, also when only a few rows pass a filter on INCLUDE columns and the primary key (it runs in the search; no exact membership set); never for 100 keys or fewer through membership | `max_nprobe < n_lists` reached, or the search split across readers; never for 100 keys or fewer | as hnsw | never |
 
 `auto` runs `force` after a short `pre` (or a short `post` when it has no pre branch), and
 `force` is never short.
@@ -426,14 +428,14 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 | 9 | The issue fixture returns ids 501..510 in `pre` and `iterative` through the hnsw index, for l2 on a five-sub-index table and for cosine, where the default mode returns none. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_modes.sql` |
 | 10 | With the filter on an INCLUDE column, the issue fixture returns a full page in `pre` and `iterative` on cagra, and ids 501..510 in `iterative` on ivfpq where `pre` with `nprobe=1` returns none; with a filter outside the INCLUDE columns `iterative` searches once and the page is short. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 11 | `iterative` (hnsw, ivfflat) and `pre` (hnsw) return zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and the `force` rows when exactly or more than `LIMIT` qualify, with periodic, `IN`, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_ivfflat.sql` |
-| 12 | Each short-page cell a fixture reaches: with `max_nprobe` below what the filter needs the `iterative` page is short on ivfflat and ivfpq, and with the cap raised it fills; ivfflat and ivfpq `pre` search one round and are short on the issue fixture; hnsw `iterative` fills at `max_itopk` = `LIMIT`. | `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`, `cases/vector/vector_filtered_search_hnsw.sql` |
+| 12 | Each short-page cell a fixture reaches: with `max_nprobe` below what the filter needs the `iterative` page is short on ivfflat and ivfpq, and with the cap raised it fills; ivfflat and ivfpq `pre` search one round and are short on the issue fixture; ivfflat `pre` with a filter on INCLUDE columns and the primary key that 10 rows pass is short where `iterative` fills; hnsw `iterative` fills at `max_itopk` = `LIMIT`. | `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`, `cases/vector/vector_filtered_search_hnsw.sql` |
 | 13 | A bare `auto` top-k builds `ADAPTIVE_TOP` on hnsw, cagra and ivfpq; on hnsw it has a pre branch only with a filter, returns the `force` rows where `post` is short and where it fills, with a prepared `LIMIT`, and runs `force` for a region with more than one output column; on cagra and ivfpq it returns a full page where `post` is short. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw), `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq) |
 | 14 | A hybrid `MATCH` + vector top-k on hnsw uses the fulltext index and the vector index through the PRE shape and returns the rows of the table without a vector index; with a query vector from a provider row it keeps the exact sort. cagra and ivfpq keep the exact sort under `MATCH`. | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 15 | ivfflat rounds scan each list once: a query vector that ties every centroid (a zero vector under cosine) returns no duplicate rows in `iterative`. | `cases/vector/vector_filtered_search_ivfflat.sql` |
 | 16 | ivfflat `pre` and `iterative` build the membership key set from every filter: an INCLUDE-column filter narrows the keys as well as the index search. | `cases/vector/vector_filtered_search_ivfflat.sql` |
 | 17 | An ivfpq search whose filter on an INCLUDE column admits no row in the probed lists returns no row instead of an error, in the default mode, `pre` and `iterative`. | `gpu_cases/vector/vector_filtered_search_gpu.sql`; `cgo/cuvs/test/ivf_pq_test.cu` `FilterEmptyInProbedListsPadsWithSentinels` |
 | 18 | `EXPLAIN` shows the filter the cagra and ivfpq search applies as SQL (`Index Filter`). | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
-| 19 | On a cagra index over more than 1024 rows where fewer than `LIMIT` rows qualify, `iterative` returns the qualifying rows; `itopk` or `max_itopk` above 1024, as an SQL option or a session variable, is an error. | `gpu_cases/vector/vector_cagra_itopk_limit.sql` |
+| 19 | On a cagra index over more than 1024 rows where fewer than `LIMIT` rows qualify, `iterative` returns the qualifying rows; `itopk` or `max_itopk` above 1024 is an error as an SQL option and lowered to 1024 as a session variable. | `gpu_cases/vector/vector_cagra_itopk_limit.sql` |
 
 ## Decision log
 
@@ -456,8 +458,9 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - Knobs by family, set in SQL options and session variables, the SQL option first. `probe_limit`
   stays `nprobe`'s session default. The over-fetch tables stay the budget when `itopk` is unset.
 - The `iterative` `max_itopk` default is 20000 (pgvector's `hnsw.max_scan_tuples` default) on hnsw
-  and 1024 on cagra, the most keys one cuVS CAGRA search returns. cagra rejects `itopk` or
-  `max_itopk` above 1024 instead of lowering it.
+  and 1024 on cagra, the most keys one cuVS CAGRA search returns. cagra rejects a SQL `itopk` or
+  `max_itopk` above 1024 and lowers a session value above it: the session variables are shared
+  with hnsw.
 - One Go iterative search per algorithm on top of the regular search, including the GPU indexes;
   hnsw, cagra and ivfpq restart, ivfflat continues its cursor; cagra leaves `filtering_rate` on
   auto; ivfpq's end state is `n_probes = n_lists` with PQ ranking.

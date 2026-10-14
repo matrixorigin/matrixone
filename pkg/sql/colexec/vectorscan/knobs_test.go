@@ -135,15 +135,33 @@ func TestApplySearchKnobsInternalTopKLimit(t *testing.T) {
 		require.ErrorContains(t, err, "exceeds the cagra limit 1024")
 	}
 
-	// session variables are checked too; an itopk lowered to max_itopk is accepted
+	// session variables are lowered to the limit, locally and on the stamped copy
 	session[SessionVarITopK] = int64(2000)
-	err := ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra}, resolve)
-	require.ErrorContains(t, err, "itopk 2000 exceeds the cagra limit 1024")
-	require.NoError(t, ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra, MaxInternalTopk: 512}, resolve))
-	session[SessionVarMaxITopK] = int64(2000)
+	req = searchplugin.Request{ResultLimit: 10}
+	require.NoError(t, ApplySearchKnobs(&req, &plan.IndexSearchScan{Index: cagra}, resolve))
+	require.Equal(t, uint64(1024), req.InternalTopK)
+	require.Equal(t, uint64(1024), req.CandidateBudget)
 	session[SessionVarITopK] = int64(0)
-	err = ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra}, resolve)
-	require.ErrorContains(t, err, "max_itopk 2000 exceeds the cagra limit 1024")
+	session[SessionVarMaxITopK] = int64(5000)
+	req = searchplugin.Request{ResultLimit: 10}
+	require.NoError(t, ApplySearchKnobs(&req, &plan.IndexSearchScan{Index: cagra}, resolve))
+	require.Equal(t, uint64(1024), req.MaxInternalTopK)
+	session[SessionVarITopK] = int64(2000)
+	stamped := &plan.IndexSearchScan{Index: cagra}
+	require.NoError(t, StampSessionKnobs(stamped, resolve))
+	require.Equal(t, uint64(1024), stamped.InternalTopk)
+	require.Equal(t, uint64(1024), stamped.MaxInternalTopk)
+	// a BY RANK value is not lowered: it is an error with the session set too
+	err := ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra, InternalTopk: 1025}, resolve)
+	require.ErrorContains(t, err, "itopk 1025 exceeds the cagra limit 1024")
+
+	// hnsw keeps the session value
+	stamped = &plan.IndexSearchScan{Index: hnsw}
+	require.NoError(t, StampSessionKnobs(stamped, resolve))
+	require.Equal(t, uint64(2000), stamped.InternalTopk)
+	require.Equal(t, uint64(5000), stamped.MaxInternalTopk)
+	session[SessionVarITopK] = int64(0)
+	session[SessionVarMaxITopK] = int64(0)
 
 	// hnsw has no limit
 	require.NoError(t, ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: hnsw, InternalTopk: 20000}, resolve))
