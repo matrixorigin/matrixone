@@ -28,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -136,15 +138,21 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	// Role rules are mandatory access control: load them even when the
 	// optional enable_remap_hint switch is off, so a session SET cannot
 	// bypass the role-rule rewrite path (issue #29142).
-	ses.ruleCacheMu.RLock()
-	policy.generation = ses.rewritePolicyGeneration
-	cacheLoaded := ses.ruleCache != nil
-	if cacheLoaded {
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
-	}
-	ses.ruleCacheMu.RUnlock()
+	cacheReloaded := false
+	for {
+		ses.ruleCacheMu.RLock()
+		cacheLoaded := ses.ruleCache != nil
+		policy.generation = ses.rewritePolicyGeneration
+		generation := policy.generation
+		if cacheLoaded {
+			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		}
+		ses.ruleCacheMu.RUnlock()
+		if cacheLoaded {
+			break
+		}
 
-	if !cacheLoaded {
+		cacheReloaded = true
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
@@ -153,17 +161,21 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		}
 
 		ses.ruleCacheMu.Lock()
-		if ses.rewritePolicyGeneration != policy.generation {
-			ses.ruleCacheMu.Unlock()
-			err := moerr.NewInvalidState(ctx, "rewrite policy changed while loading")
-			ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
-			return nil, err
-		}
-		if ses.ruleCache == nil {
+		if ses.ruleCache == nil && ses.rewritePolicyGeneration == generation {
 			ses.ruleCache = rules
 		}
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		if ses.ruleCache != nil {
+			policy.generation = ses.rewritePolicyGeneration
+			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		}
+		cacheLoaded = ses.ruleCache != nil
 		ses.ruleCacheMu.Unlock()
+		if cacheLoaded {
+			break
+		}
+		// The cache was invalidated while this load was in flight. Retry so the
+		// request observes the catalog state after the invalidation instead of
+		// publishing or using a pre-invalidation snapshot.
 	}
 
 	// Optional session layers are still gated by enable_remap_hint.
@@ -174,7 +186,7 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	}
 
 	policy.enabled = sessionEnabled || len(policy.roleRules) > 0
-	if !cacheLoaded {
+	if cacheReloaded {
 		// Every cache reload, including one after a failed SET ROLE, closes the
 		// generation boundary for handles published under the previous policy.
 		ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, nil)
@@ -1307,6 +1319,56 @@ func validateRewriteRuleSQL(ctx context.Context, rule string, lowerCaseTableName
 	}
 }
 
+type roleRuleLifecycleBackgroundExec interface {
+	execWithProcessHook(context.Context, string, backExecProcessHook) error
+}
+
+type roleRuleCacheInvalidator interface {
+	invalidateRoleRuleCache()
+}
+
+func (ses *Session) invalidateRoleRuleCache() {
+	ses.invalidateRewriteRuleCache()
+}
+
+// invalidateRoleRuleCaches invalidates every active session cache on this CN.
+// Role rewrite rules are tenant metadata, so a successful change must not leave
+// another connection enforcing the previous policy indefinitely.
+func invalidateRoleRuleCaches(ses *Session) {
+	if ses == nil {
+		return
+	}
+
+	ses.invalidateRoleRuleCache()
+	rm := ses.getRoutineManager()
+	if rm == nil || rm.sessionManager == nil {
+		return
+	}
+	for _, candidate := range rm.sessionManager.GetAllSessions() {
+		if invalidator, ok := candidate.(roleRuleCacheInvalidator); ok {
+			invalidator.invalidateRoleRuleCache()
+		}
+	}
+}
+
+// lockRoleRuleLifecycleInBackground acquires the shared mo_role_rule gate in
+// the background executor's own transaction. The no-op SELECT gives the
+// executor a live process for the compile-layer lock protocol without
+// publishing any data; all subsequent role/rule lookups then run after the
+// gate and in the same transaction.
+func lockRoleRuleLifecycleInBackground(ctx context.Context, bh BackgroundExec) error {
+	locker, ok := bh.(roleRuleLifecycleBackgroundExec)
+	if !ok {
+		return moerr.NewInternalError(ctx, "role-rule lifecycle requires a native background executor")
+	}
+	return locker.execWithProcessHook(ctx, "select 1", func(ctx context.Context, proc *process.Process) error {
+		if proc == nil || proc.GetSessionInfo() == nil {
+			return moerr.NewInternalError(ctx, "role-rule lifecycle background process is unavailable")
+		}
+		return compile.LockRoleRuleLifecycle(ctx, proc.GetSessionInfo().StorageEngine, proc)
+	})
+}
+
 // escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.
 func escapeSQLString(s string) string {
 	var buf bytes.Buffer
@@ -1314,19 +1376,59 @@ func escapeSQLString(s string) string {
 	return buf.String()
 }
 
-// handleAlterRoleAddRule verifies role existence, then inserts or updates a mo_role_rule record.
-func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) error {
+func checkRoleRuleTargetExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, lowerCaseTableNames int64) error {
+	if lowerCaseTableNames != 2 {
+		_, err := getDatabaseOrTableId(ctx, bh, false, dbName, tableName)
+		return err
+	}
+	// Mode 2 compares identifiers without case but preserves catalog spelling.
+	// The ADD RULE AST holds comparison names, so an exact catalog predicate
+	// cannot find a mixed-case target. Keep the lookup inside the gated transaction
+	// and scoped to the caller's tenant, as in the ordinary table-ID lookup.
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf(
+		`select rel_logical_id from mo_catalog.mo_tables where lower(relname) = lower(%s) and lower(reldatabase) = lower(%s) and account_id = %d;`,
+		escapeSQLString(tableName), escapeSQLString(dbName), accountID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(results) {
+		return moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+	}
+	return nil
+}
+
+// handleAlterRoleAddRule verifies role and target existence, then inserts or
+// updates a mo_role_rule record. The lifecycle gate is acquired immediately
+// after BEGIN and is held through commit, so a rename that wins the gate is
+// visible to the target lookup below.
+func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) (retErr error) {
 	ctx := execCtx.reqCtx
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// Begin transaction
 	err := bh.Exec(ctx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		retErr = finishTxn(ctx, bh, retErr)
+		if retErr == nil {
+			invalidateRoleRuleCaches(ses)
+		}
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -1348,7 +1450,25 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
-	// Derive rule_name from db.tbl
+	// Resolve the target only after the lifecycle gate and snapshot refresh. Do
+	// not reuse a pre-gate catalog result: a rename may have committed while
+	// this writer was waiting for the gate.
+	lowerCaseTableNames := parserLowerCaseTableNames(ses)
+	_, targetDB, targetTable, err := parsers.NormalizeRewriteKey(
+		ctx,
+		stmt.DbName+"."+stmt.TblName,
+		lowerCaseTableNames,
+	)
+	if err != nil {
+		return err
+	}
+	if err = checkRoleRuleTargetExists(ctx, bh, targetDB, targetTable, lowerCaseTableNames); err != nil {
+		return err
+	}
+
+	// Keep the submitted spelling in the catalog for compatibility with legacy
+	// rows. Rename admission canonicalizes both sides, so noncanonical legacy
+	// keys remain protected as well.
 	ruleName := stmt.DbName + "." + stmt.TblName
 
 	// Delete existing rule (if any), then insert the new one
@@ -1365,28 +1485,28 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
-	// Invalidate the current session's rule cache and any prepared statements
-	// that captured the previous rewrite policy. Other sessions using the same
-	// role still need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.invalidateRewriteRuleCache()
-
-	return err
+	return nil
 }
 
 // handleAlterRoleDropRule verifies role and rule existence, then deletes the mo_role_rule record.
-func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) error {
+func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) (retErr error) {
 	ctx := execCtx.reqCtx
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// Begin transaction
 	err := bh.Exec(ctx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		retErr = finishTxn(ctx, bh, retErr)
+		if retErr == nil {
+			invalidateRoleRuleCaches(ses)
+		}
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -1432,13 +1552,7 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 		return err
 	}
 
-	// Invalidate the current session's rule cache and any prepared statements
-	// that captured the previous rewrite policy. Other sessions using the same
-	// role still need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.invalidateRewriteRuleCache()
-
-	return err
+	return nil
 }
 
 // handleShowRules queries and returns all rewrite rules for the specified role.
