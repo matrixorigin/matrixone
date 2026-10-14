@@ -14,6 +14,13 @@ permissions:
 
 jobs:
   image-build:
+    if: github.event_name != 'release'
     name: Build And Push Matrixone Image
     uses: matrixorigin/CI/.github/workflows/image-build.yaml@main
+    secrets: inherit
+
+  release-images:
+    if: github.event_name == 'release'
+    name: Build versioned maintenance release images
+    uses: ./.github/workflows/release-images.yml
     secrets: inherit
