@@ -19535,8 +19535,8 @@ yydefault:
 		{
 			var roleName = yyDollar[3].cstrUnion().Compare()
 			var ruleSQL = yyDollar[6].str
-			var dbName = yyDollar[9].cstrUnion().Compare()
-			var tblName = yyDollar[11].cstrUnion().Compare()
+			var dbName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[9].cstrUnion().Origin()).Compare()
+			var tblName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[11].cstrUnion().Origin()).Compare()
 			var ruleName = dbName + "." + tblName
 			yyLOCAL = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
 		}
@@ -19547,8 +19547,8 @@ yydefault:
 //line mysql_sql.y:4336
 		{
 			var roleName = yyDollar[3].cstrUnion().Compare()
-			var dbName = yyDollar[8].cstrUnion().Compare()
-			var tblName = yyDollar[10].cstrUnion().Compare()
+			var dbName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[8].cstrUnion().Origin()).Compare()
+			var tblName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[10].cstrUnion().Origin()).Compare()
 			yyLOCAL = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
 		}
 		yyVAL.union = yyLOCAL
