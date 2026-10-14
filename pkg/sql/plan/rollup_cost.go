@@ -53,24 +53,19 @@ const (
 	rollupSortBoundaryCost = 0.02
 	rollupSortAggCost      = 0.12
 	// Every completed grouping prefix is flushed, freed, and recreated by the
-	// streaming executor. Charge that lifecycle work explicitly. The baseline
-	// and large-batch ceiling are calibrated against low-NDV, all-unique, and
-	// asymmetric-prefix benchmark shapes, including intermediate cardinalities
-	// near the admitted boundary. Selective filters retain the baseline so a
-	// small result does not lose the measured SORT win.
+	// streaming executor. Charge a conservative constant per completed group
+	// for deep rollups: the former cardinality ramp undercharged intermediate
+	// NDV inputs and admitted slower SORT plans against shared HASH. A small
+	// group count still amortizes this work; selective two-level filters retain
+	// their separately calibrated baseline. Singleton prefixes also keep the
+	// baseline: no prefix closes and recreates state before EOF.
 	rollupSortGroupFinalizeBaseCost = 2.0
-	// Asymmetric prefixes can under-report completed groups when derived-order
-	// stats are conservative.  Keep a calibrated ceiling that makes the
-	// 50,000-group control stay on shared HASH instead of admitting a measured
-	// slower SORT plan.
-	rollupSortGroupFinalizeMaxCost     = 16.0
-	rollupSortGroupFinalizeStartGroups = 10_000.0
-	rollupSortGroupFinalizeMaxGroups   = 25_000.0
-	rollupSortStartupCost              = 16.0
-	rollupHashBranchStartupCost        = 100.0
-	rollupHashWorkWeight               = 0.70
-	rollupHashLatencyWeight            = 0.30
-	rollupSpillCostWeight              = 0.35
+	rollupSortGroupFinalizeDeepCost = 16.0
+	rollupSortStartupCost           = 16.0
+	rollupHashBranchStartupCost     = 100.0
+	rollupHashWorkWeight            = 0.70
+	rollupHashLatencyWeight         = 0.30
+	rollupSpillCostWeight           = 0.35
 	// Protocol 49+ grouping-set sharing can expand one input while keeping one
 	// scan and one aggregate. The cost probe uses the common possibility gate as
 	// a conservative lower envelope; detailed rewrite checks may still reject
@@ -356,11 +351,8 @@ func estimateSortRollupCost(
 	// times the executor performs the appendOutputRow/resetLevel lifecycle;
 	// include that work for both ordered input and input that is sorted here.
 	finalizeCost := rollupSortGroupFinalizeBaseCost
-	if levels >= 3 && prefixGroups > rollupSortGroupFinalizeStartGroups {
-		groupScale := (prefixGroups - rollupSortGroupFinalizeStartGroups) /
-			(rollupSortGroupFinalizeMaxGroups - rollupSortGroupFinalizeStartGroups)
-		groupScale = math.Min(1, groupScale)
-		finalizeCost += (rollupSortGroupFinalizeMaxCost - rollupSortGroupFinalizeBaseCost) * groupScale
+	if levels >= 3 && maxPrefixGroups > 1 {
+		finalizeCost = rollupSortGroupFinalizeDeepCost
 	}
 	sortGroupFinalizeWork := prefixGroups * finalizeCost * aggregateCost
 	sortWork += sortGroupFinalizeWork
