@@ -296,6 +296,16 @@ type batchWithKind struct {
 	batch          *batch.Batch
 }
 
+// logicalOperation returns the SQL-level operation represented by this diff
+// batch. Expanded UPDATEs use DELETE/INSERT batches internally, but retain
+// their original operation for diagnostics through fromUpdate.
+func (b batchWithKind) logicalOperation() string {
+	if b.fromUpdate {
+		return diffUpdate
+	}
+	return b.kind
+}
+
 type emitFunc func(batchWithKind) (stop bool, err error)
 
 type retBatchList struct {
@@ -316,6 +326,8 @@ type retBatchList struct {
 }
 
 type compositeOption struct {
+	// onlineApply orders transaction probes and retry-capable MERGE/PICK writes.
+	onlineApply           bool
 	conflictOpt           *tree.ConflictOpt
 	outputSQL             bool
 	expandUpdate          bool

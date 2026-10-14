@@ -814,7 +814,7 @@ WHERE table_schema = database()
 AND table_name = 'union_signed_unsigned_28233_ctas'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0
+v  ¦  decimal(20,0)  ¦  YES  ¦  20  ¦  0
 SELECT v FROM union_signed_unsigned_28233_ctas ORDER BY v;
 v
 -1
@@ -833,7 +833,7 @@ WHERE table_schema = database()
 AND table_name = 'union_signed_unsigned_28233_empty'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0
+v  ¦  decimal(20,0)  ¦  YES  ¦  20  ¦  0
 SELECT v FROM union_signed_unsigned_28233_empty;
 v
 DROP TABLE union_signed_unsigned_28233_empty;
@@ -854,3 +854,134 @@ UNION ALL
 SELECT x FROM (SELECT SUM(total) AS x FROM c LIMIT 0) b;
 x
 DROP TABLE cte_zero_limit;
+DROP TABLE IF EXISTS union_narrow_unsigned_precision;
+DROP TABLE IF EXISTS union_narrow_unsigned_precision_ctas;
+CREATE TABLE union_narrow_unsigned_precision (
+id INT PRIMARY KEY,
+u8 TINYINT UNSIGNED,
+u16 SMALLINT UNSIGNED,
+s BIGINT,
+d DATE
+);
+INSERT INTO union_narrow_unsigned_precision VALUES
+(1, NULL, NULL, 9007199254740993, '2024-01-01'),
+(2, 255, 65535, -9007199254740993, '2024-01-01');
+SELECT id, COALESCE(u8, s) AS v8, COALESCE(u16, s) AS v16
+FROM union_narrow_unsigned_precision ORDER BY id;
+id    v8    v16
+1    9007199254740993    9007199254740993
+2    255    65535
+SELECT id, COALESCE(s, u8, u16) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+id    v
+1    9007199254740993
+2    -9007199254740993
+SELECT id, COALESCE(NULL, u8, u16, s, NULL) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+id    v
+1    9007199254740993
+2    255
+SELECT x FROM (
+SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993
+UNION ALL SELECT -9007199254740993
+UNION ALL SELECT 9223372036854775807
+UNION ALL SELECT -9223372036854775808
+) q ORDER BY x;
+x
+-9223372036854775808
+-9007199254740993
+255
+9007199254740993
+9223372036854775807
+SELECT x FROM (
+SELECT 9007199254740993 AS x
+UNION ALL SELECT u16 FROM union_narrow_unsigned_precision WHERE id = 2
+) q ORDER BY x;
+x
+65535
+9007199254740993
+SELECT x FROM (
+SELECT WEEK(d, 3) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+x
+1
+9007199254740993
+SELECT x FROM (
+SELECT DAYOFYEAR(d) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+x
+1
+9007199254740993
+SELECT x FROM (
+SELECT QUARTER(d) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+x
+1
+9007199254740993
+SELECT x FROM (
+SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION SELECT 9007199254740992
+UNION SELECT 9007199254740993
+) q ORDER BY x;
+x
+255
+9007199254740992
+9007199254740993
+SELECT x, COUNT(*) AS n FROM (
+SELECT u16 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740992
+UNION ALL SELECT 9007199254740993
+) q GROUP BY x ORDER BY x;
+x    n
+65535    1
+9007199254740992    1
+9007199254740993    1
+SELECT id, COALESCE(u8, u16) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+id    v
+1    null
+2    255
+SELECT x FROM (
+SELECT NULL AS x
+UNION ALL SELECT u8 FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT s FROM union_narrow_unsigned_precision WHERE id = 1
+) q ORDER BY x;
+x
+null
+255
+9007199254740993
+CREATE TABLE union_narrow_unsigned_precision_ctas AS
+SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993;
+SELECT column_type FROM information_schema.columns
+WHERE table_schema = DATABASE()
+AND table_name = 'union_narrow_unsigned_precision_ctas';
+column_type
+bigint
+SELECT x FROM union_narrow_unsigned_precision_ctas ORDER BY x;
+x
+255
+9007199254740993
+PREPARE narrow_union FROM 'SELECT x FROM (SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2 UNION ALL SELECT 9007199254740993) q ORDER BY x';
+EXECUTE narrow_union;
+x
+255
+9007199254740993
+DEALLOCATE PREPARE narrow_union;
+PREPARE narrow_coalesce FROM 'SELECT id, COALESCE(u16, s) AS x FROM union_narrow_unsigned_precision ORDER BY id';
+EXECUTE narrow_coalesce;
+id    x
+1    9007199254740993
+2    65535
+DEALLOCATE PREPARE narrow_coalesce;
+SELECT id, COALESCE(u8, s, CAST(18446744073709551615 AS UNSIGNED)) AS x
+FROM union_narrow_unsigned_precision ORDER BY id;
+id    x
+1    9007199254740993
+2    255
+DROP TABLE union_narrow_unsigned_precision_ctas;
+DROP TABLE union_narrow_unsigned_precision;

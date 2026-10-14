@@ -131,8 +131,7 @@ func countReachableFullTextScans(query *planpb.Query) int {
 		seen[nodeID] = true
 		node := query.Nodes[nodeID]
 		count := 0
-		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
-			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
+		if isFullTextSearchScan(node) {
 			count++
 		}
 		for _, childID := range node.Children {
@@ -158,8 +157,7 @@ func countReachableFullText2Scans(query *planpb.Query) int {
 		seen[nodeID] = true
 		node := query.Nodes[nodeID]
 		count := 0
-		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
-			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == fulltext2_search_func_name {
+		if isFulltext2SearchScan(node) {
 			count++
 		}
 		for _, childID := range node.Children {

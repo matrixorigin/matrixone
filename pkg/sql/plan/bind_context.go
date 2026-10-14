@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -54,6 +56,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if builder != nil {
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
+		}
 		if parent == nil && builder.persistedViewTarget != "" {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
@@ -1008,10 +1013,13 @@ func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree
 // (or vice versa); both references must resolve to the same binding and column.
 func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedName) bool {
 	if ctx != nil {
-		leftBinding, leftPos, leftOK := resolveHavingColumnIdentity(ctx, left)
-		rightBinding, rightPos, rightOK := resolveHavingColumnIdentity(ctx, right)
+		leftBinding, leftPos, leftOK := resolveColumnIdentity(ctx, left)
+		rightBinding, rightPos, rightOK := resolveColumnIdentity(ctx, right)
 		if leftOK && rightOK {
 			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
+		}
+		if leftOK || rightOK {
+			return false
 		}
 	}
 
@@ -1026,7 +1034,25 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 			strings.EqualFold(left.DbName(), right.DbName()))
 }
 
-func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
+// resolveTableBinding resolves only this scope. A different explicit database
+// is a miss, so the binder can continue through its existing parent traversal.
+func (bc *BindContext) resolveTableBinding(db, table string) *Binding {
+	binding := bc.bindingByTable[table]
+	if db == "" {
+		return binding
+	}
+	if binding != nil && binding.db != "" &&
+		(db == binding.db || db == tree.NewCStr(binding.db, bc.lower).Compare() ||
+			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db))) {
+		return binding
+	}
+	if bc.remapOption != nil {
+		return bc.bindingByTable[db+"."+table]
+	}
+	return nil
+}
+
+func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
 	if ctx == nil || ref == nil || ref.Star || ref.NumParts == 0 {
 		return nil, 0, false
 	}
@@ -1035,12 +1061,7 @@ func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*B
 	if ref.TblName() == "" {
 		binding = ctx.bindingByCol[ref.ColName()]
 	} else {
-		// Match baseBindColRef: a table name is the primary lookup key, while
-		// the database-qualified key is used by remapped contexts.
-		binding = ctx.bindingByTable[ref.TblName()]
-		if binding == nil && ref.DbName() != "" {
-			binding = ctx.bindingByTable[ref.DbName()+"."+ref.TblName()]
-		}
+		binding = ctx.resolveTableBinding(ref.DbName(), ref.TblName())
 	}
 	if binding == nil {
 		return nil, 0, false

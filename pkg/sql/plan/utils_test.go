@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3251,6 +3252,50 @@ func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
 	require.NoError(t, InitInfileOrStageParam(param, nil))
 	assert.Equal(t, "/data/x", param.Filepath)
 	assert.Equal(t, "parquet", param.Format)
+}
+
+func TestInitInfileOrStageParamRetainsStageDependency(t *testing.T) {
+	for _, backingURL := range []string{"file:///bound/", "s3://bucket/bound/"} {
+		t.Run(backingURL, func(t *testing.T) {
+			ctx := context.Background()
+			proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			backing, err := url.Parse(backingURL)
+			require.NoError(t, err)
+			definition := stage.StageDef{Name: "binding_stage", Url: backing, Credentials: map[string]string{
+				stage.PARAMKEY_AWS_KEY_ID: "key", stage.PARAMKEY_AWS_SECRET_KEY: "secret",
+				stage.PARAMKEY_AWS_REGION: "region", stage.PARAMKEY_ENDPOINT: "endpoint",
+			}}
+			proc.GetStageCache().Set(definition.Name, definition)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: "stage://binding_stage/input.csv", Format: tree.CSV,
+			}, ExParam: tree.ExParam{Ctx: ctx}}
+			require.NoError(t, InitInfileOrStageParam(param, proc))
+			require.Equal(t, "stage://binding_stage/input.csv", param.StageFilepath)
+			require.NotEqual(t, param.StageFilepath, param.Filepath)
+
+			param.Ctx = nil // Binding drops the execution context before serialization.
+			payload, err := json.Marshal(param)
+			require.NoError(t, err)
+			var retained tree.ExternParam
+			require.NoError(t, json.Unmarshal(payload, &retained))
+			require.Equal(t, param.StageFilepath, retained.StageFilepath)
+			retained.Ctx = ctx
+			definition.Status = "disabled"
+			proc.GetStageCache().Set(definition.Name, definition)
+			require.ErrorContains(t, InitInfileOrStageParam(&retained, proc), "stage binding_stage is disabled")
+
+			// A later bind can resolve the retained identity back to a local
+			// source, even when the previous bind changed ScanType to S3.
+			definition.Status = "in_use"
+			definition.Url, err = url.Parse("file:///rebound/")
+			require.NoError(t, err)
+			proc.GetStageCache().Set(definition.Name, definition)
+			require.NoError(t, InitInfileOrStageParam(&retained, proc))
+			require.Equal(t, "/rebound/input.csv", retained.Filepath)
+			require.Equal(t, tree.INFILE, retained.ScanType)
+			require.Nil(t, retained.S3Param)
+		})
+	}
 }
 
 // Avoid unused import warning when some branches of types are not directly referenced.

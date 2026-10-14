@@ -1116,3 +1116,50 @@ func Test_buildInM0ExplainPhy(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// Mixed persisted formats must produce one row each, including malformed JSON
+// following a valid plan (which used to leak the prior row's decoder state).
+func TestMoExplainPhyMixedDiagnosticHistory(t *testing.T) {
+	compact1 := `{"statement_diagnostics":{"version":1,"level":1,"captured_level":1,"reasons":1,"outcome":"success","detail":{"capture":"complete"}}}`
+	compact2 := `{"statement_diagnostics":{"version":1,"level":2,"captured_level":2,"reasons":1,"outcome":"success","detail":{"capture":"complete"},"logical":[{"index":7,"kind":"SCAN","analyze_available":true,"read_bytes":1024}]}}`
+	compact3 := `{"statement_diagnostics":{"version":1,"level":3,"captured_level":3,"reasons":1,"outcome":"success","detail":{"capture":"complete"},"physical":[{"index":7,"scope":2,"remote":true,"operator":3,"kind":"SCAN","analyze_available":true,"elapsed_ns":10,"output_rows":1}]}}`
+	detail := "detail=complete logical-omitted=0 physical-visited=0 physical-bounded=false physical-candidates-omitted=0\n"
+	legacyCases := initMoExplainPhyTestCase()
+	for i, mode := range []string{"normal", "verbose", "analyze"} {
+		expected := make([]string, 3)
+		for level := range expected {
+			expected[level] = fmt.Sprintf("Statement diagnostics L%d (captured L%d): success; reasons=elapsed\n", level+1, level+1) + detail
+		}
+		if mode != "normal" {
+			expected[1] += "node[7] SCAN read=1024B\n"
+		}
+		if mode == "analyze" {
+			expected[2] += "instance[7] SCAN scope=2 remote=true op=3 elapsed=10ns rows=0->1\n"
+		}
+		inputs := []string{legacyCases[i].inputs[0].values.([]string)[0], compact1, compact2, compact3, "{", `{}`, `{"statement_diagnostics":{"version":99}}`, compact1, "", compact1}
+		wanted := []string{legacyCases[i].expect.wanted.([]string)[0], expected[0], expected[1], expected[2], "", "", "Unsupported statement diagnostics version 99\n", expected[0], "", ""}
+		inputNull := []bool{false, false, false, false, false, false, false, false, false, true}
+		outputNull := []bool{false, false, false, false, true, false, false, false, true, true}
+		for _, reverse := range []bool{false, true} {
+			if reverse {
+				for left, right := 0, len(inputs)-1; left < right; left, right = left+1, right-1 {
+					inputs[left], inputs[right] = inputs[right], inputs[left]
+					wanted[left], wanted[right] = wanted[right], wanted[left]
+					inputNull[left], inputNull[right] = inputNull[right], inputNull[left]
+					outputNull[left], outputNull[right] = outputNull[right], outputNull[left]
+				}
+			}
+			proc := testutil.NewProcess(t)
+			targets := make([]string, len(inputs))
+			for row := range targets {
+				targets[row] = mode
+			}
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_text.ToType(), inputs, inputNull),
+				NewFunctionTestInput(types.T_varchar.ToType(), targets, make([]bool, len(inputs))),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, outputNull), buildInM0ExplainPhy)
+			ok, info := tc.RunAndFree()
+			require.True(t, ok, "mode=%s reverse=%t: %s", mode, reverse, info)
+		}
+	}
+}

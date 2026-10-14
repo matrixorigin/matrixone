@@ -422,7 +422,7 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
-func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+func TestPrepareRulesTraverseIndexSearchScanExpressions(t *testing.T) {
 	param := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
 	}
@@ -430,13 +430,14 @@ func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
 		Steps: []int32{0},
 		Nodes: []*planpb.Node{{
 			NodeId:   0,
-			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
-			VectorIndexScan: &planpb.VectorIndexScan{
-				QueryVector:     param(4),
-				CandidateLimit:  param(3),
-				FirstRoundLimit: param(0),
-				PreFilters:      []*planpb.Expr{param(2)},
-				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			NodeType: planpb.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &planpb.IndexSearchScan{
+				QueryPayload:   param(4),
+				CandidateLimit: param(3),
+				AlgoExprs:      []*planpb.Expr{param(0)},
+				AlgoExprNames:  []string{"first_round_limit"},
+				PreFilters:     []*planpb.Expr{param(2)},
+				DistanceRange:  &planpb.DistRange{LowerBound: param(1)},
 			},
 		}},
 	}}}
@@ -1065,60 +1066,77 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 }
 
 func TestBindViewPropagatesOuterRewriteOption(t *testing.T) {
-	storedCaseSensitive := int64(0)
-	mock := &lowerCaseTableNamesCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
-		lowerCaseTableNames: 1,
+	for _, qualifier := range []string{"Sales", "db.Sales"} {
+		t.Run(qualifier, func(t *testing.T) {
+			storedCaseSensitive := int64(0)
+			mock := &lowerCaseTableNamesCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				lowerCaseTableNames: 1,
+			}
+			mock.dbs["db"] = true
+			mock.objects["sales"] = &planpb.ObjectRef{SchemaName: "db", ObjName: "Sales", Db: 10, Obj: 11}
+			mock.tables["sales"] = &TableDef{
+				DbName: "db",
+				Name:   "Sales",
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+					{Name: "tenant", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				},
+			}
+
+			rewriteStmts, err := mysql.Parse(context.Background(),
+				"select * from db.sales where tenant = 1", 1)
+			require.NoError(t, err)
+			rewriteSelect, ok := rewriteStmts[0].(*tree.Select)
+			require.True(t, ok)
+
+			viewJSON, err := json.Marshal(ViewData{
+				Stmt:                "create view v_sales as select " + qualifier + ".id, " + qualifier + ".tenant from db.Sales",
+				DefaultDatabase:     "db",
+				LowerCaseTableNames: &storedCaseSensitive,
+			})
+			require.NoError(t, err)
+			builder := NewQueryBuilder(planpb.Query_SELECT, mock, true, false)
+			bindCtx := NewBindContext(builder, nil)
+			bindCtx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+				"db.sales": {{TableName: "sales", DbName: "db", Stmt: rewriteSelect}},
+			}}
+
+			viewNodeID, err := builder.bindView(
+				bindCtx,
+				&TableDef{DbName: "db", Name: "v_sales", ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+				nil,
+				&ObjectRef{SchemaName: "db", ObjName: "v_sales"},
+				"db",
+				"v_sales",
+				nil,
+			)
+			require.NoError(t, err)
+			require.NoError(t, builder.addBinding(viewNodeID, tree.AliasClause{}, bindCtx, ""))
+
+			filtered := false
+			for _, node := range builder.qry.Nodes {
+				if node != nil && node.NodeType == planpb.Node_FILTER && len(node.FilterList) > 0 {
+					filtered = true
+					break
+				}
+			}
+			require.True(t, filtered, "view expansion must apply the outer row rewrite option to the base table")
+
+			invalidStmts, err := mysql.Parse(context.Background(), "select missing from db.sales", 1)
+			require.NoError(t, err)
+			failedCtx := NewBindContext(builder, nil)
+			rewrite := &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+				"db.sales": {{TableName: "sales", DbName: "db", Stmt: invalidStmts[0].(*tree.Select)}},
+			}}
+			failedCtx.remapOption = rewrite
+			_, _, err = builder.buildTable(rewriteSelect.Select.(*tree.SelectClause).From.Tables[0], failedCtx, nil)
+			require.Error(t, err)
+			require.Same(t, rewrite, failedCtx.remapOption, "failed rewrite must restore the caller's options")
+
+		})
 	}
-	mock.dbs["db"] = true
-	mock.objects["sales"] = &planpb.ObjectRef{SchemaName: "db", ObjName: "Sales", Db: 10, Obj: 11}
-	mock.tables["sales"] = &TableDef{
-		DbName: "db",
-		Name:   "Sales",
-		Cols: []*planpb.ColDef{
-			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
-			{Name: "tenant", Typ: planpb.Type{Id: int32(types.T_int32)}},
-		},
-	}
 
-	rewriteStmts, err := mysql.Parse(context.Background(),
-		"select * from db.sales where tenant = 1", 1)
-	require.NoError(t, err)
-	rewriteSelect, ok := rewriteStmts[0].(*tree.Select)
-	require.True(t, ok)
-
-	viewJSON, err := json.Marshal(ViewData{
-		Stmt:                "create view v_sales as select Sales.id, Sales.tenant from db.Sales",
-		DefaultDatabase:     "db",
-		LowerCaseTableNames: &storedCaseSensitive,
-	})
-	require.NoError(t, err)
-	builder := NewQueryBuilder(planpb.Query_SELECT, mock, true, false)
-	bindCtx := NewBindContext(builder, nil)
-	bindCtx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
-		"db.sales": {{TableName: "sales", DbName: "db", Stmt: rewriteSelect}},
-	}}
-
-	viewNodeID, err := builder.bindView(
-		bindCtx,
-		&TableDef{DbName: "db", Name: "v_sales", ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
-		nil,
-		&ObjectRef{SchemaName: "db", ObjName: "v_sales"},
-		"db",
-		"v_sales",
-		nil,
-	)
-	require.NoError(t, err)
-	require.NoError(t, builder.addBinding(viewNodeID, tree.AliasClause{}, bindCtx))
-
-	filtered := false
-	for _, node := range builder.qry.Nodes {
-		if node != nil && node.NodeType == planpb.Node_FILTER && len(node.FilterList) > 0 {
-			filtered = true
-			break
-		}
-	}
-	require.True(t, filtered, "view expansion must apply the outer row rewrite option to the base table")
 }
 
 type lowerCaseTableNamesCompilerContext struct {
@@ -3560,6 +3578,20 @@ func TestPreparedNumericCommonType(t *testing.T) {
 		wantScale int32
 		wantOK    bool
 	}{
+		{
+			name: "decimal128 carrier survives same exact domain",
+			operands: []types.Type{
+				types.New(types.T_decimal128, 18, 2), types.New(types.T_decimal64, 5, 0),
+			},
+			wantOID: types.T_decimal128, wantWidth: 18, wantScale: 2, wantOK: true,
+		},
+		{
+			name: "decimal256 carrier survives small declared precision",
+			operands: []types.Type{
+				types.New(types.T_decimal64, 3, 2), types.New(types.T_decimal256, 6, 1),
+			},
+			wantOID: types.T_decimal256, wantWidth: 7, wantScale: 2, wantOK: true,
+		},
 		{
 			name: "uint64 keeps full integral capacity",
 			operands: []types.Type{

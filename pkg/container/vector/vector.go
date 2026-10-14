@@ -3833,11 +3833,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
-	hadData := v.data != nil
 	v.releaseBorrowedBacking()
-	if hadData {
-		v.length = 0
-	}
+	// Constant NULLs have logical rows without a payload allocation.
+	v.length = 0
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
@@ -12220,8 +12218,12 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
-	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-		return err
+	// Legacy domains need no collation admission. Check the domain before
+	// extracting bytes, especially for inline values copied in merge loops.
+	if types.IsUnicodeCollation(vec.typ.Charset) {
+		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+			return err
+		}
 	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)

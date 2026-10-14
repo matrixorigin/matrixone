@@ -142,9 +142,9 @@ type Source struct {
 	// nil means not initialized; non-nil empty means this execution admitted no block filters.
 	remoteBlockFilters []*plan.Expr
 	node               *plan.Node
-	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
-	// Each execution folds a fresh copy into node.VectorIndexScan.
-	vectorIndexScanTemplate *plan.VectorIndexScan
+	// indexSearchScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.IndexSearchScan.
+	indexSearchScanTemplate *plan.IndexSearchScan
 	TableDef                *plan.TableDef
 	Timestamp               timestamp.Timestamp
 	AccountId               *plan.PubInfo
@@ -333,6 +333,8 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+	// Fixed CREATE target/declared-parent pins survive only this statement retry.
+	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.

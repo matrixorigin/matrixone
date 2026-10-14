@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -153,6 +154,86 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return ret, nil
 }
 
+// getColumnTypeFromAst resolves a DDL declaration before applying its charset's
+// byte budget. Expression and CAST types deliberately keep their wider domain.
+func getColumnTypeFromAst(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	tableCharset uint32,
+	replay *persistedDDLReplay,
+) (plan.Type, error) {
+	astType, isVarchar := column.Type.(*tree.T)
+	isVarchar = isVarchar && strings.EqualFold(astType.InternalType.FamilyString, "varchar")
+	internal := defines.IsInternalExecutor(ctx)
+	parseType := column.Type
+	if isVarchar && !internal && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		// Resolve all other type properties through the common parser, but leave
+		// DDL VARCHAR capacity errors to the final charset-aware admission rule.
+		// Copy the AST so CAST/expression consumers and reconstruction are untouched.
+		bounded := *astType
+		bounded.InternalType.DisplayWith = types.MaxVarcharLen
+		parseType = &bounded
+	}
+	typ, err := getTypeFromAst(ctx, parseType)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		typ.Width = astType.InternalType.DisplayWith
+	}
+	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
+		return plan.Type{}, err
+	}
+	if internal {
+		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
+		// Preserve those schemas and their historical omitted-length defaults.
+		return typ, nil
+	}
+	maxWidth := int32(types.MaxVarcharLen)
+	switch types.T(typ.Id) {
+	case types.T_varchar:
+		charset := typ.Charset
+		if charset == uint32(types.CharsetLegacy) {
+			// Legacy catalogs lack a charset identity, but text is still UTF-8.
+			charset = uint32(types.CharsetUTF8)
+		}
+		definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
+		if err != nil {
+			return plan.Type{}, err
+		}
+		maxWidth /= definition.Charset.MaxBytes()
+	case types.T_varbinary:
+		if !isVarchar {
+			return typ, nil
+		}
+	default:
+		return typ, nil
+	}
+	if astType, ok := column.Type.(*tree.T); ok && astType.InternalType.DisplayWith == -1 {
+		// Preserve MO's omitted-length syntax without publishing an oversized
+		// default column. This must happen after binary charset conversion.
+		typ.Width = maxWidth
+	}
+	if typ.Width > maxWidth {
+		if replay != nil && typ.Width <= types.MaxVarcharLen {
+			if preserved := replay.columns[strings.ToLower(column.Name.ColName())]; preserved != nil {
+				old := preserved.columnType
+				// Internal LIKE/COPY reconstruction may retain a pre-existing
+				// oversized column, never a new or changed declaration. LIKE
+				// renders legacy bytewise text as explicit utf8mb4_bin.
+				if old.Id == typ.Id && old.Width == typ.Width &&
+					old.CollationVersion == typ.CollationVersion &&
+					(old.Charset == typ.Charset || old.Charset == uint32(types.CharsetLegacy) &&
+						typ.Charset == uint32(types.CharsetUTF8MB4Bin)) {
+					return typ, nil
+				}
+			}
+		}
+		return plan.Type{}, moerr.NewTooBigFieldLength(ctx, column.Name.ColNameOrigin(), maxWidth)
+	}
+	return typ, nil
+}
+
 func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
@@ -168,6 +249,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
+		case defines.MYSQL_TYPE_INT24:
+			if n.InternalType.Unsigned || n.InternalType.Zerofill {
+				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
+			}
+			return plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
@@ -360,12 +446,12 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
-			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
 				return plan.Type{}, err
 			}
 
-			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: setValues}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -863,7 +949,32 @@ func buildDefaultExprWithColumns(
 
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	// cast_assign remains an executable expression because its behavior depends
+	// on sql_mode, so rule.IsConstant rejects the outer function. Validate when
+	// its source value is constant, without eagerly evaluating volatile defaults.
+	constantMediumIntDefault := false
+	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
+		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
+			constantMediumIntDefault = rule.IsConstant(cast.Args[0], false)
+		}
+	}
+	if constantMediumIntDefault {
+		cast := newExpr.GetF()
+		strictExpr, strictErr := forceAssignmentCastExprWithName(
+			bindCtx, cast.Args[0], typ, "cast_strict")
+		if strictErr != nil {
+			err = strictErr
+		} else if strictExecutor, strictExecErr := colexec.NewExpressionExecutor(proc, strictExpr); strictExecErr != nil {
+			err = strictExecErr
+		} else {
+			_, err = strictExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			strictExecutor.Free()
+		}
+	}
 	if err != nil {
+		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
 	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&

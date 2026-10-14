@@ -135,6 +135,7 @@ type store struct {
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
 	commandPollWakeup   chan struct{}
+	heartbeatWakeup     chan struct{}
 	commandMu           sync.Mutex
 	shutdownAckMu       sync.Mutex
 	lastCommandBatchID  uint64
@@ -287,6 +288,7 @@ func NewService(
 		fileService:         fileService,
 		metadataFileService: metadataFS,
 		shutdownC:           shutdownC,
+		heartbeatWakeup:     make(chan struct{}, 1),
 		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
 	constructed := false
@@ -560,6 +562,9 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
+				}
+				if err == nil && r.started() {
+					s.notifyHeartbeat()
 				}
 				return
 			}

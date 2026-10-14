@@ -93,6 +93,6 @@ func TestUUIDShortSQL(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table uuid_short_metadata.t as select uuid_short() as id")
 		var typ string
 		require.NoError(t, db.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema='uuid_short_metadata' and table_name='t' and column_name='id'").Scan(&typ))
-		require.Equal(t, "BIGINT UNSIGNED", typ)
+		require.Equal(t, "bigint unsigned", typ)
 	})
 }

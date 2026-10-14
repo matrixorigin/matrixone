@@ -546,6 +546,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, err
 	}
 
+	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
+
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)
@@ -1771,12 +1775,8 @@ func storageAgnosticType(
 	defaultCharset uint32,
 ) (ok bool, err error) {
 
-	nTy, err := getTypeFromAst(ctx, nCol.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
 	if err != nil {
-		return
-	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
@@ -1888,7 +1888,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 		defaultValue = "'{}'"
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
-		defaultValue = enumvalues[0]
+		defaultValue = "'" + formatStrInSingleQuotes(enumvalues[0]) + "'"
 	} else if types.T(col.Typ.Id).IsArrayRelate() {
 		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
 		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to

@@ -292,3 +292,28 @@ func TestNtileCheckFn(t *testing.T) {
 		ntileFunc.checkFn(ntileFunc.Overloads,
 			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}).status)
 }
+
+func TestValueWindowResolvedNullDomain(t *testing.T) {
+	for _, name := range []string{"first_value", "last_value", "nth_value", "lag", "lead"} {
+		t.Run(name, func(t *testing.T) {
+			for _, domain := range []types.Type{types.T_any.ToType(), types.New(types.T_decimal128, 20, 4), types.New(types.T_varbinary, 16, 0)} {
+				inputs := []types.Type{domain}
+				if name == "nth_value" {
+					inputs = append(inputs, types.T_int64.ToType())
+				}
+				resolved, err := GetFunctionByName(t.Context(), name, inputs)
+				require.NoError(t, err)
+				targets, cast := resolved.ShouldDoImplicitTypeCast()
+				if domain.Oid == types.T_any {
+					require.True(t, cast)
+					require.Equal(t, types.T_text, resolved.GetReturnType().Oid)
+					require.Equal(t, types.T_text, targets[0].Oid)
+					require.Equal(t, domain, inputs[0], "resolution must not mutate caller types")
+				} else {
+					require.False(t, cast)
+					require.Equal(t, domain, resolved.GetReturnType())
+				}
+			}
+		})
+	}
+}

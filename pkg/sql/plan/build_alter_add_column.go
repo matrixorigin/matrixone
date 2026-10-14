@@ -39,10 +39,6 @@ func AddColumn(
 
 	tableDef := alterPlan.CopyTableDef
 
-	if len(tableDef.Cols) == TableColumnCountLimit {
-		return false, moerr.NewErrTooManyFields(ctx.GetContext())
-	}
-
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
 	newColName := specNewColumn.Name.ColName()
@@ -56,12 +52,11 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
+	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err
 	}
-	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
+	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {

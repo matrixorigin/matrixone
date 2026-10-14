@@ -34,7 +34,12 @@ import (
 // The runner owns ordinary cancellation. This is the fixture's emergency
 // cleanup after command failure, including descendants reparented by KILL.
 func runScheduleHarnessCommand(ctx context.Context, cmd *exec.Cmd, root string) ([]byte, error, string) {
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	var cancelDiagnostic string
+	cmd.Cancel = func() error {
+		err := cmd.Process.Signal(syscall.SIGTERM)
+		cancelDiagnostic = scheduleFixtureProcessDiagnostics(root, "deadline")
+		return err
+	}
 	if cmd.WaitDelay == 0 {
 		cmd.WaitDelay = 3 * time.Second
 	}
@@ -42,7 +47,9 @@ func runScheduleHarnessCommand(ctx context.Context, cmd *exec.Cmd, root string) 
 	if err == nil && ctx.Err() == nil {
 		return out, nil, ""
 	}
+	processDiagnostic := scheduleFixtureProcessDiagnostics(root, "before-emergency-cleanup")
 	diagnostic, cleanupErr, survivors := cleanupScheduleFixture(root)
+	diagnostic = cancelDiagnostic + processDiagnostic + diagnostic
 	if ctx.Err() != nil {
 		err = errors.Join(err, ctx.Err())
 	}
@@ -171,11 +178,69 @@ func cleanupScheduleFixture(root string) (result string, cleanupErr error, survi
 	return diagnostic.String(), nil, survivors
 }
 
+// Only the explicitly traced cancellation fixture collects these observations.
+// Never expose environment contents, and recheck process start identity.
+func scheduleFixtureProcessDiagnostics(root, phase string) string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(root, "ut-signal-trace.log")); err != nil {
+		return ""
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return fmt.Sprintf("process snapshot %s: %v\n", phase, err)
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "process snapshot %s\n", phase)
+	deadline := time.Now().Add(100 * time.Millisecond)
+	records := 0
+	for _, entry := range entries {
+		if records == 32 || time.Now().After(deadline) {
+			out.WriteString("process snapshot truncated\n")
+			break
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		process, err := scheduleOwnedProcess(pid, root)
+		if err != nil || process == nil {
+			continue
+		}
+		var details strings.Builder
+		for _, name := range []string{"stat", "status", "wchan", "task/" + entry.Name() + "/children"} {
+			file, err := os.Open(fmt.Sprintf("/proc/%d/%s", pid, name))
+			if err != nil {
+				continue
+			}
+			data, _ := io.ReadAll(io.LimitReader(file, 4096))
+			_ = file.Close()
+			if name == "status" {
+				for _, line := range strings.Split(string(data), "\n") {
+					if strings.HasPrefix(line, "Sig") || strings.HasPrefix(line, "ShdPnd:") {
+						fmt.Fprintln(&details, line)
+					}
+				}
+			} else {
+				fmt.Fprintf(&details, "%s: %s\n", name, data)
+			}
+		}
+		current, err := scheduleOwnedProcess(pid, root)
+		if err != nil || current == nil || current.start != process.start {
+			continue
+		}
+		fmt.Fprintf(&out, "pid=%d start=%s\n%s", pid, process.start, details.String())
+		records++
+	}
+	return out.String()
+}
+
 func scheduleFixtureDiagnostics(root string) (string, error) {
 	var diagnostic strings.Builder
 	// Existing files are the diagnostic authority. Bound reads even if a test
 	// produced a large report; never dump process environments.
-	files := []string{"ut-report/ut-checkpoint.log", "ut-report/ut-stderr.log", "ut-report/ut-report.json"}
+	files := []string{"ut-signal-trace.log", "ut-report/ut-checkpoint.log", "ut-report/ut-stderr.log", "ut-report/ut-report.json"}
 	reports, _ := filepath.Glob(filepath.Join(root, "scratch/*/*-UT-Report.out"))
 	for _, report := range reports {
 		relative, err := filepath.Rel(root, report)
@@ -216,6 +281,9 @@ func TestScheduleHarnessForcedCleanup(t *testing.T) {
 	for _, phase := range []string{"cancel", "pipe-holder", "exit-143"} {
 		t.Run(phase, func(t *testing.T) {
 			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "ut-signal-trace.log"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
 			neighbor := exec.Command("sleep", "30")
 			neighbor.Env = append(os.Environ(), "CASE_DIR="+root+"/neighbor")
 			if err := neighbor.Start(); err != nil {
@@ -284,6 +352,18 @@ if [[ "$PHASE" == exit-143 ]]; then exit 143; fi`
 			}
 			if !strings.Contains(got.diagnostic, fmt.Sprintf("pid=%d ", pid)) {
 				t.Fatalf("missing owned child cleanup: %s", got.diagnostic)
+			}
+			if !strings.Contains(got.diagnostic, "process snapshot before-emergency-cleanup") || strings.Contains(got.diagnostic, fmt.Sprintf("pid=%d ", neighbor.Process.Pid)) {
+				t.Fatalf("missing scoped pre-cleanup evidence: %s", got.diagnostic)
+			}
+			if !strings.Contains(got.diagnostic, "ShdPnd:") {
+				t.Fatalf("missing process-directed pending signal evidence: %s", got.diagnostic)
+			}
+			if phase == "cancel" && !strings.Contains(got.diagnostic, "process snapshot deadline") {
+				t.Fatal("missing deadline snapshot")
+			}
+			if len(got.diagnostic) > 400000 {
+				t.Fatal("unbounded process diagnostics")
 			}
 			process, err := scheduleOwnedProcess(pid, root)
 			if err != nil || process != nil {
@@ -534,6 +614,7 @@ function exit() {
  builtin exit "$@"
 }
 function wait_for_ut_process_group() {
+ ut_process_group_alive "$1" || return 0
  touch "$CASE_DIR/drain-checked"
  function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
  return 1
@@ -578,11 +659,11 @@ exit "$status"
 CHILD
 function run_engine_race_shards() {
  export PROBE_REPORT="$ENGINE_RACE_REPORT" PROBE_BINARY="$ENGINE_RACE_TEST_BINARY"
- exec bash "$CASE_DIR/helper.sh"
+ bash "$CASE_DIR/helper.sh"
 }
 function run_embedded_prebuild() {
  export PROBE_REPORT="$CLUSTER_PREBUILD_REPORT" PROBE_BINARY=""
- exec bash "$CASE_DIR/helper.sh"
+ bash "$CASE_DIR/helper.sh"
 }
 function cleanup_check() {
  local status=$? pid

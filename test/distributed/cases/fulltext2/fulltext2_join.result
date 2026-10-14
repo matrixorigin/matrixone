@@ -24,22 +24,25 @@ where match(d.title) against('alpha' in boolean mode) order by d.id;
 5  ¦  null
 explain select d.id, b.name from docs d left join base b on b.id = d.base_id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: d.id INTERNAL  𝄀
         ->  Join  𝄀
-              Join Type: LEFT   hashOnPK  𝄀
-              Join Cond: (d.base_id = b.id)  𝄀
+              Join Type: RIGHT  𝄀
+              Join Cond: (b.id = d.base_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft2_join.base [ForceOneCN]  𝄀
+                    Runtime Filter Probe: b.id  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (d.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ft2_join.docs  𝄀
+                    ->  Table Scan on ft2_join.docs [ForceOneCN]  𝄀
                           Runtime Filter Probe: d.id  𝄀
-                    ->  Table Function on fulltext2_search  𝄀
-              ->  Table Scan on ft2_join.base
+                    ->  Fulltext Index Scan on ft2_idx  𝄀
+                          Fulltext Index: ft2_idx
 select d.id, b.name from base b right join docs d on b.id = d.base_id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
 ➤ id[4,32,0]  ¦  name[12,50,0]  𝄀

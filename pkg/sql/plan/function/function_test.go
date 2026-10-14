@@ -1396,6 +1396,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "power domain or overflow", fid: POW, argCount: 2},
 		{name: "exponential overflow", fid: EXP, argCount: 1},
 		{name: "cotangent zero", fid: COT, argCount: 1},
+		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},
+		{name: "inverse hyperbolic tangent domain", fid: ATANH, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
@@ -1552,6 +1554,9 @@ func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	}{
 		{name: "equality", fid: EQUAL, argCount: 2},
 		{name: "addition", fid: PLUS, argCount: 2},
+		{name: "hyperbolic tangent", fid: TANH, argCount: 1},
+		{name: "hyperbolic cosine", fid: COSH, argCount: 1},
+		{name: "inverse hyperbolic sine", fid: ASINH, argCount: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := make([]*plan.Expr, tt.argCount)
@@ -1858,4 +1863,71 @@ func TestZoneMapMembershipDomain(t *testing.T) {
 	require.False(t, CanUseZoneMapComparison(
 		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, unicodeList}),
 		"Unicode list items must not use raw persisted metadata")
+}
+
+func TestIntegerComparisonDomainsAreSymmetricAndExact(t *testing.T) {
+	signed := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64}
+	unsigned := []types.T{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64}
+	expected := [][]types.T{
+		{types.T_int16, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int16, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int32, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int64, types.T_int64, types.T_int64, types.T_decimal128},
+	}
+	for i, signedOID := range signed {
+		for j, unsignedOID := range unsigned {
+			for _, pair := range [][2]types.T{{signedOID, unsignedOID}, {unsignedOID, signedOID}} {
+				cast, left, right := comparisonTypeCastRule(pair[0].ToType(), pair[1].ToType())
+				require.True(t, cast)
+				require.Equal(t, expected[i][j], left.Oid)
+				require.Equal(t, left, right)
+				if left.Oid.IsDecimal() {
+					require.Equal(t, int32(38), left.Width)
+					require.Zero(t, left.Scale)
+				}
+				for _, op := range []string{"=", "!=", "<", ">", "<=", ">=", "<=>"} {
+					_, err := GetFunctionByName(context.Background(), op, []types.Type{pair[0].ToType(), pair[1].ToType()})
+					require.NoError(t, err)
+				}
+			}
+		}
+	}
+	for _, family := range [][]types.T{signed, unsigned} {
+		for i, l := range family {
+			for j, r := range family {
+				_, left, right := comparisonTypeCastRule(l.ToType(), r.ToType())
+				require.Equal(t, family[max(i, j)], left.Oid)
+				require.Equal(t, left, right)
+			}
+		}
+	}
+	// Arithmetic must keep the historical rule rather than borrow comparison widening.
+	_, l, r := arithmeticTypeCastRule1(types.T_int16.ToType(), types.T_uint32.ToType())
+	require.Equal(t, types.T_int32, l.Oid)
+	require.Equal(t, l, r)
+	for _, in := range [][]types.Type{{types.T_int16.ToType(), types.T_uint8.ToType(), types.T_uint16.ToType()}, {types.T_int8.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()}} {
+		_, err := GetFunctionByName(context.Background(), "between", in)
+		require.NoError(t, err)
+	}
+}
+
+func TestCalendarNumericResultTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+		want types.T
+	}{
+		{"week", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_date.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"dayofyear", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"weekofyear", []types.Type{types.T_date.ToType()}, types.T_int64},
+	} {
+		t.Run(fmt.Sprint(tc.name, tc.args), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.want.ToType(), resolved.retType)
+		})
+	}
 }

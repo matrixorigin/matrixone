@@ -1,6 +1,6 @@
 # 普通 View 按需元数据：完整系列契约与消费者迁移设计
 
-- 修订：**v2.0-draft.1，2026-09-28，待审批**。
+- 修订：**v2.0-draft.1，2026-09-28，待审批**。S2 内存上限与实现方式已由用户于 2026-10-05 调整；以 [v2.1 S2 修订](CLAUDE_20261005-view-s2-scope-revision.md) 为准，原 §11 中逐对象先准入、128 MiB 硬证明及对应性能目标不再是 S2 验收条件。其余语义与安全边界保持。
 - 设计所有者：[S1 #29436](https://github.com/matrixorigin/matrixone/issues/29436)；完整系列：[#29433](https://github.com/matrixorigin/matrixone/issues/29433)，S2–S9 见第 15 节。
 - 核查基线：`d99187d7b3bfda8744088b3ae8cf16739b690aa0`，包含已合入的 [#29139](https://github.com/matrixorigin/matrixone/pull/29139)。本次仅修改设计，不修改生产行为。
 - 精确修订摘要、自审和审批记录：[S1 审查记录](CLAUDE_20260928-view-metadata-s1-review.md)。**同意执行设计整理不等于批准本修订。未经对精确修订的明确批准，后续生产修改仍阻塞。**
@@ -255,6 +255,8 @@ CREATE/ALTER VIEW 在同一次成功绑定中固化各查询块可展开的投�
 8. SELECT/CTAS/结果包来源 flags 可有不同展示，但不可存在独立“按结果列名查旧 catalog”的类型/default 算法。保留 #26226 的特殊类型值传输与来源清除规则，不将本系列扩大为新的 lineage 引擎。
 
 ## 11. 数值资源预算与性能验收
+
+**2026-10-05 已批准修订：** 以下保留为原 v2 设计记录；S2 当前生效的资源与实现约束以 [v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md) 为准。全链路128MiB及逐对象预收费已撤销，实际输入、工作、深度、结果和memo硬界限及既有查询admission继续保留；S6/S8的消费者与rollout基准不在S2声明完成。
 
 以下是 **v2 拟批准的硬约束/验收预算，不是实测达标声明**。实际请求上限取本表与已有更严格的 query/tenant admission 限制的较小者。放宽任何上限须记录新证据并重审，不能超限返回截断的“完整”结果。
 

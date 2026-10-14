@@ -441,6 +441,7 @@ func TestString(t *testing.T) {
 // 'C:\Program Files(x86)' -> "C:Program Files(x86)" case in TestString above.
 func TestSqlquoteStringRoundTrip(t *testing.T) {
 	for _, v := range []string{
+		"t_\xe3g", "t_xe3g", "t_�g", "\a\v\x00",
 		"abc",
 		"",
 		"a'b",

@@ -563,6 +563,13 @@ func TestBuildArrowTargetsUsesPhysicalColumnTypeAcrossGeneratedGap(t *testing.T)
 	require.Equal(t, 1, targets[1].MOIndex)
 	require.Equal(t, "id", targets[1].AttrName)
 
+	cols[2].Typ = plan.Type{Id: int32(types.T_uint64), Enumvalues: ",", NotNullable: true}
+	targets, err = BuildArrowTargets(context.Background(), attrs, cols)
+	require.NoError(t, err)
+	require.Equal(t, ",", targets[1].SetValues)
+	require.Equal(t, 1, targets[1].MOIndex)
+	require.Empty(t, targets[0].SetValues)
+
 	_, err = BuildArrowTargets(context.Background(), []plan.ExternAttr{{ColIndex: 3}}, cols)
 	require.ErrorContains(t, err, "index 3")
 }

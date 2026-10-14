@@ -160,6 +160,54 @@ func TestInstallGoUTAnalysisChecksCachedVersion(t *testing.T) {
 	}
 }
 
+func TestUTProcessGroupSnapshot(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, snapshot, psStatus, filterStatus, want string
+	}{
+		{"live-leader", "42 7 S", "0", "", "0"},
+		{"live-descendant", "7 42 S", "0", "", "0"},
+		{"zombies-only", "42 42 Z\n7 42 Z", "0", "", "1"},
+		{"unrelated-group", "7 7 S", "0", "", "1"},
+		{"snapshot-failure", "", "7", "", "0"},
+		{"partial-snapshot-failure", "42 42 Z", "7", "", "0"},
+		{"filter-failure", "42 42 S", "0", "2", "0"},
+		{"pending-termination", "42 42 S", "0", "TERM", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `
+set -o nounset
+source "$1"
+snapshot=$2 ps_status=$3 filter_status=$4 expected=$5
+term_pending=0
+trap "term_pending=1" TERM
+function kill() { return 0; }
+function ps() { printf '%s\n' "$snapshot"; return "$ps_status"; }
+function awk() {
+    if [[ "$filter_status" == TERM ]]; then
+        command awk "$@"
+        local status=$?
+        command kill -TERM "$$"
+        return "$status"
+    fi
+    if [[ -n "$filter_status" ]]; then return "$filter_status"; fi
+    command awk "$@"
+}
+status=0
+ut_process_group_alive 42 || status=$?
+[[ "$filter_status" != TERM || "$term_pending" == 1 ]] || exit 1
+[[ "$status" == "$expected" ]] || { printf 'status=%s expected=%s\n' "$status" "$expected"; exit 1; }
+`, "bash", processPath, tc.snapshot, tc.psStatus, tc.filterStatus, tc.want)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("process group snapshot: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
 func TestUTProcessGroupsEscalateAfterTerm(t *testing.T) {
 	processPath, err := filepath.Abs("ut_process.bash")
 	if err != nil {

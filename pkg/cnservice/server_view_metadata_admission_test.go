@@ -257,8 +257,10 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 		viewMetadataAdmissionGeneration: 7,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
 	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Empty(t, s.heartbeatWakeup, "catalog work must complete before its success notification")
 		statements.Add(1)
 		if sql == catalog.ViewMetadataLifecycleGateSQL {
 			return viewMetadataLifecycleGateTestResult(), nil
@@ -280,6 +282,7 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
 }
 
 func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
@@ -289,17 +292,24 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 	}
 
 	t.Run("authority already fenced", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		copy := *snapshot
 		copy.CatalogFencedEpoch = copy.Epoch
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
 		require.Equal(t, copy.Epoch, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Len(t, s.heartbeatWakeup, 1, "publish the newly observed epoch without waiting for the periodic heartbeat")
+		<-s.heartbeatWakeup
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		copy.Epoch--
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		require.Empty(t, s.heartbeatWakeup, "unchanged or older snapshots must not create a heartbeat loop")
 	})
 
 	t.Run("executor not ready", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
 		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Empty(t, s.heartbeatWakeup)
 	})
 }
 
@@ -1461,6 +1471,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 		viewMetadataAdmissionGeneration: 13,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
 	t.Cleanup(s.viewMetadataEpochFence.Close)
 	var statements int
@@ -1488,6 +1499,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.Equal(t, 1, statements)
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	require.Empty(t, s.heartbeatWakeup, "failed catalog repair must not request a success heartbeat")
 	proc := &process.Process{Base: &process.BaseProcess{}}
 	require.NoError(t, plan.RequirePersistedProtocolVersion(nil, proc, defines.MORPCVersion72), "durable read floor is independent of authoring")
 	err = plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72)
@@ -1500,6 +1512,8 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
 	require.Greater(t, statements, 1)
 	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
+	<-s.heartbeatWakeup
 	require.True(t, moerr.IsMoErrCode(plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72), moerr.ErrNotSupported))
 
 	snapshot.Preparing = false
@@ -1509,6 +1523,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	before := statements
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
 	require.Equal(t, before, statements, "the successful catalog fence is not executed twice")
+	require.Empty(t, s.heartbeatWakeup, "the unchanged epoch must not schedule another heartbeat")
 	require.False(t, snapshot.Ready, "authoring does not depend on public routing readiness")
 	require.NoError(t, plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCLatestVersion))
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())

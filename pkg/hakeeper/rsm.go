@@ -507,19 +507,6 @@ func (s *stateMachine) Close() error {
 	return nil
 }
 
-func (s *stateMachine) assignID() uint64 {
-	s.state.NextID++
-	return s.state.NextID
-}
-
-func (s *stateMachine) assignIDByKey(key string) uint64 {
-	if _, ok := s.state.NextIDByKey[key]; !ok {
-		s.state.NextIDByKey[key] = 0
-	}
-	s.state.NextIDByKey[key]++
-	return s.state.NextIDByKey[key]
-}
-
 const bootstrapAllocationRequestPrefix = "\x00bootstrap-allocation-request/"
 
 func bootstrapAllocationRequestKey(key, requestID string) string {

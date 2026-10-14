@@ -847,6 +847,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.Error = err
 			s.Status = StatementStatusFailed
 		}
+		s.finalizeStatementDiagnostics(ctx, err)
 		if !s.reported || s.exported { // cooperate with s.mux
 			s.exported = false
 			s.Report(ctx)

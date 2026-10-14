@@ -15,6 +15,7 @@
 package embed
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -22,6 +23,9 @@ import (
 )
 
 const (
+	// Only WithTesting clusters honor this opt-in; TCP remains enabled.
+	testClusterTCPOnlyEnv = "MO_TEST_CLUSTER_TCP_ONLY"
+
 	// Test clusters run under the race detector and may lose several seconds to
 	// scheduler instrumentation while a catalog-heavy transaction is active.
 	// Keep the heartbeat request alive through a transient scheduler stall, and
@@ -56,15 +60,29 @@ func WithCNCount(
 	}
 }
 
+// WithTesting applies bounded embedded-test defaults. Setting
+// MO_TEST_CLUSTER_TCP_ONLY=1 also disables CN Unix listeners; WithPreStart
+// callbacks and later Adjust calls can override that default.
+// The environment is captured at construction.
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true
+		c.options.testTCPOnly = os.Getenv(testClusterTCPOnlyEnv) == "1"
 		if c.options.heartbeatTimeout == 0 {
 			c.options.heartbeatTimeout = testHAKeeperHeartbeatTimeout
 		}
 		if c.options.storeTimeout == 0 {
 			c.options.storeTimeout = testHAKeeperStoreTimeout
 		}
+	}
+}
+
+// WithTestAdmissionContext controls admission waits for a WithTesting cluster.
+// It does not cancel service startup or shutdown. A nil context retains the
+// default background context; successful admission remains owned until Close.
+func WithTestAdmissionContext(ctx context.Context) Option {
+	return func(c *cluster) {
+		c.options.testAdmissionContext = ctx
 	}
 }
 

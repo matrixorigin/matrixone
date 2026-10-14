@@ -40,7 +40,7 @@ func admitLocalLifecycleRC(
 	if databaseName == "" {
 		return moerr.NewInternalError(ctx, "missing snapshot database")
 	}
-	admission, err := beginLifecycleRCAdmission(ctx, ses, bh)
+	admission, err := beginLifecycleRCAdmission(ctx, ses, bh, lock.LockMode_Shared)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ type lifecycleRCAdmission struct {
 	registryID uint64
 }
 
-func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundExec) (_ *lifecycleRCAdmission, err error) {
+func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundExec, gateMode lock.LockMode) (_ *lifecycleRCAdmission, err error) {
 	proc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
 	if err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundE
 		key.Vecs[0].Free(proc.Mp())
 		return nil, err
 	}
-	if err = a.lockKey(catalog.MO_FEATURE_REGISTRY, systemCtx, key, lock.LockMode_Shared, catalog.System_Account); err != nil {
+	if err = a.lockKey(catalog.MO_FEATURE_REGISTRY, systemCtx, key, gateMode, catalog.System_Account); err != nil {
 		return nil, err
 	}
 	ready = true
