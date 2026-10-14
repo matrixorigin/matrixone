@@ -554,6 +554,25 @@ their new execution identity; the measured release capture above is unchanged.
 
 ## Release validation record
 
+### CI process-pool readiness correction (2026-10-14)
+
+The standard race UT retry at `778c61e4fc` failed in
+`TestEmbeddedPrebuiltExecutionUsesBoundedProcessPool`. Its driver applied a
+three-second worker-readiness timeout while precompilation was still running.
+A controlled four-second compilation hold reproduces driver status 100; the
+corrected fixture passes the same hold using FIFO readiness and the existing
+fifteen-second outer harness deadline. All concurrency, identity, checkpoint
+ordering and cleanup assertions remain. All 286 tooling cases pass normally
+and under race, and the incremental tooling static check passes.
+
+Main `cd1eaa7a8a` and its subsequent ROLLUP correction `c3c4581595` are merged
+without conflicts. Current SQL/function/parser/EXPLAIN/planner/metadata/exporter/
+compiler/frontend owning evidence covers 10,327 roots and 37,727 named passes.
+All 22 actual native preparations and GPU data/cancellation/cuVS controls pass
+with unchanged native pin `06400cf4` and SDK fingerprint `878c0ec8`. The final
+planner group is rerun after the ROLLUP merge; the other owning inputs remain
+unchanged. Retained timing/resource captures keep their original identities.
+
 The generated development and release captures are preserved in contributor-fork
 tag `evidence/sirius-d-4230ce3d14`, at commit
 `4230ce3d143e77a8b4be83feb47bd26858a8d459`. The
