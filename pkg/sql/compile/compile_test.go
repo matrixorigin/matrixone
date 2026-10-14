@@ -182,28 +182,49 @@ func TestCompileClearResetsSkipIndexTaskRegistration(t *testing.T) {
 func TestCompilePoolHandoffClearsPrivateIndexRegistrationPolicy(t *testing.T) {
 	// Reproduce the frontend ownership boundary: the private ALTER COPY
 	// executor releases its Compile, then an ordinary frontend statement
-	// allocates the next generation from the same pool. Single-P with GC
-	// disabled makes sync.Pool's private-slot handoff return the same object,
-	// so the next owner's policy is asserted deterministically.
+	// allocates the next generation from the global reuse pool. Two layers
+	// hold that boundary: Release runs clear() before sync.Pool.Put, and
+	// NewCompile re-initializes the flag after sync.Pool.Get.
+	//
+	// sync.Pool's documented contract permits Put to discard values and Get
+	// to return an unrelated object, and the race runtime drops Put values
+	// deliberately (runtime_randn(4) in sync/pool.go), so pointer identity
+	// between the released and the reallocated compile cannot be required.
+	// The oracle is the policy of every object the public constructor
+	// returns: each round seeds the pool with the exact leak payload and
+	// asserts the ordinary registration policy on the constructed frontend
+	// compile. A leak can only travel through a Put that the pool kept, and
+	// every kept Put is a round whose frontend object is unconditionally
+	// checked, so drops never mask a leaked policy. The deterministic
+	// clear() reset layer stays covered, pool-free, by
+	// TestCompileClearResetsSkipIndexTaskRegistration.
 	oldProcs := goruntime.GOMAXPROCS(1)
 	defer goruntime.GOMAXPROCS(oldProcs)
 	oldPercent := godebug.SetGCPercent(-1)
 	defer godebug.SetGCPercent(oldPercent)
 
-	private := NewCompile("test", "test", "create table __mo_alter_copy_replica", "", "",
-		nil, testutil.NewProcess(t), nil, false, nil, time.Now())
-	// txnExecutor.Exec sets this for the private replica create's nested
-	// compiler (sql_executor.go), which Release returns to the pool.
-	private.skipIndexTaskRegistration = true
-	private.Release()
+	const handoffs = 16
+	sameObject := 0
+	for round := 0; round < handoffs; round++ {
+		private := NewCompile("test", "test", "create table __mo_alter_copy_replica", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		// txnExecutor.Exec sets this for the private replica create's nested
+		// compiler (sql_executor.go), which Release returns to the pool.
+		private.skipIndexTaskRegistration = true
+		private.Release()
 
-	frontend := NewCompile("test", "test", "create table ordinary", "", "",
-		nil, testutil.NewProcess(t), nil, false, nil, time.Now())
-	defer frontend.Release()
-	require.Same(t, private, frontend,
-		"single-P handoff must reuse the released compile; the probe lost its determinism")
-	require.False(t, frontend.skipIndexTaskRegistration,
-		"the next frontend compile must not inherit the private preparation policy")
+		frontend := NewCompile("test", "test", "create table ordinary", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		require.False(t, frontend.skipIndexTaskRegistration,
+			"round %d: a frontend compile must not inherit the private preparation policy", round)
+		frontend.Release()
+		if frontend == private {
+			sameObject++
+		}
+	}
+	// Informational only: the race runtime drops Put values purposefully, so
+	// zero reuse observations is a legitimate outcome, never a failure.
+	t.Logf("pool handed back the released compile in %d/%d rounds", sameObject, handoffs)
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
