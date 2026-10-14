@@ -51,6 +51,18 @@ func TestWriteWKBGolden(t *testing.T) {
 				"0000000000000000000000000000f03f" + // 0 1
 				"00000000000000000000000000000000", // 0 0
 		},
+		{"MULTIPOINT(1 2,3 4)", "MULTIPOINT(1 2,3 4)", "0104000000020000000101000000000000000000f03f0000000000000040010100000000000000000008400000000000001040"},
+		{"MULTILINESTRING((0 0,1 1),(2 2,3 3))", "MULTILINESTRING((0 0,1 1),(2 2,3 3))", "01050000000200000001020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f0102000000020000000000000000000040000000000000004000000000000008400000000000000840"},
+		{"MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "0106000000010000000103000000010000000400000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000f03f00000000000000000000000000000000"},
+		{"GEOMETRYCOLLECTION(POINT(1 2),GEOMETRYCOLLECTION(LINESTRING(0 0,1 1)))", "GEOMETRYCOLLECTION(POINT(1 2),GEOMETRYCOLLECTION(LINESTRING(0 0,1 1)))", "0107000000020000000101000000000000000000f03f000000000000004001070000000100000001020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f"},
+		{"POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,2 4,4 4,4 2,2 2))", "POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,2 4,4 4,4 2,2 2))", "010300000002000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000050000000000000000000040000000000000004000000000000000400000000000001040000000000000104000000000000010400000000000001040000000000000004000000000000000400000000000000040"},
+		{"LINESTRING EMPTY", "LINESTRING EMPTY", "010200000000000000"},
+		{"POLYGON EMPTY", "POLYGON EMPTY", "010300000000000000"},
+		{"MULTIPOINT EMPTY", "MULTIPOINT EMPTY", "010400000000000000"},
+		{"MULTILINESTRING EMPTY", "MULTILINESTRING EMPTY", "010500000000000000"},
+		{"MULTIPOLYGON EMPTY", "MULTIPOLYGON EMPTY", "010600000000000000"},
+		{"GEOMETRYCOLLECTION EMPTY", "GEOMETRYCOLLECTION EMPTY", "010700000000000000"},
+		{"empty point", "POINT EMPTY", "0101000000010000000000f87f010000000000f87f"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,6 +70,21 @@ func TestWriteWKBGolden(t *testing.T) {
 			require.NoError(t, err)
 			got := hex.EncodeToString(WriteWKB(g))
 			require.Equal(t, c.hex, got)
+			want := mustHex(t, c.hex)
+			prefix := []byte{0xe6, 0x10, 0, 0}
+			for _, spare := range []int{0, len(want) - 1, len(want)} {
+				dst := make([]byte, len(prefix), len(prefix)+spare)
+				copy(dst, prefix)
+				out := AppendWKB(dst, g)
+				require.Equal(t, append(append([]byte(nil), prefix...), want...), out)
+				if spare == len(want) {
+					require.Same(t, &dst[0], &out[0])
+					// A reset and second write must reuse the owned buffer.
+					require.Equal(t, out, AppendWKB(out[:len(prefix)], g))
+				} else {
+					require.Equal(t, prefix, dst)
+				}
+			}
 		})
 	}
 }
@@ -134,4 +161,38 @@ func mustHex(t *testing.T, s string) []byte {
 	b, err := hex.DecodeString(strings.ReplaceAll(s, " ", ""))
 	require.NoError(t, err)
 	return b
+}
+
+func TestAppendWKBUnsupportedAndDeepInput(t *testing.T) {
+	prefix := []byte{42}
+	for _, g := range []Geometry{nil, &Point{X: 1, Y: 2}} {
+		require.Nil(t, WriteWKB(g))
+		require.Equal(t, prefix, AppendWKB(prefix, g))
+	}
+	// Unsupported children preserve the standard writer's existing count/bytes.
+	require.Equal(t, mustHex(t, "010700000002000000"), WriteWKB(GeometryCollection{Geometries: []Geometry{nil, &Point{}}}))
+	var g Geometry = Point{X: 1, Y: 2}
+	want := mustHex(t, "0101000000000000000000f03f0000000000000040")
+	for i := 0; i <= maxGeometryNestingDepth; i++ {
+		g = GeometryCollection{Geometries: []Geometry{g}}
+		want = append(mustHex(t, "010700000001000000"), want...)
+	}
+	require.Equal(t, want, WriteWKB(g), "reservation depth limit must not become validation")
+}
+
+func TestWKBSizeOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, tc := range []struct {
+		prefix, count, unit, want int
+		ok                        bool
+	}{
+		{9, (maxInt - 9) / 16, 16, 9 + ((maxInt-9)/16)*16, true},
+		{9, (maxInt-9)/16 + 1, 16, 0, false},
+		{maxInt, 1, 1, 0, false},
+		{maxInt, 1, 0, maxInt, true},
+	} {
+		got, ok := wkbCountSize(tc.prefix, tc.count, tc.unit)
+		require.Equal(t, tc.ok, ok)
+		require.Equal(t, tc.want, got)
+	}
 }

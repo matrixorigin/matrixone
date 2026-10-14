@@ -15,6 +15,7 @@
 package geo
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -47,3 +48,34 @@ func benchmarkOverlay(b *testing.B, n int) {
 func BenchmarkOverlayUnion256(b *testing.B)  { benchmarkOverlay(b, 256) }
 func BenchmarkOverlayUnion1024(b *testing.B) { benchmarkOverlay(b, 1024) }
 func BenchmarkOverlayUnion4096(b *testing.B) { benchmarkOverlay(b, 4096) }
+
+func BenchmarkOverlayIntersection(b *testing.B) {
+	for _, n := range []int{256, 1024, 4096} {
+		for _, tc := range []struct {
+			name string
+			dx   float64
+		}{
+			{"overlap", 5},
+			{"disjoint", 25},
+			{"point-touch", 20},
+		} {
+			b.Run(fmt.Sprintf("%s/%d", tc.name, n), func(b *testing.B) {
+				a, c := regularPolygon(0, 0, 10, n), regularPolygon(tc.dx, 0, 10, n)
+				g, err := Overlay(a, c, OpIntersection)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if tc.name == "point-touch" && WriteWKT(g) != "POINT(10 0)" {
+					b.Fatalf("touch result: %s", WriteWKT(g))
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := Overlay(a, c, OpIntersection); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}

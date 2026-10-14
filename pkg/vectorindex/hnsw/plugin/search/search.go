@@ -19,6 +19,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,7 +41,23 @@ import (
 type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
+
+// ExplainSettings preserves compact text and exposes static settings on detailed output.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
+	if !detailed {
+		return nil, nil
+	}
+	opts, err := hnswplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	settings := []string{
+		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
+	}
+	return settings, nil
+}
 
 // PostFilterCandidateBudget is the hnsw post-filter over-fetch of resultLimit.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
