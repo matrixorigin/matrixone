@@ -15996,9 +15996,9 @@ timestamp_option_opt:
         }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length_option_opt:
@@ -16007,17 +16007,17 @@ length_option_opt:
     }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length:
    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = tree.GetDisplayWith(int32(value))
+        $$ = tree.GetDisplayWith(value)
     }
 
 float_length_opt:
@@ -16030,22 +16030,22 @@ float_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -16059,22 +16059,22 @@ decimal_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
