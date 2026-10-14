@@ -155,6 +155,11 @@ The following mappings are normative for schema version 1:
   as `UNION_ALL[branch 1: <expression>; branch 2: <expression>]`; this describes
   both inputs rather than claiming that either branch is the sole assignment.
   This lineage text is only for display and does not change the execution plan.
+  A MARK join's generated output uses `MARK[on: <join condition>]`. The marker
+  is TRUE if any right-input row makes the condition TRUE, NULL if no row does
+  but an UNKNOWN comparison exists, and FALSE otherwise (including empty input).
+  EXISTS's `IS TRUE` and negation wrappers remain visible; the marker is not
+  replaced with a scalar comparison or a two-valued EXISTS expression.
   An unresolved required row-image reference is an SQL error.
 - A `RECURSIVE_CTE` node records `recursive_union_mode=DISTINCT` or
   `recursive_union_mode=ALL` in `node.expressions`, directly from

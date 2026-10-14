@@ -484,6 +484,7 @@ func TestResolveUpdateProducerOutputs(t *testing.T) {
 		rel, col int32
 		want     string
 		change   func(*plan.Node, *plan.Query)
+		cancel   bool
 	}{
 		{name: "source_projection_reordering", kind: plan.Node_SINK_SCAN, want: "7"},
 		{name: "missing_source", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = nil }},
@@ -507,6 +508,16 @@ func TestResolveUpdateProducerOutputs(t *testing.T) {
 		{name: "union_out_of_range", kind: plan.Node_UNION_ALL, col: 2},
 		{name: "missing_union_input", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = 99 }},
 		{name: "union_cycle", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = n.NodeId }},
+		{name: "mark_predicate_inputs", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: (7 = 9)]"},
+		{name: "mark_multiple_predicates", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: (7 = 9) AND (8 = (null))]", change: func(n *plan.Node, _ *plan.Query) {
+			n.OnList = append(n.OnList, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: n.OnList[0].GetF().Func, Args: []*plan.Expr{ref(0, 1), ref(1, 1)}}}})
+		}},
+		{name: "mark_no_predicates", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: TRUE]", change: func(n *plan.Node, _ *plan.Query) { n.OnList = nil }},
+		{name: "mark_invalid_slot", kind: plan.Node_JOIN, rel: -1, col: 1},
+		{name: "non_mark_join", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.JoinType = plan.Node_INNER }},
+		{name: "mark_missing_input", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = 99 }},
+		{name: "mark_predicate_cycle", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.OnList = n.ProjectList }},
+		{name: "mark_canceled", kind: plan.Node_JOIN, rel: -1, cancel: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			leaf := &plan.Node{NodeId: 10, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(7), sqlJSONTestInt32(8)}}
@@ -529,13 +540,24 @@ func TestResolveUpdateProducerOutputs(t *testing.T) {
 				node.WinSpecList = []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{WindowFunc: function, PartitionBy: []*plan.Expr{ref(0, 0)}, OrderBy: []*plan.OrderBySpec{{Expr: ref(0, 1)}}}}}}
 			case plan.Node_UNION, plan.Node_UNION_ALL:
 				node.Children = []int32{10, 40}
+			case plan.Node_JOIN:
+				node.JoinType, node.Children = plan.Node_MARK, []int32{10, 40}
+				predicate, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "=", []*plan.Expr{ref(0, 0), ref(1, 0)})
+				require.NoError(t, err)
+				node.OnList = []*plan.Expr{predicate}
 			}
 			if tc.change != nil {
 				tc.change(node, query)
 			}
 			before, err := json.Marshal(query)
 			require.NoError(t, err)
-			builder := &sqlJSONPlanBuilder{ctx: t.Context(), query: query, byID: map[int32]*plan.Node{10: leaf, 20: sink, 30: node, 40: right}}
+			ctx := t.Context()
+			if tc.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			builder := &sqlJSONPlanBuilder{ctx: ctx, query: query, byID: map[int32]*plan.Node{10: leaf, 20: sink, 30: node, 40: right}}
 			expr, ok := builder.resolveUpdateExpr(node, node.ProjectList[0], make(map[sqlJSONUpdateExprKey]bool))
 			if tc.want == "" {
 				require.False(t, ok)
@@ -958,6 +980,35 @@ func TestBuildSQLJSONPlanResolvesMultiTargetUpdateAssignments(t *testing.T) {
 			for suffix := range tc.want {
 				require.True(t, found[suffix], "missing assigned value for %s", suffix)
 			}
+		})
+	}
+}
+
+func TestBuildSQLJSONPlanResolvesMarkUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct{ name, condition, wrapper string }{
+		{"exists", "exists (select 1 from region r where r.r_regionkey = n.n_regionkey)", "IS TRUE"},
+		{"in", "n.n_regionkey in (select r_regionkey from region)", ""},
+		{"not_exists", "not exists (select 1 from region r where r.r_regionkey = n.n_regionkey)", "not"},
+		{"not_in", "n.n_regionkey not in (select r_regionkey from region)", "not"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, "update nation n set n_regionkey = case when "+tc.condition+" then 1 else 0 end")
+			found := false
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					if strings.HasSuffix(assignment.Target, ".n_regionkey") {
+						found = true
+						require.Contains(t, assignment.Value, "MARK")
+						require.Contains(t, assignment.Value, "n.n_regionkey")
+						require.Contains(t, assignment.Value, "r_regionkey")
+						if tc.wrapper != "" {
+							require.Contains(t, assignment.Value, tc.wrapper)
+						}
+					}
+				}
+			}
+			require.True(t, found)
 		})
 	}
 }

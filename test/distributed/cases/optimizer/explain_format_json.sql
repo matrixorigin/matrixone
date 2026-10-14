@@ -217,6 +217,32 @@ update t set v = 10 where id = 1;
 update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
 select id, v from t order by id;
 update t set v = id * 10;
+-- MARK outputs in subquery assignments retain TRUE/UNKNOWN/FALSE semantics.
+update update_peer set v = 1 where id = 1;
+insert into update_peer values (3, null);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*MARK[^}]*[ap][.]",true)
+explain format=json update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*MARK",true)
+explain format=json update t a set v = a.id in (select v from update_peer);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*not[^}]*MARK",true)
+explain format=json update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*not[^}]*MARK",true)
+explain format=json update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+delete from update_peer;
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t set v = id * 10;
 drop table update_peer;
 -- @regex("(?s)matrixone.*statement_type.*DELETE",true)
 explain format=json delete from t where id = 1;

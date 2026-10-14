@@ -921,6 +921,34 @@ func (b *sqlJSONPlanBuilder) resolveUpdateRef(node *plan.Node, ref *plan.ColRef,
 	}
 	if node != nil {
 		switch node.NodeType {
+		case plan.Node_JOIN:
+			if node.JoinType == plan.Node_MARK && ref.RelPos == -1 {
+				if ref.ColPos != 0 || len(node.Children) != 2 ||
+					b.resolveChild(node.Children[0]) == nil || b.resolveChild(node.Children[1]) == nil {
+					return nil, false
+				}
+				predicates, ok := b.resolveUpdateExprList(node, node.OnList, active)
+				if !ok {
+					return nil, false
+				}
+				conditions := make([]string, len(predicates))
+				for i, predicate := range predicates {
+					value, err := sqlJSONExpr(b.ctx, predicate, &b.textOpts)
+					if err != nil {
+						return nil, false
+					}
+					conditions[i] = value
+				}
+				condition := "TRUE"
+				if len(conditions) > 0 {
+					condition = strings.Join(conditions, " AND ")
+				}
+				// This is the generated three-valued marker over the right input,
+				// not a scalar predicate or EXISTS. Keep outer IS TRUE/NOT wrappers.
+				return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					Name: "MARK[on: " + condition + "]",
+				}}}, true
+			}
 		case plan.Node_SINK_SCAN:
 			// Scan projections address the output of a source step, not a child.
 			if ref.RelPos == 0 {
