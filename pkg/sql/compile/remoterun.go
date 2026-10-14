@@ -140,6 +140,10 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err != nil {
 		return nil, err
 	}
+	features.ParquetVariantRead, err = parquetPipelineRequiresVariantReader(p)
+	if err != nil {
+		return nil, err
+	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
@@ -2211,6 +2215,10 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
+	features.ParquetVariantRead, err = parquetPipelineRequiresVariantReader(p)
+	if err != nil {
+		return err
+	}
 	return validateRemoteExpressionFeatures(proc, features)
 }
 
@@ -2234,11 +2242,23 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.ExactJSONParsing && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("exact JSON parsing requires MORPC protocol version 113")
+	}
+	if features.ExactJSONDecimalCast && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("exact JSON decimal casts require MORPC protocol version 113")
+	}
+	if features.ParquetVariantRead && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("Parquet VARIANT reads require MORPC protocol version 113")
+	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
+		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
 	}
 	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
 		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")

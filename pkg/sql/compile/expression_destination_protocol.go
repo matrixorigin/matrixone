@@ -39,6 +39,15 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.ExactJSONParsing, defines.MORPCVersion113,
+			"exact JSON parsing requires a versioned remote destination",
+			"remote destination does not support exact JSON parsing (MORPC version %d)"},
+		{features.ExactJSONDecimalCast, defines.MORPCVersion113,
+			"exact JSON decimal casts require a versioned remote destination",
+			"remote destination does not support exact JSON decimal casts (MORPC version %d)"},
+		{features.ParquetVariantRead, defines.MORPCVersion113,
+			"Parquet VARIANT reads require a versioned remote destination",
+			"remote destination does not support Parquet VARIANT reads (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
 			"checked integer arithmetic requires a versioned remote destination",
 			"remote destination does not support checked integer arithmetic (MORPC version %d)"},
@@ -48,6 +57,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.DateNumericResultContracts, defines.MORPCVersion112,
+			"signed date result contracts require a versioned remote destination",
+			"remote destination does not support signed date result contracts (MORPC version %d)"},
 		{features.MediumIntAssignmentBounds, defines.MORPCVersion110,
 			"MEDIUMINT assignment bounds require a versioned remote destination",
 			"remote destination does not support MEDIUMINT assignment bounds (MORPC version %d)"},
@@ -108,13 +120,24 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 			ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 			version, versionKnown, err := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
 			cancel()
-			if err != nil && parent.Err() != nil {
-				return parent.Err()
+			if cause := parent.Err(); cause != nil {
+				return cause
 			}
 			observed, known, probed = version, versionKnown && err == nil, true
 		}
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+		}
+	}
+	// Preserve the independent gates' diagnostic order above, then also close
+	// the last/only gate's probe window: its successful response is not enough
+	// when the coordinator rollout floor changed during that probe.
+	if probed {
+		current, currentKnown := remoteMORPCProtocolVersion(proc.GetService())
+		for _, gate := range gates {
+			if gate.enabled && (!currentKnown || current < gate.version) {
+				return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+			}
 		}
 	}
 	return nil

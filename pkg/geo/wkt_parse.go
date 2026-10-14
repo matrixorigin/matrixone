@@ -28,7 +28,19 @@ import (
 // Only 2D geometries are supported; a Z (elevation) or M (measure) ordinate is
 // rejected (per gis.md, POINTZ/POINTM and friends are out of scope).
 func ParseWKT(s string) (Geometry, error) {
-	p := &wktParser{s: s}
+	return parseWKT(s, false)
+}
+
+// ParseWKTForSerialization decodes already stored or materialized geometry text.
+// It preserves historical ring structure without applying new-input admission.
+// Syntax, dimensionality and nesting limits remain enforced; constructors must
+// use ParseWKT instead.
+func ParseWKTForSerialization(s string) (Geometry, error) {
+	return parseWKT(s, true)
+}
+
+func parseWKT(s string, allowInvalidRings bool) (Geometry, error) {
+	p := &wktParser{s: s, allowInvalidRings: allowInvalidRings}
 	g, err := p.parseGeometry(1)
 	if err != nil {
 		return nil, err
@@ -40,8 +52,9 @@ func ParseWKT(s string) (Geometry, error) {
 }
 
 type wktParser struct {
-	s   string
-	pos int
+	s                 string
+	pos               int
+	allowInvalidRings bool
 }
 
 func (p *wktParser) parseGeometry(depth int) (Geometry, error) {
@@ -271,6 +284,14 @@ func (p *wktParser) parseRingSeq() ([][]Coord, error) {
 		ring, err := p.parseCoordSeq()
 		if err != nil {
 			return nil, err
+		}
+		if !p.allowInvalidRings {
+			if len(ring) == 0 {
+				return nil, ValidateLinearRingStructure(0, Coord{}, Coord{})
+			}
+			if err := ValidateLinearRingStructure(len(ring), ring[0], ring[len(ring)-1]); err != nil {
+				return nil, err
+			}
 		}
 		rings = append(rings, ring)
 		if p.consumeByte(',') {

@@ -51,3 +51,21 @@ python3 test/variant_interop/review_json_subcolumns.py --port 16001
 ```
 
 The SQL script creates a uniquely named `review_json_30071_*` database and drops only that database on exit. It checks C0/DEL/C1 and quoted/Unicode keys after flush, full-document preservation, 63/64/65 JSON-column queries, exact 64 KiB projection-contract boundaries and JSON-escape expansion beyond the limit. It requires PyMySQL and the local test account `root`/`111`; it does not start or configure a server. The native Go regression also poisons allocator buffers on final release to exercise the borrowed BOOL ownership boundary that ordinary MemoryFS alone cannot expose.
+
+For exact-JSON remote admission, use the repository's native test wrapper:
+
+```bash
+.agents/skills/mo-dev/scripts/mo-cgo-test -p 1 -count=1 ./pkg/defines ./pkg/pb/plan ./pkg/sql/plan ./pkg/sql/compile
+.agents/skills/mo-dev/scripts/mo-cgo-test -p 1 -count=1 -run '^TestExactJSONWorkerWire' ./pkg/sql/plan/function
+.agents/skills/mo-dev/scripts/mo-cgo-test -p 1 -count=1 -timeout=300s -run '^TestExactJSONProtocolSQLFallbackAndUpgrade$' ./pkg/tests/sqlintegration/multicn
+```
+
+The last test owns a fresh two-CN cluster and four rows. It checks results and
+actual worker addresses with v112 advertised, then with v113 restored. Both CNs
+run the current binary. To reproduce the independent old executor witness,
+copy only `pkg/sql/plan/function/exact_json_worker_contract_test.go` into a clean
+worktree at pre-feature main `5d971d07a7c5a52a71f2c10390b109cebf5c0825`, build
+its native libraries through `make cgo`, and run the same worker-wire selection.
+The large positive/negative decimals and function 598 must fail there;
+`0.125` must pass. This deliberate baseline failure is not a current-head pass.
+Real old/new rolling-upgrade and R1 release-cost/restore gates remain separate.

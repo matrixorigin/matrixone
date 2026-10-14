@@ -79,11 +79,30 @@ mn  ¦  YES  𝄀
 fd  ¦  YES  𝄀
 typed_y  ¦  NO
 select d, ew, ey, sy, sm, sq, sd, w, wy, wd, yw, dw, dy, dn, mn, fd, typed_y from extracted order by d;
-➤ d[91,10,0]  ¦  ew[-5,64,0]  ¦  ey[-5,64,0]  ¦  sy[-5,64,0]  ¦  sm[-6,8,0]  ¦  sq[-6,8,0]  ¦  sd[-6,8,0]  ¦  w[-6,8,0]  ¦  wy[-5,64,0]  ¦  wd[-5,64,0]  ¦  yw[-5,64,0]  ¦  dw[-5,64,0]  ¦  dy[5,16,0]  ¦  dn[12,65535,0]  ¦  mn[12,65535,0]  ¦  fd[91,10,0]  ¦  typed_y[-5,64,0]  𝄀
+➤ d[91,10,0]  ¦  ew[-5,64,0]  ¦  ey[-5,64,0]  ¦  sy[-5,64,0]  ¦  sm[-6,8,0]  ¦  sq[-6,8,0]  ¦  sd[-6,8,0]  ¦  w[4,32,0]  ¦  wy[-5,64,0]  ¦  wd[-5,64,0]  ¦  yw[-5,64,0]  ¦  dw[-5,64,0]  ¦  dy[4,32,0]  ¦  dn[12,65535,0]  ¦  mn[12,65535,0]  ¦  fd[91,10,0]  ¦  typed_y[-5,64,0]  𝄀
 0000-00-00  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  𝄀
 2024-01-07  ¦  1  ¦  2024  ¦  2024  ¦  1  ¦  1  ¦  7  ¦  1  ¦  1  ¦  6  ¦  202401  ¦  1  ¦  7  ¦  Sunday  ¦  January  ¦  2024-01-07  ¦  2024
 select extract(week from date '2024-01-01') as mode0_week;
 ➤ mode0_week[-5,64,0]  𝄀
 0
+select week(d,3) as w, dayofyear(d) as doy from source_dates order by d;
+➤ w[-5,3,0]  ¦  doy[-5,4,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  2
+create table calendar_types as select week(d,3) as w, dayofyear(d) as doy from source_dates;
+select column_name, column_type from information_schema.columns
+where table_schema = 'temporal_typed_date_ctas_28851'
+and table_name = 'calendar_types' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+w  ¦  int  𝄀
+doy  ¦  int
+insert into calendar_types(w,doy) values (-1,-1),(255,65535),(256,65536);
+select w,doy from calendar_types order by w,doy;
+➤ w[4,32,0]  ¦  doy[4,32,0]  𝄀
+null  ¦  null  𝄀
+-1  ¦  -1  𝄀
+1  ¦  2  𝄀
+255  ¦  65535  𝄀
+256  ¦  65536
 set sql_mode = @old_sql_mode;
 drop database temporal_typed_date_ctas_28851;

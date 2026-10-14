@@ -298,6 +298,7 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
+	exactJSONParseFunctionID         int32 = 598
 	planInt32TypeID                  int32 = 22
 	// These stable function IDs are mirrored from pkg/sql/plan/function to
 	// avoid a dependency cycle. The generic CAST operator is not an assignment
@@ -384,7 +385,15 @@ const (
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
+// DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
+// DAYOFYEAR vectors; historical narrow serialized results remain supported.
+// ExactJSONParsing and ExactJSONDecimalCast require v113: older registries lack
+// the parser, and older JSON-to-DECIMAL64/128 casts round through DOUBLE.
 type RemoteExpressionFeatures struct {
+	ExactJSONParsing     bool
+	ExactJSONDecimalCast bool
+	// The compiler adds this input contract from query/pipeline scan metadata.
+	ParquetVariantRead              bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -416,10 +425,12 @@ type RemoteExpressionFeatures struct {
 	LegacyIntervalUnits           bool
 	WeekSessionDefault            bool
 	MediumIntAssignmentBounds     bool
+	DateNumericResultContracts    bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead ||
+		features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -444,7 +455,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
-		features.MediumIntAssignmentBounds
+		features.MediumIntAssignmentBounds ||
+		features.DateNumericResultContracts
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -904,6 +916,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				features.ExactJSONParsing = features.ExactJSONParsing || id == exactJSONParseFunctionID
+				// All these executors share jsonToOthers. Stored JSON requires the
+				// semantic floor even when no exact parser occurs in this owner.
+				if (id == 21 || id == mediumIntStrictCastFunctionID ||
+					id == mediumIntAssignmentCastFunctionID || id == mediumIntIgnoreCastFunctionID) &&
+					(current.Typ.Id == 32 || current.Typ.Id == 33) && len(fn.Args) > 0 &&
+					fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID {
+					features.ExactJSONDecimalCast = true
+				}
 				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
 					isPlanMediumIntType(fn.Args[1].Typ)
 				if (id == mediumIntStrictCastFunctionID ||
@@ -953,6 +974,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
 					features.TemporalResultContracts = true
+				}
+				if current.Typ.Id == planInt32TypeID &&
+					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					features.DateNumericResultContracts = true
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true

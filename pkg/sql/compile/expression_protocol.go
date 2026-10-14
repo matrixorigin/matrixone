@@ -38,6 +38,10 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if err != nil {
 		return err
 	}
+	features.ParquetVariantRead, err = parquetQueryRequiresVariantReader(qry)
+	if err != nil {
+		return err
+	}
 	// This rebind requirement also applies to local execution. Do not hide it
 	// behind the remote-placement fast path or an earlier worker fallback.
 	if features.LegacyIntervalUnits {
@@ -61,6 +65,9 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead {
+		required = max(required, defines.MORPCVersion113)
+	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
 	}
@@ -93,6 +100,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.MediumIntAssignmentBounds {
 		required = max(required, defines.MORPCVersion110)
+	}
+	if features.DateNumericResultContracts {
+		required = max(required, defines.MORPCVersion112)
 	}
 	return required
 }
@@ -145,6 +155,9 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	defer cancel()
 	for _, worker := range workers {
 		version, known, err := remoteWorkerProtocolVersion(ctx, proc, worker)
+		if cause := parent.Err(); cause != nil {
+			return false, cause
+		}
 		if err != nil {
 			return false, parent.Err()
 		}
@@ -152,7 +165,8 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 			return false, nil
 		}
 	}
-	return true, nil
+	version, known = remoteMORPCProtocolVersion(proc.GetService())
+	return known && version >= minimum, nil
 }
 
 // remoteWorkerProtocolVersion resolves the actual pipeline endpoint and owns
