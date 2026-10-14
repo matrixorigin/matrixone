@@ -206,26 +206,52 @@ func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBitwiseAggregateSetBindingUsesStoredBitmap(t *testing.T) {
+func TestBitwiseAggregateBindingUsesStoredValues(t *testing.T) {
 	ctx := context.Background()
-	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}
-	bitmap := &plan.Expr{
-		Typ:  setType,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name    string
+			typ     types.T
+			display bool
+		}{
+			{"set display", types.T_uint64, true},
+			{"enum display", types.T_enum, true},
+			{"raw enum", types.T_enum, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				storage := &plan.Expr{
+					Typ:  plan.Type{Id: int32(tc.typ), Enumvalues: "z,a,m"},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				arg := storage
+				if tc.display {
+					var err error
+					arg, err = makeEnumOrSetDisplayValue(ctx, storage)
+					require.NoError(t, err)
+				}
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_uint64), bound.Typ.Id)
+				fn := bound.GetF()
+				require.NotNil(t, fn)
+				require.Len(t, fn.Args, 1)
+				require.Empty(t, fn.Args[0].Typ.Enumvalues)
+				require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
+				raw := fn.Args[0]
+				if tc.typ == types.T_enum {
+					require.Equal(t, int32(types.T_uint16), raw.Typ.Id)
+					require.True(t, isCastOverload(raw, 0))
+					raw = raw.GetF().Args[0]
+					require.Equal(t, int32(types.T_enum), raw.Typ.Id)
+				} else {
+					require.Equal(t, int32(types.T_uint64), raw.Typ.Id)
+				}
+				require.NotNil(t, raw.GetCol())
+				require.Equal(t, int32(1), raw.GetCol().RelPos)
+				require.Equal(t, int32(0), raw.GetCol().ColPos)
+			})
+		}
 	}
-	display, err := makeEnumOrSetDisplayValue(ctx, bitmap)
-	require.NoError(t, err)
-
-	bound, err := BindFuncExprImplByPlanExpr(ctx, "bit_and", []*plan.Expr{display})
-	require.NoError(t, err)
-	fn := bound.GetF()
-	require.NotNil(t, fn)
-	require.Len(t, fn.Args, 1)
-	require.Equal(t, int32(types.T_uint64), fn.Args[0].Typ.Id)
-	require.Empty(t, fn.Args[0].Typ.Enumvalues)
-	require.NotNil(t, fn.Args[0].GetCol())
-	require.Equal(t, int32(1), fn.Args[0].GetCol().RelPos)
-	require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
 }
 
 func TestFindInSetRewriteHelpersRejectInvalidProvenance(t *testing.T) {

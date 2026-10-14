@@ -857,6 +857,9 @@ var BitOpsSupportedTypes = []types.T{
 }
 
 func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+	}
 	if len(inputs) == 1 && aggexec.IsBitwiseAggregateOperandTooWide(inputs[0]) {
 		return newCheckResultWithFailure(failedBitwiseAggregateOperandsSize)
 	}
