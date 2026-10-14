@@ -2124,3 +2124,33 @@ func TestResetResolvesFakePKOwnershipFromReplacementTable(t *testing.T) {
 		require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0])
 	})
 }
+
+// With several user auto_increment columns the statement reports the first
+// generated value, as on main: an explicit value in an earlier column defers to a
+// later generated one.
+func TestInsertValuesReportsFirstGeneratedUserColumn(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 7, []AutoColumn{
+				{ColName: "a", ColIndex: 0, Step: 1, Offset: 10},
+				{ColName: "b", ColIndex: 1, Step: 1, Offset: 20},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			last, err := s.InsertValues(ctx, 7, 0, nil, []*vector.Vector{gen(), gen()}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(11), last, "both generated: the first column")
+
+			last, err = s.InsertValues(ctx, 7, 0, nil, []*vector.Vector{explicit(500), gen()}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(22), last, "first explicit: the later generated column")
+		})
+}
