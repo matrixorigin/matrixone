@@ -56,7 +56,7 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
-# Only audited embedded owners may use fresh bounded process generations.
+# Only audited DML/SQL roots may use fresh bounded process generations.
 UT_EMBEDDED_BATCHES=${UT_EMBEDDED_BATCHES:-"1"}
 # Direct invocation stays serial; Make supplies the validated CI issues pool.
 if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
@@ -2540,11 +2540,7 @@ function run_embedded_tests(){
     if [[ "${UT_EMBEDDED_BATCHES}" == 4 ]]; then
         for package in ${package_scope}; do
             case "${package}" in
-                github.com/matrixorigin/matrixone/pkg/embed|\
-                github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
-                github.com/matrixorigin/matrixone/pkg/tests/upgrade|\
-                github.com/matrixorigin/matrixone/pkg/tests/dml|\
-                github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
+                github.com/matrixorigin/matrixone/pkg/tests/dml|github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
                     batched_packages+=("${package}") ;;
             esac
         done
