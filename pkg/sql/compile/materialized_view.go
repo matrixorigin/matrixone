@@ -133,6 +133,10 @@ func (c *Compile) guardMaterializedViewDDL(dbName, name string, allowMV bool) er
 		return moerr.NewInvalidInput(c.proc.Ctx, "materialized view is read only; use DROP/ALTER MATERIALIZED VIEW")
 	}
 	return c.mvTxn(func(tx executor.TxnExecutor) error {
+		ready, err := mv.CatalogReady(tx)
+		if err != nil || !ready {
+			return err
+		}
 		if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
 			if err := mv.DependencyGuard(tx, account); err != nil {
 				return err
@@ -180,6 +184,10 @@ func (c *Compile) guardMaterializedViewDatabaseDDL(dbName string) error {
 		return err
 	}
 	return c.mvTxn(func(tx executor.TxnExecutor) error {
+		ready, err := mv.CatalogReady(tx)
+		if err != nil || !ready {
+			return err
+		}
 		if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
 			if err := mv.DependencyGuard(tx, account); err != nil {
 				return err

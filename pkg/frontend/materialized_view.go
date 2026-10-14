@@ -279,6 +279,26 @@ func handleShowMaterializedViews(ctx context.Context, ses *Session, stmt *tree.S
 // A definer task revalidates IDs and names rather than inheriting the internal
 // executor's sys administrator role name. A dropped/recreated user is rejected.
 func validateMaterializedViewDefiner(ctx context.Context, ses *Session, svc *mv.Service, def *catalog.MVDefinition) error {
+	// InternalExecutor bypasses login and has no Routine. Resolve live account
+	// status from the system-owned lifecycle catalog before reading tenant users
+	// or admitting any source execution. Missing/unknown states fail closed.
+	accountResult, err := svc.SQL.Exec(ctx, fmt.Sprintf("select status from mo_catalog.mo_account where account_id=%d", ses.GetAccountId()), executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	active := false
+	accountRows := 0
+	accountResult.ReadRows(func(n int, c []*vector.Vector) bool {
+		accountRows += n
+		if n == 1 {
+			active = strings.EqualFold(c[0].GetStringAt(0), tree.AccountStatusOpen.String())
+		}
+		return true
+	})
+	accountResult.Close()
+	if accountRows != 1 || !active {
+		return moerr.NewInvalidInput(ctx, "materialized view account is unavailable, suspended or restricted")
+	}
 	query := fmt.Sprintf("select u.user_name,u.status,r.role_name from mo_catalog.mo_user u join mo_catalog.mo_user_grant g on u.user_id=g.user_id join mo_catalog.mo_role r on r.role_id=g.role_id where u.user_id=%d and r.role_id=%d", def.OwnerUser, def.OwnerRole)
 	result, err := svc.SQL.Exec(ctx, query, executor.Options{}.WithAccountID(ses.GetAccountId()))
 	if err != nil {
@@ -310,4 +330,104 @@ func isMaterializedViewCatalogDDL(sql string) bool {
 		}
 	}
 	return false
+}
+
+// Retire MV metadata before DROP ACCOUNT enters tenant DROP DATABASE. The
+// caller owns the already-open account-drop transaction and account-name lock.
+// Account/dependency and definition writes conflict with creation/publication;
+// deletion makes queued envelopes obsolete, including late scheduler delivery.
+func retireAccountMaterializedViews(ctx context.Context, bh BackgroundExec, account uint32) error {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, mv.CatalogReadinessSQL); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 || results[0].GetRowCount() != 1 {
+		return moerr.NewInternalError(ctx, "invalid materialized view catalog readiness")
+	}
+	count, err := results[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	if count != 4 {
+		return moerr.NewInternalError(ctx, "incomplete materialized view catalog migration")
+	}
+	statements := accountMaterializedViewRetirementSQL(account)
+	for _, sql := range statements[:3] {
+		if err := bh.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	// DROP DATABASE lowers native objects through DROP TABLE, whose read-only
+	// guard remains in force. Retire each MV using the existing exact
+	// account/table/transaction capability, never an account-wide DDL bypass.
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf("select mv_id,database_name,name from mo_catalog.mo_materialized_views where account_id=%d order by mv_id limit 129", account)); err != nil {
+		return err
+	}
+	objects, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(objects) != 1 {
+		return moerr.NewInternalError(ctx, "invalid materialized view retirement result")
+	}
+	if objects[0].GetRowCount() > 128 {
+		return moerr.NewInternalError(ctx, "materialized view account limit exceeded during retirement")
+	}
+	for i := uint64(0); i < objects[0].GetRowCount(); i++ {
+		id, err := objects[0].GetUint64(ctx, i, 0)
+		if err != nil {
+			return err
+		}
+		database, err := objects[0].GetString(ctx, i, 1)
+		if err != nil {
+			return err
+		}
+		name, err := objects[0].GetString(ctx, i, 2)
+		if err != nil {
+			return err
+		}
+		owner, ok := bh.(interface{ materializedViewRetirementTxnID() []byte })
+		if !ok || len(owner.materializedViewRetirementTxnID()) == 0 {
+			return moerr.NewInternalError(ctx, "materialized view retirement requires account transaction")
+		}
+		writeCtx := defines.WithMaterializedViewWrite(defines.AttachAccountId(ctx, account), account, id, owner.materializedViewRetirementTxnID())
+		if err := bh.Exec(writeCtx, "drop table "+mv.Quote(database)+"."+mv.Quote(name)); err != nil {
+			return err
+		}
+	}
+	for _, sql := range statements[3:] {
+		if err := bh.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (back *backExec) materializedViewRetirementTxnID() []byte {
+	op := backgroundExecTxnOperator(back)
+	if op == nil {
+		return nil
+	}
+	return op.Txn().ID
+}
+
+func accountMaterializedViewRetirementSQL(account uint32) []string {
+	return []string{
+		fmt.Sprintf("insert ignore into mo_catalog.mo_mv_account_state (account_id,revision) values (%d,0)", account),
+		fmt.Sprintf("update mo_catalog.mo_mv_account_state set revision=revision+1 where account_id=%d", account),
+		fmt.Sprintf("update mo_catalog.mo_materialized_views set epoch=epoch+1,interval_seconds=0,next_due=null where account_id=%d", account),
+		fmt.Sprintf("delete from mo_task.sys_async_task where task_metadata_executor=17 and json_extract(cast(task_metadata_context as varchar),'$.Key.Account')=%d", account),
+		fmt.Sprintf("delete from mo_catalog.mo_mv_dependencies where account_id=%d", account),
+		fmt.Sprintf("delete from mo_catalog.mo_mv_refresh_runs where account_id=%d", account),
+		fmt.Sprintf("delete from mo_catalog.mo_materialized_views where account_id=%d", account),
+		fmt.Sprintf("delete from mo_catalog.mo_mv_account_state where account_id=%d", account),
+	}
 }

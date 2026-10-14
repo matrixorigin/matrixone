@@ -89,7 +89,7 @@ COUNT(*) has one row containing 0, scalar SUM has one row containing NULL.
 | F10 | Source identity lifecycle | ALTER/RENAME/DROP/TRUNCATE/COPY blocked with dependencies; name reuse never rebinds silently | P1 |
 | F11 | Permissions and tenant | Same object names in two accounts isolated; live owner/role revocation suspends refresh | P1 |
 | F12 | Manual/scheduled policy | Fake clock proves coalescing, no overlapping queue growth, observable run status | P1 |
-| F13 | Drop cleanup | No schedule, metadata, grants, object or resource leaked after MV/DB/account drop | P1 |
+| F13 | Drop cleanup | DROP MV cleans owned state; ordinary DROP DB rejects surviving MVs; DROP ACCOUNT transactionally retires populated/periodic MVs and cleans metadata/grants/objects | P1 |
 | F14 | Unsupported shapes | Volatile functions, UDF, LIMIT, external/history sources and MV nesting rejected clearly | P1 |
 | F15 | Prepared/direct queries | Prepared SELECT still respects object kind, snapshot and privilege changes | P1 |
 | G01 | Native timestamp provenance | Source S differs from publication C and is reported accurately | P1 |
@@ -119,7 +119,7 @@ and consumer to each hook; no arbitrary sleep-based polling.
 | C06 | Failure in scan/write/metadata publication | Entire replacement aborts; last-good rows and coverage remain |
 | C07 | Lost response after commit | Restart checks durable run/txn outcome; no accidental FAILED overwrite |
 | C08 | Timeout/cancel/shutdown during wait or execution | Transaction, Result, admission and spill resources terminate/release |
-| C09 | DROP MV/DB/account racing task | No publication into dropped/recreated identity; queued tasks become obsolete |
+| C09 | DROP MV/DB/account racing task | DROP DB RESTRICT preserves live MVs; MV/account retirement fences publication into dropped/recreated identity and makes queued tasks obsolete |
 | C10 | Crash after policy commit before task creation | Reconciliation restores intended schedule once |
 | C11 | Backup/PITR restore | Objects restored paused; owner/bindings checked; tasks not resurrected |
 | C12 | Mixed-version or downgrade | Incapable CN cannot claim task/execute MV; unsafe downgrade refused |
@@ -267,3 +267,34 @@ found and verified a control-plane parser-mode isolation fix. The final native
 case count is 84: 67 main + 3 restart + 5 failure/cleanup + 9 two-CN.
 The publication evidence is separate from original baseline measurements in
 [the execution report](materialized_view_results.md).
+
+### Revision 3 account and migration regression acceptance
+
+- Existing initialized catalog with all four MV tables absent and automatic
+  migration disabled: ordinary ALTER, DROP/TRUNCATE, CREATE/DROP INDEX and DROP
+  DATABASE remain usable in pessimistic and optimistic modes, with the feature
+  disabled. Restore the task-owned schema before any MV feature cases. Installed
+  dependent sources continue to reject DDL; partial catalog installation and
+  catalog-read errors fail closed rather than silently disabling guards.
+- One periodic MV with last-good rows: change its source, suspend/restrict the
+  account, dispatch a typed scheduled envelope and await a terminal failure.
+  Verify successful_sequence, source snapshot and native rows did not change.
+  Reopen and dispatch a fresh envelope; verify successful refresh equals source.
+  Missing account/unknown status and downstream status-query errors reject.
+- Administrative DROP ACCOUNT with surviving populated and periodic MVs succeeds;
+  verify all four MV catalog rows, native relations, tenant grants and queued
+  account envelopes are removed. A captured old envelope cannot publish after
+  retirement. Ordinary DROP DATABASE still rejects the same surviving MVs.
+- Inject failure at retirement and after retirement in the account transaction:
+  require rollback (no tenant DROP DATABASE after early failure); account, MV
+  policy, dependency closure and last-good rows remain intact for retry.
+
+This is the selected P1 policy, not a claim of external design approval.
+
+Evidence boundaries for the old-catalog controls: a fresh normal login on the
+4.0.14 fixture first hits existing tenant-version admission. The isolated kernel
+before/after comparison uses supported skipCheckUser sessions only there, with
+privilege checks retained, and proves six DDL guards in each transaction mode.
+Normal account/ACL cases use authenticated sessions. This does not satisfy the
+separate normal-login/mixed-version release gate. Case-level/source hashes and
+functional fixture cost are in materialized_view_review_lifecycle_results.json.

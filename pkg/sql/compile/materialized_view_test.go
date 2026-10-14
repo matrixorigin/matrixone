@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"strings"
@@ -182,6 +183,12 @@ func TestMaterializedViewDDLGuardDoesNotWriteAccountFence(t *testing.T) {
 			relation.EXPECT().GetTableDef(proc.Ctx).Return(&plan.TableDef{TableType: catalog.SystemOrdinaryRel, TblId: 99})
 			calls := 0
 			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				if sql == mv.CatalogReadinessSQL {
+					res := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, proc.Mp())
+					res.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendFixedRows(res, 0, []int64{4}))
+					return res.GetResult(), nil
+				}
 				require.True(t, strings.HasPrefix(sql, "select mv_id from "), "ordinary DDL must not introduce DML or retained locks: %s", sql)
 				require.Contains(t, sql, "account_id=7")
 				calls++
@@ -214,5 +221,78 @@ func TestMaterializedViewDDLGuardDoesNotWriteAccountFence(t *testing.T) {
 			}
 			require.Equal(t, 1, calls)
 		})
+	}
+}
+
+func TestMaterializedViewDDLReadiness(t *testing.T) {
+	for _, mode := range []txn.TxnMode{txn.TxnMode_Pessimistic, txn.TxnMode_Optimistic} {
+		for _, count := range []int64{0, 4} {
+			for _, dependent := range []bool{false, true} {
+				for _, tableDDL := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%d/catalog=%d/dependent=%v/table=%v", mode, count, dependent, tableDDL), func(t *testing.T) {
+						proc := testutil.NewProcess(t)
+						proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+						op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+						op.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode}).AnyTimes()
+						proc.Base.TxnOperator = op
+						downstream := 0
+						exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+							if sql == mv.CatalogReadinessSQL {
+								r := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, proc.Mp())
+								r.NewBatchWithRowCount(1)
+								require.NoError(t, executor.AppendFixedRows(r, 0, []int64{count}))
+								return r.GetResult(), nil
+							}
+							downstream++
+							require.Equal(t, int64(4), count, "pre-migration DDL touched missing MV catalogs")
+							if strings.HasPrefix(sql, "select mv_id") && dependent {
+								r := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, proc.Mp())
+								r.NewBatchWithRowCount(1)
+								require.NoError(t, executor.AppendFixedRows(r, 0, []uint64{99}))
+								return r.GetResult(), nil
+							}
+							return executor.Result{}, nil
+						}, op)
+						installDropDDLExecutor(t, proc, exec)
+						rt := moruntime.ServiceRuntime(proc.GetService())
+						old, present := rt.GetGlobalVariables(mv.RuntimeKey)
+						marker := &mv.Service{}
+						rt.SetGlobalVariables(mv.RuntimeKey, marker)
+						t.Cleanup(func() {
+							if present {
+								rt.SetGlobalVariables(mv.RuntimeKey, old)
+							} else {
+								rt.CompareAndDeleteGlobalVariables(mv.RuntimeKey, marker)
+							}
+						})
+						c := &Compile{proc: proc, db: "db"}
+						var err error
+						if tableDDL {
+							ctrl := gomock.NewController(t)
+							eng := mock_frontend.NewMockEngine(ctrl)
+							database := mock_frontend.NewMockDatabase(ctrl)
+							relation := mock_frontend.NewMockRelation(ctrl)
+							eng.EXPECT().Database(proc.Ctx, "db", op).Return(database, nil)
+							database.EXPECT().Relation(proc.Ctx, "source", nil).Return(relation, nil)
+							relation.EXPECT().GetTableDef(proc.Ctx).Return(&plan.TableDef{TableType: catalog.SystemOrdinaryRel, TblId: 99})
+							c.e = eng
+							err = c.guardMaterializedViewDDL("db", "source", false)
+						} else {
+							err = c.guardMaterializedViewDatabaseDDL("db")
+						}
+						if count == 4 && dependent {
+							require.ErrorContains(t, err, "materialized views")
+						} else {
+							require.NoError(t, err)
+						}
+						if count == 0 {
+							require.Zero(t, downstream)
+						} else {
+							require.Positive(t, downstream)
+						}
+					})
+				}
+			}
+		}
 	}
 }

@@ -346,3 +346,20 @@ MV and its dependent source, then allow ordinary ADD after dropping the MV and
 verify original rows plus NULL new columns. Port-boundary Docker proof above is
 separate. This resolves the local generated-parser conflict; final-head GitHub
 checks remain independent. Evidence is in `materialized_view_ci_port_results.json`.
+
+### Account/catalog review closure (2026-10-14)
+
+Reviewed head `15ef9e056fc4` passed CI, but source review exposed missing catalog
+readiness, live tenant status and account-retirement integration. Revision 3
+selects ordinary DROP DATABASE RESTRICT and transactional DROP ACCOUNT retirement.
+The correction also synchronizes InternalExecutor's session account identity.
+
+All 58 SQL statements and 84 native checks pass (70 functional, 5 failure,
+9 two-CN); owning packages, incremental vet and configured lint pass. Isolated
+4.0.14 kernel controls reproduce the pre-fix missing dependency table and pass
+six DDL operations in each transaction mode afterward. Only that separate fixture
+bypasses the earlier tenant-version login fence; main account/ACL tests authenticate
+normally. Completed-task GC is an explicit terminal scheduler oracle. Full scope,
+accessor-only native evidence reuse and release/re-review limits are recorded in
+materialized_view_self_review.md and materialized_view_review_lifecycle_results.json.
+New-head CI remains independently required; no local coverage percentage is claimed.

@@ -51,7 +51,7 @@ func (e scheduledRefreshExecutor) Exec(ctx context.Context, query string, opts i
 // or lose its terminal admission failure. Reuse the existing in-memory catalog
 // fixture; no timer, task runner, or SQL service is needed for these boundaries.
 func TestMaterializedViewTaskAdmission(t *testing.T) {
-	for _, name := range []string{"non-async task", "malformed envelope", "unknown version", "metadata failure", "obsolete epoch", "manual policy", "definer success", "definer failure", "already published failure"} {
+	for _, name := range []string{"non-async task", "malformed envelope", "unknown version", "metadata failure", "retired definition", "obsolete epoch", "manual policy", "definer success", "definer failure", "already published failure"} {
 		t.Run(name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -74,6 +74,10 @@ func TestMaterializedViewTaskAdmission(t *testing.T) {
 					if name == "metadata failure" {
 						return executor.Result{}, metadataError
 					}
+					if name == "retired definition" {
+						return executor.Result{}, nil
+					}
+
 					return fixture.stateResult(), nil
 				}
 				if !strings.HasPrefix(query, "select ") {
@@ -133,6 +137,10 @@ func TestMaterializedViewTaskAdmission(t *testing.T) {
 				case "unknown version":
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 				}
+			case "retired definition":
+				require.ErrorContains(t, err, "metadata does not exist")
+				require.Zero(t, calls)
+				require.Empty(t, writes)
 			case "metadata failure":
 				require.ErrorIs(t, err, metadataError)
 			case "definer failure":

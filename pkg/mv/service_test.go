@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -341,4 +342,32 @@ func (e *zoneExecutor) Exec(ctx context.Context, sql string, opts executor.Optio
 		require.Equal(e.t, e.offset, offset)
 	}
 	return e.refreshExecutor.Exec(ctx, sql, opts)
+}
+
+func TestMaterializedViewCatalogReadiness(t *testing.T) {
+	for _, count := range []int64{0, 1, 3, 4} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			tx := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t, CatalogReadinessSQL, sql)
+				r := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, mp)
+				r.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(r, 0, []int64{count}))
+				return r.GetResult(), nil
+			}, nil)
+			ready, err := CatalogReady(tx)
+			if count == 0 || count == 4 {
+				require.NoError(t, err)
+				require.Equal(t, count == 4, ready)
+			} else {
+				require.ErrorContains(t, err, "incomplete")
+				require.False(t, ready)
+			}
+		})
+	}
+	injected := errors.New("catalog read failed")
+	ready, err := CatalogReady(executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return executor.Result{}, injected }, nil))
+	require.ErrorIs(t, err, injected)
+	require.False(t, ready)
 }

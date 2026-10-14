@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"reflect"
 	"sync"
+	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
 )
@@ -341,7 +343,9 @@ func tenantIsolationCases(dsn string) {
 	}
 	defer func() {
 		for _, name := range []string{"mv_validation_a", "mv_validation_b"} {
-			exec("drop account " + name)
+			if _, err := db.ExecContext(ctx, "drop account if exists "+name); err != nil {
+				fmt.Fprintln(os.Stderr, "tenant cleanup:", err)
+			}
 		}
 	}()
 	tenants := make([]*sql.DB, 0, 2)
@@ -374,11 +378,42 @@ func tenantIsolationCases(dsn string) {
 		if amount != (i+1)*10 {
 			panic("tenant materialization crossed accounts")
 		}
-		if _, err := connection.ExecContext(ctx, "drop materialized view totals"); err != nil {
+		if _, err := connection.ExecContext(ctx, "drop database mv_validation"); err == nil {
+			panic("DROP DATABASE bypassed surviving MV restriction")
+		} else {
+			requireServerRejection("tenant DROP DATABASE RESTRICT", err)
+		}
+		if _, err := connection.ExecContext(ctx, "create materialized view periodic refresh every interval 1 minute as select k,sum(v) as s from facts group by k"); err != nil {
+			panic(err)
+		}
+		if _, err := connection.ExecContext(ctx, "refresh materialized view periodic"); err != nil {
 			panic(err)
 		}
 	}
+	scheduledAccountLifecycleCases("mv_validation_a", dsn)
 	pass("same-name multi-tenant source and MV isolation")
+	pass("tenant DROP DATABASE restricts surviving MVs")
+	// Surviving manual/populated and periodic MVs are intentionally retained.
+	// Administrative deletion must retire them; explicit DROP MV masks the bug.
+	for _, name := range []string{"mv_validation_a", "mv_validation_b"} {
+		account := rows("select account_id from mo_catalog.mo_account where account_name='" + name + "'")[0][0]
+		if name == "mv_validation_a" {
+			accountRetirementRollbackCase(name, account, dsn)
+		}
+		exec("drop account " + name)
+		for _, table := range []string{"mo_materialized_views", "mo_mv_dependencies", "mo_mv_refresh_runs", "mo_mv_account_state"} {
+			if rows("select count(*) from mo_catalog." + table + " where account_id=" + account)[0][0] != "0" {
+				panic("DROP ACCOUNT leaked " + table)
+			}
+		}
+		if rows("select count(*) from mo_catalog.mo_tables where account_id=" + account)[0][0] != "0" {
+			panic("DROP ACCOUNT leaked native objects")
+		}
+		if rows("select count(*) from mo_task.sys_async_task where task_metadata_executor=17 and json_extract(cast(task_metadata_context as varchar),'$.Key.Account')=" + account)[0][0] != "0" {
+			panic("DROP ACCOUNT leaked queued MV tasks")
+		}
+	}
+	pass("DROP ACCOUNT retires surviving populated and periodic MVs")
 }
 
 // NewConnector preserves account:user:role usernames; reparsing FormatDSN
@@ -421,4 +456,141 @@ func runNativeFailureAndCleanup() {
 	pass("drop removes MV state")
 	exec("drop database mv_validation_failure")
 	pass("dependency cleanup permits database drop")
+}
+
+// Make the real reconciler due immediately and poll its durable terminal
+// refresh history, rather than waiting through several full policy intervals;
+// source rows and last-good metadata are the independent public oracles.
+func scheduledAccountLifecycleCases(name string, dsn string) {
+	account := rows("select account_id from mo_catalog.mo_account where account_name='" + name + "'")[0][0]
+	definition := rows("select mv_id,epoch from mo_catalog.mo_materialized_views where account_id=" + account + " and name='periodic'")[0]
+	exec("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 1 day) where account_id=" + account + " and name='periodic'")
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		panic(err)
+	}
+	cfg.User = name + ":admin"
+	cfg.Passwd = "mv-validation-only"
+	cfg.DBName = "mv_validation"
+	for _, status := range []string{"suspend", "restricted"} {
+		func() {
+			// Own a fresh session for each status transition; suspension kills it.
+			active, err := openConfigured(cfg)
+			if err != nil {
+				panic(err)
+			}
+			defer active.Close()
+			active.SetMaxOpenConns(1)
+			before := rows("select successful_sequence,last_run,source_physical,source_logical from mo_catalog.mo_materialized_views where account_id=" + account + " and name='periodic'")
+			oldRows := queryRows(active, "select * from periodic order by k")
+			if _, err := active.ExecContext(ctx, "update facts set v=v+1"); err != nil {
+				panic(err)
+			}
+			exec("alter account " + name + " " + status)
+			awaitScheduledMaterializedViewTask(account, definition, false)
+			after := rows("select successful_sequence,last_run,source_physical,source_logical from mo_catalog.mo_materialized_views where account_id=" + account + " and name='periodic'")
+			if !reflect.DeepEqual(before, after) {
+				panic(status + " account published MV metadata")
+			}
+			exec("alter account " + name + " open")
+			recovered, err := openConfigured(cfg)
+			if err != nil {
+				panic(err)
+			}
+			defer recovered.Close()
+			recovered.SetMaxOpenConns(1)
+			if !reflect.DeepEqual(oldRows, queryRows(recovered, "select * from periodic order by k")) {
+				panic(status + " account changed last-good rows")
+			}
+			pass("scheduled refresh blocked for " + status + " account preserves rows and provenance")
+			awaitScheduledMaterializedViewTask(account, definition, true)
+			if !reflect.DeepEqual(queryRows(recovered, "select k,sum(v) as s from facts group by k order by k"), queryRows(recovered, "select * from periodic order by k")) {
+				panic("reopened account refresh mismatch")
+			}
+			// Keep the normal reconciler away from the next status-boundary fixture.
+			exec("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 1 day) where account_id=" + account + " and name='periodic'")
+			pass("scheduled refresh resumes after reopening " + status + " account")
+		}()
+	}
+}
+
+func awaitScheduledMaterializedViewTask(account string, definition []string, success bool) {
+	predicate := "account_id=" + account + " and mv_id=" + definition[0]
+	before := rows("select requested_sequence from mo_catalog.mo_materialized_views where " + predicate)[0][0]
+	// A system account may update its MV lifecycle catalog, but public sessions
+	// cannot insert internal mo_task rows. Let the real reconciler own dispatch.
+	exec("update mo_catalog.mo_materialized_views set next_due=current_timestamp() where " + predicate)
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		result := rows("select status,run_id from mo_catalog.mo_mv_refresh_runs where " + predicate + " and sequence>" + before + " order by sequence desc limit 1")
+		if len(result) == 1 && (result[0][0] == "SUCCEEDED" || result[0][0] == "FAILED") {
+			if len(result[0][1]) != 64 {
+				panic("scheduled run is not a typed task envelope")
+			}
+			queued := rows("select task_status from mo_task.sys_async_task where task_metadata_id='mv:" + result[0][1][:40] + "'")
+			// FAILED history precedes bounded retries. Await queue completion
+			// before changing account state. taskService.cleanupTasks deletes
+			// only Completed rows: terminal typed history plus an absent queue
+			// row also proves completion/GC in this exclusively owned fixture.
+			// A present Created/Running row is never treated as terminal.
+			if len(queued) > 1 {
+				panic("duplicate typed task queue identity")
+			}
+			if len(queued) == 1 && queued[0][0] != "2" {
+				select {
+				case <-ctx.Done():
+					panic(ctx.Err())
+				case <-time.After(200 * time.Millisecond):
+				}
+				continue
+			}
+			if (result[0][0] == "SUCCEEDED") != success {
+				panic(fmt.Sprintf("scheduled task expected success=%v got %v", success, result))
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			panic(ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	panic(fmt.Sprintf("account-lifecycle task did not terminate; state=%v history=%v queue=%v", rows("select epoch,interval_seconds,next_due,requested_sequence,successful_sequence from mo_catalog.mo_materialized_views where "+predicate), rows("select status,run_id,sequence from mo_catalog.mo_mv_refresh_runs where "+predicate+" order by sequence desc limit 3"), rows("select task_metadata_id,task_status,result_code from mo_task.sys_async_task where task_metadata_executor=17 and json_extract(cast(task_metadata_context as varchar),'$.Key.Account')="+account)))
+}
+
+// Corrupt only a task-owned retirement target name to force failure after the
+// first MV has been dropped in the account transaction. This exercises real
+// rollback without a product hook, sleeps or scheduler luck.
+func accountRetirementRollbackCase(name, account, dsn string) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		panic(err)
+	}
+	cfg.User = name + ":admin"
+	cfg.Passwd = "mv-validation-only"
+	cfg.DBName = "mv_validation"
+	connection, err := openConfigured(cfg)
+	if err != nil {
+		panic(err)
+	}
+	defer connection.Close()
+	connection.SetMaxOpenConns(1)
+	beforeRows := queryRows(connection, "select * from totals order by k")
+	beforePeriodic := queryRows(connection, "select * from periodic order by k")
+	exec("update mo_catalog.mo_materialized_views set name='retirement_missing' where account_id=" + account + " and name='periodic'")
+	defer exec("update mo_catalog.mo_materialized_views set name='periodic' where account_id=" + account + " and name='retirement_missing'")
+	query := "select mv_id,epoch,interval_seconds,next_due,successful_sequence,last_run from mo_catalog.mo_materialized_views where account_id=" + account + " order by mv_id"
+	before := rows(query)
+	_, err = db.ExecContext(ctx, "drop account "+name)
+	requireServerRejection("account retirement injected missing target", err)
+	if !reflect.DeepEqual(before, rows(query)) {
+		panic("failed account deletion changed MV policy/state")
+	}
+	if !reflect.DeepEqual(beforeRows, queryRows(connection, "select * from totals order by k")) || !reflect.DeepEqual(beforePeriodic, queryRows(connection, "select * from periodic order by k")) {
+		panic("failed account deletion lost native MV rows")
+	}
+	if rows("select count(*) from mo_catalog.mo_account where account_id=" + account)[0][0] != "1" {
+		panic("failed account deletion removed account")
+	}
+	pass("DROP ACCOUNT failure rolls back retired objects, policy and metadata")
 }

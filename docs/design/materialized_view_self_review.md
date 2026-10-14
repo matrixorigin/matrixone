@@ -286,3 +286,68 @@ MV and its dependent source, then allow ordinary ADD after dropping the MV and
 verify original rows plus NULL new columns. Port-boundary Docker proof above is
 separate. This resolves the local generated-parser conflict; final-head GitHub
 checks remain independent. Evidence is in `materialized_view_ci_port_results.json`.
+
+### Account/catalog review closure (revision 3, 2026-10-14)
+
+Scope: focused corrections on reviewed head `15ef9e056fc44a076fd548a93403d40ecfff58b8`;
+main freshness checked at `a33dcfb2e54196e17abe21de4346200a18009d83`. The original
+feature remains experimental. These fixes restore existing compatibility,
+authorization and account-deletion contracts; revision 3 reconciles the lifecycle
+policy rather than adding a second scheduler/cleanup mechanism. External design
+and implementation re-review remain required; this author record is not approval.
+
+Change map:
+
+| Closure | Owner/consumer | Risk and evidence |
+| --- | --- | --- |
+| Catalog readiness | MV catalog helper, both compile DDL guards, account owner | R3 migration boundary; zero/partial/full/error UT; table/database controls in both modes; real isolated 4.0.14 kernel before/after controls |
+| Background account admission | InternalExecutor session constructor/overrides, frontend definer check, task consumer | R3 tenant boundary; context/base/command/system account identity, inactive/missing account controls; real suspension/restriction and reopening |
+| Account retirement | Existing DROP ACCOUNT transaction, bounded native MV drop, dependency/state/history/task cleanup | R3 transactional lifecycle; exact account/table/txn capability, per-step failures; real rollback after first native drop, surviving populated/periodic MVs, obsolete task admission |
+| RFC/acceptance/harness | Revision-3 DB RESTRICT versus account retirement policy and named cases | R0/R2 alignment; explicit ownership/ordering/rollback and evidence boundaries |
+
+The account retirement loop is bounded by the existing 128-MV limit and stable
+mv_id order. It reuses compiler lifecycle admission and the existing account
+transaction; any lock/conflict/cancellation or later cleanup error rolls back the
+whole deletion. No generic database bypass, account-wide writer capability,
+background cache, new retry layer, or feature/coverage skip is added. MV creation
+conflicts through the account fence; admitted refresh publication conflicts on
+the definition row updated/deleted by retirement. The existing epoch/publication
+UT and two-CN publication evidence apply, plus new retired-definition admission.
+Per-session identity initialization introduces no new Go shared state; database
+transaction ordering is validated by rollback/epoch/real-consumer controls rather
+than treating a Go race run as proof of database serialization.
+
+Complete owning MV/compile/frontend suites pass; delivery frontend UT passes
+again after the accessor-only reuse of backgroundExecTxnOperator. Incremental
+vet and configured lint pass with zero issues. All 58 normal SQL BVT statements
+pass, with zero ignored/failed. The full native CI entry passes **84 checks**:
+70 functional, 5 native failure/rollback, 9 two-CN publication. The functional
+fixture uses the same two tenants as the previous suite, adds two small periodic
+MVs and four real status-boundary dispatches, without extra processes or large
+data. It waits for durable typed history plus queue completion or completed-task
+GC so bounded old retries cannot overwrite the next due-time fixture. Native
+functional wall time and case/report/source hashes are recorded in
+`materialized_view_review_lifecycle_results.json`.
+
+The separate old-catalog fixture was bootstrapped from main `fcad62a8ff06`; it
+remains 4.0.14 (offset 1/state 2), with auto-upgrade disabled and all four MV tables
+absent. Standard fresh login rejects at the earlier tenant-version fence. Only
+this isolated kernel fixture sets skipCheckUser=true, retaining privilege checks,
+to reach ordinary DDL guards. Pre-fix ALTER fails with missing mo_mv_dependencies;
+post-fix ALTER, CREATE/DROP INDEX, TRUNCATE, DROP TABLE and DROP DATABASE pass in
+both pessimistic and optimistic modes (six each). No system schema or version row
+was edited. This is native kernel guard evidence, not normal-login/mixed-version
+compatibility. Main account/ACL regressions use normal authentication.
+
+The service binary precedes only the final accessor refactor: its previous direct
+backSession transaction lookup and the existing helper resolve the same operator
+and ID for valid account-drop executors. All other production inputs are unchanged;
+final owning/static checks cover the delivered accessor. This semantic reuse is
+explicitly distinguished from byte-identical source evidence. Earlier failed
+probes (protected system DDL, direct task-table insertion, early login fencing,
+interrupted environment/sandbox and queue-GC assumptions) are not passes. Latest
+head CI is still independently required; the local native service is not coverage
+instrumented, and no new changed-code coverage percentage is claimed.
+
+No unresolved local correction blocker remains. Remaining release gates and
+external revision-3 review are unchanged.

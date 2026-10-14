@@ -184,6 +184,30 @@ func nextDueSQL(seconds int64) string {
 	return fmt.Sprintf("date_add(current_timestamp(),interval %d second)", seconds)
 }
 
+// CatalogReadinessSQL uses only the pre-existing system metadata catalog. All
+// four global MV tables must be installed in the caller's transaction snapshot;
+// a registered CN service or a session feature flag is not migration readiness.
+const CatalogReadinessSQL = "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state')"
+
+func CatalogReady(tx executor.TxnExecutor) (bool, error) {
+	r, err := tx.Exec(CatalogReadinessSQL, system())
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+	var count int64
+	r.ReadRows(func(n int, c []*vector.Vector) bool {
+		if n > 0 {
+			count = vector.GetFixedAtWithTypeCheck[int64](c[0], 0)
+		}
+		return false
+	})
+	if count != 0 && count != 4 {
+		return false, moerr.NewInternalErrorNoCtx("incomplete materialized view catalog migration")
+	}
+	return count == 4, nil
+}
+
 func DependencyGuard(tx executor.TxnExecutor, account uint32) error {
 	if err := consume(tx, fmt.Sprintf("insert ignore into mo_catalog.mo_mv_account_state (account_id,revision) values (%d,0)", account)); err != nil {
 		return err

@@ -136,6 +136,8 @@ func main() {
 	dsn := flag.String("dsn", "dump:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=330s&writeTimeout=330s", "isolated local cluster DSN")
 	output := flag.String("output", "/workspace/mv-build/sql-results.json", "evidence JSON")
 	n := flag.Int("rows", 1000000, "benchmark source rows")
+	catalogMissing := flag.Bool("catalog-missing", false, "isolated pre-MV kernel fixture only: validate ordinary DDL without catalogs")
+	tenantCheck := flag.Bool("tenant-check", false, "run isolated account lifecycle contracts only")
 	functional := flag.Bool("functional", false, "run SQL contracts without performance experiments")
 	keep := flag.Bool("keep", false, "retain test database for restart checks")
 	edge := flag.Bool("edge-check", false, "verify native failure rollback and clean retained fixtures")
@@ -145,7 +147,7 @@ func main() {
 	flag.Parse()
 	evidence.Started = time.Now().UTC()
 	evidence.Rows = *n
-	if *functional {
+	if *functional || *tenantCheck {
 		evidence.Rows = 0 // No generated benchmark source is created in this mode.
 	}
 	defer func() {
@@ -173,6 +175,15 @@ func main() {
 	db.SetMaxOpenConns(4)
 	if err = db.PingContext(ctx); err != nil {
 		panic(err)
+	}
+	if *catalogMissing {
+		evidence.Rows = 0
+		runMissingMaterializedViewCatalog()
+		return
+	}
+	if *tenantCheck {
+		tenantIsolationCases(*dsn)
+		return
 	}
 	if *secondDSN != "" {
 		runMultiCN(*secondDSN)
@@ -278,7 +289,7 @@ func main() {
 	pass("refresh history")
 	runAdditionalCases(*dsn)
 	timeoutRead(*dsn)
-	if *functional {
+	if *functional || *tenantCheck {
 		for _, name := range []string{"joined", "empty_total", "totals"} {
 			exec("drop materialized view " + name)
 		}

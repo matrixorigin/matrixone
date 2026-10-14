@@ -133,3 +133,22 @@ checks prove visibility after that causal handoff, not globally fresh reads in
 the default asynchronous mode. Current integration reserves protocol 113 for MV
 after main allocated 112 to WEEK/DAYOFYEAR; older protocol records above describe
 their historical runs.
+
+Account lifecycle regressions are part of the normal `-functional` suite:
+suspension/restriction preserve last-good rows/provenance, reopening resumes
+refresh, ordinary database deletion restricts surviving MVs, and account deletion
+retires populated/periodic MVs. A missing-target fault checks real rollback after
+the first native MV drop; the fixture repairs its own catalog name afterward.
+`-tenant-check` selects only these account scenarios for focused diagnosis.
+The scheduler oracle waits for durable typed history and queue completion or
+completed-task GC, so an old bounded retry cannot overwrite the next due-time
+fixture. It uses the real reconciler, without adding task execution hooks.
+
+`-catalog-missing` is an opt-in kernel guard check for an isolated initialized
+4.0.14 catalog with all four MV catalogs absent and `auto-upgrade=false`. Bootstrap
+that catalog using the pre-feature binary. Standard login may reject this version
+mismatch before DDL; a test-only `cn.frontend.skipCheckUser=true` session isolates
+the compiler guard, with privilege checks still enabled. This scoped fixture is
+not mixed-version or login-compatibility evidence. It never edits system schemas
+and cleans its own database. Validate both transaction modes by configuring
+`cn.txn.mode` to `pessimistic` or `optimistic` on that isolated CN.

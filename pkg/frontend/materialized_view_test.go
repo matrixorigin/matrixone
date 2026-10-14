@@ -17,7 +17,17 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -58,4 +68,117 @@ func TestMaterializedViewTransactionClassification(t *testing.T) {
 	allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), nil, &tree.ShowMaterializedViews{})
 	require.NoError(t, err)
 	require.True(t, allowed)
+}
+
+func TestMaterializedViewDefinerAccountStatus(t *testing.T) {
+	for _, status := range []string{"open", "suspend", "restricted", "unknown", "missing"} {
+		t.Run(status, func(t *testing.T) {
+			ses := newTestSession(t, gomock.NewController(t))
+			t.Cleanup(ses.Close)
+			ses.SetAccountId(7)
+			ses.SetTenantInfo(getDefaultAccount())
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			userReads := 0
+			sql := executor.NewMemExecutor(func(q string) (executor.Result, error) {
+				if strings.HasPrefix(q, "select status from mo_catalog.mo_account") {
+					require.Contains(t, q, "account_id=7")
+					if status == "missing" {
+						return executor.Result{}, nil
+					}
+					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					r.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendBytesRows(r, 0, [][]byte{[]byte(status)}))
+					return r.GetResult(), nil
+				}
+				userReads++
+				r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, mp)
+				r.NewBatchWithRowCount(1)
+				for i, v := range []string{"owner", userStatusUnlock, "accountadmin"} {
+					require.NoError(t, executor.AppendBytesRows(r, i, [][]byte{[]byte(v)}))
+				}
+				return r.GetResult(), nil
+			})
+			err := validateMaterializedViewDefiner(t.Context(), ses, mv.NewService(sql), &catalog.MVDefinition{OwnerUser: 2, OwnerRole: 3, OwnerName: "owner"})
+			if status == "open" {
+				require.NoError(t, err)
+				require.Equal(t, 1, userReads)
+			} else {
+				require.ErrorContains(t, err, "account is unavailable")
+				require.Zero(t, userReads)
+			}
+		})
+	}
+}
+
+func TestMaterializedViewAccountRetirement(t *testing.T) {
+	for _, count := range []int64{0, 3, 4} {
+		for _, fail := range []int{-1, 0, 2, 5} {
+			t.Run(fmt.Sprintf("catalog=%d/failure=%d", count, fail), func(t *testing.T) {
+				bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+				ctx := t.Context()
+				bh.EXPECT().ClearExecResultSet()
+				bh.EXPECT().Exec(ctx, mv.CatalogReadinessSQL).Return(nil)
+				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{count}})})
+				statements := accountMaterializedViewRetirementSQL(7)
+				injected := errors.New("retirement failed")
+				if count == 4 && (fail < 0 || fail > 2) {
+					bh.EXPECT().ClearExecResultSet()
+					bh.EXPECT().Exec(ctx, "select mv_id,database_name,name from mo_catalog.mo_materialized_views where account_id=7 order by mv_id limit 129").Return(nil)
+					bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(nil)})
+				}
+				if count == 4 {
+					for i, q := range statements {
+						require.Contains(t, q, "7")
+						if i == fail {
+							bh.EXPECT().Exec(ctx, q).Return(injected)
+							break
+						}
+						bh.EXPECT().Exec(ctx, q).Return(nil)
+					}
+				}
+				err := retireAccountMaterializedViews(ctx, bh, 7)
+				if count == 3 {
+					require.ErrorContains(t, err, "incomplete")
+				} else if count == 4 && fail >= 0 {
+					require.ErrorIs(t, err, injected)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+}
+
+type materializedViewRetirementBackground struct{ BackgroundExec }
+
+func (materializedViewRetirementBackground) materializedViewRetirementTxnID() []byte {
+	return []byte("account-drop")
+}
+
+func TestMaterializedViewAccountRetirementCapability(t *testing.T) {
+	ctx := t.Context()
+	mock := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+	bh := materializedViewRetirementBackground{mock}
+	count := newMrsForCheckTenant([][]interface{}{{int64(4)}})
+	objects := newMrsForCheckTenant([][]interface{}{{uint64(99), "db`name", "mv`name"}})
+	mock.EXPECT().ClearExecResultSet().Times(2)
+	calls := []*gomock.Call{mock.EXPECT().Exec(ctx, mv.CatalogReadinessSQL).Return(nil), mock.EXPECT().GetExecResultSet().Return([]interface{}{count})}
+	statements := accountMaterializedViewRetirementSQL(7)
+	for _, q := range statements[:3] {
+		calls = append(calls, mock.EXPECT().Exec(ctx, q).Return(nil))
+	}
+	calls = append(calls, mock.EXPECT().Exec(ctx, "select mv_id,database_name,name from mo_catalog.mo_materialized_views where account_id=7 order by mv_id limit 129").Return(nil), mock.EXPECT().GetExecResultSet().Return([]interface{}{objects}))
+	calls = append(calls, mock.EXPECT().Exec(gomock.Any(), "drop table `db``name`.`mv``name`").DoAndReturn(func(c context.Context, _ string) error {
+		require.True(t, defines.CanWriteMaterializedView(c, 7, 99, []byte("account-drop")))
+		require.False(t, defines.CanWriteMaterializedView(c, 8, 99, []byte("account-drop")))
+		require.False(t, defines.CanWriteMaterializedView(c, 7, 100, []byte("account-drop")))
+		require.False(t, defines.CanWriteMaterializedView(c, 7, 99, []byte("another-txn")))
+		return nil
+	}))
+	for _, q := range statements[3:] {
+		calls = append(calls, mock.EXPECT().Exec(ctx, q).Return(nil))
+	}
+	gomock.InOrder(calls...)
+	require.NoError(t, retireAccountMaterializedViews(ctx, bh, 7))
 }

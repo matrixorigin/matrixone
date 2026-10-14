@@ -4226,6 +4226,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		// Retire native MVs in this transaction before tenant database guards
+		// inspect their definitions. Ordinary DROP DATABASE stays RESTRICT.
+		if rtnErr = retireAccountMaterializedViews(ctx, bh, uint32(accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop tables of the tenant
 		// NOTE!!!: single DDL drop statement per single transaction
 		// SWITCH TO THE CONTEXT of the deleted context

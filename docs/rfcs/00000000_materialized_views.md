@@ -1,9 +1,9 @@
 - Status: experimental P1 implemented and locally validated; release gates pending
 - Start Date: 2026-10-12
 - Authors: Codex, at the user's request
-- Design revision: 2 (Git4Data and validation scope added)
+- Design revision: 3 (account lifecycle and pre-migration admission clarified)
 - User approval: 2026-10-12, "去实现吧"; P1 implementation and validation authorized.
-- Implementation PR: [#30085](https://github.com/matrixorigin/matrixone/pull/30085) (Draft, experimental P1)
+- Implementation PR: [#30085](https://github.com/matrixorigin/matrixone/pull/30085) (experimental P1)
 - Issue for this RFC: [#30079](https://github.com/matrixorigin/matrixone/issues/30079)
 - Code baseline: `dd38098853ea197699ed3fac3e69dc53975ac061`
 - Publication baseline: `3e50e1b32d8da61bbbf70c89989fb08b671809de` (fresh main)
@@ -31,7 +31,7 @@ retain its current transactional semantics. An asynchronous MV is not safe for
 rewrite merely because its most recent refresh succeeded. Incremental refresh
 and synchronous maintenance are also separate from the initial implementation.
 
-The approved design below includes later-stage proposals. The P1 prototype now
+The design below includes later-stage proposals; external review of revision 3 remains pending. The P1 prototype now
 implements the subset documented in the implementation notes and execution
 report; its feature gate is disabled by default. P2/P3 remain proposals.
 
@@ -299,25 +299,69 @@ fresh S, at most twice, unless the same run already succeeded. Source row
 updates do not require blocking user DML during a refresh: S intentionally
 defines the refreshed historical result.
 
-The creation/dependency and source-DDL races need an additional **account MV
-dependency admission row**, a bounded catalog guard following existing catalog
-locking conventions. CREATE/DROP MV and source schema/identity DDL acquire its
-transactional lock before inspecting or changing dependency membership. It
-serializes only relevant DDL, not user DML, SELECT or refresh computation.
-This guard is owned by the new MV catalog, not the inactive ordinary-view
-recovery gate. Lock order is account lifecycle -> database catalog -> account MV
-dependency guard -> object catalog identity; all DROP DATABASE/ACCOUNT, restore
-and MV paths must follow it. Do not acquire the guard later from a path that
-already holds the reverse order. Implementation must audit all DDL entrants.
+The creation/dependency and source-DDL races have mode-specific admission.
+Optimistic source DDL and MV registration/retirement write the account MV
+revision row, then inspect the dependency closure; commit conflicts fence
+concurrent membership changes. Pessimistic CREATE pins the complete native
+source/target name domain through publication, and source DDL checks dependencies
+under existing catalog/name admission. Ordinary pessimistic DDL does not write
+an account MV fence. Neither form adds blocking work to ordinary DML or SELECT.
+Refresh publishes through its definition row and native schema fences, not this
+account-wide dependency guard.
+
+The account owner first holds its existing lineage lifecycle and account
+name/row boundary, then takes the MV revision/definition fences before retiring
+native targets in stable mv_id order and entering the tenant database loop.
+Each native DROP retains compiler lifecycle/name admission; its retained-lock
+FastFail path and normal transaction conflict/cancellation errors abort and roll
+back the entire account transaction rather than weakening admission or retrying
+individual cleanup statements. Ordinary MV/source DDL retains its existing name
+admission order. Account cleanup does not introduce a second transaction, lock
+manager, account-wide MV writer capability or a generic DROP DATABASE bypass.
 
 P1 rejects source ALTER/RENAME/DROP and schema-changing index operations while
 dependent MVs exist. No automatic rebinding to a different output schema is
 allowed. TRUNCATE/COPY/RESTORE that changes a source's physical identity is also
 rejected with dependencies in P1; ordinary INSERT/UPDATE/DELETE remain allowed.
-DROP DATABASE/ACCOUNT removes the whole same-database dependency closure and MV
-objects transactionally through lifecycle cleanup, rather than being blocked
-forever by objects it owns. Refresh's publication-row conflict and native schema
-fences prevent it committing after a concurrent MV drop or policy epoch change.
+P1 ordinary DROP DATABASE uses RESTRICT: it fails while the database owns MVs,
+including unpopulated or periodic MVs, and remains usable after explicit DROP
+MATERIALIZED VIEW. Administrative DROP ACCOUNT instead retires all tenant MVs in
+the existing account-drop transaction before its tenant DROP DATABASE loop.
+
+The account lifecycle owner takes its existing account-name/account-row locks,
+then the MV account dependency write fence, then writes each definition's epoch
+and disables interval/next_due before dropping each native MV using the exact
+account/table/transaction-bound writer capability, then deleting dependencies,
+refresh history, definitions and account MV state. Enumeration is bounded at the
+existing 128-MV account limit. Already queued MV tasks are removed by their
+typed account envelope; late deliveries become obsolete because their definition
+no longer exists. No generic DROP DATABASE bypass or session flag is introduced.
+The ordinary account cleanup removes tenant grants and native databases/objects.
+CREATE MV's account fence conflicts with retirement; an admitted refresh's
+publication writes the same definition row that retirement updates/deletes, so
+both cannot commit across the retired identity. Existing native schema fences
+also reject publication into removed objects. All cleanup shares the caller's
+transaction: cancellation, task/catalog failure or a later database/metadata
+failure rolls back retirement, policy, objects and account deletion together.
+Do not open or commit a separate MV transaction from the account owner.
+
+Before the 4.0.15 migration, MV readiness is checked through the pre-existing
+mo_tables system catalog in the DDL transaction snapshot, independently of the
+session feature flag or CN registration. Zero MV catalogs means no MV can exist
+and ordinary table/database DDL proceeds without querying/writing MV tables.
+All four catalogs enable dependency guards; partial installation or metadata
+query errors fail closed. This bounded four-name lookup adds one metadata query
+per guarded ordinary DDL and no extra user DML/SELECT work.
+
+InternalExecutor keeps the session account ID synchronized with its context and
+final tenant overrides; MV resolution and account checks use that same identity.
+Background refresh checks live mo_account status through the system-owned
+account catalog before validating tenant user/role and source privileges. Only
+one existing OPEN account is admitted; suspension, restriction, missing accounts
+and unknown states reject before source execution, preserve last-good rows and
+record a sanitized task admission failure. Reopening permits later tasks after
+fresh identity/role/source admission. This is admission enforcement, not forced
+preemption of a refresh admitted before the status change.
 
 If a privileged restore/recovery path cannot satisfy these checks, it must
 invalidate the MV and pause scheduling, never leave an apparently valid binding
