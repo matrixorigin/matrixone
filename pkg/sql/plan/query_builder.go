@@ -6135,6 +6135,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
@@ -6154,7 +6157,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  groupingSetBranchHaving(selectClause.Having, selectClause.GroupBy.Rollup),
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -7564,15 +7567,15 @@ func rewriteRollupWindowSelect(
 // ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
 // to every branch so aggregate binding stays identical for shared input plans.
 // Keep fresh wrappers because a CTE declaration can be bound more than once.
-func groupingSetBranchHaving(having *tree.Where, rollup bool) *tree.Where {
-	if having == nil && !rollup {
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
 		return nil
 	}
 	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
 	if having != nil {
 		result.Expr = having.Expr
 	}
-	if rollup {
+	if guardEmptyInput {
 		count := &tree.FuncExpr{
 			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
 			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
@@ -7653,6 +7656,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		}
 	}
 	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
@@ -7678,7 +7682,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: groupingSetBranchHaving(selectClause.Having, selectClause.GroupBy.Rollup),
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}

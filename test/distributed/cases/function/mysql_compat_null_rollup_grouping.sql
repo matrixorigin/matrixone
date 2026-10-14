@@ -96,4 +96,13 @@ from t_empty group by k with rollup order by grouping(k);
 delete from t_empty;
 select k, count(*) as n from t_empty group by k with rollup;
 
+-- SAMPLE already suppresses empty input and must not acquire an ordinary aggregate.
+select k, sample(v, 1 rows) as sampled from t_empty group by k with rollup;
+select k, sample(v, 100 percent) as sampled from t_empty group by rollup(k);
+insert into t_empty values(1,10);
+select k, sample(v, 1 rows) as sampled from t_empty group by k with rollup;
+select k, sample(v, 100 percent) as sampled from t_empty group by rollup(k);
+select k, sample(v, 1 rows) as sampled from t_empty where 1=0 group by rollup(k);
+delete from t_empty;
+
 drop database mysql_compat_null_rollup_grouping;

@@ -107,6 +107,8 @@ func TestRollupEmptyInput(t *testing.T) {
 			{"having zero", rolled + " having count(*)=0"},
 			{"having OR", rolled + " having count(*)=0 or sum(v)>0"},
 			{"window", "select k,sum(v),row_number() over(order by sum(v)) from src group by k with rollup"},
+			{"empty SAMPLE with rollup", "select k,sample(v,1 rows) from src group by k with rollup"},
+			{"empty SAMPLE functional", "select k,sample(v,1 rows) from src group by rollup(k)"},
 			{"alias with window", "select k as x,sum(v) as s,row_number() over(order by sum(v)) as rn from src group by x with rollup"},
 			{"derived", "select * from (" + rolled + ") r"},
 			{"CTE reused", "with r as (" + rolled + ") select * from r union all select * from r"},
@@ -115,6 +117,24 @@ func TestRollupEmptyInput(t *testing.T) {
 				require.Empty(t, queryStringRows(t, ctx, db, test.query))
 			})
 		}
+		t.Run("SAMPLE keeps its sampling path", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "insert into src values(1,10)")
+			t.Cleanup(func() { execSQLDB(t, ctx, db, "delete from src") })
+			for _, spelling := range []string{"group by k with rollup", "group by rollup(k)"} {
+				for _, sampling := range []string{"1 rows", "100 percent"} {
+					query := "select k,sample(v," + sampling + ") from src " + spelling
+					require.Equal(t, [][]string{{"1", "10"}, {"1", "10"}}, queryStringRows(t, ctx, db, query))
+				}
+				require.Empty(t, queryStringRows(t, ctx, db,
+					"select k,sample(v,1 rows) from src where false "+spelling))
+			}
+			require.Equal(t, [][]string{{"1", "10"}}, queryStringRows(t, ctx, db,
+				"select k,sample(v,1 rows) from src group by k"))
+			require.Equal(t, [][]string{{"1", "10"}, {"1", "10"}}, queryStringRows(t, ctx, db,
+				"select k,sample(v,1 rows) from src group by grouping sets ((k),())"))
+			_, err := db.ExecContext(ctx, "select k,sample(v,1 rows),count(*) from src group by k with rollup")
+			require.ErrorContains(t, err, "cannot fixed non-scalar function and scalar function in the same query")
+		})
 		require.Equal(t, [][]string{{"99", "99", "99", "0"}}, queryStringRows(t, ctx, db, rolled+" union all select 99,99,99,0"))
 		require.Equal(t, [][]string{{"NULL", "0"}}, queryStringRows(t, ctx, db, "select sum(v),count(*) from src"))
 		require.Equal(t, [][]string{{"NULL", "NULL", "0", "1"}}, queryStringRows(t, ctx, db,

@@ -1752,6 +1752,30 @@ func TestRollupWindowVolatileExprOccurrencesStayIndependent(t *testing.T) {
 	require.True(t, ok, "the window's rand occurrence must not reuse either SELECT projection")
 }
 
+func TestRollupSamplePlanning(t *testing.T) {
+	for _, sql := range []string{
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by l_returnflag with rollup",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by rollup(l_returnflag)",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by l_returnflag",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by grouping sets ((l_returnflag),())",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+			require.True(t, reachableNodeType(logical.GetQuery(), plan.Node_SAMPLE))
+			require.False(t, reachableNodeType(logical.GetQuery(), plan.Node_AGG))
+		})
+	}
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"select l_returnflag,sample(l_quantity,1 rows),count(*) from lineitem group by l_returnflag with rollup")
+	require.ErrorContains(t, err, "cannot fixed non-scalar function and scalar function in the same query")
+	logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"select v from (select sample(l_quantity,1 rows) as v from lineitem) s group by v with rollup")
+	require.NoError(t, err)
+	require.True(t, reachableNodeType(logical.GetQuery(), plan.Node_AGG),
+		"a nested SAMPLE must not disable the outer ROLLUP guard")
+}
+
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	stmt := mustParseRollupWindowSelect(t, `
 		select
