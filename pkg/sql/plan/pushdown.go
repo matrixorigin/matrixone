@@ -19,6 +19,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -950,14 +951,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		// Physical equality keys can identify distinct visible values (for
-		// example PAD SPACE 'a' and 'a '). An outer byte-sensitive predicate
-		// must not change which rows match, cancel or survive deduplication.
-		// Until equivalence-preservation is proven, keep such predicates above
-		// the set operation, while still optimizing each branch's own filters.
+		// A transformed equality key may merge visible representations.
+		// Preserve those predicates above the set operation, but permit an
+		// independent predicate on an unchanged exact-domain output column.
 		if node.NodeType != plan.Node_UNION_ALL && len(node.PhysicalEqualityKeyList) > 0 {
-			cantPushdown = append(cantPushdown, filters...)
-			filters = nil
+			safe := filters[:0]
+			for _, filter := range filters {
+				if setFilterPreservesEquality(filter, node) {
+					safe = append(safe, filter)
+				} else {
+					cantPushdown = append(cantPushdown, filter)
+				}
+			}
+			filters = safe
 		}
 		// Record middle: processing UNION/MINUS/INTERSECT node
 		builder.optimizationHistory = append(builder.optimizationHistory,
@@ -1802,6 +1808,47 @@ func exprColRefsSubsetOf(expr *plan.Expr, set map[[2]int32]bool) bool {
 		}
 		return true
 	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
+		return true
+	default:
+		return false
+	}
+}
+
+// setFilterPreservesEquality proves invariance conservatively per referenced
+// output slot. Raw floating/string keys are not proof of an exact domain: their
+// ordinary equality can normalize NaNs, scales or PAD SPACE representations.
+func setFilterPreservesEquality(expr *plan.Expr, node *plan.Node) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if len(node.BindingTags) != 1 || e.Col.RelPos != node.BindingTags[0] || pos < 0 || pos >= len(node.ProjectList) || pos >= len(node.PhysicalEqualityKeyList) {
+			return false
+		}
+		output, key := node.ProjectList[pos], node.PhysicalEqualityKeyList[pos]
+		if output == nil || key == nil || output.GetCol() == nil || key.GetCol() == nil {
+			return false
+		}
+		typ := types.T(output.Typ.Id)
+		return (typ.IsInteger() || typ == types.T_bool) && isSameColumnType(output.Typ, key.Typ) &&
+			output.GetCol().RelPos == key.GetCol().RelPos && output.GetCol().ColPos == key.GetCol().ColPos
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if !setFilterPreservesEquality(arg, node) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, arg := range e.List.List {
+			if !setFilterPreservesEquality(arg, node) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
 		return true
 	default:
 		return false
