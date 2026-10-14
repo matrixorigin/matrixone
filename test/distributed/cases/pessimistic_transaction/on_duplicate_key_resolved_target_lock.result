@@ -18,4 +18,25 @@ commit;
 select * from target_row;
 id    u    v
 1    10    100
+create table repeated_target(id int primary key, u int unique, v int) partition by range(id*id) (partition p0 values less than (0), partition p1 values less than maxvalue);
+insert into repeated_target values (1,10,1);
+insert into repeated_target values (-1,10,999) on duplicate key update v=v+1;
+insert into repeated_target values (-1,10,999) on duplicate key update v=v+1;
+select id,u,v from repeated_target;
+id    u    v
+1    10    3
+select id,u,v from repeated_target where id=1;
+id    u    v
+1    10    3
+select id,u,v from repeated_target where u=10;
+id    u    v
+1    10    3
+update repeated_target set v=v+1 where id=1;
+select id,u,v from repeated_target where id=1;
+id    u    v
+1    10    4
+delete from repeated_target where id=1;
+select count(*) from repeated_target;
+count(*)
+0
 drop database odku_resolved_target_lock;
