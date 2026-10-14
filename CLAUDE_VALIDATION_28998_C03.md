@@ -238,3 +238,16 @@ P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch
 - 该包仅含测试代码，coverprofile只有 `mode: atomic` 头，**明确排除为覆盖证据**；首次要求非空profile的资格校验拒绝保留，不将其冒充生产覆盖率。本次新增生产可执行token为0；既有生产输入完全不变，因此不扩张上一轮严格609/756=80.56%或race/restart/upgrade/public BVT的资格范围。未重新跑完整Linux coverage。
 - 被取消的普通UT/PROXY不算成功或产品失败；PROXY诊断日志未见panic/fatal/data-race签名，但不是完整测试通过证明。CI Required失败是门禁汇总结果。修复交付后远端Linux green仍须终态证据，不能从本地PASS推断。
 - 本轮未合并新上游：fetch所得 `mo/main=2e139d84bf8ad297fd3c08782c5b9c113213416d` 留作上下文；当前请求限CI修复，不扩大为11个新上游提交的维护重验。
+
+
+## CI 后续修复：旧分区宽表 COPY 阶段预算（065d71 起点）
+
+- 精确远端输入：`065d71ecf71468db31513804bb5c500f5832ead9`，run `38534034119` / UT job `115755398553`。只有 `TestLegacyPartitionColumnLimitCopy` 及其包失败；coverage及上一轮multicn修复已通过。`CI Required` 是门禁汇总，不是第二个测试故障。
+- 首次 `gh run view` 输出中途结束；diagnostic artifact预算也删除失败输出。随后使用 `gh api --allow-escape-sequences` 得到完整2795385字节原始日志，确认原第186行 `alter table wide add replacement int, drop c4096` 在11:35:20报 `context deadline exceeded`。整个case共享180秒上下文，前面的准备及多次4098列COPY已消耗其预算；193.16秒包含后续独立cleanup/quarantine，不能当作单条SQL的执行耗时。
+- 最小fixture：seed只保留相同的c0主键/hash(c0)/2分区模板；现有typed engine仍生成真正4098列的父表及两个分区子表。全部原require断言逐行比对一致；4098→4097→4096、两行95/195、rollback、replacement、1117/HY000、2分区、无copy残留、会话存活和最终数据库清理均不变。正常CREATE4096边界仍有原planner UT及公共table_column_limit SQL，不删其oracle。
+- 预算修复：按已有seeding/rollback/committed shrink/replacement/final reduction/cleanup状态边界分配上下文，**每阶段仍限180秒，总测试上限明确由180秒改为600秒**。上一context即时cancel，最后context及外层context均defer释放；不增加单阶段预算，不添加重试/sleep/skip，不改生产等待或公共20000000行PK COPY的120000ms socket预算。
+- 本地Go1.27.1/native，原源码focused race PASS79.70秒。仅缩小seed候选race PASS92.79秒且有并行static编译，不能据此声称提速或CI已修复。最终 `-race -tags=matrixone_test` 测量PASS75.11秒；B=30秒，N=clamp(floor(B/T),1,100)=1，独立同模式replay PASS67.47秒。所有完整package终态与exit均为0，不把首轮候选冒充最终输入资格。
+- 最终普通完整 `pkg/tests/sqlintegration` 包PASS185.833秒 / exit0，42 top-level与301含子用例PASS事件，目标用例10.55秒；最终gofmt、vet、增量lint及whitespace检查通过。源码SHA256 `9eaf2a7d5b65884936f33666b50fe3820ad099b1fccc36d93a8aea29b652878a` 与资格记录一致。
+- 没有生产可执行token差异；既有严格609/756=80.56%的生产输入未改，但不把旧profile扩张为新一轮完整coverage/race/restart/upgrade资格。未改公共BVT SQL/result或共享fixture所有者，因此不新增重复BVT/全包race。
+- 构建期间按既有16GiB保留/>17GiB准入边界回收确认闲置的Go archive缓存：记录哈希、mtime、open handles、当前response/importcfg及活动build-root pins；保留源码/WIP/模块/原生产物/诊断/worktree和无关进程。逻辑回收字节不等于APFS物理回收量。
+- 仍保留原始Linux失败、截断输出、初始API转义拒绝、baseline与候选测量。最终本地PASS不能证明新提交远端Linux绿色；以推送后确切head终态为准。
