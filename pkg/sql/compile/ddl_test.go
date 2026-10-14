@@ -1674,6 +1674,24 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 }
 
 func TestScope_CreateView(t *testing.T) {
+	t.Run("replace_rc_without_database", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, catalog.System_Account)
+		op := mock_frontend.NewMockTxnOperator(ctrl)
+		op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+		proc.Base.TxnOperator = op
+		// No engine, lockservice or Snapshot calls are permitted: an empty
+		// database must be rejected before lifecycle admission has side effects.
+		eng := mock_frontend.NewMockEngine(ctrl)
+		proc.Base.LockService = mock_lock.NewMockLockService(ctrl)
+		scope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateView{CreateView: &plan2.CreateView{
+				Replace: true, TableDef: &plan2.TableDef{Name: "v"},
+			}},
+		}}}}
+		require.True(t, moerr.IsMoErrCode(scope.CreateView(&Compile{proc: proc, e: eng}), moerr.ErrNoDB))
+	})
 	tableDef := &plan.TableDef{
 		Name: "v1",
 		Cols: []*plan.ColDef{
