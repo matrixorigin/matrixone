@@ -14,8 +14,6 @@
 
 package mysql
 
-package mysql
-
 import (
 	"context"
 	"testing"
