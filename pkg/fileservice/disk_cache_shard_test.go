@@ -23,6 +23,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -81,6 +82,67 @@ func TestDiskCacheSpreadsFilesAcrossShards(t *testing.T) {
 	rel, err := filepath.Rel(cache.path, cache.pathForFile(path))
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(diskCacheShard(path), "fullquery_result", "ws_1_2_3.blk"+cacheFileSuffix), rel)
+}
+
+func TestDiskCachePathsNormalizeDotSegments(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	// "foo/./bar" and "foo/bar" name the same backing object (this mirrors
+	// how S3 and the rest of fileservice treat them, see ParsePath/path.Clean
+	// elsewhere in this package). filepath.Join cleans the "full..."/"N-N..."
+	// filename component for free, so the shard has to be derived from the
+	// same cleaned form, or the two spellings would be sharded apart and a
+	// delete issued through one spelling would leave the other reachable.
+	require.Equal(t, cache.pathForFile("foo/bar"), cache.pathForFile("foo/./bar"))
+	require.Equal(t,
+		cache.pathForIOEntry("foo/bar", IOEntry{Offset: 1, Size: 2}),
+		cache.pathForIOEntry("foo/./bar", IOEntry{Offset: 1, Size: 2}),
+	)
+}
+
+// TestDiskCacheAliasDelete and TestDiskCacheS3AliasDelete reproduce a review
+// finding against the initial version of this change: diskCacheShard hashed
+// the raw, uncleaned object path, so an alias like "foo/./bar" sharded apart
+// from "foo/bar" even though they name the same object. A delete or
+// overwrite issued through one spelling left the other's cache entry
+// reachable and stale.
+func TestDiskCacheAliasDelete(t *testing.T) {
+	ctx := context.Background()
+	cache := newLifecycleTestDiskCache(t)
+	const original = "foo/./bar"
+	const canonical = "foo/bar"
+	require.Equal(t, pathpkg.Join("prefix", original), pathpkg.Join("prefix", canonical))
+	require.NoError(t, cache.SetFile(ctx, original, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("old"))), nil
+	}))
+	require.NoError(t, cache.DeletePaths(ctx, []string{canonical}))
+	v := &IOVector{FilePath: original, Entries: []IOEntry{{Offset: 0, Size: 3}}}
+	defer v.Release()
+	require.NoError(t, cache.Read(ctx, v))
+	require.False(t, v.Entries[0].done, "alias deletion must invalidate the full file for the same backing object")
+}
+
+func TestDiskCacheS3AliasDelete(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, DisabledCacheConfig, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close(ctx) })
+	cache := newLifecycleTestDiskCache(t)
+	s.diskCache = cache
+	const original = "foo/./bar"
+	const canonical = "foo/bar"
+	write := func(data string) {
+		require.NoError(t, s.Write(ctx, IOVector{FilePath: original, Entries: []IOEntry{{Size: 3, Data: []byte(data)}}, Policy: SkipFullFilePreloads}))
+	}
+	write("old")
+	require.NoError(t, cache.SetFile(ctx, original, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("old"))), nil
+	}))
+	require.NoError(t, s.Delete(ctx, canonical))
+	write("new")
+	v := &IOVector{FilePath: original, Entries: []IOEntry{{Offset: 0, Size: 3}}, Policy: SkipMemoryCache | SkipDiskCacheWrites}
+	defer v.Release()
+	require.NoError(t, s.Read(ctx, v))
+	require.Equal(t, []byte("new"), v.Entries[0].Data, "reading rewritten S3 object must not return its deleted predecessor")
 }
 
 func TestDiskCacheDecodeFilePathAcceptsBothLayouts(t *testing.T) {
@@ -250,6 +312,19 @@ func TestDiskCacheENOSPCEvictsWhenFilesystemIsExhausted(t *testing.T) {
 		cache.evictForDiskFull(context.Background(), enospc)
 		require.Equal(t, used-n, cache.cache.Used())
 	})
+}
+
+// TestDiskCacheSmallInodeFilesystemTriggersEviction reproduces a review
+// finding: totalInodes/100 truncates to zero on a filesystem with under 100
+// inodes total, so freeInodes < 0 could never be true and zero free inodes
+// was never recognized as exhaustion.
+func TestDiskCacheSmallInodeFilesystemTriggersEviction(t *testing.T) {
+	cache, used := newDiskFullTestCache(t)
+	cache.statFilesystem = func(string) (diskCacheFilesystemStat, bool) {
+		return diskCacheFilesystemStat{availableBytes: 1 << 40, totalInodes: 64, freeInodes: 0}, true
+	}
+	cache.evictForDiskFull(context.Background(), &fs.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC})
+	require.Less(t, cache.cache.Used(), used, "zero free inodes must trigger eviction even when total inodes is below 100")
 }
 
 func TestDiskCacheQuotaExceededEvictsRegardlessOfFilesystem(t *testing.T) {

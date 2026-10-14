@@ -23,6 +23,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -687,7 +688,11 @@ func (d *DiskCache) filesystemExhausted(wantBytes int64) bool {
 		return true
 	}
 	// Filesystems with dynamic inode allocation report zero total inodes.
-	return stat.totalInodes > 0 && stat.freeInodes < stat.totalInodes/100
+	// Cross-multiply instead of dividing totalInodes by 100: on a filesystem
+	// with under 100 inodes total, that division truncates to zero and
+	// freeInodes < 0 can never be true, so zero free inodes would never be
+	// recognized as exhaustion.
+	return stat.totalInodes > 0 && stat.freeInodes*100 < stat.totalInodes
 }
 
 func (d *DiskCache) createCacheTempFile(dir string) (*os.File, error) {
@@ -940,6 +945,13 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	if entry.Size < 0 {
 		panic("should not cache size -1 entry")
 	}
+	// Different spellings of the same object path (for example "foo/./bar"
+	// and "foo/bar") must land on the same disk path, or a delete issued
+	// with one spelling leaves a stale entry reachable under another.
+	// filepath.Join below already cleans the "full..."/"N-N..." component,
+	// so the shard has to be derived from the same cleaned form or the two
+	// spellings would be sharded apart even though the filename collides.
+	path = pathpkg.Clean(path)
 	return filepath.Join(
 		d.path,
 		diskCacheShard(path),
@@ -948,6 +960,7 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 }
 
 func (d *DiskCache) pathForFile(path string) string {
+	path = pathpkg.Clean(path)
 	return filepath.Join(
 		d.path,
 		diskCacheShard(path),
