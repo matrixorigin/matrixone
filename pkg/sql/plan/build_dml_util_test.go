@@ -1295,4 +1295,36 @@ func TestAppendPreInsertPlanPreservesUpdateRowIDForV1Unique(t *testing.T) {
 	require.Equal(t, int32(types.T_int32), preInsert.ProjectList[1].Typ.Id)
 	require.Equal(t, int32(types.T_Rowid), preInsert.ProjectList[2].Typ.Id)
 	require.Equal(t, catalog.Row_ID, preInsert.ProjectList[2].GetCol().Name)
+
+	// INSERT streams do not carry a trailing rowid.  The V1 key must therefore
+	// be appended after the existing projection instead of being inserted before
+	// its last column.
+	_, err = appendPreInsertPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		sourceID,
+		0,
+		false,
+		false,
+		uniqueTableDef,
+		true,
+	)
+	require.NoError(t, err)
+
+	var insertPreInsert *plan.Node
+	for i := len(builder.qry.Nodes) - 1; i >= 0; i-- {
+		if builder.qry.Nodes[i].NodeType == plan.Node_PRE_INSERT_UK {
+			insertPreInsert = builder.qry.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, insertPreInsert)
+	insertKeyProject := builder.qry.Nodes[insertPreInsert.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, insertKeyProject.NodeType)
+	require.Len(t, insertKeyProject.ProjectList, 4)
+	require.Equal(t, int32(types.T_Rowid), insertKeyProject.ProjectList[2].Typ.Id)
+	require.Equal(t, int32(2), insertKeyProject.ProjectList[2].GetCol().ColPos)
+	require.Equal(t, int32(types.T_varbinary), insertKeyProject.ProjectList[3].Typ.Id)
+	require.Equal(t, "physical_collation_key", insertKeyProject.ProjectList[3].GetF().Func.ObjName)
 }
