@@ -30,7 +30,9 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -369,4 +371,58 @@ func TestDiskCacheConcurrentDiskFullFailuresEvictOnce(t *testing.T) {
 	cache.cache.Evict(context.Background(), done, 0)
 	<-done
 	require.Equal(t, used-n, cache.cache.Used())
+}
+
+func TestDiskCacheDeleteRemovesLegacyLayoutFile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// A pre-upgrade binary left a legacy, unsharded cache file on disk; the
+	// fix never migrates it, only ages it out (option B), so it is still
+	// present when the current binary starts up and indexes it.
+	legacyFull := filepath.Join(dir, "fullfoo"+cacheFileSuffix)
+	require.NoError(t, os.WriteFile(legacyFull, []byte("stale"), 0o644))
+
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	require.True(t, cache.cache.Contains(legacyFull))
+
+	require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
+
+	_, err = os.Stat(legacyFull)
+	require.True(t, os.IsNotExist(err), "delete must remove the leftover legacy-layout file, not just the new sharded path")
+	require.False(t, cache.cache.Contains(legacyFull))
+}
+
+func TestDiskCacheDeleteInvalidatesLegacyLayoutBeforeRestore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Same setup as TestDiskCacheDeleteRemovesLegacyLayoutFile: a legacy
+	// full-file cache entry left over from before an upgrade.
+	legacyFull := filepath.Join(dir, "fullfoo"+cacheFileSuffix)
+	require.NoError(t, os.WriteFile(legacyFull, []byte("stale"), 0o644))
+
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	require.True(t, cache.cache.Contains(legacyFull))
+
+	s, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, DisabledCacheConfig, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close(ctx) })
+	s.diskCache = cache
+
+	require.NoError(t, s.Delete(ctx, "foo"))
+
+	// Without the fix, the orphaned legacy file is still on disk here, and
+	// the directory walk below treats it as live cache content.
+	counterSet := new(perfcounter.CounterSet)
+	ctx = perfcounter.WithCounterSet(ctx, counterSet)
+	s.restoreFromDiskCache(ctx)
+	require.Equal(t, int64(0), counterSet.FileService.S3.Put.Load(), "restoring from disk cache must not resurrect an explicitly deleted object from a stale legacy cache file")
+
+	err = s.Read(ctx, &IOVector{FilePath: "foo", Entries: []IOEntry{{Size: 3}}})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }

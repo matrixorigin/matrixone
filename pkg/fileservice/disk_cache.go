@@ -968,6 +968,17 @@ func (d *DiskCache) pathForFile(path string) string {
 	)
 }
 
+// legacyPathForFile reproduces the pre-sharding on-disk name for path, i.e.
+// what pathForFile returned before shard directories were introduced. It is
+// never written to going forward; it exists solely so removeOnePath can find
+// and invalidate a leftover legacy-layout cache file on delete.
+func (d *DiskCache) legacyPathForFile(path string) string {
+	return filepath.Join(
+		d.path,
+		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
+	)
+}
+
 var ErrNotCacheFile = errorStr("not a cache file")
 
 // decodeFilePath accepts both the sharded layout and the unsharded layout
@@ -1322,6 +1333,23 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 		err = nil
 	}
 	d.cache.Delete(ctx, diskPath)
+
+	// A pre-upgrade binary may have left a legacy, unsharded cache file for this
+	// path (see the sharding comment on pathForFile). Legacy files are never
+	// migrated, but they must still be invalidated on delete: otherwise
+	// restoreFromDiskCache's directory walk (triggered by -fs-fix-missing /
+	// MO_FS_FIX_MISSING) can later read the orphaned legacy file back and
+	// resurrect data that was explicitly deleted.
+	if legacyPath := d.legacyPathForFile(path); legacyPath != diskPath {
+		if err = os.Remove(legacyPath); err != nil {
+			if !os.IsNotExist(err) {
+				return
+			}
+			err = nil
+		}
+		d.cache.Delete(ctx, legacyPath)
+	}
+
 	return
 }
 
