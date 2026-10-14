@@ -148,8 +148,7 @@ const (
 	MORPCVersion110 int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
 	MORPCVersion111 int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112 int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
-	// MORPCVersion113 adds closed capability-gated nonblocking locks and
-	// expression metadata used by the Issue 25107 compatibility functions.
+	// MORPCVersion113 adds capability-gated nonblocking row-lock admission.
 	MORPCVersion113    int64 = 113
 	MORPCLatestVersion       = MORPCVersion113
 )
