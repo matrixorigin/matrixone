@@ -39,7 +39,7 @@ Project  𝄀
                           Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1000 outputRows=500 (min=500, max=500) InputSize=11.72 KiB OutputSize=3.91 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16.60 KiB (min=16.60 KiB, max=16.60 KiB)  𝄀
                           Filter Cond: (t.category = 1)  𝄀
   Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=10 bucket_windows=0:5, 5:10 row_limits=50, 50 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=1778240 centroid_blocks=1 centroid_rows=10 centroid_time_ns=1770058 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=50 entry_time_ns=706898 storage_filter_rows=0:0 vector_rows_scored=500 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=50 output_rows=50
+  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=1807368 centroid_blocks=1 centroid_rows=10 centroid_time_ns=1598421 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=50 entry_time_ns=584954 storage_filter_rows=0:0 vector_rows_scored=500 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=50 output_rows=50
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10) x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -81,10 +81,10 @@ Project  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 10  𝄀
         ->  Vector Index Scan on i [l2_distance]  𝄀
-              Analyze: timeConsumed=0ms waitTime=2ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=320 bytes (min=320 bytes, max=320 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=1ms inputRows=10 outputRows=10 (min=10, max=10) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=320 bytes (min=320 bytes, max=320 bytes)  𝄀
               Vector Index: i, Metric: l2_distance, Candidate Limit: 10, NProbe: 5, Index Filter: __mo_index_pri_col BETWEEN 991 AND 1000  𝄀
   Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=10 bucket_windows=0:5, 5:10 row_limits=10, 10 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=91953 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=10 entry_time_ns=756042 storage_filter_rows=0:0 vector_rows_scored=10 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=10 output_rows=10
+  Vector Index Execution: search_count=1 readers=2 metadata_blocks=1 metadata_rows=1 metadata_time_ns=82978 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=10 entry_time_ns=610886 storage_filter_rows=0:0 vector_rows_scored=10 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=10 output_rows=10
 select count(*) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post') x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -138,7 +138,7 @@ Project  𝄀
                           Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1000 outputRows=500 (min=500, max=500) InputSize=11.72 KiB OutputSize=3.91 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16.60 KiB (min=16.60 KiB, max=16.60 KiB)  𝄀
                           Filter Cond: (t.category = 1)  𝄀
   Vector Index Search Summary: search_count=1 round_count=1 buckets_searched=5 bucket_windows=0:5 row_limits=50 empty_rounds=1  𝄀
-  Vector Index Execution: search_count=1 readers=1 metadata_blocks=1 metadata_rows=1 metadata_time_ns=84782 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=1 entry_blocks_read=0 entry_output_rows=0 entry_time_ns=171940 storage_filter_rows=0:0 vector_rows_scored=0 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=0 output_rows=0
+  Vector Index Execution: search_count=1 readers=1 metadata_blocks=1 metadata_rows=1 metadata_time_ns=77524 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=1 entry_blocks_read=0 entry_output_rows=0 entry_time_ns=190572 storage_filter_rows=0:0 vector_rows_scored=0 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=0 output_rows=0
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -146,24 +146,20 @@ select group_concat(id order by id) from (select id from t where id in (3, 700, 
 ➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
 3
 select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-501,502,503,504,505,506,507,508,509,510
-select group_concat(id order by id) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-991,992,993,994,995,996,997,998,999,1000
+invalid input: mode=include is deprecated. use mode=pre, post, iterative
 create table t_cos(id bigint primary key, v vecf32(4));
 insert into t_cos select result, cast(concat('[', sin(result), ',', cos(result * 1.3), ',', sin(result * 0.7), ',', cos(result * 2.1), ']') as vecf32(4)) from generate_series(1, 3000, 1) g;
 create index i_cos using ivfflat on t_cos(v) lists = 16 op_type 'vector_cosine_ops';
 create table t_cos_ref(id bigint primary key, category int);
 insert into t_cos_ref select result, result % 2 from generate_series(1, 3000, 1) g;
-select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=include') x;
+select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 ➤ count(*)[-5,64,0]  ¦  count(distinct id)[-5,64,0]  𝄀
 37  ¦  37
 select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 ➤ count(*)[-5,64,0]  ¦  count(distinct id)[-5,64,0]  𝄀
 37  ¦  37
-create table t_inc(id bigint primary key, category int not null, v vecf32(2));
-insert into t_inc select id, category, v from t;
+create table t_inc(id bigint primary key, category int not null, tag int, v vecf32(2));
+insert into t_inc select id, category, tag, v from t;
 create index i_inc using ivfflat on t_inc(v) lists = 10 op_type 'vector_l2_ops' include(category);
 explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10;
 -- @regex("Index Filter: [^\n]*category", true)
@@ -220,19 +216,33 @@ select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 1
 509  𝄀
 510
 explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
--- @regex("Index Filter: [^\n]*category", false)
--- @regex("Join Type: SEMI", true)
-➤ AP QUERY PLAN ON ONE CN(8 core)[12,-1,0]  𝄀
+-- @regex("Index Filter: [^\n]*category", true)
+-- @regex("Join Type: SEMI", false)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 10  𝄀
+        ->  Vector Index Scan on i_inc [l2_distance]  𝄀
+              Vector Index: i_inc, Metric: l2_distance, Candidate Limit: 10, NProbe: 5, Index Filter: (__mo_index_include_category = 1)
+select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre', 'nprobe=10') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+501,502,503,504,505,506,507,508,509,510
+explain select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre';
+-- @regex("Index Filter: [^\n]*category", true)
+-- @regex("Join Type: SEMI", true)
+-- @regex("Filter Cond: \(t_inc.tag = 4\), \(t_inc.category = 1\)", true)
+➤ AP QUERY PLAN ON ONE CN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 5  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (t_inc.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_filtered_search_ivfflat.t_inc  𝄀
-                    Filter Cond: (t_inc.category = 1)  𝄀
+                    Filter Cond: (t_inc.tag = 4)  𝄀
                     Runtime Filter Probe: t_inc.id  𝄀
               ->  Join  𝄀
                     Join Type: SEMI  𝄀
@@ -240,9 +250,15 @@ Project  𝄀
                     Runtime Filter Build: #[10,0]  𝄀
                     ->  Vector Index Scan on i_inc [l2_distance]  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
-                          Vector Index: i_inc, Metric: l2_distance, Candidate Limit: 10, NProbe: 5  𝄀
+                          Vector Index: i_inc, Metric: l2_distance, Candidate Limit: 5, NProbe: 5, Index Filter: (__mo_index_include_category = 1)  𝄀
                     ->  Table Scan on vector_filtered_search_ivfflat.t_inc  𝄀
-                          Filter Cond: (t_inc.category = 1)
+                          Filter Cond: (t_inc.tag = 4), (t_inc.category = 1)
+select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre', 'nprobe=10') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+514,524,544,554,574
+select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=force') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+514,524,544,554,574
 explain select id from t_inc where category = 1 and id > 500 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 -- @regex("Index Filter: [^\n]*__mo_index_pri_col > 500", true)
 -- @regex("Index Filter: [^\n]*category", false)

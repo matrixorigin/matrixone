@@ -33,7 +33,7 @@ select group_concat(id order by id) from (select id from t_ivfpq where category 
 -- @regex("Internal Top-K: 1000, Max Internal Top-K: 2000, Max NProbe: 2", true)
 explain select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'nprobe=2', 'itopk=1000', 'max_itopk=2000', 'max_nprobe=2';
 
--- iterative applies to cagra and ivfpq; include is ivfflat only
+-- iterative applies to cagra and ivfpq; mode=include is deprecated: an error
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative';
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative';

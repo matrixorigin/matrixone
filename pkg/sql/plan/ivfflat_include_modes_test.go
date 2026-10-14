@@ -415,6 +415,63 @@ func TestApplyIndicesForSortUsingIvfflat_ElidesImpliedVectorNotNullOnlyForSyncPo
 	})
 }
 
+// The membership producer scan applies the filters of the index search too, so the
+// membership key set holds only rows that pass every filter.
+func TestApplyIndicesForSortUsingIvfflat_MembershipProducerAppliesIndexFilters(t *testing.T) {
+	for _, mode := range []string{"pre", "iterative"} {
+		t.Run(mode, func(t *testing.T) {
+			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+			scanTag := scanNode.BindingTags[0]
+			filter := func(colPos int32, name, fn string, val *plan.Expr) *plan.Expr {
+				return &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: fn},
+						Args: []*plan.Expr{
+							{Typ: scanNode.TableDef.Cols[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: colPos, Name: name}}},
+							val,
+						},
+					}},
+				}
+			}
+			scanNode.FilterList = []*plan.Expr{
+				filter(3, "category", ">=", MakePlan2Int32ConstExprWithType(20)),
+				filter(0, "id", ">", MakePlan2Int64ConstExprWithType(7)),
+				filter(4, "note", "=", makePlan2StringConstExprWithType("n2")),
+			}
+
+			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, mode, 0, 2, 4)
+			_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+			require.NoError(t, err)
+
+			tableFuncNode := findIvfTableFunctionNode(builder, builder.qry.Nodes[vecCtx.projNode.Children[0]].Children[0])
+			require.NotNil(t, tableFuncNode)
+			require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 2)
+			require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+
+			// the row-fetch scan keeps the residual filter only
+			require.Len(t, scanNode.FilterList, 1)
+			require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
+
+			var producers [][]string
+			for _, node := range builder.qry.Nodes {
+				if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.NodeId == scanNode.NodeId {
+					continue
+				}
+				var names []string
+				for _, expr := range node.FilterList {
+					col := expr.GetF().Args[0].GetCol()
+					require.Equal(t, node.BindingTags[0], col.RelPos, "producer filters are bound to the copied scan")
+					names = append(names, col.Name)
+				}
+				producers = append(producers, names)
+			}
+			require.Len(t, producers, 1)
+			require.ElementsMatch(t, []string{"category", "id", "note"}, producers[0])
+		})
+	}
+}
+
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidualFilter(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
@@ -446,7 +503,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 		},
 	}
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 4)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 4)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -500,7 +557,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 		},
 	}
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 4)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 4)
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
 
@@ -549,7 +606,7 @@ func TestApplyIndicesForSortUsingIvfflat_ProtocolVersionDoesNotGateScan(t *testi
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(
-		scanNode, scanNodeID, "include", 0, 2, 4)
+		scanNode, scanNodeID, "iterative", 0, 2, 4)
 	gotNodeID, err := builder.applyIndicesForSortUsingIvfflat(
 		scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -559,7 +616,7 @@ func TestApplyIndicesForSortUsingIvfflat_ProtocolVersionDoesNotGateScan(t *testi
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_PreModeUsesIncludePushdown(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -585,17 +642,16 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
-	require.Equal(t, plan.Node_JOIN, builder.qry.Nodes[sortNode.Children[0]].NodeType)
-
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
-	require.NotNil(t, tableFuncNode)
-	require.Len(t, tableFuncNode.TableDef.Cols, 2)
+	// the INCLUDE columns cover the filter and the projection: an index-only scan
+	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tableFuncNode.NodeType)
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
-	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
-	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
-	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.False(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
+	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
+	require.Equal(t, catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category", tableFuncNode.IndexSearchScan.PreFilters[0].GetF().Args[0].GetCol().Name)
+	require.Empty(t, tableFuncNode.RuntimeFilterProbeList)
+	require.Empty(t, scanNode.FilterList)
+	require.False(t, testIvfScanOptions(t, tableFuncNode.IndexSearchScan).Iterative)
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindow(t *testing.T) {
@@ -609,12 +665,9 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindo
 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
-	require.Equal(t, plan.Node_JOIN, builder.qry.Nodes[sortNode.Children[0]].NodeType)
-
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
-	require.NotNil(t, tableFuncNode)
-	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
+	// the INCLUDE columns cover the projection: an index-only scan
+	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tableFuncNode.NodeType)
 	require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.False(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
@@ -638,6 +691,7 @@ func TestApplyIndicesForSortUsingIvfflat_AsyncIndexForcesOneCN(t *testing.T) {
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t *testing.T) {
+	// note is not an INCLUDE column: the filter reaches the search through membership
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -648,8 +702,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 				F: &plan.Function{
 					Func: &plan.ObjectRef{ObjName: "="},
 					Args: []*plan.Expr{
-						{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
-						MakePlan2Int32ConstExprWithType(20),
+						{Typ: scanNode.TableDef.Cols[4].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 4, Name: "note"}}},
+						makePlan2StringConstExprWithType("n2"),
 					},
 				},
 			},
@@ -688,7 +742,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPo
 	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IncludedColumns = nil
 	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IncludedColumns = nil
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -724,7 +778,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownWidens(t *t
 		},
 	}
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -760,7 +814,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownCandidateLimitInclud
 		},
 	}
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 3)
 	setIvfIncludeModeTestPagination(vecCtx, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
@@ -781,7 +835,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownCandidateLimitInclud
 func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleCountOffset(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "iterative", 0, 2, 3)
 	setIvfIncludeModeTestPagination(vecCtx, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
@@ -799,7 +853,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleC
 	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_IncludeModeIsIterativeMode(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_PreMatchesIterativeIndexFilters(t *testing.T) {
 	type shape struct {
 		root            plan.Node_NodeType
 		preFilters      int
@@ -844,11 +898,10 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIsIterativeMode(t *testing.T
 	}
 	for _, covered := range []bool{true, false} {
 		iterative := build("iterative", covered)
-		require.Equal(t, iterative, build("include", covered), "covered=%v", covered)
 		require.True(t, iterative.opts.Iterative)
 		pre := build("pre", covered)
 		require.False(t, pre.opts.Iterative)
 		require.Zero(t, pre.opts.BucketExpandStep)
-		require.Zero(t, pre.preFilters, "pre does not use INCLUDE columns")
+		require.Equal(t, iterative.preFilters, pre.preFilters, "pre uses INCLUDE columns as iterative, covered=%v", covered)
 	}
 }

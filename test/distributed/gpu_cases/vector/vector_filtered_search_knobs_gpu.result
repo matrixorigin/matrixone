@@ -60,9 +60,9 @@ Project  𝄀
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative';
 ➤ id[-5,64,0]
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
-not supported: mode=include on index type cagra
+invalid input: mode=include is deprecated. use mode=pre, post, iterative
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative';
 ➤ id[-5,64,0]
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
-not supported: mode=include on index type ivfpq
+invalid input: mode=include is deprecated. use mode=pre, post, iterative
 drop database vector_filtered_search_knobs_gpu;

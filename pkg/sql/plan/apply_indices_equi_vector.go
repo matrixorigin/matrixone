@@ -44,7 +44,7 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	}
 	if sort.RankOption != nil {
 		switch sort.RankOption.Mode {
-		case "", "pre", "iterative", "include":
+		case "", "pre", "iterative":
 		default:
 			return nil
 		}

@@ -78,8 +78,6 @@ func TestEquiVectorTopKPublicPlan(t *testing.T) {
 				order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=pre'`},
 			{"iterative", `select a.id,b.label from equi_chunks a join equi_documents b on a.document_id=b.document_id
 				order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=iterative'`},
-			{"include", `select a.id,b.label from equi_chunks a join equi_documents b on a.document_id=b.document_id
-				order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=include'`},
 			{"indexed_right", `select a.id,b.label from equi_documents b join equi_chunks a on b.document_id=a.document_id
 				order by l2_distance(a.v,'[0,0]') limit 2`},
 			{"distance_alias", `select a.id,b.label,l2_distance(a.v,'[0,0]') as distance

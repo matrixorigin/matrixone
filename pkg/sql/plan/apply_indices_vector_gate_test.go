@@ -88,22 +88,11 @@ func TestCheckVectorSearchMode(t *testing.T) {
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, ivfflat))
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, catalog.MoIndexHnswAlgo.ToString()))
 	}
-
-	// mode=include is ivfflat only
-	include := &vectorSortContext{rankOption: &planpb.RankOption{Mode: "include"}}
-	require.NoError(t, checkVectorSearchMode(ctx, include, ivfflat))
-	for _, algo := range []string{
-		catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
-	} {
-		err := checkVectorSearchMode(ctx, include, algo)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), algo)
-		require.ErrorContains(t, err, "mode=include on index type "+algo)
-	}
 }
 
 func TestIvfIterativeMode(t *testing.T) {
 	require.True(t, ivfIterativeMode("iterative"))
-	require.True(t, ivfIterativeMode("include"))
+	require.False(t, ivfIterativeMode("include"))
 	require.False(t, ivfIterativeMode("pre"))
 	require.False(t, ivfIterativeMode(""))
 }

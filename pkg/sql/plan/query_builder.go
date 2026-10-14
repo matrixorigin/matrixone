@@ -14107,9 +14107,12 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		// - "force": Force disable vector index, use full table scan
 		// - "auto": Adaptive mode that automatically selects the best strategy
 		// - "iterative": "pre" that widens the search until LIMIT rows qualify or a cap is reached
-		// - "include": ivfflat only, the same as "iterative"
-		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "include" && modeLower != "auto" && modeLower != "iterative" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', 'iterative', or 'include', got '%s'", mode)
+		// - "include": deprecated, an error
+		if modeLower == "include" {
+			return nil, moerr.NewInvalidInput(ctx, "mode=include is deprecated. use mode=pre, post, iterative")
+		}
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "auto" && modeLower != "iterative" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto' or 'iterative', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}

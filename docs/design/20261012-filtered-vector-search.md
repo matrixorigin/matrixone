@@ -80,7 +80,7 @@ resumable cursor (`IvfSearchCursor`), so its widening continues.
 | no option (default) | `post`, except that filters on INCLUDE columns also run inside the index search |
 | `pre` | the filter runs inside one index search (per algorithm below) |
 | `iterative` | `pre` whose search widens while the page is short, up to `max_itopk` / `max_nprobe` |
-| `include` | ivfflat only: `iterative` (the name INCLUDE columns introduced, #24168) |
+| `include` | deprecated: an error on every index, `mode=include is deprecated. use mode=pre, post, iterative` |
 | `auto` | `ADAPTIVE_TOP [post, pre, force]`: the next branch runs when the previous one is short |
 | `force` | exact search without the vector index |
 
@@ -89,10 +89,10 @@ How each index runs the filter inside its search:
 | | `pre` | `iterative` |
 |---|---|---|
 | hnsw | membership: the keys of the filtered rows (PRE shape) | membership, widening |
-| ivfflat | primary-key filters in the search; any other filter through membership | INCLUDE-column and primary-key filters in the search; any other filter through membership |
+| ivfflat | INCLUDE-column and primary-key filters in the search; any other filter through membership | as `pre`, widening |
 | cagra, ivfpq | INCLUDE-column and primary-key filters in the GPU search; every other filter after it | as `pre`, widening only when the GPU search holds every filter |
 
-`mode=include` on hnsw, cagra or ivfpq is an error. Every vector index supports `pre`,
+`mode=include` is an error on every index. Every vector index supports `pre`,
 `iterative` and `auto`; the capability check is by interface (below), so an index that supports
 neither membership nor an index filter rejects them.
 
@@ -226,10 +226,14 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   `IvfSearchCursor` ranks the centroids once; a round scans the next lists' entries with the
   membership set and the filters the index search evaluates (INCLUDE columns and the primary
   key), up to its row limit.
-- Filters in the search: the primary key in every mode; INCLUDE columns in the default mode,
-  `iterative` / `include` and `auto`, not in `pre` or `post`.
-  No membership join is built when the index search evaluates every filter. A membership set of
-  100 keys or fewer (`exactPkFilterThreshold`) scans those keys in every list.
+- Filters in the search: a single-column primary key in every mode; INCLUDE columns in every
+  mode but `post` (default, `pre`, `iterative`, `auto`). A filter on an INCLUDE
+  column in the search admits only qualifying entries, so a round returns more qualifying rows
+  than when the filter runs after it.
+  No membership join is built when the index search evaluates every filter. Otherwise the
+  membership producer scan applies every filter, those the index search evaluates included, so
+  the key set holds only rows that pass all of them. A membership set of 100 keys or fewer
+  (`exactPkFilterThreshold`) scans those keys in every list.
 - `pre`, `post` and the default mode search one round of `nprobe` lists. `post` with a filter on
   an INCLUDE column builds `ADAPTIVE_TOP [post, force]` where a non-empty `post` page wins, so an
   empty page runs the exact sort.
@@ -297,7 +301,7 @@ type MembershipHooks interface{ SupportsMembership() bool }   // hnsw, ivfflat
 type IndexFilterHooks interface{ SupportsIndexFilter() bool } // cagra, ivfpq, ivfflat
 ```
 
-`pre`, `iterative` and `auto` need either; `include` needs both. They replace the algorithm-name
+`pre`, `iterative` and `auto` need either. They replace the algorithm-name
 checks in `vectorIndexSupportsContext` (`pkg/sql/plan/apply_indices.go`) and
 `apply_indices_vector.go`. The mode check runs after an index proves it serves the query, so an
 index the planner does not use cannot reject the query.
@@ -371,8 +375,8 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - **Membership**: no version change; an older hnsw, cagra or ivfpq reader refuses
   `MembershipFilterRequired`, so a CN of an older build fails a PRE plan instead of ignoring the
   filter.
-- **Defaults**: the default mode is unchanged; widening runs only under `mode=iterative` (or
-  ivfflat's `include`).
+- **Defaults**: the default mode is unchanged; widening runs only under `mode=iterative`.
+  `mode=include`, ivfflat's earlier name for it (#24168), is an error naming its replacements.
 - **Scan options**: `iterative` is a field of the hnsw, cagra, ivfpq and ivfflat `algo_options`
   JSON. A CN of an older build ignores it: hnsw, cagra and ivfpq search once; ivfflat widens a
   scan marked multi-round (`BucketExpandStep`) and searches a membership scan once.
@@ -412,21 +416,21 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 | # | Claim | Black-box test |
 |---|---|---|
 | 1 | A query without a mode or knob returns the rows it returns on main, on all four indexes, except an ivfflat query vector that ties every centroid (claim 15). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
-| 2 | `pre`, `iterative` and `auto` are accepted on hnsw, ivfflat, cagra and ivfpq; `include` is accepted on ivfflat and rejected on hnsw, cagra and ivfpq. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
+| 2 | `pre`, `iterative` and `auto` are accepted on hnsw, ivfflat, cagra and ivfpq; `include` is rejected on every index as deprecated. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk` and `max_itopk` are accepted on every vector index, `nprobe` and `max_nprobe` on ivfflat and ivfpq only; values must be positive integers with a cap at least its start. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
 | 4 | `EXPLAIN` shows `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and `NProbe` from the SQL options. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
 | 5 | A `SET vector_itopk` or `SET vector_max_nprobe` after `PREPARE` applies to the next `EXECUTE` and stops applying once reset; the SQL option wins over the session variable. | `cases/vector/vector_filtered_search_knobs.sql` |
 | 6 | With one search, `itopk` covering the index returns a full page on the issue fixture where the default budget returns none, on all four indexes (ids 501..510 on all but cagra, whose graph build is not deterministic); `max_itopk` lowers `itopk`. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 7 | `post` runs one search: `max_itopk` and `max_nprobe` without `itopk` do not change its rows. | `cases/vector/vector_filtered_search_knobs.sql` |
-| 8 | `post` runs only primary-key filters inside the index search; the default mode also runs INCLUDE-column filters there (cagra, ivfpq, ivfflat); ivfflat `pre` does not use INCLUDE columns and `iterative` does; ivfflat `post` with a filter on an INCLUDE column runs `force` when its page is empty. | `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql` |
+| 8 | `post` runs only primary-key filters inside the index search; the default mode also runs INCLUDE-column filters there (cagra, ivfpq, ivfflat); ivfflat `pre` and `iterative` also run them there, `pre` without a membership join when every filter is on an INCLUDE column or the primary key; ivfflat `post` with a filter on an INCLUDE column runs `force` when its page is empty. | `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 9 | The issue fixture returns ids 501..510 in `pre` and `iterative` through the hnsw index, for l2 on a five-sub-index table and for cosine, where the default mode returns none. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_modes.sql` |
 | 10 | With the filter on an INCLUDE column, the issue fixture returns a full page in `pre` and `iterative` on cagra, and ids 501..510 in `iterative` on ivfpq where `pre` with `nprobe=1` returns none; with a filter outside the INCLUDE columns `iterative` searches once and the page is short. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 11 | `iterative` (hnsw, ivfflat) and `pre` (hnsw) return zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and the `force` rows when exactly or more than `LIMIT` qualify, with periodic, `IN`, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_ivfflat.sql` |
 | 12 | Each short-page cell a fixture reaches: with `max_nprobe` below what the filter needs the `iterative` page is short on ivfflat and ivfpq, and with the cap raised it fills; ivfflat and ivfpq `pre` search one round and are short on the issue fixture; hnsw `iterative` fills at `max_itopk` = `LIMIT`. | `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`, `cases/vector/vector_filtered_search_hnsw.sql` |
 | 13 | A bare `auto` top-k builds `ADAPTIVE_TOP` on hnsw, cagra and ivfpq; on hnsw it has a pre branch only with a filter, returns the `force` rows where `post` is short and where it fills, with a prepared `LIMIT`, and runs `force` for a region with more than one output column; on cagra and ivfpq it returns a full page where `post` is short. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw), `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq) |
 | 14 | A hybrid `MATCH` + vector top-k on hnsw uses the fulltext index and the vector index through the PRE shape and returns the rows of the table without a vector index; with a query vector from a provider row it keeps the exact sort. cagra and ivfpq keep the exact sort under `MATCH`. | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
-| 15 | ivfflat rounds scan each list once: a query vector that ties every centroid (a zero vector under cosine) returns no duplicate rows in `include` and `iterative`. | `cases/vector/vector_filtered_search_ivfflat.sql` |
-| 16 | ivfflat `include` returns the rows of `iterative`. | `cases/vector/vector_filtered_search_ivfflat.sql` |
+| 15 | ivfflat rounds scan each list once: a query vector that ties every centroid (a zero vector under cosine) returns no duplicate rows in `iterative`. | `cases/vector/vector_filtered_search_ivfflat.sql` |
+| 16 | ivfflat `pre` and `iterative` build the membership key set from every filter: an INCLUDE-column filter narrows the keys as well as the index search. | `cases/vector/vector_filtered_search_ivfflat.sql` |
 | 17 | An ivfpq search whose filter on an INCLUDE column admits no row in the probed lists returns no row instead of an error, in the default mode, `pre` and `iterative`. | `gpu_cases/vector/vector_filtered_search_gpu.sql`; `cgo/cuvs/test/ivf_pq_test.cu` `FilterEmptyInProbedListsPadsWithSentinels` |
 | 18 | `EXPLAIN` shows the filter the cagra and ivfpq search applies as SQL (`Index Filter`). | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 19 | On a cagra index over more than 1024 rows where fewer than `LIMIT` rows qualify, `iterative` returns the qualifying rows; `itopk` or `max_itopk` above 1024, as an SQL option or a session variable, is an error. | `gpu_cases/vector/vector_cagra_itopk_limit.sql` |
@@ -439,9 +443,11 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - The default mode is unchanged. `post` is one search with only primary-key filters inside it;
   there is no `post` widening.
 - `pre` is the filter inside one search; widening is `iterative` (pgvector's iterative scan).
-  `include` is ivfflat's existing name for it and is rejected on the other indexes. `auto`'s
+  `include`, ivfflat's earlier name for it, is deprecated: an error on every index. `auto`'s
   middle branch is `pre`.
-- ivfflat `pre` does not use INCLUDE columns, as before this design; `iterative` does.
+- ivfflat `pre` runs filters on INCLUDE columns in the index search, as the default mode,
+  `iterative`, cagra and ivfpq do; only filters on other columns go through membership. Before
+  this design ivfflat `pre` sent them through membership.
 - cagra and ivfpq run `pre` and `iterative` on their GPU filter of INCLUDE columns and the
   primary key; they apply no membership set, and a `MATCH` filter keeps their exact sort.
 - The ivfpq host post-filter runs whenever a filter is present: IVF-PQ pads with excluded rows

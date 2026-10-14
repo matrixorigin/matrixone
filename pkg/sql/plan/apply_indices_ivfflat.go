@@ -710,11 +710,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	// The local POST candidate is annotated as explicit POST to prevent nested
 	// adaptive construction, but it still owns the AUTO resolution semantics.
 	// Preserve AUTO's include-aware index-only eligibility from the prepared
-	// context. A user-written explicit POST keeps its historical behavior.
+	// context. A user-written explicit POST keeps its historical behavior; every
+	// other mode evaluates filters on INCLUDE columns in the index search.
 	preserveAutoInclude := prepared != nil && ivfCtx.isAutoMode
 	if vecCtx.rankOption != nil && !preserveAutoInclude {
 		switch vecCtx.rankOption.Mode {
-		case "", "include", "iterative", "auto":
+		case "", "pre", "iterative", "auto":
 		default:
 			includeAwareColumns = nil
 		}
@@ -909,6 +910,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		preInput := vectorPreFilterInput{
 			ctx:             ctx,
 			scanNode:        scanNode,
+			producerFilters: typedPushdownFilters,
 			colRefCnt:       colRefCnt,
 			idxColMap:       idxColMap,
 			pkPos:           ivfCtx.pkPos,
@@ -1048,10 +1050,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
-// ivfIterativeMode reports whether mode selects the widening pre-filter search; include
-// is an ivfflat alias of iterative.
+// ivfIterativeMode reports whether mode selects the widening pre-filter search.
 func ivfIterativeMode(mode string) bool {
-	return mode == "iterative" || mode == "include"
+	return mode == "iterative"
 }
 
 func vectorRankMode(vecCtx *vectorSortContext) string {

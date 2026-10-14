@@ -32,6 +32,9 @@ type vectorPreFilterInput struct {
 	tableFuncTag    int32
 	tableFuncNodeID int32
 	candidateNodeID int32
+	// producerFilters, bound to scanNode, are added to the copied scan's filters: the
+	// filters the index search evaluates, which narrow the membership key set.
+	producerFilters []*plan.Expr
 	// trimProducerFilters removes the filters of the copied scan, bound to tag, that the
 	// index candidates imply; nil keeps every filter.
 	trimProducerFilters func(filters []*plan.Expr, tag int32) []*plan.Expr
@@ -56,6 +59,11 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 	oldTag := secondScanNode.BindingTags[0]
 	builder.rebindScanNode(secondScanNode)
 	newTag := secondScanNode.BindingTags[0]
+	for _, expr := range in.producerFilters {
+		producerFilter := DeepCopyExpr(expr)
+		replaceColRefTag(producerFilter, oldTag, newTag)
+		secondScanNode.FilterList = append(secondScanNode.FilterList, producerFilter)
+	}
 
 	// The copied scan is an internal producer. Keep its regular-index remaps local so
 	// they cannot affect the original row-fetch side, while preserving any mappings

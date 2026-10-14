@@ -4,7 +4,7 @@
 -- join). mode=pre searches the nprobe nearest lists once. mode=iterative probes the
 -- nearest lists in rounds until it holds the candidate budget, all lists are probed, or
 -- max_nprobe is reached; a membership set of 100 keys or fewer is scanned in every list.
--- mode=include is mode=iterative. Each query is compared with mode=force.
+-- mode=include is deprecated: an error. Each query is compared with mode=force.
 drop database if exists vector_filtered_search_ivfflat;
 create database vector_filtered_search_ivfflat;
 use vector_filtered_search_ivfflat;
@@ -67,9 +67,8 @@ explain analyze select id from t where category = 1 order by l2_distance(v, '[0,
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 select group_concat(id order by id) from (select id from t where id in (3, 700, 999) order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 
--- mode=include is mode=iterative
+-- mode=include is deprecated: an error
 select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
-select group_concat(id order by id) from (select id from t where id between 991 and 1000 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
 
 -- a zero query vector ties every centroid under cosine: the rounds scan each list once
 create table t_cos(id bigint primary key, v vecf32(4));
@@ -77,13 +76,13 @@ insert into t_cos select result, cast(concat('[', sin(result), ',', cos(result *
 create index i_cos using ivfflat on t_cos(v) lists = 16 op_type 'vector_cosine_ops';
 create table t_cos_ref(id bigint primary key, category int);
 insert into t_cos_ref select result, result % 2 from generate_series(1, 3000, 1) g;
-select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=include') x;
+select count(*), count(distinct id) from (select id from t_cos where id < 300 order by cosine_distance(v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 select count(*), count(distinct id) from (select c.id from t_cos c where c.id in (select id from t_cos_ref where category = 1) order by cosine_distance(c.v, '[0,0,0,0]') limit 37 by rank with option 'mode=iterative') x;
 
--- INCLUDE columns: the default mode and iterative run the INCLUDE filter in the index
--- search; post and pre do not; post runs a primary-key filter in the index search
-create table t_inc(id bigint primary key, category int not null, v vecf32(2));
-insert into t_inc select id, category, v from t;
+-- INCLUDE columns: the default mode, pre and iterative run the INCLUDE filter in the index
+-- search; post does not; post runs a primary-key filter in the index search
+create table t_inc(id bigint primary key, category int not null, tag int, v vecf32(2));
+insert into t_inc select id, category, tag, v from t;
 create index i_inc using ivfflat on t_inc(v) lists = 10 op_type 'vector_l2_ops' include(category);
 -- @separator:table
 -- @regex("Index Filter: [^\n]*category", true)
@@ -99,9 +98,19 @@ explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]')
 explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 -- @separator:table
--- @regex("Index Filter: [^\n]*category", false)
--- @regex("Join Type: SEMI", true)
+-- @regex("Index Filter: [^\n]*category", true)
+-- @regex("Join Type: SEMI", false)
 explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre', 'nprobe=10') x;
+-- a filter outside the INCLUDE columns goes through membership; the membership producer
+-- scan also applies the INCLUDE filter, so the key set holds only rows that pass both
+-- @separator:table
+-- @regex("Index Filter: [^\n]*category", true)
+-- @regex("Join Type: SEMI", true)
+-- @regex("Filter Cond: \(t_inc.tag = 4\), \(t_inc.category = 1\)", true)
+explain select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre';
+select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=pre', 'nprobe=10') x;
+select group_concat(id order by id) from (select id from t_inc where category = 1 and tag = 4 order by l2_distance(v, '[0,0]') limit 5 by rank with option 'mode=force') x;
 -- @separator:table
 -- @regex("Index Filter: [^\n]*__mo_index_pri_col > 500", true)
 -- @regex("Index Filter: [^\n]*category", false)

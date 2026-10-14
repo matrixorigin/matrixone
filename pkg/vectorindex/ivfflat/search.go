@@ -503,6 +503,14 @@ func filterRequestedIncludeColumns(requested []string, configured []string) []st
 	return filtered
 }
 
+// searchAllLists sets the window of cursor's current round to every ranked list and
+// marks cursor exhausted: an exact primary-key search reads every list in one round.
+func searchAllLists(cursor *vectorindex.IvfSearchCursor) {
+	cursor.NextBucketOffset = 0
+	cursor.CurrentBucketCount = uint(len(cursor.RankedCentroidIDs))
+	cursor.Exhausted = true
+}
+
 func buildActiveCentroidIDs(cursor *vectorindex.IvfSearchCursor, probe uint) []int64 {
 	if cursor == nil {
 		return nil
@@ -894,7 +902,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			scanCentroidIDs := activeCentroidIDs
 			if directExactMembership {
 				scanCentroidIDs = nil
-				cursor.Exhausted = true
+				searchAllLists(cursor)
 			}
 			res, err = idx.scanEntriesInDomain(
 				sqlproc,
@@ -921,9 +929,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			if err != nil {
 				return nil, nil, err
 			}
-			if cursor != nil {
-				cursor.Exhausted = true
-			}
+			searchAllLists(cursor)
 		} else {
 			sql, err = idx.buildSearchRoundSQL(
 				idxcfg,

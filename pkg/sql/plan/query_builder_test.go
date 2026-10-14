@@ -6877,7 +6877,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', 'iterative', or 'include'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto' or 'iterative'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -6891,14 +6891,13 @@ func TestParseRankOption(t *testing.T) {
 		require.Equal(t, "force", rankOption.Mode)
 	})
 
-	t.Run("valid mode include", func(t *testing.T) {
-		options := map[string]string{
-			"mode": "include",
+	t.Run("deprecated mode include", func(t *testing.T) {
+		for _, mode := range []string{"include", " INCLUDE "} {
+			rankOption, err := parseRankOption(map[string]string{"mode": mode}, ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+			require.Nil(t, rankOption)
+			require.ErrorContains(t, err, "mode=include is deprecated. use mode=pre, post, iterative")
 		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.NotNil(t, rankOption)
-		require.Equal(t, "include", rankOption.Mode)
 	})
 
 	t.Run("valid mode auto", func(t *testing.T) {

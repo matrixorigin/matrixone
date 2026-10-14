@@ -1967,9 +1967,9 @@ func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContex
 }
 
 // checkVectorSearchMode rejects an explicit mode=pre, mode=iterative or mode=auto on an
-// algorithm with neither the membership nor the index-filter capability, mode=include on
-// an algorithm without both, itopk or max_itopk above the algorithm's internal top-k
-// limit, and nprobe or max_nprobe on an algorithm without the probe knobs capability.
+// algorithm with neither the membership nor the index-filter capability, itopk or
+// max_itopk above the algorithm's internal top-k limit, and nprobe or max_nprobe on an
+// algorithm without the probe knobs capability.
 func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo string) error {
 	if vecCtx == nil || vecCtx.rankOption == nil {
 		return nil
@@ -1977,11 +1977,6 @@ func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo 
 	switch mode := vecCtx.rankOption.Mode; mode {
 	case "pre", "iterative", "auto":
 		if !indexplugin.SupportsMembership(algo) && !indexplugin.SupportsIndexFilter(algo) {
-			return moerr.NewNotSupportedf(ctx, "mode=%s on index type %s", mode, algo)
-		}
-	case "include":
-		// include is iterative on INCLUDE columns with a membership fallback.
-		if !indexplugin.SupportsMembership(algo) || !indexplugin.SupportsIndexFilter(algo) {
 			return moerr.NewNotSupportedf(ctx, "mode=%s on index type %s", mode, algo)
 		}
 	}

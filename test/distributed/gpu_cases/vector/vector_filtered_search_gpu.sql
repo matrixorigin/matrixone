@@ -73,7 +73,7 @@ explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,
 -- @ignore:0
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
 
--- include is ivfflat only
+-- mode=include is deprecated: an error
 select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
 
 drop database vector_filtered_search_gpu;
