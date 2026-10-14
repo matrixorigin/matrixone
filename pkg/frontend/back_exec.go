@@ -53,6 +53,12 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+// backExecProcessHook runs after a background statement has created its
+// process, but before the statement is compiled or executed. It is used for
+// control-plane protocols that must operate on the same transaction and
+// process as the following background SQL statements.
+type backExecProcessHook func(context.Context, *process.Process) error
+
 type backgroundExecRowCount interface {
 	GetLastAffectedRows() int64
 	SetLastAffectedRows(int64)
@@ -143,6 +149,22 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+func (back *backExec) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	hook backExecProcessHook,
+) error {
+	if back == nil || back.backSes == nil {
+		return moerr.NewInternalError(ctx, "background executor is closed")
+	}
+	previous := back.backSes.processHook
+	back.backSes.processHook = hook
+	defer func() {
+		back.backSes.processHook = previous
+	}()
 	return back.exec(ctx, sql, "", false)
 }
 
@@ -1079,6 +1101,7 @@ type backSession struct {
 	forcePessimisticRC                bool
 	cloneSnapshotUsesBackgroundTxn    bool
 	cancelTxnCreateWithRequest        bool
+	processHook                       backExecProcessHook
 	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
@@ -1430,6 +1453,16 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
+	case "experimental_hnsw_index":
+		// Procedure DDL runs through a frontend back session and must see
+		// the caller's feature gate rather than the executor default.
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return nil, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}

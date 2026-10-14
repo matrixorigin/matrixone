@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -84,6 +86,17 @@ type Table struct {
 // 3. It will append rowid column as the last column, which is **incorrect** if we want impl alter column gracefully.
 func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]Column, error) {
+	// Validate before mutating attributes or narrowing column ordinals. Hidden
+	// backing columns consume ordinary sequence numbers; physical rowid does not.
+	ordinaryColumns := 0
+	for _, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.Name != Row_ID {
+			ordinaryColumns++
+			if ordinaryColumns > objectio.SEQNUM_UPPER {
+				return nil, moerr.NewErrTooManyFields(context.Background())
+			}
+		}
+	}
 	{
 		mp := make(map[string]int)
 		for i, def := range defs {

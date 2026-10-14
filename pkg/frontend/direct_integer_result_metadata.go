@@ -75,6 +75,10 @@ func directIntegerResultLengths(stmt tree.Statement, cols []*plan.ColDef) []uint
 			length = 3
 		case "strcmp":
 			length = 2
+		case "week":
+			length = 3
+		case "dayofyear":
+			length = 4
 		default:
 			continue
 		}
