@@ -49,7 +49,7 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 			defer stop()
 			execSQLRequire(t, cleanup, admin, fmt.Sprintf("set global lower_case_table_names=%d", oldMode))
 		}()
-		for _, mode := range []int{1, 2} {
+		for _, mode := range []int{0, 1, 2} {
 			t.Run(fmt.Sprintf("mode%d", mode), func(t *testing.T) {
 				execSQLRequire(t, ctx, admin, fmt.Sprintf("set global lower_case_table_names=%d", mode))
 				owner := open("dump")
@@ -120,6 +120,18 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 					require.Equal(t, database, schema)
 					require.Equal(t, "Controlled", table)
 				}
+				t.Run("missing_rule_target", func(t *testing.T) {
+					_, err := owner.ExecContext(ctx, "alter role "+role+" add rule 'select 1' on table "+database+".Missing")
+					require.ErrorContains(t, err, "there is no table")
+					if mode == 0 {
+						// Case-sensitive lookup must not accept the existing Controlled.
+						_, err = owner.ExecContext(ctx, "alter role "+role+" add rule 'select 1' on table "+database+".controlled")
+						require.ErrorContains(t, err, "there is no table")
+					}
+					var n int
+					require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_role_rule where role_id in (select role_id from mo_catalog.mo_role where role_name='"+role+"')").Scan(&n))
+					require.Zero(t, n)
+				})
 				type scenario struct {
 					name, table, rule string
 					direct, metadata  []string
@@ -134,6 +146,14 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 					{"invalid column", "Controlled", "select absent.secret from " + database + ".Controlled", nil, nil, true},
 					{"invalid star", "Controlled", "select absent.* from " + database + ".Controlled", nil, nil, true},
 					{"star then invalid column", "Controlled", "select *, absent.secret from " + database + ".Controlled", nil, nil, true},
+				}
+				if mode == 0 {
+					// Exercise the case-sensitive ADD/DROP target boundary with the
+					// same public enforcement and metadata oracles; the existing
+					// projection matrix below belongs to comparison modes 1 and 2.
+					scenarios = []scenario{
+						{"case sensitive rule target", "Controlled", "select a.id from " + database + ".Controlled as a", []string{"id"}, []string{"id"}, false},
+					}
 				}
 				if mode == 1 {
 					scenarios = append(scenarios,
