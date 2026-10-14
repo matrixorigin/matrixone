@@ -1583,7 +1583,7 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
 		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN {
+		if child.NodeType == plan.Node_TABLE_SCAN && !scanHasFullTextBooleanComposition(child) {
 			if limit, offset, ok := composePagination(
 				child.Limit, child.Offset, node.Limit, node.Offset,
 			); ok {

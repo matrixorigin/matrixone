@@ -199,11 +199,14 @@ insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select id from two where match(body) against('hello') > 0.5 or id = 4;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+4
 select id from two where not match(body) against('hello');
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+4
 select id from two where id = 4 or match(body) against('hello') > 0.5;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+➤ id[4,32,0]  𝄀
+4
 select id from two where match(body) against('hello') < 0.015 order by id;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 order by id;
