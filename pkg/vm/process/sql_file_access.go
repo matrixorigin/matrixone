@@ -49,8 +49,9 @@ func AuthorizeSQLFileAccess(proc *Process, moPath string) error {
 }
 
 // AuthorizeSQLFileAccessPath is the parsed-path form used by SQL readers that
-// must keep the authorization parse and ETL resolution on one path. Callers
-// must pass the result of fileservice.ParsePath without changing it.
+// must keep the authorization parse and ETL resolution on one path. Generic
+// ETL callers pass the unchanged result of fileservice.ParsePath. Owners that
+// always open local storage may construct a service-less Path for admission.
 func AuthorizeSQLFileAccessPath(proc *Process, path fileservice.Path) error {
 
 	// Keep this admission check aligned with GetForETL's provider selection so

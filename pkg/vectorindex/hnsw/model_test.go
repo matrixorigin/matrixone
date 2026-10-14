@@ -28,6 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -477,6 +480,35 @@ func TestModel(t *testing.T) {
 		key += 1
 	}
 
+}
+
+func TestModelToSqlStringLiterals(t *testing.T) {
+	for _, tc := range []struct{ name, id, file string }{
+		{"plain", "model-id", "model.bin"},
+		{"quoted ID", "model'\\id", "model.bin"},
+		{"quoted path", "model-id", "model'\\file.bin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.file)
+			require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))
+			// An already serialized model exercises the real SQL producer without
+			// allocating a native index. The parser supplies an independent oracle.
+			model := HnswModel[float32]{Id: tc.id, Path: path}
+			sqls, err := model.ToSql(vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"})
+			require.NoError(t, err)
+			require.Len(t, sqls, 1)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sqls[0], 1)
+			require.NoError(t, err)
+			insert := stmt.(*tree.Insert)
+			rows := insert.Rows.Select.(*tree.ValuesClause).Rows
+			require.Len(t, rows, 1)
+			require.Len(t, rows[0], 4)
+			require.Equal(t, tc.id, rows[0][0].(*tree.NumVal).String())
+			load := rows[0][2].(*tree.FuncExpr)
+			url := load.Exprs[0].(*tree.CastExpr).Expr.(*tree.NumVal).String()
+			require.Equal(t, "file://"+path+"?offset=0&size=5", url)
+		})
+	}
 }
 
 func TestModelNil(t *testing.T) {

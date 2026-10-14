@@ -640,7 +640,6 @@ func (s *HnswSync[T]) nextTimestamp() int64 {
 }
 
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
-	storageProc := sqlproc.WithSystemFileAccess()
 	// save to files and then save to database
 	s.ts = s.nextTimestamp()
 	// build_ts is the upper bound of the change range this sync applied -- the data version the
@@ -649,7 +648,7 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// claim coverage of changes committed after the range was collected but never applied.
 	// 0 when no consumer supplied one (a direct caller outside ISCP), meaning unknown.
 	sqls, err := s.ToSql(s.ts, s.buildTS,
-		sqlexec.HasProvenanceColumns(storageProc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+		sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
 			catalog.Hnsw_TblCol_Metadata_Build_Ts))
 	if err != nil {
 		return err
@@ -659,7 +658,7 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 		return nil
 	}
 
-	err = s.runSqls(storageProc, sqls)
+	err = s.runSqls(sqlproc.WithSystemFileAccess(), sqls)
 	if err != nil {
 		return err
 	}

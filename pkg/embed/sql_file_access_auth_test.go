@@ -15,6 +15,7 @@
 package embed
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	mysql "github.com/go-sql-driver/mysql"
@@ -28,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/stretchr/testify/require"
 )
 
@@ -274,5 +276,126 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var filesz int64
 		require.NoError(t, tenant.QueryRow(fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)).Scan(&filesz))
 		require.Greater(t, filesz, int64(0))
+
+		t.Run("HNSW loaded IDs remain data during persistence", func(t *testing.T) {
+			var hnswStore string
+			require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswStore))
+			conn, err := tenant.Conn(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+			metaTable := sqlquote.QualifiedIdent(dbName, hnswMeta)
+			storeTable := sqlquote.QualifiedIdent(dbName, hnswStore)
+			var oldID, oldChecksum string
+			require.NoError(t, conn.QueryRowContext(t.Context(), "select index_id, checksum from "+metaTable).Scan(&oldID, &oldChecksum))
+			// The marker belongs to this fixture. Expression-looking metadata must
+			// remain literal data when a background storage writer persists it.
+			const literalID = "0' or save_file(cast('stage://sql_file_access_local_stage/hnsw-marker' as datalink),'x') or '0"
+			require.LessOrEqual(t, len(literalID), 128)
+			_, err = conn.ExecContext(t.Context(), "select save_file(cast('stage://sql_file_access_local_stage/hnsw-marker' as datalink),'x')")
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = conn.ExecContext(t.Context(), "begin")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = conn.ExecContext(ctx, "rollback")
+			})
+			for _, table := range []string{metaTable, storeTable} {
+				_, err = conn.ExecContext(t.Context(), "update "+table+" set index_id="+sqlquote.String(literalID)+" where index_id="+sqlquote.String(oldID))
+				require.NoError(t, err)
+			}
+			_, err = conn.ExecContext(t.Context(), "commit")
+			require.NoError(t, err)
+			var storedID string
+			require.NoError(t, conn.QueryRowContext(t.Context(), "select index_id from "+metaTable).Scan(&storedID))
+			require.Equal(t, literalID, storedID)
+			_, err = conn.ExecContext(t.Context(), "insert into "+sqlquote.QualifiedIdent(dbName, "build_vectors")+" values (3, '[0,0,1]')")
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				var checksum string
+				return conn.QueryRowContext(t.Context(), "select checksum from "+metaTable+" where index_id="+sqlquote.String(literalID)).Scan(&checksum) == nil && checksum != oldChecksum
+			}, 30*time.Second, 250*time.Millisecond, "the loaded model must be modified and persisted by CDC")
+			var n int
+			require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from "+storeTable+" where index_id="+sqlquote.String(literalID)).Scan(&n))
+			require.Positive(t, n)
+			_, err = os.Stat(filepath.Join(dir, "hnsw-marker"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+			_, err = conn.ExecContext(t.Context(), "set experimental_hnsw_index = 1")
+			require.NoError(t, err)
+			require.NoError(t, conn.QueryRowContext(t.Context(), "select id from "+sqlquote.QualifiedIdent(dbName, "build_vectors")+" force index (build_hidx) order by l2_distance(v, '[0,0,1]') limit 1").Scan(&id))
+			require.Equal(t, int64(3), id)
+		})
+
+		t.Run("compaction metadata retains caller authority", func(t *testing.T) {
+			marker := filepath.Join(dir, "metadata-marker.txt")
+			mustExec(t, tenant, "create table authority_paths (fpath datalink)")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop table if exists authority_paths") })
+			mustExec(t, tenant, fmt.Sprintf("insert into authority_paths values ('file://%s')", marker))
+			// Every metadata column is valid: a missing-column error must not
+			// conceal whether the view expression receives storage authority.
+			mustExec(t, tenant, "create view authority_meta as select cast(save_file(fpath, 'owned test marker') as varchar(128)) as index_id, cast(0 as bigint) as timestamp, cast('unused' as varchar(32)) as checksum, cast(0 as bigint) as filesize, cast(0 as bigint) as recency, cast(0 as bigint) as nrow, cast(0 as bigint) as build_ts from authority_paths")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop view if exists authority_meta") })
+			counts := func() [2]int {
+				var n [2]int
+				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, store)).Scan(&n[0]))
+				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, meta)).Scan(&n[1]))
+				return n
+			}
+			before := counts()
+			_, err := tenant.Exec("select index_id from authority_meta")
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = tenant.Exec(fmt.Sprintf("select * from fulltext2_compact('%s', '%s', 'authority_meta', '1') as f", dbName, store))
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = os.Stat(marker)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			require.Equal(t, before, counts(), "refused compaction must leave genuine index storage unchanged")
+			require.NoError(t, tenant.QueryRow("select id from build_documents where match(body) against('compaction')").Scan(&id))
+			require.Equal(t, int64(2), id)
+		})
+
+		t.Run("dump and load use local provider authority", func(t *testing.T) {
+			const dumpDB = "sql_file_access_dump_db"
+			mustExec(t, admin, "create database "+dumpDB)
+			t.Cleanup(func() { _, _ = admin.Exec("drop database if exists " + dumpDB) })
+			mustExec(t, admin, "create table "+dumpDB+".source (id int primary key, value varchar(32))")
+			mustExec(t, admin, "insert into "+dumpDB+".source values (7, 'owned dump data')")
+			mustExec(t, admin, "select mo_ctl('dn', 'flush', '"+dumpDB+".source')")
+			// Preserve the spelling until the fixed-local owner normalizes it.
+			alternate := dir + "/unused,remote:x/../dump-fixture"
+			mustExec(t, admin, fmt.Sprintf("dump table %s.source to '%s'", dumpDB, alternate))
+			fixture := filepath.Join(dir, "dump-fixture")
+			_, err := os.Stat(filepath.Join(fixture, "manifest.json"))
+			require.NoError(t, err)
+			mustExec(t, admin, "create table "+dumpDB+".target like "+dumpDB+".source")
+			mustExec(t, admin, fmt.Sprintf("load table %s.target from 'file://%s'", dumpDB, alternate))
+			var gotID int
+			var value string
+			require.NoError(t, admin.QueryRow("select id, value from "+dumpDB+".target").Scan(&gotID, &value))
+			require.Equal(t, 7, gotID)
+			require.Equal(t, "owned dump data", value)
+
+			mustExec(t, tenant, "create table dump_target (id int primary key, value varchar(32))")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop table if exists dump_target") })
+			mustExec(t, tenant, "insert into dump_target values (9, 'tenant original')")
+			for _, tc := range []struct{ name, prefix, suffix string }{
+				{"absolute", "", ""},
+				{"file URL", "file://", ""},
+				{"service syntax in local name", "", "/unused,remote:x/.."},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					target := tc.prefix + dir + tc.suffix + "/denied-dump"
+					_, err := tenant.Exec(fmt.Sprintf("dump table dump_target to '%s'", target))
+					require.ErrorContains(t, err, "only the sys account moadmin role")
+					_, err = os.Stat(filepath.Join(dir, "denied-dump"))
+					require.ErrorIs(t, err, os.ErrNotExist)
+					source := tc.prefix + dir + tc.suffix + "/dump-fixture"
+					_, err = tenant.Exec(fmt.Sprintf("load table dump_target from '%s'", source))
+					require.ErrorContains(t, err, "only the sys account moadmin role")
+					require.NoError(t, tenant.QueryRow("select id, value from dump_target").Scan(&gotID, &value))
+					require.Equal(t, 9, gotID)
+					require.Equal(t, "tenant original", value)
+				})
+			}
+		})
 	})
 }

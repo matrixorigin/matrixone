@@ -131,7 +131,17 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 			return e
 		}
 		defer cleanup()
-		return runCompactSqls(sqlproc, sqls)
+		// ToInsertSqls emits metadata first, followed by generated spill reads.
+		if err := runCompactSql(sqlproc, sqls[0]); err != nil {
+			return err
+		}
+		storageProc := sqlproc.WithSystemFileAccess()
+		for _, sql := range sqls[1:] {
+			if err := runCompactSql(storageProc, sql); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	for d, derr := range idx.ReconstructLiveDocs(cfg.PositionFree) {
 		if derr != nil {
@@ -169,14 +179,5 @@ func runCompactSql(sqlproc *sqlexec.SqlProcess, sql string) error {
 		return err
 	}
 	res.Close()
-	return nil
-}
-
-func runCompactSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
-	for _, s := range sqls {
-		if err := runCompactSql(sqlproc, s); err != nil {
-			return err
-		}
-	}
 	return nil
 }

@@ -2173,9 +2173,22 @@ func TestTableDumpRequiresServerFileAuthority(t *testing.T) {
 	defer ses.Close()
 	ses.proc.Base.SessionInfo.Account = "tenant"
 	ses.proc.Base.SessionInfo.Role = "accountadmin"
-	_, _, err := openTableDumpFS(t.Context(), ses, dir)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-	_, err = os.Stat(dir)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	for _, tc := range []struct{ name, prefix, suffix string }{
+		{"absolute", "", "/denied"},
+		{"file URL", "file://", "/denied"},
+		{"service syntax in local name", "", "/unused,remote:x/../denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := tc.prefix + root + tc.suffix
+			_, closeFS, err := openTableDumpFS(t.Context(), ses, target)
+			if closeFS != nil {
+				t.Cleanup(closeFS)
+			}
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = os.Stat(filepath.Join(root, "denied"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 	require.ErrorContains(t, validateOutputDirPath(t.Context(), ses, dir), "only the sys account moadmin role")
 }

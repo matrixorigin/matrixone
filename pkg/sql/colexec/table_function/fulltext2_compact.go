@@ -117,7 +117,9 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 	if !u.inited {
 		return nil
 	}
-	sqlproc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
+	// Metadata may be a caller-supplied view. Keep its evaluation under caller
+	// authority; CompactSegments grants file access only for generated spill reads.
+	sqlproc := sqlexec.NewSqlProcess(proc)
 	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity, u.postingCap); err != nil {
 		return err
 	}

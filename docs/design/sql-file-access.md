@@ -51,9 +51,20 @@ and rechecked at resource acquisition. No user expression can set the storage
 owner's authority. A Datalink cannot retain a role grant across statements.
 
 An index storage grant is used for generated spill-file storage statements,
-not user-provided source content. Tenant CDC resolves remote source Datalinks
+not user-provided source content or metadata-view evaluation. Fulltext2 CREATE
+and compaction generate SQL with caller authority, execute the metadata INSERT
+normally, and grant a copy only for the following generated spill-reading INSERTs.
+Reads, provenance probes and deletes do not acquire that grant.
+Generated persistence SQL encodes loaded model IDs and spill paths as string
+literals. Metadata values cannot become expressions under storage authority.
+Tenant CDC resolves remote source Datalinks
 without such a grant. Background local-stage source reads are denied just as
 foreground reads are; there is no compatibility exception.
+
+Admission and acquisition must agree on the provider. Non-stage table dump/load
+always opens local storage, so it admits a service-less target independently of
+commas or colons in its filename. Its existing local owner validates and cleans
+the path; the stage branch retains the generic provider resolver.
 
 ## Alternatives and cost
 

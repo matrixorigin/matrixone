@@ -15,6 +15,10 @@
 package table_function
 
 import (
+	"context"
+	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -511,35 +515,70 @@ func TestFulltext2CreateEndNotInited(t *testing.T) {
 // fileservice) are captured by a stubbed fulltext2_runSql, then end() seals the final
 // (empty) segment and evicts the cache.
 func TestFulltext2CreateSealAndEnd(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"storage error", errors.New("storage write failed")},
+		{"cancelled storage", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			proc.Base.SessionInfo.Account = "tenant"
+			proc.Base.SessionInfo.Role = "accountadmin"
+			prev := fulltext2_runSql
+			t.Cleanup(func() { fulltext2_runSql = prev })
+			var ran int
+			var spill string
+			fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				ran++
+				account, role := sqlproc.StatementOption().SessionIdentity()
+				if start := strings.Index(sql, "file://"); start >= 0 {
+					require.Equal(t, "sys", account)
+					require.Equal(t, "moadmin", role)
+					spill, _, _ = strings.Cut(sql[start+len("file://"):], "?")
+					_, err := os.Stat(spill)
+					require.NoError(t, err, "the generated spill must exist until execution finishes")
+					return executor.Result{}, tc.err
+				}
+				require.Equal(t, "tenant", account, "metadata and deletes retain caller authority")
+				require.Equal(t, "accountadmin", role)
+				return executor.Result{}, nil
+			}
 
-	prev := fulltext2_runSql
-	defer func() { fulltext2_runSql = prev }()
-	var ran int
-	fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		ran++
-		return executor.Result{}, nil
+			// capacity=1 seals one real spill without additional data or services.
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1})
+			require.NoError(t, err)
+			st := &fulltext2CreateState{}
+			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
+			t.Cleanup(func() {
+				st.free(tf, proc, false, nil)
+				for _, v := range vecs {
+					v.Free(mp)
+				}
+			})
+			err = st.start(tf, proc, 0, nil)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, st.cur)
+				require.Zero(t, st.cur.NumDocs())
+				// The final empty segment adds no storage statements.
+				before := ran
+				require.NoError(t, st.end(tf, proc))
+				require.Equal(t, before, ran)
+			}
+			require.Equal(t, int64(1), st.capacity)
+			require.Equal(t, 1, st.segIdx)
+			require.True(t, st.basesCleared)
+			require.NotEmpty(t, spill)
+			_, err = os.Stat(spill)
+			require.ErrorIs(t, err, os.ErrNotExist, "success/error/cancellation must remove the owned spill")
+			require.Equal(t, "tenant", proc.GetSessionInfo().Account)
+			require.Equal(t, "accountadmin", proc.GetSessionInfo().Role)
+		})
 	}
-
-	// capacity=1 ⇒ each doc seals its own segment.
-	cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram, Capacity: 1})
-	require.NoError(t, err)
-
-	st := &fulltext2CreateState{}
-	tf, _ := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
-	require.NoError(t, st.start(tf, proc, 0, nil))
-	require.Equal(t, int64(1), st.capacity)
-	// the doc reached capacity ⇒ its segment was sealed and persisted.
-	require.Equal(t, 1, st.segIdx)
-	require.True(t, st.basesCleared)
-	require.NotNil(t, st.cur) // a fresh empty builder replaces the sealed one
-	require.Equal(t, 0, st.cur.NumDocs())
-	require.Positive(t, ran)
-
-	// end() seals the (empty) trailing segment and evicts the cache; segIdx stays 1.
-	require.NoError(t, st.end(tf, proc))
-	require.Equal(t, 1, st.segIdx)
-
-	st.free(tf, proc, false, nil)
 }

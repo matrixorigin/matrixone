@@ -327,6 +327,10 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 	sqls := make([]string, 0, 5)
 
 	sql := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
+	// Loaded IDs are data, and spill paths may contain SQL literal characters.
+	// Escape each once per model; the per-chunk URL suffix contains only counters.
+	idLiteral := sqlquote.String(idx.Id)
+	pathLiteral := sqlquote.EscapeString(idx.Path)
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	for offset = 0; offset < filesz; {
@@ -337,8 +341,8 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 			chunksz = filesz - offset
 		}
 
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
+		url := fmt.Sprintf("'file://%s?offset=%d&size=%d'", pathLiteral, offset, chunksz)
+		tuple := fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), 0)", idLiteral, chunkid, url)
 		values = append(values, tuple)
 
 		// offset and chunksz

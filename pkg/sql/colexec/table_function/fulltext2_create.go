@@ -190,7 +190,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	sqlproc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
+	sqlproc := sqlexec.NewSqlProcess(proc)
 	if !u.basesCleared {
 		for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
 			res, e := fulltext2_runSql(sqlproc, s)
@@ -208,8 +208,14 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 		return err
 	}
 	defer cleanup() // remove the spill file once its INSERTs have run — bounds temp disk too
-	for _, s := range sqls {
-		res, e := fulltext2_runSql(sqlproc, s)
+	storageProc := sqlproc.WithSystemFileAccess()
+	for i, s := range sqls {
+		// ToInsertSqls emits ordinary metadata before generated spill reads.
+		execProc := sqlproc
+		if i > 0 {
+			execProc = storageProc
+		}
+		res, e := fulltext2_runSql(execProc, s)
 		if e != nil {
 			return e
 		}

@@ -400,6 +400,8 @@ func tailChunkBatch(mp *mpool.MPool, chunks []TailChunk) *batch.Batch {
 // (the user's "different runSql for different SQLs") and DELETE/INSERT writes succeed.
 func TestCompactSegmentsFoldsTail(t *testing.T) {
 	sp, mp := mockSqlProc(t)
+	sp.Proc.Base.SessionInfo.Account = "tenant"
+	sp.Proc.Base.SessionInfo.Role = "accountadmin"
 	cfg := testStorageCfg()
 
 	// forge a tail insert frame carrying two docs.
@@ -413,7 +415,15 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	chunks := splitFrameChunks(1, framed)
 
 	var deleteAllRan, insertRan bool
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	swapRunSql(t, func(execProc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		account, role := execProc.StatementOption().SessionIdentity()
+		if strings.Contains(sql, "load_file(") {
+			require.Equal(t, "sys", account)
+			require.Equal(t, "moadmin", role)
+		} else {
+			require.Equal(t, "tenant", account, "metadata and deletes retain caller authority: %s", sql)
+			require.Equal(t, "accountadmin", role)
+		}
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
@@ -445,6 +455,9 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	require.Equal(t, 2, nlive) // both docs are live → folded into the fresh base
 	require.True(t, deleteAllRan, "MERGE must clear prior bases first")
 	require.True(t, insertRan, "MERGE must persist the rebuilt base")
+	account, role := sp.StatementOption().SessionIdentity()
+	require.Equal(t, "tenant", account)
+	require.Equal(t, "accountadmin", role)
 }
 
 // twoIdBatch renders a 2-row index_id enumerate result.

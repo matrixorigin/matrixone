@@ -141,7 +141,9 @@ func openTableDumpFS(
 		}
 		return fileservice.SubPath(etlFS, root), func() { etlFS.Close(ctx) }, nil
 	}
-	if err := process.AuthorizeSQLFileAccess(ses.proc, strings.TrimPrefix(dumpPath, "file://")); err != nil {
+	// This branch always opens a local directory. Filename spelling must not
+	// reclassify its provider through the generic ETL service-path parser.
+	if err := process.AuthorizeSQLFileAccessPath(ses.proc, fileservice.Path{File: dumpPath}); err != nil {
 		return nil, nil, err
 	}
 	fs, err := openLocalTableDump(dumpPath)

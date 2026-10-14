@@ -145,6 +145,8 @@ const maxInsertTuples = 500
 // base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
 // SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
 // run after the SQLs execute (they read the temp file at execution).
+// On success, sqls contains one metadata INSERT first, followed by generated
+// spill-reading INSERTs. Only the latter require server file authority.
 // ToInsertSqls persists this segment. buildTS is the base-table version the segment's content
 // reflects, recorded as metadata.build_ts; 0 means unknown.
 //
