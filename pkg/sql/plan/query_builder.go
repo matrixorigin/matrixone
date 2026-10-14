@@ -4612,12 +4612,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
+	initialStepCount := len(builder.qry.Steps)
 
 	// get Union selectStmts
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
+	identicalUnion := len(selectStmts) == 2 && len(unionTypes) == 1 && unionTypes[0] == plan.Node_UNION &&
+		tree.String(selectStmts[0], dialect.MYSQL) == tree.String(selectStmts[1], dialect.MYSQL)
 
 	if len(selectStmts) == 1 {
 		var nodeID int32
@@ -5016,6 +5019,29 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
 		return buildSetOperationPhysicalKeys(builder.GetContext(), projectList, setOperationKeyRequired)
 	}
+	// Preserve the single-arm DISTINCT path only after proving that its
+	// equality domain and evaluations match UNION. In particular, float and
+	// parameter-dependent outputs must retain their typed set membership keys.
+	// Identical SQL text does not imply identical parameter slots, even when
+	// parameters appear only in WHERE and the visible type remains fixed.
+	canCollapseIdenticalUnion := identicalUnion && !builder.isReusablePlan() && len(builder.qry.Steps) == initialStepCount
+	if canCollapseIdenticalUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canCollapseIdenticalUnion = canCollapseIdenticalUnion && builder.subtreeIsDeterministic(id, seen, false)
+			for _, expr := range builder.qry.Nodes[id].ProjectList {
+				oid := types.T(expr.Typ.Id)
+				if oid == types.T_any || oid == types.T_float32 || oid == types.T_float64 {
+					canCollapseIdenticalUnion = false
+				}
+			}
+		}
+		for id := range seen {
+			if builder.qry.Nodes[id].Limit != nil || builder.qry.Nodes[id].Offset != nil {
+				canCollapseIdenticalUnion = false
+			}
+		}
+	}
 	appendSetOperationNode := func(
 		nodeType plan.Node_NodeType,
 		leftNodeID, rightNodeID int32,
@@ -5030,6 +5056,16 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if err != nil {
 				return 0, err
 			}
+		}
+		if canCollapseIdenticalUnion && nodeType == plan.Node_UNION && len(keyList) == 0 {
+			child, err := builder.appendDistinctNode(ctx, leftNodeID)
+			if err != nil {
+				return 0, err
+			}
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{child},
+				BindingTags: []int32{thisTag}, ProjectList: projectList,
+			}, ctx), nil
 		}
 		return builder.appendNode(&plan.Node{
 			NodeType:                nodeType,

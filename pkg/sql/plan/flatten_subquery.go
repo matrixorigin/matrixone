@@ -4473,7 +4473,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			}
 		}
 
-	case plan.Node_UNION_ALL:
+	case plan.Node_UNION, plan.Node_UNION_ALL:
 		left := builder.qry.Nodes[node.Children[0]]
 		right := builder.qry.Nodes[node.Children[1]]
 		pos := int32(len(node.ProjectList))
@@ -4483,8 +4483,12 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		// The two arms must export the same hidden identity slot as well as
 		// their user columns. Collapse their matching correlation predicates
 		// into a single predicate on the union's new output slot.
+		errPrefix := "correlated UNION"
+		if node.NodeType == plan.Node_UNION_ALL {
+			errPrefix = "correlated local CTE: UNION ALL"
+		}
 		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
-			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL without matching row identities")
+			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
 		}
 		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
 		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
@@ -4494,11 +4498,31 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
 			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
 			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
+			len(left.BindingTags) != 1 || len(right.BindingTags) != 1 ||
+			leftKey.GetCol().RelPos != left.BindingTags[0] || rightKey.GetCol().RelPos != right.BindingTags[0] ||
 			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
-			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
-			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL branch identities differ")
+			!isSameColumnType(leftKey.Typ, rightKey.Typ) ||
+			(node.NodeType == plan.Node_UNION && types.T(leftKey.Typ.Id) == types.T_any) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
+		}
+		if node.NodeType == plan.Node_UNION && len(node.PhysicalEqualityKeyList) != 0 && len(node.PhysicalEqualityKeyList) != int(pos) {
+			return 0, nil, moerr.NewInternalError(builder.GetContext(), "correlated UNION equality key width mismatch")
 		}
 		node.ProjectList = append(node.ProjectList, GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
+		if node.NodeType == plan.Node_UNION {
+			// User columns retain set membership keys; the hidden correlation
+			// identity uses scalar equality, including -0 = +0. An explicit raw
+			// float key also preserves that role through prepared specialization.
+			if len(node.PhysicalEqualityKeyList) == 0 &&
+				(types.T(leftKey.Typ.Id) == types.T_float32 || types.T(leftKey.Typ.Id) == types.T_float64) {
+				for _, expr := range node.ProjectList[:pos] {
+					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(expr))
+				}
+			}
+			if len(node.PhysicalEqualityKeyList) != 0 {
+				node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(node.ProjectList[pos]))
+			}
+		}
 		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
 		pred := DeepCopyExpr(preds[0])
 		for _, arg := range pred.GetF().Args {

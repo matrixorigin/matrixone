@@ -8033,6 +8033,23 @@ func refreshPreparedSetOperationPhysicalKeys(
 	if err != nil {
 		return err
 	}
+	// Visible float set keys are always function expressions. A pre-existing
+	// raw float key at the same output slot encodes a schema-stable hidden
+	// correlation identity, whose equality must remain scalar. Inspect its old
+	// type: a visible ANY/integer slot specializing to float must get a set key.
+	if len(node.PhysicalEqualityKeyList) == len(node.ProjectList) && len(keys) != 0 {
+		for i, oldKey := range node.PhysicalEqualityKeyList {
+			if oldKey == nil || (types.T(oldKey.Typ.Id) != types.T_float32 && types.T(oldKey.Typ.Id) != types.T_float64) {
+				continue
+			}
+			oldCol, outputCol := oldKey.GetCol(), node.ProjectList[i].GetCol()
+			outputType := types.T(node.ProjectList[i].Typ.Id)
+			if oldCol != nil && outputCol != nil && oldCol.RelPos == outputCol.RelPos && oldCol.ColPos == outputCol.ColPos &&
+				(outputType == types.T_float32 || outputType == types.T_float64) {
+				keys[i] = DeepCopyExpr(node.ProjectList[i])
+			}
+		}
+	}
 	node.PhysicalEqualityKeyList = keys
 	return nil
 }
