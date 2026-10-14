@@ -568,6 +568,11 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 }
 
 func (w *GCWindow) Close() {
+	// A diagnostic or otherwise abandoned window may have prepared durable
+	// cleanup ownership without publishing the resulting metadata. Release
+	// only the in-memory active reservation; the durable marker remains for
+	// cleanup replay.
+	w.abandonPrepared()
 	w.files = nil
 }
 

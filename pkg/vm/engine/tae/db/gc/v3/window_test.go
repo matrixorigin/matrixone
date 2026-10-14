@@ -174,6 +174,29 @@ func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
 	require.ErrorContains(t, err, "checkpoint reader failure")
 }
 
+func TestGCWindowCloseAbandonsPreparedOwnership(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	var abandoned []string
+	window := NewGCWindow(
+		mp,
+		nil,
+		WithUnpublishedObjectLifecycle(
+			func(context.Context, string, []string) error { return nil },
+			func(context.Context, string) error { return nil },
+			func(file string) { abandoned = append(abandoned, file) },
+		),
+	)
+	require.NoError(t, window.prepareObject(context.Background(), "prepared-object"))
+
+	window.Close()
+	window.Close()
+
+	require.Equal(t, []string{"prepared-object"}, abandoned)
+	require.Empty(t, window.prepared)
+}
+
 func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T) {
 	ctx := context.Background()
 	baseFS, err := fileservice.NewMemoryFS("gc-window", fileservice.DisabledCacheConfig, nil)

@@ -641,6 +641,35 @@ func TestCheckpointCleanerMarkerAccountingIsIdentityBased(t *testing.T) {
 	cleaner.unpublishedCleanupOwnership.Unlock()
 }
 
+func TestCheckpointCleanerRepeatedMarkerAdmissionIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+	name := objectio.MockObjectName().String()
+
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	cleaner.AbandonUnpublishedObject(name)
+
+	repeatedMarker, err := cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.Equal(t, marker, repeatedMarker)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	require.NoError(t, cleaner.FinishUnpublishedObject(ctx, repeatedMarker, name))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
 func TestCheckpointCleanerOverflowStaysClosedUntilCompleteReplay(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(

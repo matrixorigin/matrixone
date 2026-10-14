@@ -1969,7 +1969,17 @@ func (c *checkpointCleaner) retainUnpublishedObjectMarker(marker string) {
 	if c.unpublishedCleanupOwnership.markers == nil {
 		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
 	}
-	c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+	if _, exists := c.unpublishedCleanupOwnership.markers[marker]; exists {
+		// prepareUnpublishedObject reserves a slot before the content-addressed
+		// marker is written. Reusing an existing marker must not turn one
+		// durable owner into multiple pending reservations.
+		if !c.unpublishedCleanupOwnership.overflow &&
+			c.unpublishedCleanupOwnership.pending > 0 {
+			c.unpublishedCleanupOwnership.pending--
+		}
+	} else {
+		c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+	}
 	delete(c.unpublishedCleanupOwnership.uncertain, marker)
 }
 
