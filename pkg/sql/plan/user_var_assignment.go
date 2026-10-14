@@ -95,6 +95,54 @@ func userVariableReadsBeforeAssignment(expr tree.Expr) map[string]struct{} {
 	return names
 }
 
+func userVarAssignmentNames(expr tree.Expr) map[string]struct{} {
+	names := make(map[string]struct{})
+	collectUserVarAssignmentNames(reflect.ValueOf(expr), make(map[assignmentVisit]struct{}), names)
+	return names
+}
+
+func collectUserVarAssignmentNames(
+	v reflect.Value, seen map[assignmentVisit]struct{}, names map[string]struct{},
+) {
+	if !v.IsValid() {
+		return
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return
+		}
+		if v.Type() == userVarAssignmentExprType {
+			assignment := v.Interface().(*tree.UserVarAssignmentExpr)
+			names[strings.ToLower(assignment.Name)] = struct{}{}
+		}
+		visit := assignmentVisit{typ: v.Type(), ptr: v.Pointer()}
+		if _, ok := seen[visit]; ok {
+			return
+		}
+		seen[visit] = struct{}{}
+		collectUserVarAssignmentNames(v.Elem(), seen, names)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			collectUserVarAssignmentNames(field, seen, names)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			collectUserVarAssignmentNames(v.Index(i), seen, names)
+		}
+	}
+}
+
 func collectUserVariableReads(
 	v reflect.Value, seen map[assignmentVisit]struct{}, names map[string]struct{},
 ) {
@@ -180,11 +228,11 @@ func validateUserVarAssignmentScope(
 			if !isUserVarAssignmentRoot(selectExpr.Expr) {
 				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
 			}
-			assignment := userVarAssignmentRoot(selectExpr.Expr)
-			assignedName := strings.ToLower(assignment.Name)
-			if _, readBefore := priorUserVariableReads[assignedName]; readBefore {
-				return userVarAssignmentNotSupported(ctx,
-					"reading a user variable before its assignment projection")
+			for assignedName := range userVarAssignmentNames(selectExpr.Expr) {
+				if _, readBefore := priorUserVariableReads[assignedName]; readBefore {
+					return userVarAssignmentNotSupported(ctx,
+						"reading a user variable before its assignment projection")
+				}
 			}
 			assignmentProjections++
 		} else if !hasAssignment {

@@ -74,6 +74,9 @@ that assigns `x` is rejected. Such a read can otherwise observe the prior
 batch's complete row history and make the result depend on physical batching.
 A read after the assignment projection remains supported because the current
 batch has a complete staged row vector by then.
+The assignment write set is the complete expression subtree: every nested or
+conditional assignment target is checked against every earlier user-variable
+read, with names canonicalized case-insensitively.
 
 ## Logical-row and batch semantics
 

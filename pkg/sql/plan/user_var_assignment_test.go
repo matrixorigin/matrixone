@@ -127,19 +127,37 @@ func TestUserVariableAssignmentRejectsMultipleProjectionAssignments(t *testing.T
 }
 
 func TestUserVariableAssignmentRejectsReadBeforeWriteProjection(t *testing.T) {
-	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a as prior, @a := @a + 1 as current", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
+	for _, sql := range []string{
+		"select @a as prior, @a := @a + 1 as current",
+		"select @b as prior, @a := @b := @b + 1 as current",
+		"select @B as prior, @a := @b := @B + 1 as current",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-	_, err = BuildPlan(ctx, stmt, false)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "reading a user variable before its assignment projection")
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "reading a user variable before its assignment projection")
+		})
+	}
 }
 
 func TestUserVariableAssignmentAllowsReadAfterWriteProjection(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a := 1 as written, @a as current", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+}
+
+func TestUserVariableAssignmentAllowsNestedReadAfterWriteProjection(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a := @b := 1 as written, @b as current", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
