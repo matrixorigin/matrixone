@@ -1507,9 +1507,10 @@ func doSetVar(
 	}
 	for _, assign := range sv.Assignments {
 		if assign.SetNames {
-			names := []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			}
+			)
 			names = append(names, "collation_connection")
 			for _, name := range names {
 				captureSystemReplayability(name)
@@ -1693,9 +1694,10 @@ func doSetVar(
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
-			names := []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			}
+			)
 			names = append(names, "collation_connection")
 			for _, name := range names {
 				mark(name, replayable)
