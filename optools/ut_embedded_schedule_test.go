@@ -257,14 +257,16 @@ trap cleanup_pool_driver EXIT
 (
  trap release_pool_children EXIT
  trap 'exit 143' TERM INT
- read -r -t 3 first first_pid <&8 || exit 100
- read -r -t 3 second second_pid <&8 || exit 101
+ # The harness deadline bounds the whole operation. Precompilation may still
+ # be running here, so worker readiness must not start a separate short timer.
+ read -r first first_pid <&8 || exit 100
+ read -r second second_pid <&8 || exit 101
  [[ "$first $second" == 'a b' || "$first $second" == 'b a' ]] || exit 102
  [[ "$first_pid" != "$second_pid" ]] || exit 103
  kill -0 "$first_pid" && kill -0 "$second_pid" || exit 104
  [[ -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && ! -e "$CASE_DIR/executed-c" ]] || exit 105
  printf 'release\n' >&10
- read -r -t 3 third third_pid <&8 || exit 106
+ read -r third third_pid <&8 || exit 106
  [[ "$third" == c && "$third_pid" != "$first_pid" && "$third_pid" != "$second_pid" ]] || exit 107
  kill -0 "$third_pid" || exit 108
  [[ ! -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && -e "$CASE_DIR/active-c" ]] || exit 109
@@ -275,7 +277,10 @@ UT_EMBEDDED_PACKAGE_PARALLEL=2 run_embedded_tests "$scope" || status=$?
 driver_status=0
 wait "$pool_driver_pid" || driver_status=$?
 pool_driver_pid=""
-[[ "$status" == 0 && "$driver_status" == 0 ]] || exit 90
+[[ "$status" == 0 && "$driver_status" == 0 ]] || {
+ printf 'embedded execution status=%s pool driver status=%s\n' "$status" "$driver_status" >&2
+ exit 90
+}
 [[ "$(grep -c '^pool=2 ' "$CASE_DIR/pool-events")" == 3 ]] || exit 91
 # Indexed execution checkpoints exclude the outer command and compile events.
 awk '

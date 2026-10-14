@@ -228,6 +228,27 @@ def evidence():
 
 
 class AcceptanceTest(unittest.TestCase):
+    def test_historical_v2_archive_preserves_missing_execution_profile(self):
+        inputs = evidence()
+        identities = [
+            inputs[0]["provenance"],
+            inputs[2]["provenance"],
+            *(item["provenance"] for item in inputs[4]),
+            *(item["provenance"] for item in inputs[5:]),
+        ]
+        for identity in identities:
+            identity["config"].pop("gomaxprocs", None)
+            identity["config"].pop("native_host_block_bytes", None)
+        original = copy.deepcopy(inputs)
+        self.assertTrue(acceptance.validate(*inputs)["local_acceptance_complete"])
+        self.assertEqual(original, inputs, "verification must not invent settings")
+
+        inputs = evidence()
+        for key in ("gomaxprocs", "native_host_block_bytes"):
+            del inputs[0]["provenance"]["config"][key]
+        with self.assertRaisesRegex(campaign.CampaignError, "semantic inputs differ"):
+            acceptance.validate(*inputs)
+
     def test_cli_binds_consumed_inputs_to_archive_checksums(self):
         inputs = evidence()
         with tempfile.TemporaryDirectory() as directory:

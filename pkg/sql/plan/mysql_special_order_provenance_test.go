@@ -489,6 +489,73 @@ func TestMySQLSpecialBitwiseAggregateIdentity(t *testing.T) {
 	}
 }
 
+func TestStatisticalAggregateNumericDomains(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+		for _, tc := range []struct {
+			label, operand, source string
+			want                   types.T
+		}{
+			{"enum", "e", "enum_order_t", types.T_uint16},
+			{"distinct enum", "distinct e", "enum_order_t", types.T_uint16},
+			{"derived enum", "e", "(select e from enum_order_t) d", types.T_uint16},
+			{"materialized enum", "e", "(select e from enum_order_t limit 2) d", types.T_uint16},
+			{"bool predicate", "id > 1", "enum_order_t", types.T_int8},
+			{"explicit enum label", "cast(e as char)", "enum_order_t", types.T_float64},
+		} {
+			for _, prepared := range []bool{false, true} {
+				sql := "select " + name + "(" + tc.operand + ") from " + tc.source
+				if prepared {
+					sql = "prepare stat_agg from '" + sql + "'"
+				}
+				t.Run(sql, func(t *testing.T) {
+					mock := newMySQLSpecialOrderMock(t)
+					mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+					p, err := runOneStmt(mock, t, sql)
+					require.NoError(t, err)
+					if prepared {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					require.NotNil(t, fn)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Len(t, fn.GetF().Args, 1)
+					require.Equal(t, int32(tc.want), fn.GetF().Args[0].Typ.Id, tc.label)
+					if tc.label == "materialized enum" {
+						// The existing label-to-ordinal recovery retains the ENUM
+						// definition on its numeric expression.
+						require.NotNil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+					} else {
+						require.Empty(t, fn.GetF().Args[0].Typ.Enumvalues)
+					}
+				})
+			}
+		}
+
+		for _, operand := range []struct {
+			sql  string
+			want types.T
+		}{{"e", types.T_uint16}, {"id > 1", types.T_int8}} {
+			t.Run(name+" window "+operand.sql, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
+					"select "+name+"("+operand.sql+") over (order by id rows between unbounded preceding and current row) from enum_order_t")
+				require.NoError(t, err)
+				var aggregate *planpb.Expr
+				for _, node := range p.GetQuery().Nodes {
+					for _, item := range node.WinSpecList {
+						if w := item.GetW(); w != nil && w.WindowFunc.GetF().Func.ObjName == name {
+							aggregate = w.WindowFunc
+						}
+					}
+				}
+				require.NotNil(t, aggregate)
+				require.Equal(t, int32(types.T_float64), aggregate.Typ.Id)
+				require.Len(t, aggregate.GetF().Args, 1)
+				require.Equal(t, int32(operand.want), aggregate.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
 func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 	for _, target := range []string{"unsigned", "decimal(10,2)", "double"} {
 		for _, source := range []string{

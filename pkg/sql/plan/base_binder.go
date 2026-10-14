@@ -7517,7 +7517,11 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
-	lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	// MOD literal refinement is metadata-only; its existing casts must retain
+	// the integer's full storage domain.
+	if name != "mod" && name != "%" {
+		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		if state := preparedBindingState(ctx); state != nil {
@@ -7583,6 +7587,10 @@ func bindFuncExprImplByPlanExpr(
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
+	if name == "mod" || name == "%" {
+		metadataTypes := refineDecimalArithmeticLiteralLookupTypes(name, args, argsType)
+		returnType = function.DecimalModReturnType(metadataTypes, returnType)
+	}
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 	// Literal-domain refinement participates in overload lookup, so the
 	// physical arguments must honor a refined OID even when the selected
@@ -10037,7 +10045,7 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 // synthetic DECIMAL(38,s) bound would make a weak literal such as 0.5 force an
 // otherwise narrow prepared expression into Decimal256.
 func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs []types.Type) []types.Type {
-	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
+	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*" && name != "mod" && name != "%") {
 		return inputs
 	}
 	hasDecimalInput := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal()
@@ -10066,13 +10074,14 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication because the
+		// Integer literal precision matters for multiplication and MOD because the
 		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the product.  Addition and subtraction already derive
+		// spuriously widen the result. MOD uses this bound only for metadata.
+		// Addition and subtraction already derive
 		// their safe result precision from the integer domain; retaining their
 		// established Decimal128 coercion also avoids changing outer-join decimal
 		// expression execution paths.
-		if name == "*" && hasDecimalInput && inputs[i].IsIntOrUint() {
+		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue
