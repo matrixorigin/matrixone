@@ -24,6 +24,8 @@ from sqlalchemy import Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
+from .test_config import online_config
+
 Base = declarative_base()
 
 
@@ -48,8 +50,6 @@ class TestPineconeFilter:
     @pytest.fixture(scope="class")
     def client(self):
         """Create test client"""
-        from .test_config import online_config
-
         host, port, user, password, database = online_config.get_connection_params()
         client = Client()
         client.connect(host=host, port=port, user=user, password=password, database=database)
@@ -292,16 +292,10 @@ class TestPineconeFilter:
             assert match.metadata["director"] != "Christopher Nolan"
 
     @pytest.mark.asyncio
-    async def test_async_filter_functionality(self, async_client, test_data_setup):
+    async def test_async_filter_functionality(self, async_client, test_data_setup, test_database):
         """Test async filter functionality"""
         # Connect async client
-        await async_client.connect(
-            host="127.0.0.1",
-            port=6001,
-            user="dump",
-            password="111",
-            database="test_pinecone_filter_db",
-        )
+        await async_client.connect(**online_config.get_connection_kwargs(database=test_database))
 
         try:
             # Create async Pinecone-compatible index
@@ -576,15 +570,9 @@ class TestPineconeFilter:
             assert match.metadata["rating"] >= 8.8 or match.metadata["director"] == "Christopher Nolan"
 
     @pytest.mark.asyncio
-    async def test_async_query_with_all_parameters(self, async_client, test_data_setup):
+    async def test_async_query_with_all_parameters(self, async_client, test_data_setup, test_database):
         """Test async query with all parameters"""
-        await async_client.connect(
-            host="127.0.0.1",
-            port=6001,
-            user="dump",
-            password="111",
-            database="test_pinecone_filter_db",
-        )
+        await async_client.connect(**online_config.get_connection_kwargs(database=test_database))
 
         try:
             index = async_client.get_pinecone_index("test_movies", "embedding")
@@ -616,15 +604,9 @@ class TestPineconeFilter:
             await async_client.disconnect()
 
     @pytest.mark.asyncio
-    async def test_async_query_with_complex_filter(self, async_client, test_data_setup):
+    async def test_async_query_with_complex_filter(self, async_client, test_data_setup, test_database):
         """Test async query with complex filter"""
-        await async_client.connect(
-            host="127.0.0.1",
-            port=6001,
-            user="dump",
-            password="111",
-            database="test_pinecone_filter_db",
-        )
+        await async_client.connect(**online_config.get_connection_kwargs(database=test_database))
 
         try:
             index = async_client.get_pinecone_index("test_movies", "embedding")

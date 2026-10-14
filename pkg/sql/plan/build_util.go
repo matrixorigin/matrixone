@@ -1006,7 +1006,7 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
-	crc32Text, err := plan.RequiresMORPCVersion112CRC32JSONTextBytes(defaultExpr)
+	crc32Text, err := plan.RequiresMORPCVersion113CRC32JSONTextBytes(defaultExpr)
 	if err != nil {
 		return nil, err
 	}

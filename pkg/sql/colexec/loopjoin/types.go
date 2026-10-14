@@ -248,10 +248,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	// of carrying generation-bound storage across Reset.
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanHashMap()
-	if ctr.resBat != nil {
-		ctr.resBat.Clean(proc.GetMPool())
-		ctr.resBat = nil
-	}
+	ctr.cleanBatch(proc.Mp())
 	ctr.state = Build
 	ctr.inBat = nil
 	ctr.probeIdx = 0
@@ -322,6 +319,7 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
+	ctr.cfs = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

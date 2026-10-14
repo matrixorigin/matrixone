@@ -71,6 +71,15 @@ func TestPostgresql(t *testing.T) {
 }
 
 func TestSplitSqlBySemicolon(t *testing.T) {
+	t.Run("qualified BEGIN before comment semicolon", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				first := "SELECT t." + name + "/* ; */ FROM t"
+				require.Equal(t, []string{first, "SELECT 2"}, SplitSqlBySemicolon(first+"; SELECT 2"))
+				require.Equal(t, []string{first, "SELECT 2"}, HandleSqlForRecord(first+"; SELECT 2"))
+			})
+		}
+	})
 	ret := SplitSqlBySemicolon("select 1;select 2;select 3;")
 	require.Equal(t, 3, len(ret))
 	require.Equal(t, "select 1", ret[0])
@@ -240,6 +249,47 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			sql:  "/*!40101 select 1; */;",
 			want: []string{"/*!40101 select 1; */", ""},
 		},
+		{
+			name: "qualified BEGIN before comma",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */"},
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! SELECT t.`begin`, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.`begin`, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "/*! SELECT t.rank FROM t; */",
+			want: []string{"/*! SELECT t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN after whitespace and line comment",
+			sql:  "/*! SELECT t. -- component\n begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t. -- component\n begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualification crosses executable comment opening",
+			sql:  "SELECT t./*! begin, t.rank FROM t; */",
+			want: []string{"SELECT t./*! begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN followed by ordinary statement",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ SELECT 2;",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "SELECT 2"},
+		},
+		{
+			name: "qualified BEGIN in consecutive executable comments",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ /*! SELECT t.begin FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin FROM t; */"},
+		},
+		{
+			name:    "qualified BEGIN with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! SELECT t.begin, 'x\', t.rank FROM t; */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! SELECT t.begin, 'x\', t.rank FROM t; */`},
+		},
 	}
 
 	for _, test := range tests {
@@ -252,6 +302,28 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 }
 
 func TestHandleSqlForRecord(t *testing.T) {
+	t.Run("qualified BEGIN before quoted comment text", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				for _, key := range []string{"secret_access_key", "access_key_id"} {
+					t.Run(key, func(t *testing.T) {
+						prefix := "SELECT t." + name + "/* 'comment */ FROM t WHERE " + key + " = "
+						input := prefix + "'recording-test-value'"
+						stmt, err := ParseOne(context.Background(), dialect.MYSQL, input, 1)
+						require.NoError(t, err)
+						defer stmt.Free()
+						require.Equal(t, []string{prefix + "'******'"}, HandleSqlForRecord(input))
+					})
+				}
+			})
+		}
+	})
+	t.Run("qualified recording context resets between fragments", func(t *testing.T) {
+		first := "SELECT t.begin/* 'comment */ FROM t WHERE secret_access_key = "
+		last := "SELECT t.begin/* 'comment */ FROM t WHERE access_key_id = "
+		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
+		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")
@@ -471,6 +543,29 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
 	}
+}
+
+func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	ctas, ok := stmts[0].(*tree.CreateTable)
+	require.True(t, ok)
+	require.NotNil(t, ctas.AsSource)
+	require.NotNil(t, ctas.AsSource.RewriteOption)
+	require.Contains(t, ctas.AsSource.RewriteOption.Rewrites, "db1.t1")
+}
+
+func TestAddRewriteHints_CreateTableWithoutSource(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": "select 1"}} */ create table db1.copy (id int)`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ctas, ok := stmts[0].(*tree.CreateTable)
+	require.True(t, ok)
+	require.Nil(t, ctas.AsSource)
 }
 
 // A read source inside a DML statement must carry the rewrite option too,

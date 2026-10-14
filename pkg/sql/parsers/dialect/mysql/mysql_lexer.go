@@ -340,7 +340,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
-	typ, str := l.scanner.Scan()
+	var typ int
+	var str string
+	if l.lastToken == int('.') {
+		typ, str = l.scanner.ScanAfterDot()
+	} else {
+		typ, str = l.scanner.Scan()
+	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
@@ -399,7 +405,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// native join or whether ASOF still occupies the current table's alias slot.
 	// This preserves legacy `t asof JOIN u`, while an already completed alias or
 	// table-factor suffix makes the same phrase a native ASOF JOIN.
-	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
 
@@ -635,8 +641,17 @@ func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]i
 
 	var ends map[int]int
 	finalSemicolonEnd := 0
+	previousToken := 0
 	for {
-		typ, _ := scanner.Scan()
+		// Match Lex's qualification context before keyword-specific lookahead
+		// so accepted names such as t.begin cannot stop this boundary rescan.
+		var typ int
+		if previousToken == int('.') {
+			typ, _ = scanner.ScanAfterDot()
+		} else {
+			typ, _ = scanner.Scan()
+		}
+		previousToken = typ
 		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
 			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
 				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {

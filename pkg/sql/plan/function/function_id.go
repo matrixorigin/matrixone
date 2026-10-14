@@ -876,11 +876,16 @@ const (
 	ACOSH = 594
 	ATANH = 595
 
-	FUNCTION_END_NUMBER = 596
+	FORMAT_BYTES     = 596
+	FORMAT_PICO_TIME = 597
+
+	FUNCTION_END_NUMBER = 598
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"format_bytes":            FORMAT_BYTES,
+	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,

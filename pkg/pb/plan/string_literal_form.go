@@ -373,7 +373,7 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// CRC32JSONTextBytes requires candidate MORPC v112 for the new CRC32 JSON-text execution
+// CRC32JSONTextBytes requires candidate MORPC v113 for the new CRC32 JSON-text execution
 // identity. Legacy catalog and wire expressions retain binary JSON hashing
 // under overload zero.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
@@ -387,6 +387,8 @@ const (
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
+// DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
+// DAYOFYEAR vectors; historical narrow serialized results remain supported.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
@@ -420,6 +422,7 @@ type RemoteExpressionFeatures struct {
 	LegacyIntervalUnits           bool
 	WeekSessionDefault            bool
 	MediumIntAssignmentBounds     bool
+	DateNumericResultContracts    bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -449,7 +452,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
-		features.MediumIntAssignmentBounds
+		features.MediumIntAssignmentBounds ||
+		features.DateNumericResultContracts
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -959,6 +963,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
 					features.TemporalResultContracts = true
 				}
+				if current.Typ.Id == planInt32TypeID &&
+					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					features.DateNumericResultContracts = true
+				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
 				}
@@ -1136,9 +1144,9 @@ func isCRC32JSONTextBytes(expr *Expr) bool {
 	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
 }
 
-// RequiresMORPCVersion112CRC32JSONTextBytes reports whether an owner contains
+// RequiresMORPCVersion113CRC32JSONTextBytes reports whether an owner contains
 // the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
-func RequiresMORPCVersion112CRC32JSONTextBytes(owner any) (bool, error) {
+func RequiresMORPCVersion113CRC32JSONTextBytes(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.CRC32JSONTextBytes, err
 }

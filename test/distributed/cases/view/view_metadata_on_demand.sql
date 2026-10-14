@@ -4,6 +4,18 @@ DROP DATABASE IF EXISTS view_metadata_on_demand;
 CREATE DATABASE view_metadata_on_demand;
 USE view_metadata_on_demand;
 
+-- DESCRIBE types used by SQLAlchemy's MySQL view-reflection path (#30045).
+-- Keep the exact INT/VARCHAR/DECIMAL reproduction independent of BOOL aliases.
+CREATE TABLE reflection_t (i INT, s VARCHAR(8), a DECIMAL(24,6));
+CREATE VIEW reflection_v AS SELECT * FROM reflection_t;
+COMMIT;
+DESCRIBE reflection_t;
+DESCRIBE reflection_v;
+SHOW COLUMNS FROM reflection_v;
+SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'reflection_v' ORDER BY ordinal_position;
+DROP VIEW reflection_v;
+DROP TABLE reflection_t;
+
 CREATE TABLE src (
   id INT,
   code VARCHAR(5),
