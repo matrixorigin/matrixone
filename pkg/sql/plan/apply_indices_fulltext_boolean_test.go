@@ -846,3 +846,24 @@ func TestFullTextBooleanRefusesUnservedProjectionLeaf(t *testing.T) {
 		})
 	}
 }
+
+func TestFullTextBooleanForcedJoinHintsDoNotSkipComposition(t *testing.T) {
+	for _, ft2 := range []bool{false, true} {
+		kind := "classic"
+		if ft2 {
+			kind = "fulltext2"
+		}
+		for _, hint := range []string{"", " force index for join(primary)", " force index for join(idx_base_id)"} {
+			for _, predicate := range []string{
+				"match(f.title,f.body) against('hello') or f.base_id='b1'",
+				"not match(f.title,f.body) against('hello')",
+			} {
+				t.Run(kind+"/"+hint+"/"+predicate, func(t *testing.T) {
+					sql := "select f.id from ft f" + hint + " join base b on f.base_id=b.id where " + predicate
+					query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
+					requireBooleanFullTextCompleteStreams(t, query, query.Steps[0], 1)
+				})
+			}
+		}
+	}
+}

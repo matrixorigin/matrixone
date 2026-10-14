@@ -426,7 +426,8 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
-			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
+			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) &&
+			!scanHasFullTextBooleanComposition(builder.qry.Nodes[childID]) {
 			continue
 		}
 		node.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
