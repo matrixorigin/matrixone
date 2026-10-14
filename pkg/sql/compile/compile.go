@@ -2678,6 +2678,9 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 			}
 		}
 	}
+	if err := plan2.AuthorizeExternalFileAccess(param, proc); err != nil {
+		return nil, err
+	}
 	return param, nil
 }
 

@@ -39,10 +39,6 @@ type Datalink struct {
 	Size   int64
 	MoPath string
 	path   fileservice.Path
-	// fromStage preserves the authority boundary after stage:// resolution.
-	// The resolved path alone cannot distinguish a user supplied local path from
-	// a tenant-owned stage consumed by trusted internal CDC SQL.
-	fromStage bool
 }
 
 func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
@@ -60,17 +56,15 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	if err != nil {
 		return Datalink{}, err
 	}
-	fromStage := strings.EqualFold(u.Scheme, stage.STAGE_PROTOCOL)
-	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, fromStage); err != nil {
+	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
 		return Datalink{}, err
 	}
 	return Datalink{
-		Url:       u,
-		Offset:    int64(offsetSize[0]),
-		Size:      int64(offsetSize[1]),
-		MoPath:    moUrl,
-		path:      path,
-		fromStage: fromStage,
+		Url:    u,
+		Offset: int64(offsetSize[0]),
+		Size:   int64(offsetSize[1]),
+		MoPath: moUrl,
+		path:   path,
 	}, nil
 }
 
@@ -112,7 +106,7 @@ func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWrit
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
 		return nil, err
 	}
 
@@ -186,7 +180,7 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
 		return nil, err
 	}
 	fs := proc.GetFileService()
@@ -233,7 +227,7 @@ func (d Datalink) StatFile(proc *process.Process) (*fileservice.DirEntry, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
 		return nil, err
 	}
 	fs, readPath, err := fileservice.GetForETLWithParsedPath(proc.Ctx, proc.GetFileService(), d.MoPath, path)

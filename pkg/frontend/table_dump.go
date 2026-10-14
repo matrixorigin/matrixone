@@ -49,6 +49,7 @@ import (
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -131,11 +132,17 @@ func openTableDumpFS(
 	if decoded, ok, err := tryDecodeStagePath(ses, dumpPath); err != nil {
 		return nil, nil, err
 	} else if ok {
+		if err := process.AuthorizeSQLFileAccess(ses.proc, decoded); err != nil {
+			return nil, nil, err
+		}
 		etlFS, root, err := fileservice.GetForETL(ctx, nil, decoded)
 		if err != nil {
 			return nil, nil, err
 		}
 		return fileservice.SubPath(etlFS, root), func() { etlFS.Close(ctx) }, nil
+	}
+	if err := process.AuthorizeSQLFileAccess(ses.proc, strings.TrimPrefix(dumpPath, "file://")); err != nil {
+		return nil, nil, err
 	}
 	fs, err := openLocalTableDump(dumpPath)
 	if err != nil {

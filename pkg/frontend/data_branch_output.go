@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -1622,6 +1623,7 @@ func writeCSV(
 	}
 
 	ep := &ExportConfig{
+		proc:       ses.proc,
 		userConfig: newDiffCSVUserConfig(),
 		service:    ses.service,
 	}
@@ -2331,6 +2333,10 @@ func prepareFSForDiffAsFile(
 	)
 
 	if fsPath, err = fileservice.ParsePath(fullFilePath); err != nil {
+		return
+	}
+
+	if err = process.AuthorizeSQLFileAccessPath(ses.proc, fsPath); err != nil {
 		return
 	}
 
@@ -3147,6 +3153,10 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 
 	var fsPath fileservice.Path
 	if fsPath, err = fileservice.ParsePath(dirPath); err != nil {
+		return
+	}
+
+	if err = process.AuthorizeSQLFileAccessPath(ses.proc, fsPath); err != nil {
 		return
 	}
 

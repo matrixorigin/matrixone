@@ -3109,22 +3109,52 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 
 	return nil
 }
-func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
-	if param.ScanType == tree.S3 {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
-			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if strings.ToLower(param.S3Param.Provider) == "minio" {
-			opts = append(opts, "is-minio=true")
-		}
-		if err = w.Write(opts); err != nil {
-			return nil, "", err
-		}
-		w.Flush()
-		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
+
+// AuthorizeExternalFileAccess admits a server-side external source before stat,
+// listing, or reader creation. LOCAL and INLINE read client-supplied data. A
+// RESULT_SCAN is an engine-owned path admitted by its existing result owner.
+func AuthorizeExternalFileAccess(param *tree.ExternParam, proc *process.Process) error {
+	if param.Local || param.ScanType == tree.INLINE || param.ExternType == int32(plan.ExternType_RESULT_SCAN) {
+		return nil
 	}
-	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
+	target, err := etlPathWithType(param, param.Filepath)
+	if err != nil {
+		return err
+	}
+	return process.AuthorizeSQLFileAccess(proc, target)
+}
+
+func etlPathWithType(param *tree.ExternParam, prefix string) (string, error) {
+	if param.ScanType != tree.S3 {
+		return prefix, nil
+	}
+	if param.S3Param == nil {
+		return "", moerr.NewBadConfig(param.Ctx, "missing S3 parameters")
+	}
+	buf := new(strings.Builder)
+	w := csv.NewWriter(buf)
+	opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+		"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+	if strings.EqualFold(param.S3Param.Provider, "minio") {
+		opts = append(opts, "is-minio=true")
+	}
+	if err := w.Write(opts); err != nil {
+		return "", err
+	}
+	w.Flush()
+	return fileservice.JoinPath(buf.String(), prefix), nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	target, err := etlPathWithType(param, prefix)
+	if err != nil {
+		return nil, "", err
+	}
+	fs := param.FileService
+	if param.ScanType == tree.S3 {
+		fs = nil
+	}
+	return fileservice.GetForETL(context.TODO(), fs, target)
 }
 
 func StatFile(param *tree.ExternParam) error {

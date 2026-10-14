@@ -252,6 +252,8 @@ func Test_runSql(t *testing.T) {
 
 func TestDeleteStageFiles(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	cache := proc.GetStageCache()
 
 	dir := t.TempDir()
@@ -290,6 +292,8 @@ func TestDeleteStageFiles(t *testing.T) {
 
 func TestDeleteStageFilesErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	cache := proc.GetStageCache()
 
 	dir := t.TempDir()
@@ -316,6 +320,8 @@ func TestDeleteStageFilesErrors(t *testing.T) {
 
 func TestStageListWithPatternNoWildcard(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "a.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("a"), 0600))

@@ -5933,7 +5933,7 @@ func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if err := datalink.AuthorizeSQLFileAccessPath(proc, path); err != nil {
+	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
 		return nil, err
 	}
 	r, err := readFromParsedPath(proc.Ctx, filePath, path, proc.GetFileService(), 0, -1)

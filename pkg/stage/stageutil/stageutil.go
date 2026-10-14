@@ -366,6 +366,9 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 
 func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
 	const wildcards = "*?"
+	if err := process.AuthorizeSQLFileAccess(proc, fileservice.JoinPath(service, pattern)); err != nil {
+		return nil, err
+	}
 
 	idx := strings.IndexAny(pattern, wildcards)
 	if idx == -1 {
@@ -398,6 +401,9 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 
 	fspath, query, err := s.ToPath()
 	if err != nil {
+		return 0, err
+	}
+	if err := process.AuthorizeSQLFileAccess(proc, fspath); err != nil {
 		return 0, err
 	}
 	if query != "" {

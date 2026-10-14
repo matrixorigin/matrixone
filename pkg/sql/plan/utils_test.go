@@ -3435,3 +3435,32 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthorizeExternalFileAccess(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{SessionInfo: process.SessionInfo{Account: "tenant", Role: "accountadmin"}}}
+	for _, tc := range []struct {
+		name   string
+		param  tree.ExternParam
+		denied bool
+	}{
+		{name: "server infile", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "/owned/input.csv"}}, denied: true},
+		{name: "client local", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "client.csv"}, ExParam: tree.ExParam{Local: true}}},
+		{name: "inline", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}}},
+		{name: "owned result scan", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:/query_result/owned"}, ExParam: tree.ExParam{ExternType: int32(plan.ExternType_RESULT_SCAN)}}},
+		{name: "named service", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:owned.csv"}}, denied: true},
+		{name: "remote s3", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "https://owned.example", Bucket: "owned"}}}},
+		{name: "s3 disk", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "disk", Bucket: "/owned"}}}, denied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AuthorizeExternalFileAccess(&tc.param, proc)
+			if tc.denied {
+				require.ErrorContains(t, err, "only the sys account moadmin role")
+			} else {
+				require.NoError(t, err)
+			}
+			proc.Base.SessionInfo = process.SessionInfo{Account: "sys", Role: "moadmin"}
+			require.NoError(t, AuthorizeExternalFileAccess(&tc.param, proc))
+			proc.Base.SessionInfo = process.SessionInfo{Account: "tenant", Role: "accountadmin"}
+		})
+	}
+}

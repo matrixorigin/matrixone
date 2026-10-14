@@ -754,6 +754,8 @@ func TestReadExternalFirstLineSizeUsesSmallFileWithoutTrailingNewline(t *testing
 func TestGetExternalStatsUsesKnownFileSizeForSmallFile(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	filePath := "etl:/small.csv"
 	data := "abcd"
 	require.NoError(t, proc.GetFileService().Write(ctx, fileservice.IOVector{

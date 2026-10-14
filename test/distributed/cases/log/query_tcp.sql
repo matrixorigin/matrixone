@@ -72,7 +72,7 @@ CREATE  TABLE rawlog_withnull (
 `end_time` DATETIME,
 `duration` BIGINT UNSIGNED,
 `resource` TEXT);
-load data infile '$resources/external_table_file/rawlog_withnull.csv' into table rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+load data local infile '$resources/external_table_file/rawlog_withnull.csv' into table rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 load data local infile '$resources/external_table_file/rawlog_withnull.csv' into table rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 
 -- @session

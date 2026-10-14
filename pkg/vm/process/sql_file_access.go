@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package datalink
+package process
 
 import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -39,31 +37,21 @@ const (
 // its validation), so this helper does not duplicate remote credentials
 // policy.  An argumented path that selects the process-local disk backend is
 // still server-owned and follows the local-path rule. The check is
-// deliberately repeated at the actual I/O boundary by
-// Datalink.NewReadCloser/NewWriter because a Datalink can outlive planning.
-func AuthorizeSQLFileAccess(proc *process.Process, moPath string) error {
+// repeated at I/O admission because prepared plans and Datalinks can outlive
+// the statement that created them. Stage resolution and background execution
+// do not confer authority over server-owned files.
+func AuthorizeSQLFileAccess(proc *Process, moPath string) error {
 	path, err := fileservice.ParsePath(moPath)
 	if err != nil {
 		return err
 	}
-	return authorizeSQLFileAccessPath(proc, path)
-}
-
-func authorizeSQLFileAccessPath(proc *process.Process, path fileservice.Path) error {
-	return authorizeSQLFileAccessPathWithOrigin(proc, path, false)
+	return AuthorizeSQLFileAccessPath(proc, path)
 }
 
 // AuthorizeSQLFileAccessPath is the parsed-path form used by SQL readers that
 // must keep the authorization parse and ETL resolution on one path. Callers
 // must pass the result of fileservice.ParsePath without changing it.
-func AuthorizeSQLFileAccessPath(proc *process.Process, path fileservice.Path) error {
-	return authorizeSQLFileAccessPath(proc, path)
-}
-
-func authorizeSQLFileAccessPathWithOrigin(proc *process.Process, path fileservice.Path, fromStage bool) error {
-	if path.File == "" {
-		return moerr.NewFileNotFoundNoCtx(path.File)
-	}
+func AuthorizeSQLFileAccessPath(proc *Process, path fileservice.Path) error {
 
 	// Keep this admission check aligned with GetForETL's provider selection so
 	// an argumented disk backend cannot be classified as remote here while the
@@ -73,31 +61,13 @@ func authorizeSQLFileAccessPathWithOrigin(proc *process.Process, path fileservic
 		return nil
 	}
 
-	// A fulltext2 CDC task is trusted internal SQL, but it resolves a tenant-owned
-	// stage:// value to the stage's concrete local path before this boundary. Keep
-	// that asynchronous workflow working without treating background execution as
-	// a blanket host-file grant: the origin must be a stage URL and the process
-	// must be an internal, non-frontend execution.
-	if fromStage && isTrustedInternalStageExecution(proc) {
-		return nil
-	}
-
 	if proc != nil && proc.Base != nil {
 		info := proc.GetSessionInfo()
-		if info != nil &&
-			strings.EqualFold(info.Account, systemAccountName) &&
-			strings.EqualFold(info.Role, moAdminRoleName) {
+		if strings.ToLower(info.Account) == systemAccountName &&
+			strings.ToLower(info.Role) == moAdminRoleName {
 			return nil
 		}
 	}
 
 	return moerr.NewInternalErrorNoCtx("only the sys account moadmin role can access SQL file paths")
-}
-
-func isTrustedInternalStageExecution(proc *process.Process) bool {
-	return proc != nil &&
-		proc.Base != nil &&
-		!proc.Base.IsFrontend &&
-		proc.Ctx != nil &&
-		defines.IsInternalExecutor(proc.Ctx)
 }

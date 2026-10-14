@@ -148,6 +148,8 @@ func TestAuthorizeSQLFileAccess(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
+		{name: "ASCII account and role names", proc: newProc("SYS", "MOADMIN"), path: "/tmp/owned.txt"},
+		{name: "distinct Unicode account is not sys", proc: newProc("ſys", "moadmin"), path: "/tmp/owned.txt", wantErr: true},
 		{name: "local path requires system moadmin", proc: newProc("sys", "moadmin"), path: "/tmp/owned.txt"},
 		{name: "public local path denied", proc: newProc("sys", "public"), path: "/tmp/owned.txt", wantErr: true},
 		{name: "tenant admin local path denied", proc: newProc("tenant", "accountadmin"), path: "/tmp/owned.txt", wantErr: true},
@@ -167,7 +169,7 @@ func TestAuthorizeSQLFileAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := AuthorizeSQLFileAccess(tt.proc, tt.path)
+			err := process.AuthorizeSQLFileAccess(tt.proc, tt.path)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.ErrorContains(t, err, "only the sys account moadmin role")
@@ -200,9 +202,8 @@ func TestRemoteStageDatalinkKeepsOrdinaryReadWrite(t *testing.T) {
 	})
 
 	readPath := "stage://remote/read.txt"
-	// The server starts with the object so this first read also proves that the
-	// SQL admission path does not require sys/moadmin for an argumented remote
-	// provider.
+	// Writing and then reading the object proves that remote stage admission
+	// does not require sys/moadmin.
 	dl, err := NewDatalink(readPath, proc)
 	require.NoError(t, err)
 	writer, err := dl.NewWriter(proc)
@@ -270,83 +271,52 @@ func TestDatalinkNamedReadRechecksCurrentIdentity(t *testing.T) {
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 }
 
-func TestInternalStageDatalinkKeepsBackgroundCDCAccess(t *testing.T) {
+func TestInternalStageDatalinkRequiresServerAuthority(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "prefix", "stage.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	require.NoError(t, os.WriteFile(path, []byte("stage content"), 0600))
-
+	target := filepath.Join(dir, "missing", "stage.txt")
 	ctx := context.WithValue(context.Background(), defines.InternalExecutorKey{}, true)
 	proc := testutil.NewProc(t)
 	proc.BuildPipelineContext(ctx)
-	outerURL, err := url.Parse("file://" + dir)
+	outerURL, err := url.Parse("file://" + filepath.Dir(target))
 	require.NoError(t, err)
 	innerURL, err := url.Parse("stage://outer/prefix")
 	require.NoError(t, err)
 	proc.GetStageCache().Set("outer", stage.StageDef{Id: 1, Name: "outer", Url: outerURL})
 	proc.GetStageCache().Set("inner", stage.StageDef{Id: 2, Name: "inner", Url: innerURL})
-	dl, err := NewDatalink("stage://inner/stage.txt", proc)
+	_, err = NewDatalink("stage://inner/stage.txt", proc)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = os.Stat(filepath.Dir(target))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDatalinkStageReuseRechecksServerAuthority(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "stage.txt")
+	require.NoError(t, os.WriteFile(target, []byte("stage content"), 0o600))
+	stageURL, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+	ctx := context.WithValue(context.Background(), defines.InternalExecutorKey{}, true)
+	proc := testutil.NewProc(t)
+	proc.BuildPipelineContext(ctx)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	proc.GetStageCache().Set("owned", stage.StageDef{Id: 1, Name: "owned", Url: stageURL})
+	dl, err := NewDatalink("stage://owned/stage.txt", proc)
 	require.NoError(t, err)
 	r, err := dl.NewReadCloser(proc)
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.NoError(t, r.Close())
-	require.Equal(t, []byte("stage content"), data)
+	require.Equal(t, "stage content", string(data))
 
-	proc.Base.IsFrontend = true
-	_, err = NewDatalink("stage://inner/stage.txt", proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-}
-
-func TestDatalinkStageOriginDoesNotBypassReuseAuthorization(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stage.txt")
-	require.NoError(t, os.WriteFile(path, []byte("stage content"), 0o600))
-
-	stageURL, err := url.Parse("file://" + dir)
-	require.NoError(t, err)
-
-	trustedCtx := context.WithValue(context.Background(), defines.InternalExecutorKey{}, true)
-	proc := testutil.NewProc(t)
-	proc.BuildPipelineContext(trustedCtx)
-	proc.GetStageCache().Set("owned", stage.StageDef{Id: 1, Name: "owned", Url: stageURL})
-
-	// Only the original stage:// input receives the narrow background exception.
-	dl, err := NewDatalink("stage://owned/stage.txt", proc)
-	require.NoError(t, err)
-	_, err = NewDatalink("file://"+path, proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-
-	// A manually assembled Datalink whose resolved path looks local must not be
-	// able to claim stage provenance. Exercise every I/O boundary on the same
-	// object so a stale admission cannot survive into reuse.
-	parsed, err := fileservice.ParsePath(path)
-	require.NoError(t, err)
-	manual := Datalink{MoPath: path, Size: -1, path: parsed}
-	_, err = manual.NewReadCloser(proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-	_, err = manual.StatFile(proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-	_, err = manual.NewWriter(proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-
-	// Once the process is reused by a foreground statement, the internal marker
-	// is not an authority grant. The previously admitted stage Datalink must be
-	// rechecked for read, stat, and write before any capability is acquired.
-	proc.Base.IsFrontend = true
+	// Background execution retains its internal marker, but loses the current
+	// role's file authority. Reuse must reject every subsequent I/O operation.
+	proc.Base.SessionInfo.Role = "public"
 	_, err = dl.NewReadCloser(proc)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 	_, err = dl.StatFile(proc)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 	_, err = dl.NewWriter(proc)
-	require.ErrorContains(t, err, "only the sys account moadmin role")
-
-	// A background process without the explicit internal marker is denied even
-	// when the stage cache can resolve the URL.
-	ordinary := testutil.NewProc(t)
-	ordinary.BuildPipelineContext(context.Background())
-	ordinary.GetStageCache().Set("owned", stage.StageDef{Id: 1, Name: "owned", Url: stageURL})
-	_, err = NewDatalink("stage://owned/stage.txt", ordinary)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 }

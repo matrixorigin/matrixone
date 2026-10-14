@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -110,7 +109,6 @@ func (w *Fulltext2SqlWriter) datalinkText(ctx context.Context, rawurl string) (o
 	// would otherwise be looked up in the system tenant's mo_stages and fail (or resolve an
 	// unrelated same-named system stage). runTxnWithSqlContext sets the txn tenant from the
 	// account we pass, overriding the ctx tenant.
-	ctx = context.WithValue(ctx, defines.InternalExecutorKey{}, true)
 	err = runTxnWithSqlContext(ctx, w.cnEngine, w.cnTxnClient, w.cnUUID, w.srcAccountID, time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sql := fmt.Sprintf("SELECT load_text(cast(%s as datalink))", sqlquote.String(rawurl))
