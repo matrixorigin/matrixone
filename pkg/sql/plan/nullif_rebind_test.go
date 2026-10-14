@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,8 +34,9 @@ func TestInitNullMapRebindReturnsSameRules(t *testing.T) {
 		{"single", "a=nullif(a,'null')", map[string][]string{"a": {"null"}}},
 		{"multiple sentinels", "a=nullif(a,'null'),a=nullif(a,'')", map[string][]string{"a": {"null", ""}}},
 		{"multiple columns", "a=nullif(a,'null'),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
-		{"legacy unsupported same column boundary", "a=nullif(a,'null'),a=upper(a),b=nullif(b,'nil')", map[string][]string{"a": {"null"}}},
-		{"legacy unsupported assignment boundary", "a=nullif(a,'null'),b=upper(b),a=nullif(a,'nil')", map[string][]string{"a": {"null"}}},
+		{"skip non-nullif on same column", "a=nullif(a,'null'),a=upper(a),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
+		{"skip non-nullif on different column", "a=nullif(a,'null'),b=upper(b),a=nullif(a,'nil')", map[string][]string{"a": {"null", "nil"}}},
+		{"leading non-nullif", "a=upper(a),b=nullif(b,'nil')", map[string][]string{"b": {"nil"}}},
 	} {
 		for _, kind := range []string{"external", "load"} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {
@@ -56,11 +56,6 @@ func TestInitNullMapRebindReturnsSameRules(t *testing.T) {
 				for pass := range 20 {
 					require.NoError(t, InitNullMap(param, nil))
 					require.Equal(t, tc.want, param.NullMap, "rebind %d", pass)
-				}
-				if strings.HasPrefix(tc.name, "legacy unsupported") {
-					// Only the consumed prefix is supported by this binder; a
-					// trailing, unconsumed expression has no JSON codec contract.
-					return
 				}
 				// The stored external-table parameter must retain the same rules
 				// after repeated binding and a remote JSON round trip.
