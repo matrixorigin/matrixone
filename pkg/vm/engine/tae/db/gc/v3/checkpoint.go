@@ -372,6 +372,10 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		if err != nil {
 			return
 		}
+		if cleanupErr := c.replayUnpublishedObjectCleanup(ctx); cleanupErr != nil {
+			logutil.Warn(
+				"GC-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
+		}
 		if cleanupErr := c.replayCCPRUnpublishedObjectCleanup(ctx); cleanupErr != nil {
 			logutil.Warn(
 				"GC-CCPR-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
@@ -400,9 +404,6 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		logutil.Warn("GC-UNPUBLISHED-ADMISSION-DEFERRED", zap.Error(initErr))
 	}
 	c.unpublishedCleanupGeneration.Add(1)
-	if cleanupErr := c.replayUnpublishedObjectCleanup(ctx); cleanupErr != nil {
-		logutil.Warn("GC-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
-	}
 
 	c.StartMutationTask("gc-replay")
 	defer c.StopMutationTask()
@@ -1440,6 +1441,9 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.start,
 		scannedWindow.tsRange.end,
 	))
+	if publishErr := scannedWindow.Publish(ctx); publishErr != nil {
+		return filesToGC, metafile, publishErr
+	}
 	softDuration = time.Since(now)
 	// Record GC filter duration
 	v2.GCCheckpointFilterDurationHistogram.Observe(softDuration.Seconds())
@@ -1966,6 +1970,7 @@ func (c *checkpointCleaner) retainUnpublishedObjectMarker(marker string) {
 		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
 	}
 	c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+	delete(c.unpublishedCleanupOwnership.uncertain, marker)
 }
 
 // initializeUnpublishedObjectOwnership reconstructs admission accounting once
@@ -2241,6 +2246,14 @@ func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 	if active {
 		return ioutil.RetryUnpublishedObjectCleanup, nil
 	}
+	if c.isAdoptedGCMetadata(object.File) {
+		return ioutil.ReleaseUnpublishedObjectCleanup, nil
+	}
+	for _, dependency := range object.DependsOn {
+		if c.isAdoptedGCMetadata(dependency) {
+			return ioutil.ReleaseUnpublishedObjectCleanup, nil
+		}
+	}
 	if c.checkpointCli == nil {
 		return ioutil.DeleteUnpublishedObject, nil
 	}
@@ -2265,6 +2278,17 @@ func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 		return ioutil.ReleaseUnpublishedObjectCleanup, nil
 	}
 	return ioutil.DeleteUnpublishedObject, nil
+}
+
+func (c *checkpointCleaner) isAdoptedGCMetadata(file string) bool {
+	name := file
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	c.mutation.Lock()
+	_, adopted := c.mutation.metaFiles[name]
+	c.mutation.Unlock()
+	return adopted
 }
 
 func (c *checkpointCleaner) replayCCPRUnpublishedObjectCleanup(
@@ -2722,6 +2746,21 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		c.mp,
 		c.fs,
 		WithUnpublishedCleanup(c.retainUnpublishedObjects),
+		WithUnpublishedObjectLifecycle(
+			func(ctx context.Context, file string, dependsOn []string) error {
+				_, err := c.prepareUnpublishedObject(
+					ctx, 0, 0, false, file, dependsOn)
+				return err
+			},
+			func(_ context.Context, file string) error {
+				c.AbandonUnpublishedObject(file)
+				return nil
+			},
+			c.AbandonUnpublishedObject,
+		),
+		WithCheckpointScanRollback(func() {
+			c.mutation.snapshotMeta.RestoreFrom(snapshotBefore)
+		}),
 	)
 	var gcMetaFile string
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
@@ -2748,6 +2787,9 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			gcWindow.tsRange.end,
 		),
 	)
+	if publishErr := gcWindow.Publish(ctx); publishErr != nil {
+		err = errors.Join(err, publishErr)
+	}
 	return
 }
 
@@ -2831,6 +2873,7 @@ func (c *checkpointCleaner) retainUnboundedUnpublishedObjectMarker(
 		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
 	}
 	c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+	delete(c.unpublishedCleanupOwnership.uncertain, marker)
 	c.unpublishedCleanupOwnership.overflow = true
 	if c.unpublishedCleanupOwnership.pending < unpublishedCleanupMaxPending {
 		c.unpublishedCleanupOwnership.pending = unpublishedCleanupMaxPending

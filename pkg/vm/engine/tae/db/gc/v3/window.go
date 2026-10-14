@@ -67,6 +67,29 @@ func WithUnpublishedCleanup(
 	}
 }
 
+// WithUnpublishedObjectLifecycle makes object persistence participate in the
+// same ownership protocol as checkpoint metadata persistence.
+func WithUnpublishedObjectLifecycle(
+	prepare func(context.Context, string, []string) error,
+	finish func(context.Context, string) error,
+	abandon func(string),
+) WindowOption {
+	return func(window *GCWindow) {
+		window.prepareUnpublished = prepare
+		window.finishUnpublished = finish
+		window.abandonUnpublished = abandon
+	}
+}
+
+// WithCheckpointScanRollback supplies the transaction boundary for snapshot
+// updates made by processCkpData. It is invoked when collection of the same
+// checkpoint fails after that update has already succeeded.
+func WithCheckpointScanRollback(rollback func()) WindowOption {
+	return func(window *GCWindow) {
+		window.rollbackScan = rollback
+	}
+}
+
 func NewGCWindow(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -90,7 +113,12 @@ type GCWindow struct {
 	mp  *mpool.MPool
 	fs  fileservice.FileService
 
-	retainUnpublished func(context.Context, []string) error
+	retainUnpublished  func(context.Context, []string) error
+	prepareUnpublished func(context.Context, string) error
+	finishUnpublished  func(context.Context, string) error
+	abandonUnpublished func(string)
+	rollbackScan       func()
+	prepared           map[string]struct{}
 
 	files []objectio.ObjectStats
 
@@ -108,6 +136,12 @@ func (w *GCWindow) Clone() GCWindow {
 	w2 := *w
 	w2.files = make([]objectio.ObjectStats, len(w.files))
 	copy(w2.files, w.files)
+	if w.prepared != nil {
+		w2.prepared = make(map[string]struct{}, len(w.prepared))
+		for file := range w.prepared {
+			w2.prepared[file] = struct{}{}
+		}
+	}
 	return w2
 }
 
@@ -145,7 +179,15 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	probility float64,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) ([]string, string, error) {
+) (filesToGC []string, metaFile string, err error) {
+	defer func() {
+		// A caller publishes the metadata only after WAL/catalog adoption. Any
+		// earlier error must release in-memory admission while retaining the
+		// durable marker for replay.
+		if err != nil {
+			w.abandonPrepared()
+		}
+	}()
 	// Record memory usage at start
 	v2.GCMemoryObjectsGauge.Set(float64(len(w.files)))
 
@@ -177,8 +219,6 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 
 	vecToGC, filesNotGC := job.Result()
 	defer vecToGC.Free(w.mp)
-	var metaFile string
-	var err error
 	var bf *bloomfilter.BloomFilter
 	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
@@ -213,7 +253,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 				return
 			}
 		})
-	filesToGC := make([]string, 0, len(filesToGCSet))
+	filesToGC = make([]string, 0, len(filesToGCSet))
 	for file := range filesToGCSet {
 		filesToGC = append(filesToGC, file)
 	}
@@ -236,6 +276,9 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
+	previousTSRange := w.tsRange
+	w.tsRange.start = start
+	w.tsRange.end = end
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
 		select {
 		case <-cxt.Done():
@@ -268,12 +311,16 @@ func (w *GCWindow) ScanCheckpoints(
 	transferred := false
 	defer func() {
 		if !transferred {
+			w.tsRange = previousTSRange
+			w.rollbackScanIfNeeded()
+			w.abandonPrepared()
 			metaCleanupErr := w.deleteMeta(ctx, metaFile)
 			if metaCleanupErr != nil {
 				err = errors.Join(err, metaCleanupErr)
 				if w.retainUnpublished != nil {
 					persisted, _ := sinker.GetResult()
 					files := objectStatsNames(persisted)
+					files = append(files, sinker.GetUnpublishedFiles()...)
 					if metaFile != "" {
 						files = append(files, ioutil.MakeFullName(w.dir, metaFile))
 					}
@@ -337,6 +384,57 @@ func (w *GCWindow) ScanCheckpoints(
 	return metaFile, nil
 }
 
+func (w *GCWindow) rollbackScanIfNeeded() {
+	if w.rollbackScan != nil {
+		w.rollbackScan()
+	}
+}
+
+func (w *GCWindow) abandonPrepared() {
+	if w.abandonUnpublished == nil {
+		return
+	}
+	for file := range w.prepared {
+		w.abandonUnpublished(file)
+	}
+	w.prepared = nil
+}
+
+func (w *GCWindow) prepareObject(ctx context.Context, file string) error {
+	if w.prepareUnpublished == nil {
+		return nil
+	}
+	var dependsOn []string
+	if !isGCMetadataFile(file) {
+		metadata := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
+		dependsOn = []string{ioutil.MakeFullName(w.dir, metadata)}
+	}
+	if err := w.prepareUnpublished(ctx, file, dependsOn); err != nil {
+		return err
+	}
+	if w.prepared == nil {
+		w.prepared = make(map[string]struct{})
+	}
+	w.prepared[file] = struct{}{}
+	return nil
+}
+
+// Publish releases the active write owner after the resulting metadata has
+// been adopted by the catalog/replay state. The durable marker remains for
+// replay to reconcile with that adopted metadata.
+func (w *GCWindow) Publish(ctx context.Context) error {
+	if w.finishUnpublished == nil {
+		w.prepared = nil
+		return nil
+	}
+	var err error
+	for file := range w.prepared {
+		err = errors.Join(err, w.finishUnpublished(ctx, file))
+	}
+	w.prepared = nil
+	return err
+}
+
 func (w *GCWindow) getSinker(
 	tailSize int,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -350,6 +448,7 @@ func (w *GCWindow) getSinker(
 		w.fs,
 		ioutil.WithTailSizeCap(tailSize),
 		ioutil.WithBuffer(buffer, false),
+		ioutil.WithBeforePersist(w.prepareObject),
 	)
 }
 
@@ -363,6 +462,16 @@ func (w *GCWindow) writeMetaForRemainings(
 	default:
 	}
 	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
+	fullName := ioutil.MakeFullName(w.dir, name)
+	if err := w.prepareObject(ctx, fullName); err != nil {
+		return name, err
+	}
+	prepared := true
+	defer func() {
+		if prepared {
+			w.abandonPrepared()
+		}
+	}()
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
@@ -376,7 +485,7 @@ func (w *GCWindow) writeMetaForRemainings(
 	}
 	writer, err := objectio.NewObjectWriterSpecial(
 		objectio.WriterGC,
-		ioutil.MakeFullName(w.dir, name),
+		fullName,
 		w.fs,
 	)
 	if err != nil {
@@ -386,6 +495,9 @@ func (w *GCWindow) writeMetaForRemainings(
 		return name, err
 	}
 	_, err = writer.WriteEnd(ctx)
+	if err == nil {
+		prepared = false
+	}
 	return name, err
 }
 
