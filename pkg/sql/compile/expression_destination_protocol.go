@@ -48,6 +48,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.DateNumericResultContracts, defines.MORPCVersion112,
+			"signed date result contracts require a versioned remote destination",
+			"remote destination does not support signed date result contracts (MORPC version %d)"},
 		{features.MediumIntAssignmentBounds, defines.MORPCVersion110,
 			"MEDIUMINT assignment bounds require a versioned remote destination",
 			"remote destination does not support MEDIUMINT assignment bounds (MORPC version %d)"},
@@ -75,7 +78,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion112,
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion113,
 			"partitioned FULLTEXT routing requires a versioned remote destination",
 			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 	}

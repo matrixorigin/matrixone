@@ -77,6 +77,33 @@ func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	require.Equal(t, int8(0), value)
 }
 
+func TestBackSessionInheritsHnswFeatureGate(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	child := &backSession{parentBackSession: parent}
+
+	for _, enabled := range []int64{1, 0, 1} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "experimental_hnsw_index", enabled))
+		for _, backSes := range []*backSession{parent, child} {
+			value, err := backSes.GetSessionSysVar("EXPERIMENTAL_HNSW_INDEX")
+			require.NoError(t, err)
+			require.Equal(t, int8(enabled), value)
+		}
+	}
+
+	// Independent background sessions keep their executor-default fallback.
+	value, err := (&backSession{}).GetSessionSysVar("experimental_hnsw_index")
+	require.NoError(t, err)
+	require.Nil(t, value)
+	// The feature gate does not change background transaction/SQL-mode overrides.
+	for name, want := range map[string]interface{}{"autocommit": true, "sql_mode": "", "lower_case_table_names": int64(1)} {
+		value, err := child.GetSessionSysVar(name)
+		require.NoError(t, err)
+		require.Equal(t, want, value)
+	}
+}
+
 func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {
 	ctx := context.Background()
 	ses := newFeatureLimitTestSession(t)

@@ -1,0 +1,289 @@
+set @saved_sql_mode = @@sql_mode;
+set @saved_time_zone = @@time_zone;
+set time_zone = '+00:00';
+set sql_mode = 'STRICT_TRANS_TABLES';
+drop database if exists external_time_assignment_db;
+create database external_time_assignment_db;
+use external_time_assignment_db;
+drop table if exists external_time_assignment;
+create table external_time_assignment(id int primary key, v time(6));
+load data infile {'filepath'='$resources/load_data/time_assignment_range.csv','format'='csv'} into table external_time_assignment fields terminated by ',';
+Data truncation: data out of range: data type time, value '-838:59:59.000001'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '-838:59:59.000001'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/time_assignment_valid.csv','format'='csv'} into table external_time_assignment fields terminated by ',';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=-838:59:59.000000  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-00:00:00.000001  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+set sql_mode = '';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.csv','format'='csv'} into table external_time_assignment fields terminated by ',';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 4  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 5
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:00.000007  𝄀
+2  ¦  t=-838:59:59.000000  𝄀
+3  ¦  t=838:59:59.000000  𝄀
+4  ¦  t=838:59:59.000000  𝄀
+5  ¦  t=-838:59:59.000000
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.jl','format'='jsonline','jsondata'='object'} into table external_time_assignment;
+Data truncation: data out of range: data type time, value '-838:59:59.000001'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '-838:59:59.000001'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/time_assignment_valid.jl','format'='jsonline','jsondata'='object'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=-838:59:59.000000  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-00:00:00.000001  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+set sql_mode = '';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.jl','format'='jsonline','jsondata'='object'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 4  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 5
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:00.000007  𝄀
+2  ¦  t=-838:59:59.000000  𝄀
+3  ¦  t=838:59:59.000000  𝄀
+4  ¦  t=838:59:59.000000  𝄀
+5  ¦  t=-838:59:59.000000
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.parquet','format'='parquet'} into table external_time_assignment;
+Data truncation: data out of range: data type time, value '-838:59:59.000001'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '-838:59:59.000001'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/time_assignment_valid.parquet','format'='parquet'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=-838:59:59.000000  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-00:00:00.000001  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+set sql_mode = '';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.parquet','format'='parquet'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 4  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 5
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:00.000007  𝄀
+2  ¦  t=-838:59:59.000000  𝄀
+3  ¦  t=838:59:59.000000  𝄀
+4  ¦  t=838:59:59.000000  𝄀
+5  ¦  t=-838:59:59.000000
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+insert into external_time_assignment values (1,'838:59:59.000001');
+Data truncation: data out of range: data type time, value '838:59:59.000001'
+insert into external_time_assignment values (2,'-838:59:59.000001');
+Data truncation: data out of range: data type time, value '-838:59:59.000001'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+insert into external_time_assignment values (1,'838:59:59.000001'),(2,'-838:59:59.000001');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=838:59:59.000000  𝄀
+2  ¦  t=-838:59:59.000000
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data infile {'filepath'='$resources/load_data/time_assignment_range.csv','format'='csv'} ignore into table external_time_assignment fields terminated by ',';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 4  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 5
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:00.000007  𝄀
+2  ¦  t=-838:59:59.000000  𝄀
+3  ¦  t=838:59:59.000000  𝄀
+4  ¦  t=838:59:59.000000  𝄀
+5  ¦  t=-838:59:59.000000
+drop table external_time_assignment;
+create table external_time_assignment(v time(0));
+load data inline format='csv', data='00:00:00.4999999' into table external_time_assignment;
+load data inline format='csv', data='838:59:59.9' into table external_time_assignment;
+Data truncation: data out of range: data type time, value '839:00:00'
+select concat('t=',cast(v as char)) as time_value from external_time_assignment;
+➤ time_value[-1,16383,0]  𝄀
+t=00:00:00
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL';
+load data inline format='csv', data='838:59:59.9' into table external_time_assignment;
+select concat('t=',cast(v as char)) as time_value from external_time_assignment;
+➤ time_value[-1,16383,0]  𝄀
+t=838:59:59
+drop table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+create table external_time_assignment(id int primary key, v time(0));
+load data infile {'filepath'='$resources/load_data/time_assignment_extreme.parquet','format'='parquet'} into table external_time_assignment;
+Data truncation: data out of range: data type time, value '-9223372036854775808 microseconds'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '-9223372036854775808 microseconds'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+load data infile {'filepath'='$resources/load_data/time_assignment_extreme.parquet','format'='parquet'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=-838:59:59  𝄀
+2  ¦  t=838:59:59  𝄀
+3  ¦  null
+drop table external_time_assignment;
+create table external_time_assignment(id int primary key, v time(6));
+set sql_mode = 'STRICT_TRANS_TABLES';
+insert into external_time_assignment values (2,'2562047788:00:00');
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '2562047788:00:00'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+insert into external_time_assignment values (2,'2562047788:00:00'),(3,'-2562047788:00:00');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-838:59:59.000000
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='1,00:00:01.9876549\n2,2562047788:00:00\n3,-2562047788:00:00\n4,' into table external_time_assignment fields terminated by ',';
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '2562047788:00:00'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+load data inline format='csv', data='1,00:00:01.9876549\n2,2562047788:00:00\n3,-2562047788:00:00\n4,' into table external_time_assignment fields terminated by ',';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:01.987655  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-838:59:59.000000  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data infile {'filepath'='$resources/load_data/time_assignment_text_overflow.jl','format'='jsonline','jsondata'='object'} into table external_time_assignment;
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '2562047788:00:00'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+load data infile {'filepath'='$resources/load_data/time_assignment_text_overflow.jl','format'='jsonline','jsondata'='object'} into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 3
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:01.987655  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-838:59:59.000000  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+set sql_mode = 'STRICT_TRANS_TABLES';
+load data infile {'filepath'='$resources/load_data/time_assignment_text_overflow.parquet','format'='parquet'} into table external_time_assignment;
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1690  ¦  data out of range: data type time, value '2562047788:00:00'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/time_assignment_text_overflow.parquet','format'='parquet'} ignore into table external_time_assignment;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 2
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+1  ¦  t=00:00:01.987655  𝄀
+2  ¦  t=838:59:59.000000  𝄀
+3  ¦  t=-838:59:59.000000  𝄀
+4  ¦  null
+truncate table external_time_assignment;
+prepare time_text_load from "load data inline format='csv', data='2,2562047788:00:00' into table external_time_assignment fields terminated by ','";
+execute time_text_load;
+Data truncation: data out of range: data type time, value '2562047788:00:00'
+select count(*) from external_time_assignment;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = '';
+execute time_text_load;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'time' at row 1
+select id, concat('t=',cast(v as char)) as time_value from external_time_assignment order by id;
+➤ id[4,32,0]  ¦  time_value[-1,16383,0]  𝄀
+2  ¦  t=838:59:59.000000
+deallocate prepare time_text_load;
+drop table external_time_assignment;
+drop database external_time_assignment_db;
+set time_zone = @saved_time_zone;
+set sql_mode = @saved_sql_mode;

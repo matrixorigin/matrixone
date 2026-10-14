@@ -337,7 +337,7 @@ release/owning-package/static delivery checks, then C.
 ## Merged native delivery and kernel prerequisite (2026-10-09)
 
 Sirius #29 merged as `908ffc75a58b3be496b2172795e416326416e7ec`
-on the authoritative `upstream-dev-merge` branch. C now pins that merged
+on the authoritative integration branch, now `perf/embedded-mo-scan`. C pins that merged
 revision. Its source tree is identical to the independently validated clean
 `2a39339beb0c2312dc4b71fbdd472e822450637c` tree; regenerate the release
 SDK and verify its merged source/artifact identity before using it for delivery.

@@ -641,28 +641,23 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	if len(spec.AlgoExprNames) > 0 {
-		for i, name := range spec.AlgoExprNames {
-			values = append(values, "algo_expr_name["+strconv.Itoa(i)+"]="+name)
-		}
+	settings, err := indexSearchScanSettings(spec, true)
+	if err != nil {
+		return nil, err
 	}
-	for i, expr := range spec.AlgoExprs {
-		value, err := sqlJSONExpr(ctx, expr, options)
-		if err != nil {
-			return nil, err
-		}
-		if value != "" {
-			values = append(values, "algo_expr["+strconv.Itoa(i)+"]="+value)
-		}
-	}
+	values = append(values, settings...)
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
+	}
+	payloadName := "query_vector"
+	if isFulltextIndexSearchScan(spec) {
+		payloadName = "query_payload"
 	}
 	for _, field := range []struct {
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_payload", expr: spec.QueryPayload},
+		{name: payloadName, expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
@@ -672,6 +667,19 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		if value != "" {
 			values = append(values, field.name+"="+value)
 		}
+	}
+	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
+		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
+	}
+	for i, expr := range spec.AlgoExprs {
+		if spec.AlgoExprNames[i] == "" || expr == nil {
+			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression metadata is missing")
+		}
+		value, err := sqlJSONExpr(ctx, expr, options)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, spec.AlgoExprNames[i]+"="+value)
 	}
 	if spec.DistanceRange != nil {
 		for _, bound := range []struct {
@@ -689,7 +697,9 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s expression is missing", bound.name)
 			}
 			boundType := bound.boundType.String()
-			if boundType == "" {
+			switch bound.boundType {
+			case plan.BoundType_UNBOUNDED, plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
+			default:
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s has unknown bound type %d", bound.name, bound.boundType)
 			}
 			value, err := sqlJSONExpr(ctx, bound.expr, options)

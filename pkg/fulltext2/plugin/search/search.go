@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -65,6 +66,32 @@ type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.EmptyScanHooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
+
+// ExplainSettings describes the static semantics using the same options as the reader.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, _ bool) ([]string, error) {
+	opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	settings := []string{"Match Mode: " + strconv.FormatInt(opts.Mode, 10)}
+	if opts.Config != "" {
+		var cfg fulltext2.TableConfig
+		if err := json.Unmarshal([]byte(opts.Config), &cfg); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid fulltext2 search config: %v", err)
+		}
+		for i, name := range cfg.IncludeColumns {
+			settings = append(settings, "Include Column["+strconv.Itoa(i)+"]: "+name)
+		}
+	}
+	if opts.IncludePreds != "" {
+		settings = append(settings, "Include Predicates: "+opts.IncludePreds)
+	}
+	if opts.ScoreRange != "" {
+		settings = append(settings, "Score Range: "+opts.ScoreRange)
+	}
+	return settings, nil
+}
 
 // NewReader returns the reader of one fulltext2 MATCH search.
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {

@@ -38,6 +38,14 @@ import (
 // Option option to create cn service
 type Option func(*service)
 
+// WithFrontendUnixSocketAddress overrides the frontend address after CN
+// defaults are applied. An empty address selects TCP-only frontend listening.
+func WithFrontendUnixSocketAddress(address string) Option {
+	return func(s *service) {
+		s.cfg.Frontend.UnixSocketAddress = address
+	}
+}
+
 // WithLogger setup cn service's logger
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *service) {

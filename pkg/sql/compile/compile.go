@@ -1755,6 +1755,82 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	return materialization, nil
 }
 
+// Parentheses are flattened during binding, but prepared execution retains the
+// original AST. Only this wrapper chain belongs to the statement's result limit.
+func statementHasExplicitTopLevelLimit(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return false
+	}
+	for selectStmt != nil {
+		if selectStmt.Limit != nil && selectStmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := selectStmt.Select.(*tree.ParenSelect)
+		if !ok || paren == nil {
+			return false
+		}
+		selectStmt = paren.Select
+	}
+	return false
+}
+
+// materializePreparedLimitZero uses the existing empty-result topology for a
+// bound outer LIMIT. Parameterized pagination is compiled afresh by the frontend;
+// restoring the borrowed plan prevents a zero execution contaminating later ones.
+func (c *Compile) materializePreparedLimitZero(pn *plan.Plan) (func(), error) {
+	if c.isPrepare || pn == nil || !pn.IsPrepare || c.proc.GetPrepareParams() == nil || statementHasSQLCalcFoundRows(c.stmt) {
+		return nil, nil
+	}
+	if !statementHasExplicitTopLevelLimit(c.stmt) {
+		return nil, nil
+	}
+	q := pn.GetQuery()
+	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) == 0 {
+		return nil, nil
+	}
+	id := q.Steps[len(q.Steps)-1]
+	if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+		return nil, nil
+	}
+	root, node := q.Nodes[id], q.Nodes[id]
+	for depth := 0; node.Limit == nil; depth++ {
+		if depth >= len(q.Nodes) {
+			return nil, nil
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 || node.Offset != nil {
+			return nil, nil
+		}
+		id = node.Children[0]
+		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+			return nil, nil
+		}
+		node = q.Nodes[id]
+	}
+	if node.NodeType == plan.Node_RECURSIVE_CTE || node.Limit.Typ.Id != int32(types.T_uint64) {
+		return nil, nil
+	}
+	expr := node.Limit
+	for expr.GetP() == nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
+			return nil, nil
+		}
+		expr = fn.Args[0]
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer free()
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) || vec.GetType().Oid != types.T_uint64 || vec.Length() == 0 || vector.MustFixedColWithTypeCheck[uint64](vec)[0] != 0 {
+		return nil, nil
+	}
+	original := root.Limit
+	root.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	return func() { root.Limit = original }, nil
+}
+
 // makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are
 // reused across EXECUTEs. Ordinary statements are compiled for one execution,
 // so resolve their value once and omit the default unlimited no-op entirely.
@@ -3041,7 +3117,7 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		// the matched files fill every available load scope.  Do not pay one
 		// serial footer round trip per file merely to discover that row-group
 		// fanout cannot add useful execution parallelism.
-		if c.parquetLoadFileFanoutSaturates(param, len(fileList)) {
+		if c.parquetLoadFileFanoutSaturates(node, param, len(fileList)) {
 			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
 		}
 		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
@@ -3862,7 +3938,7 @@ func (c *Compile) planArrowCompileRuntime(
 		}
 		if filePlan != nil && param.Parallel && len(fileList) == 1 && len(filePlan.RecordBatches) > 1 {
 			desiredShards := len(c.getHiveFileFanoutNodes(
-				param, min(len(filePlan.RecordBatches), arrowMaxPlannedShards),
+				node, param, min(len(filePlan.RecordBatches), arrowMaxPlannedShards),
 			))
 			if desiredShards > 1 {
 				runtime.shardsByPath[filePath], err = buildArrowRecordBatchShards(
@@ -3962,7 +4038,7 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	if len(shards) <= 1 {
 		return nil, moerr.NewInvalidInput(c.proc.Ctx, "Arrow record-batch fanout requires multiple shards")
 	}
-	nodes := c.getHiveFileFanoutNodes(param, len(shards))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(shards))
 	if len(nodes) != len(shards) {
 		return nil, moerr.NewInternalErrorf(c.proc.Ctx,
 			"Arrow planned %d record-batch shards for %d workers", len(shards), len(nodes))
@@ -4022,6 +4098,34 @@ func (c *Compile) compileExternScanMultiFileFanout(node *plan.Node, param *tree.
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
 }
 
+// TIME LOAD readers must share the coordinator's assignment implementation.
+// An older worker would decode a logical TIME before the new varchar projection
+// could classify its original text. Keep local file/row-group/offset parallelism,
+// but do not send this scan (or its assignment projection) to another CN. Parquet
+// schema is not known here, so typed TIME sources take the same conservative path.
+func loadTimeScanNeedsCoordinator(node *plan.Node, param *tree.ExternParam) bool {
+	if param == nil || param.ExternType != int32(plan.ExternType_LOAD) ||
+		param.Format == tree.ARROW || node == nil || node.TableDef == nil || node.ExternScan == nil {
+		return false
+	}
+	for _, col := range node.TableDef.Cols {
+		if col == nil || col.Hidden || col.Typ.Id != int32(types.T_time) {
+			continue
+		}
+		if field, supplied := node.ExternScan.TbColToDataCol[col.Name]; supplied && field >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) externalScanStageNodes(node *plan.Node, param *tree.ExternParam) engine.Nodes {
+	if loadTimeScanNeedsCoordinator(node, param) {
+		return nil
+	}
+	return c.queryWorkerStageNodes()
+}
+
 // multiFileFanoutEligible states the rule for parallelising a row-oriented
 // external file read: more than one file means whole files are distributed to
 // threads, one shard per scope, each file read start to finish by a single
@@ -4061,7 +4165,7 @@ func multiFileFanoutEligible(param *tree.ExternParam, fileCount int) bool {
 }
 
 func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
-	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
 		serialParam := *param
@@ -4070,7 +4174,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	}
 
 	ss := make([]*Scope, 0, len(shards))
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -4221,7 +4325,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 	rowGroups []parquetRowGroupMeta,
 	strictSqlMode bool,
 ) ([]*Scope, error) {
-	nodes := c.getHiveFileFanoutNodes(param, len(rowGroups))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(rowGroups))
 	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
 	if err != nil {
 		return nil, err
@@ -4233,7 +4337,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 	}
 
 	ss := make([]*Scope, 0, len(shards))
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -4459,12 +4563,12 @@ func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
 // DOP rather than getHiveFileFanoutNodes(fileCount): the latter is capped by
 // fileCount and therefore cannot tell whether additional row-group scopes
 // would be useful.
-func (c *Compile) parquetLoadFileFanoutSaturates(param *tree.ExternParam, fileCount int) bool {
-	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(param)
+func (c *Compile) parquetLoadFileFanoutSaturates(node *plan.Node, param *tree.ExternParam, fileCount int) bool {
+	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(node, param)
 }
 
-func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
-	stageNodes := c.queryWorkerStageNodes()
+func (c *Compile) parquetLoadFileFanoutDOP(node *plan.Node, param *tree.ExternParam) int {
+	stageNodes := c.externalScanStageNodes(node, param)
 	if param != nil && param.ScanType == tree.S3 && len(stageNodes) > 0 {
 		dop := 0
 		for _, node := range stageNodes {
@@ -4496,11 +4600,11 @@ func (c *Compile) capFanoutByMaxDop(mcpu int) int {
 	return mcpu
 }
 
-func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
+func (c *Compile) getHiveFileFanoutNodes(node *plan.Node, param *tree.ExternParam, fileCount int) []engine.Node {
 	if fileCount <= 0 {
 		return nil
 	}
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	if param.ScanType == tree.S3 && len(stageNodes) > 0 {
 		nodes := make([]engine.Node, 0, fileCount)
 		for _, node := range stageNodes {
@@ -5007,7 +5111,10 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
+	if len(stageNodes) == 0 && loadTimeScanNeedsCoordinator(node, param) {
+		stageNodes = engine.Nodes{{Addr: c.addr, Mcpu: c.capFanoutByMaxDop(max(c.ncpu, 1))}}
+	}
 	if len(stageNodes) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
 	}
@@ -8584,7 +8691,7 @@ func supportsRemotePartitionFulltextRoute(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion112
+	return ok && protocolVersion >= defines.MORPCVersion113
 }
 
 func supportsRemoteApproxPercentile(service string) bool {

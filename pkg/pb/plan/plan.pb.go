@@ -16198,6 +16198,7 @@ func (m *AlterPartitionOption) GetPartitionDefs() []*PartitionDef {
 
 type RankOption struct {
 	Mode                 string   `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
+	Nprobe               int64    `protobuf:"varint,2,opt,name=nprobe,proto3" json:"nprobe,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -16241,6 +16242,13 @@ func (m *RankOption) GetMode() string {
 		return m.Mode
 	}
 	return ""
+}
+
+func (m *RankOption) GetNprobe() int64 {
+	if m != nil {
+		return m.Nprobe
+	}
+	return 0
 }
 
 type AlterTableAutoIncrement struct {
@@ -32020,6 +32028,11 @@ func (m *RankOption) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.Nprobe != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.Nprobe))
+		i--
+		dAtA[i] = 0x10
+	}
 	if len(m.Mode) > 0 {
 		i -= len(m.Mode)
 		copy(dAtA[i:], m.Mode)
@@ -38637,6 +38650,9 @@ func (m *RankOption) ProtoSize() (n int) {
 	l = len(m.Mode)
 	if l > 0 {
 		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.Nprobe != 0 {
+		n += 1 + sovPlan(uint64(m.Nprobe))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -75032,6 +75048,25 @@ func (m *RankOption) Unmarshal(dAtA []byte) error {
 			}
 			m.Mode = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Nprobe", wireType)
+			}
+			m.Nprobe = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Nprobe |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

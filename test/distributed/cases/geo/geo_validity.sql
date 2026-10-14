@@ -39,3 +39,8 @@ insert into rings values
 select id, st_isring(g) as is_ring, st_issimple(g) as is_simple from rings order by id;
 drop table rings;
 drop database geo_valid;
+
+-- Repeated positions do not invalidate a line with two distinct coordinates.
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0 0,1 0,1 0)',0)) as repeated_valid;
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0 0)',0)) as degenerate_invalid;
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0.0000000001 0)',0)) as tiny_valid;
