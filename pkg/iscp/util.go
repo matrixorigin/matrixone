@@ -369,17 +369,41 @@ func convertColIntoSql(
 		}
 		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal64:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal64 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal128:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal128 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Uuid:
+			value = v.String()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected uuid value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
