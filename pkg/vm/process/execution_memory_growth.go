@@ -59,11 +59,29 @@ func (g *ExecutionResourceGeneration) RegisterMemoryGrowthParticipant() (
 }
 
 func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
+	return b.sampleMemoryHeadroomObserved(nil)
+}
+
+// memoryGrowthTiming is call-local. It never escapes to a shared budget or
+// participant, and publishing its counters happens after releasing all locks.
+type memoryGrowthTiming struct {
+	gateWait, budgetWait, provider, critical time.Duration
+	refreshes                                int64
+}
+
+func (b *ExecutionResourceBudget) sampleMemoryHeadroomObserved(timing *memoryGrowthTiming) (uint64, bool) {
 	if b == nil || b.memoryHeadroomProvider == nil {
 		return 0, false
 	}
+	var start time.Time
+	if timing != nil {
+		start = time.Now()
+	}
 	b.headroomMu.Lock()
 	defer b.headroomMu.Unlock()
+	if timing != nil {
+		timing.gateWait += time.Since(start)
+	}
 	now := b.memoryHeadroomNow
 	if now == nil {
 		now = func() time.Time { return time.Now() }
@@ -71,12 +89,29 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 	current := now()
 	if b.memoryHeadroomCached && b.memoryHeadroomTTL > 0 &&
 		current.Sub(b.memoryHeadroomAt) < b.memoryHeadroomTTL {
+		if timing != nil {
+			start = time.Now()
+		}
 		b.mu.Lock()
+		if timing != nil {
+			timing.budgetWait += time.Since(start)
+			start = time.Now()
+		}
 		bytes, measured := b.memoryHeadroomBytes, b.memoryHeadroomMeasured
+		if timing != nil {
+			timing.critical += time.Since(start)
+		}
 		b.mu.Unlock()
 		return bytes, measured
 	}
+	if timing != nil {
+		start = time.Now()
+	}
 	b.mu.Lock()
+	if timing != nil {
+		timing.budgetWait += time.Since(start)
+		start = time.Now()
+	}
 	// Observe committed backing BEFORE reading the OS. An allocator may finish
 	// while the sample is read; counting it twice for this sample is safe, but
 	// reading backing after the OS could omit it from both observations. The
@@ -89,12 +124,23 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 	// admission critical section. Otherwise an allocation between those two
 	// observations would be absent from both the sampled usage and the cached
 	// growth delta, allowing the same bytes twice.
+	var providerStart time.Time
+	if timing != nil {
+		providerStart = time.Now()
+	}
 	bytes, measured := b.memoryHeadroomProvider()
+	if timing != nil {
+		timing.provider += time.Since(providerStart)
+		timing.refreshes++
+	}
 	b.memoryHeadroomBytes = bytes
 	b.memoryHeadroomMeasured = measured
 	b.memoryHeadroomBacking = backing
 	b.memoryHeadroomAt = current
 	b.memoryHeadroomCached = true
+	if timing != nil {
+		timing.critical += time.Since(start)
+	}
 	b.mu.Unlock()
 	return bytes, measured
 }
@@ -150,6 +196,31 @@ func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool) 
 func (p *ExecutionMemoryGrowthParticipant) RetainedLimit(
 	current uint64,
 ) (uint64, error) {
+	return p.retainedLimit(current, nil)
+}
+
+// RetainedLimitWithStats samples one in 1024 advisory checks, starting at zero.
+// check is an operator-owned sequence, not shared participant state. Counters
+// contain raw sampled nanoseconds (critical includes provider time); they are
+// not full-query wall time and must not be added across concurrent workers.
+func (p *ExecutionMemoryGrowthParticipant) RetainedLimitWithStats(current, check uint64, stats *OperatorStats) (uint64, error) {
+	if stats == nil || check%1024 != 0 {
+		return p.RetainedLimit(current)
+	}
+	var timing memoryGrowthTiming
+	start := time.Now()
+	limit, err := p.retainedLimit(current, &timing)
+	stats.AddExtraStat("MemoryGrowthSampleNanos", time.Since(start).Nanoseconds())
+	stats.AddExtraStat("MemoryGrowthSamples", 1)
+	stats.AddExtraStat("MemoryGrowthGateWaitSampleNanos", timing.gateWait.Nanoseconds())
+	stats.AddExtraStat("MemoryGrowthBudgetWaitSampleNanos", timing.budgetWait.Nanoseconds())
+	stats.AddExtraStat("MemoryGrowthCriticalSampleNanos", timing.critical.Nanoseconds())
+	stats.AddExtraStat("MemoryGrowthProviderSampleNanos", timing.provider.Nanoseconds())
+	stats.AddExtraStat("MemoryGrowthRefreshSamples", timing.refreshes)
+	return limit, err
+}
+
+func (p *ExecutionMemoryGrowthParticipant) retainedLimit(current uint64, timing *memoryGrowthTiming) (uint64, error) {
 	if p == nil || p.generation == nil || p.released.Load() {
 		return 0, ErrExecutionResourceInvalid
 	}
@@ -158,9 +229,22 @@ func (p *ExecutionMemoryGrowthParticipant) RetainedLimit(
 	if b == nil {
 		return 0, ErrExecutionResourceInvalid
 	}
-	_, physicalMeasured := b.sampleMemoryHeadroom()
+	_, physicalMeasured := b.sampleMemoryHeadroomObserved(timing)
+	var start time.Time
+	if timing != nil {
+		start = time.Now()
+	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	if timing != nil {
+		timing.budgetWait += time.Since(start)
+		start = time.Now()
+	}
+	defer func() {
+		if timing != nil {
+			timing.critical += time.Since(start)
+		}
+		b.mu.Unlock()
+	}()
 	// Release publishes the terminal state before waiting for b.mu. Recheck it
 	// inside the same critical section as the participant counters so a
 	// concurrent terminal cleanup cannot remove this participant and then let

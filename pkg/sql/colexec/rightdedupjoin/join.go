@@ -236,6 +236,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				return mpool.ErrAllocationAccountInvalid
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				DiagnosticNodeIdx:       rightDedupJoin.GetIdx(),
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
 				SpillThreshold:          ctr.spillThreshold,

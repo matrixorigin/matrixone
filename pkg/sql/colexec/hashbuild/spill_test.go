@@ -419,6 +419,14 @@ func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
 	var nilBuilder *HashmapBuilder
 	_, err = nilBuilder.EstimatedHashMapBytes(1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	var grouping bool
+	got, err = builder.EstimatedResidentBuildBytesForInput(math.MaxUint64, 1, nil, &grouping)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), got)
+	_, err = builder.EstimatedResidentBuildBytesForInput(0, -1, nil, &grouping)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	_, err = builder.EstimatedResidentBuildBytesForInput(0, 1, nil, nil)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
 
 func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
@@ -518,6 +526,18 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, spill)
 			require.Equal(t, tc.want, op.ctr.autoSpillHasGrouping)
+			// Recovery uses the same pending-input invariant, independently of
+			// ingress state and without rescanning previously copied batches.
+			var recoveryGrouping bool
+			projected, err := op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			wantMapBytes := intBytes
+			if tc.want {
+				wantMapBytes = strBytes
+			}
+			require.Equal(t, uint64(inputBytes)+wantMapBytes, projected)
+			require.Equal(t, tc.want, recoveryGrouping)
 			if tc.borrowed {
 				require.True(t, input.Vecs[0].GetGrouping().HasBorrowedValidity(), "projection must not mutate upstream-owned metadata")
 			}
@@ -525,11 +545,25 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 			// A sentinel first appearing in a later input changes the projected
 			// map kind before that input is copied into the retained relation.
 			input.Vecs[0].GetGrouping().Add(0)
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+strBytes, projected)
 			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
 			require.NoError(t, err)
 			require.True(t, spill)
 			// Reusing the upstream buffer cannot erase the retained fact.
 			input.Vecs[0].GetGrouping().Clear()
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, nil, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+strBytes, projected)
+			// A new bucket starts a new observation lifetime.
+			recoveryGrouping = false
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+intBytes, projected)
 			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
 			require.NoError(t, err)
 			require.True(t, spill)

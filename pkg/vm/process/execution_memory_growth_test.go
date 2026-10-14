@@ -24,6 +24,75 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMemoryGrowthDiagnosticsPreserveAdmission(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	var reads int
+	budget.memoryHeadroomProvider = func() (uint64, bool) { reads++; return 300, true }
+	budget.memoryHeadroomTTL = time.Hour
+	budget.memoryHeadroomNow = func() time.Time { return time.Unix(1, 0) }
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	p, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	defer p.Release()
+	// Stats are worker-owned even when participants share the same budget.
+	stats := &OperatorStats{}
+	otherStats := &OperatorStats{}
+	var wg sync.WaitGroup
+	for _, localStats := range []*OperatorStats{stats, otherStats} {
+		wg.Go(func() {
+			for check := uint64(0); check <= 1024; check++ {
+				limit, err := p.RetainedLimitWithStats(100, check, localStats)
+				if err != nil || limit != 400 {
+					t.Errorf("limit=%d err=%v", limit, err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	require.Equal(t, 1, reads, "instrumentation must not refresh the cached provider")
+	require.EqualValues(t, 2, stats.ExtraStats["MemoryGrowthSamples"])
+	require.EqualValues(t, 2, otherStats.ExtraStats["MemoryGrowthSamples"])
+	require.EqualValues(t, 1, stats.ExtraStats["MemoryGrowthRefreshSamples"]+otherStats.ExtraStats["MemoryGrowthRefreshSamples"])
+	require.True(t, p.Release())
+	_, err = p.RetainedLimitWithStats(0, 0, stats)
+	require.ErrorIs(t, err, ErrExecutionResourceInvalid)
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+}
+
+func BenchmarkMemoryGrowthDiagnostics(b *testing.B) {
+	for _, observed := range []bool{false, true} {
+		name := "plain"
+		if observed {
+			name = "sampled"
+		}
+		b.Run(name, func(b *testing.B) {
+			budget := MustNewExecutionResourceBudget(1000, 800)
+			budget.memoryHeadroomProvider = func() (uint64, bool) { return 300, true }
+			budget.memoryHeadroomTTL = time.Hour
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(b, err)
+			p, err := generation.RegisterMemoryGrowthParticipant()
+			require.NoError(b, err)
+			defer p.Release()
+			stats := &OperatorStats{}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				if observed {
+					_, err = p.RetainedLimitWithStats(100, uint64(i), stats)
+				} else {
+					_, err = p.RetainedLimit(100)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestExecutionMemoryGrowthParticipantSharesLiveHeadroom(t *testing.T) {
 	budget := MustNewExecutionResourceBudget(1_000, 800)
 	generation, err := budget.OpenGeneration(1)

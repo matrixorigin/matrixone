@@ -524,6 +524,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				needsBuildForEmptyProbe = hashJoin.JoinType == plan.Node_ASOF_LEFT
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				DiagnosticNodeIdx:       hashJoin.GetIdx(),
 				BuildKeyExprs:           buildKeyExprs,
 				ProbeKeyExprs:           probeKeyExprs,
 				SpillThreshold:          ctr.spillThreshold,
