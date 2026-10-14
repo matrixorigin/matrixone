@@ -154,7 +154,9 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 	if err := expectScalar(ctx, db, "select json_type(value) from mongodb_ci.json_scalar", "STRING"); err != nil {
 		return err
 	}
-	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", "text"); err != nil {
+	// Explicit CAST serializes a JSON string, including its quotes; only
+	// JSON_UNQUOTE and implicit scalar conversion expose the bare payload.
+	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", `"text"`); err != nil {
 		return err
 	}
 	if err := expectScalar(ctx, db, "select json_unquote(json_extract(payload, '$.a')) from mongodb_ci.json_scalar", "2"); err != nil {

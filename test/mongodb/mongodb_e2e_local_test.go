@@ -587,7 +587,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "seed")
 	expectMongoDBE2EScalar(mock, "STRING")
-	expectMongoDBE2EScalar(mock, "text")
+	mock.ExpectQuery(`select cast\(value as char\) from mongodb_ci.json_scalar`).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(`"text"`)).RowsWillBeClosed()
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "4")
@@ -798,7 +799,8 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			expectMongoDBE2EScalar(mock, "1")
 			expectMongoDBE2EScalar(mock, "seed")
 			expectMongoDBE2EScalar(mock, "STRING")
-			expectMongoDBE2EScalar(mock, "text")
+			mock.ExpectQuery(`select cast\(value as char\) from mongodb_ci.json_scalar`).
+				WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(`"text"`)).RowsWillBeClosed()
 			if tc.failedQuery == "json_contains" {
 				expectMongoDBE2EScalar(mock, "2")
 			}
