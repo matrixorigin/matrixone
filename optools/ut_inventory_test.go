@@ -426,16 +426,20 @@ func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
 PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
 function logger() { printf '%s\n' "$*"; }
 UT_ISSUES_BATCH_PARALLEL=2
+export GOMAXPROCS=8
+mkfifo "$CASE_DIR/ready-One" "$CASE_DIR/ready-Two"
 printf 'package fixture\n' > "$CASE_DIR/TestFile.go"
 mock_binary="$CASE_DIR/issues.test"
 status=0
-run_ut_command serial issues run_issues_race_batches example/issues "$mock_binary" 2 || status=$?
+run_ut_command serial issues run_issues_race_batches example/issues "$mock_binary" 8 || status=$?
 consume_race_report PREBUILT_RACE_REPORT
 cat "$UT_REPORT"
 [[ "$status" == 0 ]] || exit 90
-for name in one two; do
+[[ "$GOMAXPROCS" == 8 ]] || exit 94
+for name in One Two Three Four Five Six Seven Eight; do
  [[ "$(<"$CASE_DIR/pool-$name")" == 2 ]] || exit 91
  [[ -e "$CASE_DIR/start-$name" ]] || exit 92
+ [[ "$(<"$CASE_DIR/cpu-$name")" == 2 ]] || exit 93
 done
 `
 	mock := `#!/bin/bash
@@ -448,6 +452,7 @@ list)
  ;;
 test)
  if [[ " $* " == *' -c '* ]]; then
+  [[ "$GOMAXPROCS" == 8 ]] || exit 94
   output=''
   while (( $# > 0 )); do
    if [[ "$1" == -o ]]; then output=$2; break; fi
@@ -457,24 +462,30 @@ test)
   cat > "$output" <<'EOF'
 #!/bin/bash
 if [[ "$*" == *-test.list=* ]]; then
- printf 'TestOne\nTestTwo\n'
+ [[ "$GOMAXPROCS" == 8 ]] || exit 95
+ printf 'TestOne\nTestTwo\nTestThree\nTestFour\nTestFive\nTestSix\nTestSeven\nTestEight\n'
  exit 0
 fi
-if [[ "$*" == *TestOne* ]]; then
- name=one
-else
- name=two
-fi
-printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
-touch "$CASE_DIR/start-$name"
-for _ in $(seq 1 100); do
- if [[ -e "$CASE_DIR/start-one" && -e "$CASE_DIR/start-two" ]]; then
- printf '{"Action":"pass","Package":"example/issues"}\n'
- exit 0
-fi
- sleep 0.01
+name=''
+for candidate in One Two Three Four Five Six Seven Eight; do
+ if [[ "$*" == *"Test$candidate"* ]]; then name=$candidate; break; fi
 done
-exit 7
+[[ -n "$name" ]] || exit 96
+printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
+printf '%s\n' "$GOMAXPROCS" > "$CASE_DIR/cpu-$name"
+touch "$CASE_DIR/start-$name"
+if [[ "$name" == One || "$name" == Two ]]; then
+ exec 7<> "$CASE_DIR/ready-One" 8<> "$CASE_DIR/ready-Two"
+ if [[ "$name" == One ]]; then
+  printf 'ready\n' >&7
+  read -r -t 5 ready <&8 || exit 7
+ else
+  printf 'ready\n' >&8
+  read -r -t 5 ready <&7 || exit 7
+ fi
+fi
+printf '{"Action":"pass","Package":"example/issues"}\n'
+exit 0
 EOF
   chmod +x "$output"
  fi
@@ -493,8 +504,8 @@ esac
 		t.Fatalf("issues batches did not run two admitted processes: %v\n%s", err, out)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want two batch events: %s", out)
+	if len(lines) != 8 {
+		t.Fatalf("want eight batch events: %s", out)
 	}
 	for _, line := range lines {
 		assertScheduleJSONReport(t, []byte(line), map[string]string{"example/issues": "pass"})

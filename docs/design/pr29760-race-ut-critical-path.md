@@ -14,6 +14,87 @@ by `gpt-6.1-sol`, reasoning `xhigh`, in design session
 its own overall review and validation. This revision supersedes the scheduling
 snapshot assumption in [UT racing owner costs](ut-race-owner-costs.md).
 
+## Eight-batch issues execution (2026-10-14)
+
+This amendment changes the Make/CI issues default to eight round-robin batches,
+with at most two test processes. Each process retains a complete two-CN cluster
+and all selected roots, subtests, assertions and race instrumentation. One or
+four batches remain serial by default; direct script invocation still defaults
+to one batch. Embedded execution remains serial. The new Make default disables
+embedded prebuild and uses its existing full-scope `go test -race -p1` path.
+One/four-batch rollback modes and explicit embedded-pool users retain their
+previous prebuild default; callers can still override `UT_PREBUILD_EMBEDDED`.
+
+The existing partitioner, process admission, dispatcher, shared package deadline,
+TestMain guard and failure/drain owners remain authoritative. Eight batches
+must enter the existing batched dispatch, rather than the ordinary package path.
+The eight-batch pool scopes `GOMAXPROCS=2` to issues execution after preparation.
+It restores the caller's environment on return and does not cap compilation.
+The default no longer overlaps an embedded compiler with two issues clusters.
+Four-batch pool opt-in retains its previous CPU policy.
+
+The cost being addressed is long process lifetime plus serialized independent
+root groups. Four pooled batches alone improved time but retained more memory.
+Shorter generations reduced measured total CPU and memory occupancy enough to
+offset four additional cluster starts in the local experiment:
+
+| Issues execution | Wall seconds | CPU seconds | Peak PSS GiB | PSS integral GiB-seconds |
+|---|---:|---:|---:|---:|
+| Four serial, GOMAXPROCS=8 | 570.93 | 926.20 | 2.84 | 939.77 |
+| Four pooled, GOMAXPROCS=2 | 304.36 | 761.96 | 4.14 | 833.49 |
+| Eight pooled, GOMAXPROCS=2 | 301.21 | 717.60 | 3.27 | 677.00 |
+
+These are standalone same-machine race measurements, not completed CI timings.
+The eight-batch phase peak still exceeds the serial phase peak. Overall memory
+acceptance therefore requires the combined issues/prebuild peak to stay below
+the unchanged whole-run peak, with lower CPU and anonymous/PSS occupancy. The
+unchanged same-machine SQL package supplies a measured peak floor; comparing
+different runners or anonymous memory against total cgroup memory is invalid.
+
+The first combined experiment included ten-package prebuild in both arms,
+identical starting Go caches, an actual eight-CPU quota, an 8-GiB memory limit
+and no swap. It improved elapsed time from 673.10 to 367.37 seconds and CPU
+from 1040.61 to 848.50 seconds, but failed the memory gate: process PSS peak
+rose from 4.41 to 5.72 GiB and cgroup max events rose from zero to 965. Neither
+arm had an OOM. The peak occurred during compilation; after compilation the
+candidate PSS peak was 3.13 GiB. That overlap is rejected for the new default.
+
+The revised resource experiment runs issues first and then compiles all ten
+embedded packages, retaining their binaries as a conservative resource proxy.
+It is not a timing measurement of complete embedded test execution. Production
+uses the existing ordinary embedded command, which compiles and executes with
+`-p1` and removes completed test work directories. No new scheduling state,
+resource fallback or cleanup path is introduced. Compiler budget stays eight.
+The revised experiment passed the resource gate at base `a33dcfb2e5`:
+
+| Issues plus ten-package compilation | Wall seconds | CPU seconds | Peak PSS GiB | Peak cgroup GiB | PSS integral GiB-seconds |
+|---|---:|---:|---:|---:|---:|
+| Four serial, overlapping prebuild | 673.10 | 1040.61 | 4.41 | 7.51 | 1277.67 |
+| Eight pooled, overlapping prebuild (rejected) | 367.37 | 848.50 | 5.72 | 8.00 | 976.67 |
+| Eight pooled, compilation afterward | 385.92 | 802.20 | 3.31 | 5.48 | 812.60 |
+
+The final arm had zero max/OOM events and zero CPU throttling. Anonymous memory
+occupancy fell 32.4%; some/full memory PSI fell from 11.60/11.51 seconds to
+1.08/1.08 seconds. Its issues-phase anonymous peak exceeds the serial issues
+phase, but remains below the unchanged SQL package's measured anonymous peak.
+The process and cgroup peaks both decrease against the combined baseline.
+Inventory comparison passed all 179 roots and 1548 terminal tests, with no
+failures, skips, duplicate terminals or malformed JSON. All ten compiles passed.
+
+Recent CI issues phases took 28–35 minutes, while prebuild overlapped about
+two minutes. Applying the standalone local improvement and subtracting that
+lost overlap projects roughly 11–14 minutes of CI saving. This is an estimate;
+no completed optimized CI run or full embedded-wave time is claimed. Design
+and source review used `gpt-6.1-sol` with `xhigh` reasoning.
+
+All 179 roots and 1548 terminal test results must remain; four subtest names contain a runtime PITR timestamp, which is the
+only normalization allowed in result-name comparison. No runtime failure reruns
+completed roots. `UT_ISSUES_BATCHES=4 UT_ISSUES_BATCH_PARALLEL=1` restores the
+previous execution policy.
+
+The following amendments retain the historical decisions and measurements;
+their serial Make default is superseded only by this bounded eight-batch mode.
+
 ## PR29795 amendment: optional bounded process waves
 
 Implementation: [#29795](https://github.com/matrixorigin/matrixone/pull/29795).

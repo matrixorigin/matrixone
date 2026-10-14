@@ -56,7 +56,7 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
-# Pool adoption requires matched full-wave resource evidence; stay opt-in.
+# Direct invocation stays serial; Make supplies the validated CI issues pool.
 if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
     UT_ISSUES_BATCH_PARALLEL="1"
 fi
@@ -2449,6 +2449,12 @@ function run_issues_race_batches(){
     # Ordinary packages keep the exclusive cluster admission contract.
     if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
         logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL} and ${partition_layout} partition" >&2
+        if (( batches == 8 )); then
+            # Scope the execution budget to this function, after preparation.
+            # The parent and its concurrent prebuild keep their CPU budget.
+            local GOMAXPROCS=2
+            export GOMAXPROCS
+        fi
         MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
             run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
                 "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
@@ -2610,8 +2616,8 @@ function run_tests(){
         return 0
     fi
     if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
-        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
-        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
+        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 && "${UT_ISSUES_BATCHES}" != 8 ]]; then
+        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4|8"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2920,7 +2926,7 @@ function run_tests(){
             logger "INF" "Run exclusive race-test packages serially"
             for package in ${serial_test_scope}; do
                 logger "INF" "Run exclusive race-test package ${package}"
-                if (( UT_ISSUES_BATCHES == 4 )); then
+                if (( UT_ISSUES_BATCHES > 1 )); then
                     PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-issues-race-report.out"
                     PREBUILT_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-issues-race.test"
                     run_ut_command serial "batched exclusive race-test package ${package}" \

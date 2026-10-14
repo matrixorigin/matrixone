@@ -795,7 +795,7 @@ function report_cgroup_memory_usage() { :; }
 MO_CL_CUDA=1
 UT_SHARD=issues
 UT_PREBUILD_EMBEDDED=0
-UT_ISSUES_BATCHES=4
+UT_ISSUES_BATCHES=8
 UT_HEARTBEAT_INTERVAL=60
 UT_PREBUILD_MIN_FREE_KB=1
 fixture_companion_pid=""
@@ -826,6 +826,7 @@ function list_embedded_cluster_test_packages() { :; }
 # Only expensive child work is replaced: scheduling, joining, root dispatch,
 # heartbeat and companion launch/shutdown remain the production functions.
 function run_issues_race_batches() {
+ [[ "$3" == 8 ]] || return 96
  read -r -t 5 timer_pid <&7 || return 90
  printf '%s\n' "$timer_pid" > "$CASE_DIR/timer.pid"
  if [[ "$COMPANION" != none ]]; then read -r -t 5 _ <&8 || return 91; fi
