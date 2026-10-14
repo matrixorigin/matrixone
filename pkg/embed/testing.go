@@ -165,6 +165,16 @@ func (c *SharedTestCluster) Run(
 	fn func(Cluster),
 ) {
 	t.Helper()
+	c.run(t, init, fn, false)
+}
+
+func (c *SharedTestCluster) run(
+	t testReporter,
+	init func() (Cluster, error),
+	fn func(Cluster),
+	activeOnly bool,
+) {
+	t.Helper()
 	c.initializeRunCondition()
 	scope := sharedRunScopeFor(t)
 
@@ -207,20 +217,27 @@ func (c *SharedTestCluster) Run(
 			return
 		}
 
+		if activeOnly && (c.cluster == nil || c.err != nil) {
+			fatalMessage = "shared cluster is not active"
+			return
+		}
+
 		c.runActive = true
 		c.runScope = scope
 		activeClaimed = true
 
 		initialized := false
 		initStarted := time.Now()
-		c.once.Do(func() {
-			initialized = true
-			c.generation++
-			c.cluster, c.err = init()
-			if c.err == nil && c.cluster == nil {
-				c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
-			}
-		})
+		if !activeOnly {
+			c.once.Do(func() {
+				initialized = true
+				c.generation++
+				c.cluster, c.err = init()
+				if c.err == nil && c.cluster == nil {
+					c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
+				}
+			})
+		}
 		if initialized {
 			status := "ready"
 			if c.err != nil {
@@ -422,18 +439,11 @@ func (c *SharedTestCluster) active() bool {
 	return c.cluster != nil && c.err == nil && !c.closed
 }
 
-// RunActive invokes fn while holding this fixture's lifecycle lock. Callers
-// must use active first and only use this method for a fixture that has
-// already been initialized successfully.
+// RunActive borrows an initialized fixture through the same callback admission
+// and failure isolation as Run. It never initializes an inactive generation.
 func (c *SharedTestCluster) RunActive(t testReporter, fn func(Cluster)) {
 	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed || c.cluster == nil || c.err != nil {
-		t.Fatalf("shared cluster is not active")
-		return
-	}
-	fn(c.cluster)
+	c.run(t, nil, fn, true)
 }
 
 // Close releases the shared cluster or retries cleanup retained from a failed
