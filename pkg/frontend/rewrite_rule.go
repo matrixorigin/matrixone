@@ -1374,6 +1374,37 @@ func escapeSQLString(s string) string {
 	return buf.String()
 }
 
+func checkRoleRuleTargetExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, lowerCaseTableNames int64) error {
+	if lowerCaseTableNames != 2 {
+		_, err := getDatabaseOrTableId(ctx, bh, false, dbName, tableName)
+		return err
+	}
+	// Mode 2 compares identifiers without case but preserves catalog spelling.
+	// The ADD RULE AST holds comparison names, so an exact catalog predicate
+	// cannot find a mixed-case target. Keep the lookup inside the gated transaction
+	// and scoped to the caller's tenant, as in the ordinary table-ID lookup.
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf(
+		`select rel_logical_id from mo_catalog.mo_tables where lower(relname) = lower(%s) and lower(reldatabase) = lower(%s) and account_id = %d;`,
+		escapeSQLString(tableName), escapeSQLString(dbName), accountID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(results) {
+		return moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+	}
+	return nil
+}
+
 // handleAlterRoleAddRule verifies role and target existence, then inserts or
 // updates a mo_role_rule record. The lifecycle gate is acquired immediately
 // after BEGIN and is held through commit, so a rename that wins the gate is
@@ -1429,7 +1460,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	if err != nil {
 		return err
 	}
-	if _, err = getDatabaseOrTableId(ctx, bh, false, targetDB, targetTable); err != nil {
+	if err = checkRoleRuleTargetExists(ctx, bh, targetDB, targetTable, lowerCaseTableNames); err != nil {
 		return err
 	}
 
