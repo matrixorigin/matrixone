@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -116,4 +117,42 @@ func TestDecimalStatisticalAggregateDescriptorProtocol(t *testing.T) {
 	// The result contract does not replace the historical variance state floor.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(c.proc, []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.EncodeOverloadID(function.VAR_POP, 0), false, []*planpb.Expr{{Typ: types.T_float64.ToType().PlanType()}}, nil)}), "version 35")
+}
+
+// Exercise admission through the receiver, not just the shared gate helper.
+func TestDecimalStatisticalDescriptorReceive(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, op := range []int32{int32(vm.Group), int32(vm.MergeGroup)} {
+		for _, nested := range []bool{false, true} {
+			for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256, types.T_float64} {
+				leaf := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{Op: op, Agg: &pipeline.Group{NeedEval: true, Aggs: []*pipeline.Aggregate{{Op: aggexec.AggIdOfVarPop, Expr: []*planpb.Expr{{Typ: oid.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}}}}}}}}
+				p := leaf
+				if nested {
+					p = &pipeline.Pipeline{Children: []*pipeline.Pipeline{leaf}}
+				}
+				data, err := p.Marshal()
+				require.NoError(t, err)
+				for _, version := range []any{nil, "113", defines.MORPCVersion112, defines.MORPCVersion113} {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+					affected := oid == types.T_decimal64 || oid == types.T_decimal128
+					// Unchanged result families retain their historical decoder contract.
+					if !affected && (version == nil || version == "113") {
+						continue
+					}
+					scope, decodeErr := decodeScope(data, c.proc, true, nil)
+					if scope != nil {
+						t.Cleanup(scope.release)
+					}
+					if affected && version != defines.MORPCVersion113 {
+						require.ErrorContains(t, decodeErr, "version 113")
+						require.Nil(t, scope, "reject before constructing operator owners")
+					} else {
+						require.NoError(t, decodeErr)
+						require.NotNil(t, scope)
+					}
+				}
+			}
+		}
+	}
 }

@@ -264,6 +264,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteDecimalStatisticalPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -1978,17 +1981,9 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
-		if isVarianceAggregate(agg) {
-			args := agg.GetArgExpressions()
-			if len(args) == 1 && args[0] != nil &&
-				(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128) {
-				version, known := int64(0), false
-				if proc != nil {
-					version, known = remoteMORPCProtocolVersion(proc.GetService())
-				}
-				if !known || version < defines.MORPCVersion113 {
-					return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
-				}
+		if isDecimalStatisticalAggregate(agg) {
+			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
+				return err
 			}
 		}
 		if isVarianceAggregate(agg) &&
@@ -2084,6 +2079,54 @@ func orderedSetPercentileDiscUsesExtendedType(
 	default:
 		return true
 	}
+}
+
+// Native Group descriptors carry only the aggregate ID and its arguments;
+// the expression visitor cannot infer their changed result vector contract.
+// Validate the complete pipeline before constructing pooled operator owners.
+func validateRemoteDecimalStatisticalPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, in := range p.InstructionList {
+		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) || in.Agg == nil {
+			continue
+		}
+		for _, wire := range in.Agg.Aggs {
+			if wire == nil {
+				continue
+			}
+			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			if isDecimalStatisticalAggregate(agg) {
+				if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteDecimalStatisticalPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
+	args := agg.GetArgExpressions()
+	return isVarianceAggregate(agg) && len(args) == 1 && args[0] != nil &&
+		(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128)
+}
+
+func requireRemoteDecimalStatisticalResults(proc *process.Process) error {
+	version, known := int64(0), false
+	if proc != nil {
+		version, known = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if !known || version < defines.MORPCVersion113 {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	return nil
 }
 
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
