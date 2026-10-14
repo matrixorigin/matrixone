@@ -2098,6 +2098,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
 	}
+	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
+		setMysqlColumnTypeMetadata(col, typ)
+		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+		return nil
+	}
 	if typ.Oid == types.T_blob {
 		length := uint32(math.MaxUint32)
 		if typ.Width > 0 {
@@ -2482,7 +2489,7 @@ func statementSQLSource(sql, sqlMode string) string {
 // sqlSourcesByFragment scans the whole lexical stream: a grammar fragment can
 // start inside a MySQL executable comment. Unfiltered fragments are ordered
 // trimmed slices of sql, so recovering their ends needs no second SQL parser.
-func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string, internalSource bool) ([]string, error) {
+func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []mysql.SQLFragment, internalSource bool) ([]string, error) {
 	scanSources := !internalSource && hasSQLSourceTag(sql)
 	var ends []int
 	if scanSources {
@@ -2495,13 +2502,10 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 		if internalSource {
 			sources[i] = constant.InternalSql
 		}
-		if fragment != "" {
-			offset := strings.Index(sql[cursor:], fragment)
-			if offset < 0 {
-				return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
-			}
-			cursor += offset + len(fragment)
+		if fragment.Start < cursor || !fragment.MatchesSource(sql) {
+			return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
 		}
+		cursor = fragment.End
 		if scanSources {
 			ends[i] = cursor
 		}

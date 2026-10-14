@@ -70,6 +70,8 @@ func sqlTaskInt64(v any) int64 {
     }
 }
 
+const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -699,7 +701,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
+%type <str> json_type_opt restore_snapshot_name restore_snapshot_from_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -1066,9 +1068,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <fillMode> fill_mode
 
 %start start_command
-
 // python udf
 %type<str> func_handler func_handler_opt
+%type <alterTableOptions> alter_add_column_list
 %%
 
 start_command:
@@ -1576,6 +1578,16 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
+|   RESTORE DATABASE ident '.' ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 |   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
     {
         var account tree.Identifier
@@ -1634,6 +1646,11 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 
 restore_db_scope:
     ident
@@ -1673,6 +1690,16 @@ restore_snapshot_name:
 |   '{' SNAPSHOT '=' STRING '}'
     {
         $$ = strings.ToLower($4)
+    }
+
+restore_snapshot_from_name:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
     }
 
 restore_to_account_name_opt:
@@ -4300,16 +4327,16 @@ alter_role_stmt:
     {
         var roleName = $3.Compare()
         var ruleSQL = $6
-        var dbName = $9.Compare()
-        var tblName = $11.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($9.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($11.Origin()).Compare()
         var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
 |   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var dbName = $8.Compare()
-        var tblName = $10.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($8.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($10.Origin()).Compare()
         $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 
@@ -7328,7 +7355,8 @@ rank_opt:
             } else if strVal, ok := expr.(*tree.StrVal); ok {
                 str = strVal.String()
             } else {
-                continue
+                yylex.Error("rank options must be string literals containing key=value")
+                return 1
             }
             
             // Remove quotes if present
@@ -7338,11 +7366,13 @@ rank_opt:
             
             // Parse key=value pairs
             parts := strings.Split(str, "=")
-            if len(parts) == 2 {
-                key := strings.TrimSpace(strings.ToLower(parts[0]))
-                value := strings.TrimSpace(parts[1])
-                optionMap[key] = value
+            if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+                yylex.Error("rank options must contain a nonempty key=value pair")
+                return 1
             }
+            key := strings.TrimSpace(strings.ToLower(parts[0]))
+            value := strings.TrimSpace(parts[1])
+            optionMap[key] = value
         }
         
         $$ = &tree.RankOption{
@@ -15966,9 +15996,9 @@ timestamp_option_opt:
         }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length_option_opt:
@@ -15977,17 +16007,17 @@ length_option_opt:
     }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length:
    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = tree.GetDisplayWith(int32(value))
+        $$ = tree.GetDisplayWith(value)
     }
 
 float_length_opt:
@@ -16000,22 +16030,22 @@ float_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -16029,22 +16059,22 @@ decimal_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -16569,6 +16599,7 @@ non_reserved_keyword:
 |   MINVALUE
 |	PROCESSLIST
 |   PUBLICATION
+|   SUBSCRIPTION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
 |   PROPERTIES
@@ -16815,5 +16846,27 @@ nth_value_from_first_opt:
 //    PROPERTIES
 //  BSI
 //  ZONEMAP
+
+alter_option_list:
+    ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = $4
+    }
+|   alter_option_list ',' ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = append($1, $6...)
+    }
+
+alter_add_column_list:
+    column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = tree.AlterTableOptions{tree.NewAlterAddCol($1, position)}
+    }
+|   alter_add_column_list ',' column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = append($1, tree.NewAlterAddCol($3, position))
+    }
 
 %%

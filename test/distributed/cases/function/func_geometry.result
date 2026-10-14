@@ -36,7 +36,7 @@ select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
 invalid input: invalid geometry payload
 select st_astext(cast('POINT(1' as geometry)) as invalid_struct_geom;
 invalid input: invalid geometry payload
-select st_geomfromtext('POINT(7 8)', 4326) as direct_geom;
+select st_astext(st_geomfromtext('POINT(7 8)', 4326)) as direct_geom;
 direct_geom
 POINT(7 8)
 select cast('SRID=4326;POINT(9 9)' as geometry) as raw_payload_geom;
@@ -1601,17 +1601,17 @@ insert into t1 values
 (1, st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(10 10)', 4326)),
 (2, st_geomfromtext('POINT(3 4)'), st_geomfromtext('POINT(20 20)', 4326)),
 (3, null, null);
-select id, g, p from t1 order by id;
+select id, st_astext(g) as g, st_astext(p) as p from t1 order by id;
 id    g    p
 1    LINESTRING(0 0,1 1)    POINT(10 10)
 2    POINT(3 4)    POINT(20 20)
 3    null    null
-select g from t1 order by id;
+select st_astext(g) as g from t1 order by id;
 g
 LINESTRING(0 0,1 1)
 POINT(3 4)
 null
-select p from t1 order by id;
+select st_astext(p) as p from t1 order by id;
 p
 POINT(10 10)
 POINT(20 20)
