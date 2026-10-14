@@ -3437,7 +3437,8 @@ func TestLogicalCSVJSONVisibleRoundTrip(t *testing.T) {
 func TestCheckpointCSVRejectsTypedJSONLoss(t *testing.T) {
 	opaque, err := bytejson.NewMySQLOpaque(defines.MORPCVersion52, 253, []byte("x"))
 	require.NoError(t, err)
-	values := []any{opaque, []any{opaque}, map[string]any{"kind": []any{opaque}}}
+	values := make([]any, 0, 13)
+	values = append(values, opaque, []any{opaque}, map[string]any{"kind": []any{opaque}})
 	for _, scalar := range []struct {
 		kind bytejson.TpCode
 		text string
