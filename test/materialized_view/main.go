@@ -136,6 +136,7 @@ func main() {
 	dsn := flag.String("dsn", "dump:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=330s&writeTimeout=330s", "isolated local cluster DSN")
 	output := flag.String("output", "/workspace/mv-build/sql-results.json", "evidence JSON")
 	n := flag.Int("rows", 1000000, "benchmark source rows")
+	functional := flag.Bool("functional", false, "run SQL contracts without performance experiments")
 	keep := flag.Bool("keep", false, "retain test database for restart checks")
 	edge := flag.Bool("edge-check", false, "verify native failure rollback and clean retained fixtures")
 	restart := flag.Bool("restart-check", false, "check a retained database after restarting service")
@@ -144,6 +145,9 @@ func main() {
 	flag.Parse()
 	evidence.Started = time.Now().UTC()
 	evidence.Rows = *n
+	if *functional {
+		evidence.Rows = 0 // No generated benchmark source is created in this mode.
+	}
 	defer func() {
 		if failure := recover(); failure != nil {
 			evidence.Error = fmt.Sprint(failure)
@@ -274,6 +278,14 @@ func main() {
 	pass("refresh history")
 	runAdditionalCases(*dsn)
 	timeoutRead(*dsn)
+	if *functional {
+		for _, name := range []string{"joined", "empty_total", "totals"} {
+			exec("drop materialized view " + name)
+		}
+		exec("drop database mv_validation")
+		pass("drop cleanup")
+		return
+	}
 	// Explicit view scan versus the same raw aggregation: P1 has no automatic rewrite.
 	exec("create table bench(id bigint,k int,v bigint)")
 	exec(fmt.Sprintf("insert into bench select result,result%%128,result%%1000 from generate_series(1,%d) g", *n))

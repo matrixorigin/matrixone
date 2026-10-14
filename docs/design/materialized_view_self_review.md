@@ -225,3 +225,27 @@ redundant, identical empty-index early return is removed; the retained return
 has the same no-op contract and owning-suite evidence is semantically valid.
 Native evidence reuse is bounded to the unchanged non-ODKU/non-view-replacement
 paths, as recorded in the CI triage document. No unresolved merge blocker.
+
+Coverage integration review (2026-10-14): head `9ffe2fb06a2e` passed all executed
+functional CI producers and Connector/J; the required gate failed at 37.12%
+changed-code coverage. The correction is an R1 test/runner closure: one native
+SQL golden, the existing two-CN contract consumer integrated after group 0's
+global restore fixtures, and 21 deterministic scheduler/retention subcases.
+No production behavior, threshold, exclusions, skips, or retry policy changes.
+The runner owns its temporary executable and JSON reports, reuses existing CNs,
+uses direct published ports, preserves terminal failure status and validates
+nonempty reports. Client counters join the existing server coverage producer
+with the same mode; this avoids inventing another CI publication path.
+
+The native failure fixture now owns a separate database, so it runs independently
+and does not delete a retained benchmark/restart fixture. Functional mode omits
+all generated benchmark rows and timing experiments. Scheduled refresh retains
+its existing actual-result poll and bounded 120-second deadline. UT verifies
+terminal failures/replay, epoch admission, active-run protection, bounded pages,
+overlap deduplication and cancellation without timers or extra services.
+All 54 new SQL statements, 77 native checks, complete owning MV UT, incremental
+vet/lint and shell syntax pass. A nonempty local profile reproduction reaches
+793/1043 (76.03%) with the original strict >75% policy; this reuses old CI profiles
+only for unchanged semantic inputs. No unresolved local correction blocker.
+New-head GitHub checks and the existing Draft release-validation gaps remain
+separate requirements.

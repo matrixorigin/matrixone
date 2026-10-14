@@ -70,3 +70,13 @@ printf '%s\n' "${included_scripts[@]}"
 
 cd "${tester_dir}"
 ./run.sh -n -g -o -p "${case_root}" -i "${include_list}" "${resource_args[@]}"
+
+# Native MV checks need two independently addressed CNs and typed SQL oracles.
+# Run once, after mo-tester's global restore/account fixtures have finished.
+if (( group_id == 0 )); then
+    repo_root=$(cd "${case_root}/../../.." && pwd)
+    if [[ -f "${repo_root}/test/materialized_view/main.go" ]]; then
+        bash "${repo_root}/optools/run_materialized_view_bvt.sh" \
+            "${repo_root}" "${tester_dir}/report/materialized_view"
+    fi
+fi

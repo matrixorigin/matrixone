@@ -392,7 +392,9 @@ func openConfigured(cfg *mysql.Config) (*sql.DB, error) {
 }
 
 func runNativeFailureAndCleanup() {
-	exec("use mv_validation")
+	// Own this fixture independently of the benchmark/restart deployment.
+	exec("create database if not exists mv_validation_failure")
+	exec("use mv_validation_failure")
 	exec("set experimental_materialized_view=1")
 	exec("drop materialized view if exists failure_mv")
 	exec("drop table if exists failure_source")
@@ -412,13 +414,11 @@ func runNativeFailureAndCleanup() {
 		panic("native failed refresh history missing")
 	}
 	pass("native failed refresh diagnostic")
-	for _, name := range []string{"failure_mv", "bench_mv", "joined", "empty_total", "totals"} {
-		exec("drop materialized view " + name)
-	}
+	exec("drop materialized view failure_mv")
 	if len(rows("show materialized views")) != 0 {
 		panic("drop left MV metadata")
 	}
 	pass("drop removes MV state")
-	exec("drop database mv_validation")
+	exec("drop database mv_validation_failure")
 	pass("dependency cleanup permits database drop")
 }

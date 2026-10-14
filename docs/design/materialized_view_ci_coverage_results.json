@@ -1,0 +1,69 @@
+{
+  "baseline_head": "9ffe2fb06a2e311f937a8c3cd622885438b30eb6",
+  "baseline_ci_run": 38489522602,
+  "baseline_changed_coverage": {
+    "covered": 386,
+    "total": 1040,
+    "percentage": 37.12
+  },
+  "validation_scope": "Local reproduction; GitHub checks for the correction remain independent. Reuse complete old CI profiles only for unchanged production sources. Replace stale client positions with fresh nonempty instrumentation. No CI coverage policy changes.",
+  "go_version": "1.27.1",
+  "bvt": {
+    "sql_statements": 54,
+    "failed": 0,
+    "ignored": 0,
+    "functional": 63,
+    "failure_rollback": 5,
+    "causal_two_cn": 9,
+    "native_entry_wall_seconds": 105,
+    "new_processes_started_by_bvt_entry": 0
+  },
+  "task_subcases": [
+    "TestMaterializedViewTaskAdmission/non-async_task",
+    "TestMaterializedViewTaskAdmission/malformed_envelope",
+    "TestMaterializedViewTaskAdmission/unknown_version",
+    "TestMaterializedViewTaskAdmission/metadata_failure",
+    "TestMaterializedViewTaskAdmission/obsolete_epoch",
+    "TestMaterializedViewTaskAdmission/manual_policy",
+    "TestMaterializedViewTaskAdmission/definer_success",
+    "TestMaterializedViewTaskAdmission/definer_failure",
+    "TestMaterializedViewTaskAdmission/already_published_failure",
+    "TestMaterializedViewInterruptedTaskRecovery/success",
+    "TestMaterializedViewInterruptedTaskRecovery/scan_failure",
+    "TestMaterializedViewInterruptedTaskRecovery/reschedule_failure",
+    "TestMaterializedViewInterruptedTaskRecovery/abort_failure",
+    "TestMaterializedViewInterruptedTaskRecovery/cancelled_page",
+    "TestMaterializedViewHistoryRetention/overlapping_pages",
+    "TestMaterializedViewHistoryRetention/key_scan_failure",
+    "TestMaterializedViewHistoryRetention/count_page_failure",
+    "TestMaterializedViewHistoryRetention/age_page_failure",
+    "TestMaterializedViewHistoryRetention/delete_failure",
+    "TestMaterializedViewHistoryRetention/cursor_failure",
+    "TestMaterializedViewHistoryRetention/cancelled_page"
+  ],
+  "owning_package": "pkg/mv",
+  "owning_package_passed": true,
+  "local_coverage_summary": {
+    "approved": true,
+    "covered_blocks": 318369,
+    "covered_modified_lines": 793,
+    "has_go_changes": true,
+    "has_pr_coverage": true,
+    "minimal_coverage": 0.75,
+    "overall_coverage": 0.799124993411095,
+    "pr_coverage": 0.7603068072866731,
+    "schema_version": 1,
+    "total_blocks": 398397,
+    "total_modified_lines": 1043
+  },
+  "source_sha256": {
+    "pkg/mv/task_test.go": "828a2465b692f113c72ff60a42c8897355cc76161d4bf74501746a7c2f74ff1a",
+    "test/materialized_view/main.go": "ba31738b8e43a3b8f4d5eec3d7d6e1a7e90d8d70f621e1e772432033caaf926c",
+    "test/materialized_view/additional.go": "b0b978f8074fb9d82aa9bb3a81d99fc289e80b806dbf72c05d76c97ed5ffae84",
+    "optools/run_bvt_group.sh": "9a461777a6478a68ceba8576209f89aadc5c6b30d508b687e7fb3f620a9e68fe",
+    "optools/run_materialized_view_bvt.sh": "8b9a4cb4b5a7f774789fbf927eb7273c8e4edef7c3e9224cea872058dde6d775",
+    "test/distributed/cases/view/materialized_view.sql": "20da9b3ba716bb9a3e9391895f9f93171ee0ea9f572ca6d9a35995160fa34117",
+    "test/distributed/cases/view/materialized_view.result": "0f482ae6b29e9bf0a6660d7a6b6d9b9efa70989f8be4e450bef7da57ffe64573"
+  },
+  "binary_sha256": "ba6b6f6d4a6ba779196b64cc554bce51b77cad03f2e694a65a5082b819230074"
+}

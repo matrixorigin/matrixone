@@ -238,3 +238,63 @@ The native MV/JSON/NULLIF fixtures contain no ODKU or ordinary-view replacement,
 so their relevant execution branches are unchanged and their evidence is reused.
 Configured compile/plan lint is refreshed for this integration. Full CI remains
 separate and must be read at the final pushed head.
+### Required coverage producer integration (2026-10-14)
+
+At head `9ffe2fb06a2e311f937a8c3cd622885438b30eb6`, run `38489522602`
+passed the shared build, arm64 SCA, coverage UT, and both full BVT deployments.
+Ordinary UT was still running when the coverage verdict arrived. Coverage job
+`115630262739` failed its actual changed-code gate: 386/1040 instrumented blocks
+(37.12%), below the required strict >75%; the complete profile was valid.
+The report exposed two missing consumers: default-off native MV SQL had no
+distributed case, and the manually executed Go validation program was never
+executed as a coverage producer in CI. This is a test-integration failure, not
+an infrastructure failure or a reason to lower/exclude coverage.
+
+The correction adds the independently runnable `view/materialized_view.sql`
+case and runs the existing native contract oracles after group 0's mo-tester
+work. No account/cluster restore fixture can overlap the native suite. Reuse
+the existing two Compose CNs through their directly published ports, rather
+than relying on proxy connection placement to prove distinct CN execution.
+Build the pure Go client with coverage and share the existing producer's
+coverage directory. Existing trusted CI workflows already convert that
+directory and enforce the same threshold; their policy remains unchanged.
+
+Validation map: SQL result/error goldens prove manual/deferred/DDL behavior;
+the small functional mode proves typed NULL/numeric results, source grants and
+revocation, authoring context, tenant isolation and scheduled refresh; the
+independent failure mode proves last-good rows and FAILED history after native
+overflow; the existing four-row cross-CN mode proves complete publication,
+identity/provenance and terminal history after explicit causal handoffs.
+Performance samples and actual process restart remain separate manual modes.
+Only the minimum 60-second scheduled period uses elapsed time, with observable
+result equality and a 120-second deadline. Client compilation reuses the CI Go
+toolchain/cache and does not need native dependencies or new server processes.
+
+The coverage report then identified missing component cases for interrupted
+attempt recovery and terminal-history retention. Add 21 named task subcases:
+9 envelope/policy/definer cases, 5 interrupted recovery cases, and 7 retention
+cases. They use existing in-memory catalog fixtures, one metadata row and one
+overlapping terminal run; assert cancellation/error propagation, epoch/run
+fences, no execution for obsolete/manual policies, sanitized failure history,
+conditional deletion excluding RUNNING attempts, deduplication across retention
+pages, and no maintenance cursor advancement after failure. No clock or service
+process is added to UT.
+
+Local verification: all 54 SQL BVT statements passed with zero ignored/failed;
+the final instrumented two-CN contract entry passed 77 checks (63 functional,
+5 native rollback, 9 causal topology) in 105 seconds including client build.
+Complete `pkg/mv` owning UT passed with 21 new named subcases. Using the unchanged
+CI parser and strict >75% gate, the prior complete CI producer profiles for
+unchanged source plus fresh local server/client and owning-UT profiles produce
+793/1043 changed blocks (76.03%). This is a local coverage reproduction, not a
+new GitHub CI result. Old client blocks were removed from the diagnostic merge
+because source line positions changed; the fresh full client profile supplies
+their replacement. Nothing is excluded from the actual CI coverage policy.
+
+The ordinary UT and Connector/J jobs of run `38489522602` also completed
+successfully. Its CI Required gate failed only for the actual coverage verdict.
+The first partial local coverage build omitted the entry package and emitted no
+profile; that empty attempt is not evidence. The corrected build includes the
+service entry and emits nonempty metadata/counters on graceful shutdown. The
+automated CI build already instruments its entry through its normal `-cover`
+build. Match the client's `set` coverage mode to that existing server build.

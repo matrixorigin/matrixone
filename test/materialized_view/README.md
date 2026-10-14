@@ -61,7 +61,7 @@ response, optimistic retry, bounded admission, writer budget, captured timezone,
 and reconciliation identity. See `docs/design/materialized_view_validation.md`
 for executed evidence and remaining stage-specific cases.
 
-After the restart check, run native failure rollback and cleanup:
+Run native failure rollback and dependency cleanup independently:
 
 ```bash
 /workspace/mv-build/mv-validation -edge-check \
@@ -70,6 +70,36 @@ After the restart check, run native failure rollback and cleanup:
 
 The companion performance cases include explicit rollup, repeated join and a
 high-cardinality control. All observations and EXPLAIN rows are saved in JSON.
+
+The failure mode owns `mv_validation_failure`; it does not delete a benchmark
+fixture retained with `-keep`. After restart validation, explicitly drop the
+retained `bench_mv`, `joined`, `empty_total`, and `totals` materialized views,
+then drop `mv_validation`.
+
+### Automated BVT
+
+`optools/run_bvt_group.sh` runs the native contract suite once, after group 0's
+mo-tester scripts finish. `optools/run_materialized_view_bvt.sh` reuses the two
+existing Compose CNs, discovers their published SQL ports, and runs functional,
+native rollback, and causal cross-CN modes. The functional mode uses the small
+SQL fixtures and omits all performance experiments. Scheduled publication polls
+the actual result with a 120-second outer deadline; its minimum supported period
+is 60 seconds. No extra service is started.
+
+The Go runner is coverage-instrumented and writes into the same `coverage/`
+directory as mo-service, so the existing BVT profile and required coverage merge
+include both real server execution and client oracles. A failed mode or missing,
+empty, or error-bearing JSON report fails the BVT step. To reuse local servers:
+
+```bash
+MV_BVT_DSN='dump:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=330s&writeTimeout=330s' \
+MV_BVT_SECOND_DSN='dump:111@tcp(127.0.0.1:6002)/?timeout=5s&readTimeout=330s&writeTimeout=330s' \
+  bash optools/run_materialized_view_bvt.sh "$PWD" /tmp/mv-bvt-report
+```
+
+`test/distributed/cases/view/materialized_view.sql` separately specifies the
+deferred/manual SQL contract, unchanged stored rows before refresh, read-only and
+dependency rejections, no replacement under IF NOT EXISTS, and schedule metadata.
 
 With two CN SQL endpoints sharing the same TN/LOG and storage, run the small
 topology suite independently of the benchmark:
