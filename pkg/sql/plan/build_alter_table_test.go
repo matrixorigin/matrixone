@@ -131,7 +131,7 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 }
 
 func TestAlterTableCharsetAdmission(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion112)
+	databaseDefaultsProtocol(t, defines.MORPCVersion113)
 	for _, tc := range []struct {
 		option string
 		err    string

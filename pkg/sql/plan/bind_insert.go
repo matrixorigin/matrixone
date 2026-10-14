@@ -2674,6 +2674,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	updateColIdxList := make([]int32, 0, len(astUpdateExprs))
 	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
+	immutablePrimaryKeyCols := make(map[string]struct{})
+	// Once any assignment to a primary key is not proven immutable, a later
+	// direct literal/marker assignment cannot make the ordered stream safe again.
+	unprovenPrimaryKeyCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
@@ -2773,6 +2777,32 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
+			// MySQL clients such as NiFi's JDBC writer assign every inserted
+			// column in the ODKU arm, including a literal or prepared marker for
+			// the primary key. The value is only a no-op when it equals the row
+			// selected by the primary-key arbiter, so retain the assignment in
+			// order and validate it against the old row at execution time.
+			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
+				if isDirectODKUPKIdentityValue(astExpr) {
+					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
+						oldPrimaryKey := &plan.Expr{
+							Typ: colDef.Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: scanTag,
+								ColPos: int32(colIdx),
+							}},
+						}
+						updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
+						if err != nil {
+							return 0, err
+						}
+						immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+					}
+				} else {
+					delete(immutablePrimaryKeyCols, colDef.Name)
+					unprovenPrimaryKeyCols[colDef.Name] = struct{}{}
+				}
+			}
 			updateExprs[colDef.Name] = updateExpr
 			updateColIdxList = append(updateColIdxList, colIdx)
 			updateColExprList = append(updateColExprList, updateExpr)
@@ -2806,6 +2836,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// while possiblyChangedCols describes which keys may need maintenance.
 		seedCols := make(map[string]struct{}, len(updateExprs))
 		for colName := range updateExprs {
+			if _, immutable := immutablePrimaryKeyCols[colName]; immutable {
+				continue
+			}
 			seedCols[colName] = struct{}{}
 		}
 		possiblyChangedCols, err = collectGeneratedColumnDependents(
@@ -4431,6 +4464,84 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	col := expr.GetCol()
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
+}
+
+// isDirectODKUPKIdentityValue limits the runtime no-op guard to values whose
+// identity is available without evaluating an arbitrary expression. Keep
+// wrapped expressions and cross-column references on the existing unsupported
+// path; direct parentheses do not change the assignment's meaning.
+func isDirectODKUPKIdentityValue(expr tree.Expr) bool {
+	expr = unwrapParenExpr(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal, *tree.StrVal, *tree.ParamExpr:
+		return true
+	case *tree.UnaryExpr:
+		return isSignedODKUPKNumericLiteral(value)
+	default:
+		return false
+	}
+}
+
+func isSignedODKUPKNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		return isSignedODKUPKNumericLiteral(value.Expr)
+	default:
+		return false
+	}
+}
+
+func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *plan.Expr) (*plan.Expr, error) {
+	identityType := oldPrimaryKey.Typ
+	oldIdentity, err := bindPrimaryKeyIdentityExpr(builder, oldPrimaryKey, identityType)
+	if err != nil {
+		return nil, err
+	}
+	candidateIdentity, err := bindPrimaryKeyIdentityExpr(builder, candidate, identityType)
+	if err != nil {
+		return nil, err
+	}
+	samePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{candidateIdentity, oldIdentity})
+	if err != nil {
+		return nil, err
+	}
+	assertSamePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{
+		samePrimaryKey,
+		makePlan2StringConstExprWithType("update primary key on duplicate"),
+		makePlan2StringConstExprWithType("odku_pk_mutation"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Return the original key on success. Keep the unreachable NULL branch at
+	// the key's exact type: an ANY NULL would promote CHAR keys to VARCHAR in IF,
+	// which makes an unchanged key look like a changed ODKU value and can fire
+	// implicit ON UPDATE columns. NULL comparisons fail closed in assert before
+	// this branch can become an assignment.
+	nullPrimaryKey := makePlan2NullConstExprWithType()
+	nullPrimaryKey.Typ = oldPrimaryKey.Typ
+	nullPrimaryKey.Typ.NotNullable = false
+	guard, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
+		assertSamePrimaryKey,
+		DeepCopyExpr(oldPrimaryKey),
+		nullPrimaryKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// A successful assert can only return true; false or NULL comparisons fail
+	// before the IF can select its NULL branch. The old value is a primary key,
+	// so every successful evaluation returns a non-NULL value. Keep the NULL
+	// branch nullable and exactly typed above to preserve CHAR key semantics,
+	// while exposing the guard's successful-result nullability to later ODKU
+	// constraint planning.
+	guard.Typ.NotNullable = true
+	return guard, nil
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table

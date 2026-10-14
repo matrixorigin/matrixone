@@ -306,16 +306,16 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), "\n"),
 		InformationSchemaColumnsDDL)
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), InformationSchemaColumnsDDL)
-	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
+	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112} {
 		definitions := InitInformationSchemaSysTablesForProtocol(protocol)
 		require.Contains(t, definitions, InformationSchemaSchemataLegacyDDL)
 		require.Contains(t, definitions, InformationSchemaTablesDDL)
 		require.NotContains(t, strings.Join(definitions, "\n"), "mo_database_defaults")
-		require.NotContains(t, definitions, InformationSchemaTablesV112DDL)
+		require.NotContains(t, definitions, InformationSchemaTablesV113DDL)
 	}
-	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion112)
+	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion113)
 	require.Contains(t, definitions, InformationSchemaSchemataDDL)
-	require.Contains(t, definitions, InformationSchemaTablesV112DDL)
+	require.Contains(t, definitions, InformationSchemaTablesV113DDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -541,6 +541,19 @@ func TestInformationSchemaColumnsUsesTypeCharsetIdentity(t *testing.T) {
 		"WHEN 3 then 'utf8mb4_general_ci'",
 	} {
 		assert.Contains(t, InformationSchemaColumnsDDL, expected)
+	}
+}
+
+func TestShowAndInformationSchemaBinaryCollationContracts(t *testing.T) {
+	information := ColumnCollationSQL("col.atttyp")
+	show := ShowColumnCollationSQL("col.atttyp")
+	require.Contains(t, information, "WHEN 2 then 'binary'")
+	require.NotContains(t, show, "WHEN 2 then")
+	for _, expression := range []string{information, show} {
+		require.Contains(t, expression, "WHEN 1 then 'utf8mb4_bin'")
+		require.Contains(t, expression, "WHEN 4 then 'utf8_unicode_ci'")
+		require.Contains(t, expression, "WHEN 5 then 'utf8mb4_unicode_ci'")
+		require.Contains(t, expression, "else NULL end)")
 	}
 }
 

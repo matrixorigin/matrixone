@@ -62,7 +62,7 @@ func TestWrappedCompilerContextKeepsScopedExecutor(t *testing.T) {
 }
 
 func TestDatabaseDefaultsMissingDatabaseError(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion112)
+	databaseDefaultsProtocol(t, defines.MORPCVersion113)
 	failure := errors.New("catalog unavailable")
 	for _, tc := range []struct {
 		name string
@@ -90,7 +90,7 @@ func TestDatabaseDefaultsMissingDatabaseError(t *testing.T) {
 }
 
 func TestSubscriptionShowCreateUsesSubscriberDefault(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion112)
+	databaseDefaultsProtocol(t, defines.MORPCVersion113)
 	for _, identity := range []uint32{2, 3} {
 		t.Run(map[uint32]string{2: "binary subscriber", 3: "general subscriber"}[identity], func(t *testing.T) {
 			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))

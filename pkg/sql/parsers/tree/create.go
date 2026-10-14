@@ -2178,7 +2178,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.AlgoParamVectorOpType != "" {
 		ctx.WriteString("OP_TYPE ")
-		ctx.WriteString(node.AlgoParamVectorOpType)
+		// OP_TYPE requires a STRING token regardless of the context's quoting
+		// options, including SQL reserialized for procedure execution.
+		value := node.AlgoParamVectorOpType
+		if !ctx.NoBackslashEscape() {
+			value = FormatString(value)
+		}
+		ctx.WriteByte('\'')
+		ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+		ctx.WriteByte('\'')
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {

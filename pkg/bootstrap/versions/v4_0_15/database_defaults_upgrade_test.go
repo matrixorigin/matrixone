@@ -37,7 +37,7 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 	metadata := Handler.Metadata()
 	require.Equal(t, "4.0.15", metadata.Version)
 	require.Equal(t, "4.0.14", metadata.MinUpgradeVersion)
-	require.Equal(t, defines.MORPCVersion112, metadata.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion113, metadata.RequiredProtocolVersion)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
 	require.Equal(t, uint32(4), metadata.VersionOffset)
 	injected := errors.New("catalog unavailable")
@@ -93,9 +93,9 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 						return strResult(viewDefinition), nil
 					case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
 						if tc.oldProtocol {
-							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:112,cn-b:111"}`), nil
+							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:113,cn-b:112"}`), nil
 						}
-						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:112,cn-b:112"}`), nil
+						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:113,cn-b:113"}`), nil
 					case sql == catalog.MoDatabaseDefaultsDDL:
 						if tc.fail == "create" {
 							return executor.Result{}, injected
@@ -112,7 +112,7 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 					case sql == sysview.InformationSchemaColumnsDDL:
 						columnsDefinition = sql
 						writes = append(writes, sql)
-					case sql == sysview.InformationSchemaTablesV112DDL:
+					case sql == sysview.InformationSchemaTablesV113DDL:
 						tablesDefinition = sql
 						writes = append(writes, sql)
 					default:
@@ -125,13 +125,13 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 				require.Error(t, Handler.HandleCreateFrameworkDeps(txnExec))
 				err := Handler.HandleTenantUpgrade(t.Context(), 7, txnExec)
 				if tc.oldProtocol {
-					require.ErrorContains(t, err, "version 111")
+					require.ErrorContains(t, err, "version 112")
 					require.Empty(t, writes)
 				} else if tc.fail != "" {
 					require.ErrorIs(t, err, injected)
 				} else {
 					require.NoError(t, err)
-					require.Equal(t, []string{catalog.MoDatabaseDefaultsDDL, tenantUpgEntries[1].PreSql, sysview.InformationSchemaSchemataDDL, tenantUpgEntries[2].PreSql, sysview.InformationSchemaColumnsDDL, tenantUpgEntries[3].PreSql, sysview.InformationSchemaTablesV112DDL}, writes)
+					require.Equal(t, []string{catalog.MoDatabaseDefaultsDDL, tenantUpgEntries[1].PreSql, sysview.InformationSchemaSchemataDDL, tenantUpgEntries[2].PreSql, sysview.InformationSchemaColumnsDDL, tenantUpgEntries[3].PreSql, sysview.InformationSchemaTablesV113DDL}, writes)
 					writes = nil
 					require.NoError(t, Handler.HandleTenantUpgrade(t.Context(), 7, txnExec))
 					require.Empty(t, writes)

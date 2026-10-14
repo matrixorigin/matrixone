@@ -51,7 +51,7 @@ show full columns from native_defaults;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 g  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
-raw  ¦  varbinary(8)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+raw  ¦  varbinary(8)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 n  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
 select column_name,character_set_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name='native_defaults' order by ordinal_position;
@@ -261,8 +261,8 @@ explicit_binary  ¦  CREATE TABLE `explicit_binary` (
 ) CHARACTER SET=binary
 show full columns from explicit_binary;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-v  ¦  varbinary(4)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-g  ¦  binary(2)  ¦  binary  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references
+v  ¦  varbinary(4)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+g  ¦  binary(2)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references
 create table source_like(v varchar(8)) collate=utf8mb4_bin;
 create table target_like like source_like;
 alter table target_like default collate=utf8mb4_general_ci;

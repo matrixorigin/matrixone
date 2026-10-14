@@ -24,7 +24,7 @@ import (
 )
 
 func TestAlterTableCharsetContract(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion112)
+	databaseDefaultsProtocol(t, defines.MORPCVersion113)
 	for _, tc := range []struct {
 		name, source, option, failure string
 		algorithm                     plan.AlterTable_AlgorithmType

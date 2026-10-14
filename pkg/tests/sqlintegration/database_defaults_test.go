@@ -265,8 +265,11 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			var value string
 			require.NoError(t, first.QueryRowContext(ctx, "select hex(v) from binary_conversion").Scan(&value))
 			require.Equal(t, "F09F9880", value)
-			require.NoError(t, first.QueryRowContext(ctx, "show full columns from binary_conversion where Field='v'").Scan(new(any), new(any), &value, new(any), new(any), new(any), new(any), new(any), new(any)))
-			require.Equal(t, "binary", value, "C3 metadata selector must survive the upstream SHOW FULL COLUMNS projection")
+			var showCollation sql.NullString
+			require.NoError(t, first.QueryRowContext(ctx, "show full columns from binary_conversion where Field='v'").Scan(new(any), new(any), &showCollation, new(any), new(any), new(any), new(any), new(any), new(any)))
+			require.False(t, showCollation.Valid, "SHOW must not advertise a text collation for non-character binary types")
+			require.NoError(t, first.QueryRowContext(ctx, "select collation_name from information_schema.columns where table_schema=? and table_name='binary_conversion' and column_name='v'", schema).Scan(&value))
+			require.Equal(t, "binary", value, "information_schema retains the binary pseudo-character-set metadata")
 		})
 
 		t.Run("binary COPY preserves an explicit cast inside a generated expression", func(t *testing.T) {

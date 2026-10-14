@@ -736,7 +736,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		"WHEN 5 then 'utf8mb4_unicode_ci' " +
 		"else NULL end"
 	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
-		showColumnsCollation = sysview.ColumnCollationSQL("col.atttyp")
+		showColumnsCollation = sysview.ShowColumnCollationSQL("col.atttyp")
 	}
 
 	var sql string

@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-13，冻结main `8586fa0871`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
+当前维护编号（2026-10-14，冻结main `fcad62a8ff`）：保留main有符号WEEK/DAYOFYEAR协议 **112**，C03协议能力顺延 **113**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -256,3 +256,11 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - 47bbf28c05只在legacy域不提前提取varlen bytes，native Unicode仍原Validate admission；8586 row-variable NULLIF在raw scan到目标列赋值时继续使用forceAssignmentCastExpr(target.Typ)，C03 defaults/domain owner不改。通过完整vector/plan及新增完整LOAD公开owner验证交互，数据仅其已有5行资源。
 - CI38377757841的两UT相关失败发生在精确6a3的checkout TLS（exit128），执行/coverage采集未开始；汇总缺producer不是百分比判负。不能用产品改动、retry/skip/覆盖门豁免掩盖；新正常push触发正常新CI，不声称未完成远端CI成功。
 - 当前分配仍112、4.0.15、defaults#18、598/END599；proto、grammar、native、modules未变，无本轮新执行lifetime/locks/workers/waits/格式。所有历史race/restart资格保留其输入范围，当前验收见验证文档。
+
+## 2026-10-14 CI消费者与协议冲突协调（冻结fcad62a8ff）
+
+- 保留main有符号WEEK/DAYOFYEAR协议112，未发布C03按获批顺延规则迁至113；authoring/loader/restore/sysview/4.0.15门槛与全部正控同步，109–112旧协议拒绝，混部113/112升级在写入前拒绝。4.0.15/min4.0.14/offset4、defaults18、598/END599不变。
+- CI38421272142的原Unicode消费者证明SHOW FULL COLUMNS二进制类型必须NULL，而information_schema仍须binary。新增纯SQL投影helper区分这两个展示合同，保留所有字符域/native/revision分类；原CI断言不改。C03真实SQL双检查、原public三处SHOW binary单元格纠正，其余SQL/数据/metadata断言不变。此前历史112展示binary不再代表当前合同。
+- PB/parser均正常生成。普通make因时间戳跳过parser的本地编译红证据保留；最终仓库make -B强制双次生成并核对一致哈希及无冲突标记。完整descriptor对比新main只增加批准DatabaseDefaults与5/3/18，上游RankOption.nprobe2与全部其余类型/编号/reserved/options/enum原样保留。
+- 逐项协调main的live-source COPY宽度/replay、view admission、LOAD NULLIF重绑定、共享CTE/set-operation ordinal/effect保护、OP_TYPE引用及procedure gate、subscription标识符/ADD列表/RESTORE拒绝规则。复用既有owner，不新增本轮生产state/cache/worker/锁序/retry；原C03严格赋值、生成列内层CAST、默认版本新鲜度与恢复身份边界不变。
+- 新鲜11 owner、10实际SQL、14包静态、严格609/756=80.56%、23完整public同实例双轮通过；历史race/restart/upgrade/GPU范围不扩张，精确成功与失败见验证文档。本地通过不推断远端Linux CI绿色。

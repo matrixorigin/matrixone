@@ -112,18 +112,26 @@ func databaseDefaultsMetadataSQL(charset bool) string {
 	return sql.String()
 }
 
-// ColumnCollationSQL shares the effective-domain projection between COLUMNS
-// and SHOW FULL COLUMNS. The expression is a planner-owned encoded type.
+// ColumnCollationSQL projects effective domains for information_schema.COLUMNS.
+// The expression is a planner-owned encoded type.
 func ColumnCollationSQL(encodedType string) string {
-	return columnDomainMetadataSQL(encodedType, false)
+	return columnDomainMetadataSQL(encodedType, false, true)
 }
 
-func columnDomainMetadataSQL(encodedType string, charset bool) string {
+// ShowColumnCollationSQL preserves SHOW's NULL for non-character binary types.
+func ShowColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false, false)
+}
+
+func columnDomainMetadataSQL(encodedType string, charset, includeBinary bool) string {
 	var sql strings.Builder
 	fmt.Fprintf(&sql, "(case internal_column_character_set(%s)", encodedType)
 	// These are classifier presentation codes, not persisted identities.
 	for code, identity := range []collation.Identity{collation.UTF8MB4GeneralCIIdentity, collation.UTF8MB4BinIdentity,
 		collation.BinaryIdentity, collation.UTF8MB4GeneralCIIdentity, collation.UTF8UnicodeCIIdentity, collation.UTF8MB4UnicodeCIIdentity} {
+		if code == 2 && !includeBinary {
+			continue
+		}
 		revision := uint32(collation.RevisionLegacy)
 		if code >= 4 {
 			revision = uint32(collation.RevisionV1)
