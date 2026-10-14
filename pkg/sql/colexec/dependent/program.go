@@ -150,6 +150,17 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 			if copy := existenceNodes[id]; copy != nil {
 				n = copy
 			}
+			if n.NodeType == plan.Node_LOCK_OP && len(n.ProjectList) == 0 && len(n.Children) == 1 {
+				// Legacy DML locks forward the native input without an explicit
+				// projection. Preserve that payload in the continuation template,
+				// without publishing a specialization into the cached query.
+				input := query.Nodes[n.Children[0]]
+				n = proto.Clone(n).(*plan.Node)
+				for j, expr := range input.ProjectList {
+					n.ProjectList = append(n.ProjectList, &plan.Expr{Typ: expr.Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(j)}}})
+				}
+			}
 			nt := &nodeTemplate{node: n, children: append([]int32(nil), n.Children...)}
 			nt.limitIndex, nt.offsetIndex = -1, -1
 			var bounds []*plan.Expr

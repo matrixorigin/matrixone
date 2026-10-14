@@ -300,7 +300,11 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			case plan.Node_PRE_INSERT_SK:
 				op = constructPreInsertSk(n)
 			case plan.Node_INSERT:
-				op, err = constructInsert(proc, n, c.e, false)
+				if isExternalWriteInsert(n) {
+					op, err = constructExternalInsert(proc, n, c.e, externalInsertStmtTime(proc, c.startAt))
+				} else {
+					op, err = constructInsert(proc, n, c.e, false)
+				}
 			case plan.Node_MULTI_UPDATE:
 				op, err = constructMultiUpdate(n, c.e, proc, multi_update.UpdateWriteTable, false)
 			case plan.Node_DELETE:

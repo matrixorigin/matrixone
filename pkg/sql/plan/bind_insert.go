@@ -1393,7 +1393,10 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	builder.tempOptimizeForDML()
 	builder.determineShuffleForDMLSteps()
 	applyLockTableFallback(builder)
-	return nil
+	if err := builder.refreshCorrelationBindings(); err != nil {
+		return err
+	}
+	return query.ValidateCorrelation()
 }
 
 func (builder *QueryBuilder) determineShuffleForDMLSteps() {
