@@ -98,3 +98,122 @@ func TestIdenticalFloatUnionKeepsSetEquality(t *testing.T) {
 		require.True(t, found, "textual equality must not rewrite UNION to ordinary DISTINCT")
 	}
 }
+
+func TestCorrelatedUnionExportsIdentity(t *testing.T) {
+	for _, tc := range []struct{ name, query string }{
+		{"exists", `SELECT 2 FROM NATION o WHERE EXISTS
+			((SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY)
+			UNION (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY))`},
+		{"membership", `SELECT o.N_NATIONKEY IN
+			(SELECT i.N_NATIONKEY FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY
+			UNION SELECT i.N_NATIONKEY FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY) FROM NATION o`},
+		{"aggregate", `SELECT o.N_NATIONKEY IN
+			(SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY GROUP BY i.N_NAME
+			UNION SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY GROUP BY i.N_NAME) FROM NATION o`},
+		{"float-output", `SELECT o.N_NATIONKEY FROM NATION o WHERE EXISTS
+			(SELECT CAST(-0e0 AS DOUBLE) FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY
+			UNION SELECT CAST(0e0 AS DOUBLE) FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY)`},
+		{"different-arms", `SELECT 1 FROM NATION o WHERE EXISTS
+			(SELECT 1 FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY
+			UNION SELECT 2 FROM NATION i WHERE i.N_REGIONKEY=o.N_REGIONKEY)`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.query)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			found := false
+			for _, n := range q.Nodes {
+				if n.NodeType != planpb.Node_UNION {
+					continue
+				}
+				found = true
+				require.Len(t, n.ProjectList, 2)
+				for _, child := range n.Children {
+					require.Len(t, q.Nodes[child].ProjectList, 2)
+				}
+				if tc.name == "float-output" {
+					require.Len(t, n.PhysicalEqualityKeyList, 2)
+					require.Equal(t, "set_operation_float_key", n.PhysicalEqualityKeyList[0].GetF().Func.ObjName)
+					identity := n.PhysicalEqualityKeyList[1].GetCol()
+					require.NotNil(t, identity)
+					require.Equal(t, n.ProjectList[1].GetCol().RelPos, identity.RelPos)
+					require.Equal(t, n.ProjectList[1].GetCol().ColPos, identity.ColPos)
+				}
+			}
+			require.Equal(t, tc.name == "float-output" || tc.name == "different-arms", found)
+			assertReachablePlanHasNoCorrelatedExpr(t, q)
+		})
+	}
+}
+
+func TestCorrelatedUnionRejectsMismatchedIdentity(t *testing.T) {
+	for _, query := range []string{
+		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i)`,
+		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_REGIONKEY)`,
+		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY UNION SELECT 2 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY)`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+		require.ErrorContains(t, err, "correlated UNION", query)
+	}
+}
+
+func TestIdenticalNonFloatUnionRetainsSafePath(t *testing.T) {
+	for _, predicate := range []string{
+		"i.N_NATIONKEY=o.N_NATIONKEY AND i.N_REGIONKEY=o.N_REGIONKEY",
+		"i.N_NATIONKEY>o.N_NATIONKEY",
+	} {
+		query := "SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE " + predicate +
+			" UNION SELECT 1 FROM NATION i WHERE " + predicate + ")"
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+		require.NoError(t, err, query)
+		for _, n := range p.GetQuery().Nodes {
+			require.NotEqual(t, planpb.Node_UNION, n.NodeType)
+		}
+		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+	}
+}
+
+func TestIdenticalVolatileUnionKeepsBothArms(t *testing.T) {
+	for _, query := range []string{
+		"select cast(rand() as int) union select cast(rand() as int)",
+		"select 1 where rand()>0.5 union select 1 where rand()>0.5",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+		require.NoError(t, err)
+		found := false
+		for _, n := range p.GetQuery().Nodes {
+			found = found || n.NodeType == planpb.Node_UNION
+		}
+		require.True(t, found, "volatile evaluation counts must be preserved")
+	}
+}
+
+func TestPreparedUnionKeepsScalarFloatIdentity(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			outputType := planpb.Type{Id: int32(oid)}
+			node := &planpb.Node{
+				NodeType: planpb.Node_UNION,
+				ProjectList: []*planpb.Expr{
+					GetColExpr(outputType, 0, 0), GetColExpr(outputType, 0, 1),
+				},
+				PhysicalEqualityKeyList: []*planpb.Expr{
+					GetColExpr(planpb.Type{Id: int32(types.T_any)}, 0, 0),
+					GetColExpr(outputType, 0, 1),
+				},
+			}
+			for range 2 {
+				require.NoError(t, refreshPreparedSetOperationPhysicalKeys(t.Context(), node, nil))
+				require.Len(t, node.PhysicalEqualityKeyList, 2)
+				require.Equal(t, "set_operation_float_key", node.PhysicalEqualityKeyList[0].GetF().Func.ObjName,
+					"visible ANY specializing to float must retain signed-zero set membership")
+				require.Equal(t, node.ProjectList[1].GetCol(), node.PhysicalEqualityKeyList[1].GetCol(),
+					"hidden identity must keep scalar float equality across refreshes")
+				require.NotSame(t, node.ProjectList[1], node.PhysicalEqualityKeyList[1])
+			}
+			node.PhysicalEqualityKeyList[0] = GetColExpr(outputType, 0, 1)
+			require.NoError(t, refreshPreparedSetOperationPhysicalKeys(t.Context(), node, nil))
+			require.NotNil(t, node.PhysicalEqualityKeyList[0].GetF(), "a different slot is not an identity marker")
+		})
+	}
+}
