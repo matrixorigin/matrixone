@@ -2939,6 +2939,22 @@ func (s *Scope) CreateView(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
+	if qry.GetReplace() && c.isLifecycleRC() {
+		if dbName == "" {
+			return moerr.NewNoDB(c.proc.Ctx)
+		}
+		// The nested DROP VIEW participates in lifecycle admission. Enter C/G/D
+		// before taking the database lock; otherwise a fresh replacement appears
+		// to be a retained-lock transaction and spuriously FastFails on G.
+		// Admission still FastFails for locks retained by earlier statements.
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: dbName, mode: lock.LockMode_Shared}}, false); err != nil {
+			return err
+		}
+	}
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 		return err
 	}
