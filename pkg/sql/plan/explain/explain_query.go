@@ -560,7 +560,7 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 		expdata.Steps = append(expdata.Steps, *step)
 	}
 	if stats := statistic.StatsInfoFromContext(ctx); stats != nil {
-		expdata.NewPlanStats = *stats
+		expdata.NewPlanStats = stats.Snapshot()
 	}
 	return expdata
 }
