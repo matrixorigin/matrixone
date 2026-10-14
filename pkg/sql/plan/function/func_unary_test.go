@@ -4831,22 +4831,85 @@ func TestSpace(t *testing.T) {
 func TestSpaceHonorsStringLimitAndNegativeCount(t *testing.T) {
 	require.Len(t, mustFillSpaceNumber(t, uint64(MaxAllowedValue)), MaxAllowedValue)
 	require.Empty(t, mustFillSpaceNumber(t, int64(-1)))
-	_, err := FillSpaceNumber(uint64(MaxAllowedValue + 1))
-	require.Error(t, err)
+	require.Empty(t, mustFillSpaceNumber(t, int64(math.MinInt64)))
+	for _, value := range []uint64{MaxAllowedValue + 1, math.MaxInt64, math.MaxUint64} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %d: %v", value, err)
+	}
+	for _, value := range []float64{MaxAllowedValue + 1, math.NaN(), math.Inf(1)} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %v: %v", value, err)
+	}
 
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	counts := []uint64{0, 8000, 8001, 10000, 65535, 65536, 100000}
+	want := make([]string, len(counts))
+	for i, count := range counts {
+		want[i] = strings.Repeat(" ", int(count))
+	}
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8000, 8001, 10000},
-				[]bool{false, false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(), counts, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{strings.Repeat(" ", 8000), strings.Repeat(" ", 8001), strings.Repeat(" ", 10000)},
-			[]bool{false, false, false}),
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, want, nil),
 		SpaceNumber[uint64],
 	)
+	succeeded, info := testCase.RunAndFree()
+	require.True(t, succeeded, info)
+}
+
+func TestSpaceLargeResultTypesAndDecimalCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for id, oid := range []types.T{types.T_uint64, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			overload, err := GetFunctionById(proc.Ctx, encodeOverloadID(SPACE, int32(id)))
+			require.NoError(t, err)
+			resultType := overload.retType([]types.Type{oid.ToType()})
+			require.Equal(t, types.New(types.T_text, types.MaxLongTextLen, 0), resultType)
+			if !oid.IsDecimal() {
+				return
+			}
+			inputType := types.New(oid, 18, 1)
+			var values any
+			switch oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal64{value}
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal128{value}
+			case types.T_decimal256:
+				value, err := types.ParseDecimal256("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal256{value}
+			}
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(inputType, values, nil)},
+				NewFunctionTestResult(resultType, false, []string{strings.Repeat(" ", 65536)}, nil),
+				overload.newOp())
+			succeeded, info := testCase.RunAndFree()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
+func TestSpaceSkipsNullAndMaskedLargeCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{65536, MaxAllowedValue + 1, MaxAllowedValue + 1, -1},
+			[]bool{false, true, false, false})},
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false,
+			[]string{strings.Repeat(" ", 65536), "", "", ""}, []bool{false, true, true, false}),
+		SpaceNumber[int64]).WithSelectList(&FunctionSelectList{
+		AnyNull: true, SelectList: []bool{true, true, false, true},
+	})
 	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
