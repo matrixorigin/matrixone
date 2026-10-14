@@ -1978,6 +1978,19 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isVarianceAggregate(agg) {
+			args := agg.GetArgExpressions()
+			if len(args) == 1 && args[0] != nil &&
+				(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128) {
+				version, known := int64(0), false
+				if proc != nil {
+					version, known = remoteMORPCProtocolVersion(proc.GetService())
+				}
+				if !known || version < defines.MORPCVersion113 {
+					return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+				}
+			}
+		}
 		if isVarianceAggregate(agg) &&
 			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
 			return moerr.NewNotSupportedNoCtx(
@@ -2218,6 +2231,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if !features.Any() {
 		return nil
 	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
+	}
 	if features.InvalidTemporalResultContract {
 		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
 	}
@@ -2237,6 +2253,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
