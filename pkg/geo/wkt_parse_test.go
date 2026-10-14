@@ -15,6 +15,7 @@
 package geo
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -152,6 +153,71 @@ func TestParseWKTInvalid(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := ParseWKT(c.wkt)
 			require.Error(t, err)
+			_, err = ParseWKTForSerialization(c.wkt)
+			require.Error(t, err)
 		})
 	}
+}
+
+func TestPolygonRingAdmissionStructure(t *testing.T) {
+	for _, tc := range []struct{ wkt, json string }{
+		{"POLYGON((0 0,1 0,1 1))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1]]]}`},
+		{"POLYGON((0 0,1 0,0 0))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,0]]]}`},
+		{"POLYGON((0 0,1 0,1 1,0 0.0000000001))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0.0000000001]]]}`},
+		{"MULTIPOLYGON(((0 0,1 0,1 1)))", `{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1]]]]}`},
+		{"GEOMETRYCOLLECTION(POLYGON((0 0,1 0,1 1)))", `{"type":"GeometryCollection","geometries":[{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1]]]}]}`},
+	} {
+		_, err := ParseWKT(tc.wkt)
+		require.Error(t, err, tc.wkt)
+		_, err = ParseGeoJSON([]byte(tc.json))
+		require.Error(t, err, tc.json)
+	}
+	for _, text := range []string{"POLYGON EMPTY", "MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))", "POLYGON((0 0,1 1,1 0,0 1,0 0))"} {
+		_, err := ParseWKT(text)
+		require.NoError(t, err, text)
+	}
+	_, err := ParseGeoJSON([]byte(`{"type":"Polygon","coordinates":[[]]}`))
+	require.Error(t, err)
+	_, err = ParseGeoJSON([]byte(`{"type":"Polygon","coordinates":[]}`))
+	require.NoError(t, err)
+	// Codecs still expose old malformed WKB for inspection/export. Admission is
+	// the constructor's responsibility, not a new stored-data reader policy.
+	historical := Polygon{Rings: [][]Coord{{{0, 0}, {1, 0}, {1, 1}}}}
+	g, err := ReadWKB(WriteWKB(historical))
+	require.NoError(t, err)
+	require.Equal(t, historical, g)
+}
+
+func TestParseWKTForSerializationPreservesHistoricalRings(t *testing.T) {
+	three := []Coord{{0, 0}, {1, 0}, {1, 1}}
+	four := []Coord{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+	polygon := Polygon{Rings: [][]Coord{four}}
+	for _, tc := range []struct {
+		text string
+		want Geometry
+	}{
+		{"POLYGON((0 0,1 0,1 1))", Polygon{Rings: [][]Coord{three}}},
+		{"POLYGON((0 0,1 0,1 1,0 1))", polygon},
+		{"POLYGON((0 0,4 0,4 4,0 0),(0 0,1 0,1 1))", Polygon{Rings: [][]Coord{{{0, 0}, {4, 0}, {4, 4}, {0, 0}}, three}}},
+		{"MULTIPOLYGON(EMPTY,((0 0,1 0,1 1,0 1)))", MultiPolygon{Polygons: []Polygon{{}, polygon}}},
+		{"GEOMETRYCOLLECTION(POINT EMPTY,GEOMETRYCOLLECTION(POLYGON((0 0,1 0,1 1,0 1))))", GeometryCollection{Geometries: []Geometry{Point{IsEmpty: true}, GeometryCollection{Geometries: []Geometry{polygon}}}}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			_, err := ParseWKT(tc.text)
+			require.Error(t, err)
+			g, err := ParseWKTForSerialization(tc.text)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, g)
+		})
+	}
+	for _, text := range []string{"POLYGON EMPTY", "MULTIPOLYGON(EMPTY)", "POLYGON((0 0,1 1,1 0,0 1,0 0))"} {
+		strict, err := ParseWKT(text)
+		require.NoError(t, err)
+		stored, err := ParseWKTForSerialization(text)
+		require.NoError(t, err)
+		require.Equal(t, strict, stored)
+	}
+	deeplyNested := strings.Repeat("GEOMETRYCOLLECTION(", maxGeometryNestingDepth+1) + "POINT EMPTY" + strings.Repeat(")", maxGeometryNestingDepth+1)
+	_, err := ParseWKTForSerialization(deeplyNested)
+	require.ErrorContains(t, err, "nesting depth")
 }

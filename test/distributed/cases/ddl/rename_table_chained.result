@@ -12,6 +12,55 @@ id
 select * from t_shadow;
 id
 100
+rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
+select * from t_live;
+id
+100
+select * from t_shadow;
+id
+200
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+count(*)
+0
+rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
+select * from t_live;
+id
+200
+select * from t_shadow;
+id
+100
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+count(*)
+0
+rename table t_live to t_tmp;
+rename table t_shadow to t_live;
+rename table t_tmp to t_shadow;
+select * from t_live;
+id
+100
+select * from t_shadow;
+id
+200
+rename table t_live to t_tmp;
+rename table t_shadow to t_live;
+rename table t_tmp to t_shadow;
+select * from t_live;
+id
+200
+select * from t_shadow;
+id
+100
+rename table t_live to t_tmp, missing_source to t_live;
+no such table test_rename_chain.missing_source
+select * from t_live;
+id
+200
+select * from t_shadow;
+id
+100
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+count(*)
+0
 create table t1 (a int, b int);
 insert into t1 values (24499, 3);
 rename table t1 to t2, t2 to t3;
