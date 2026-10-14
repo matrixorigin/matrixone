@@ -98,7 +98,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
 					if mode == "mixed" {
@@ -113,30 +113,41 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 							}},
 						})
 					}
+					if mode == "statistical" {
+						statistical, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "var_pop", []*planpb.Expr{{
+							Typ:  types.New(types.T_decimal128, 38, 18).PlanType(),
+							Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+						}})
+						require.NoError(t, err)
+						op.ProjectList = append(op.ProjectList, statistical)
+					}
 					features, err := planpb.RequiredRemoteExpressionFeatures(&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}})
 					require.NoError(t, err)
 					require.True(t, features.ViewMetadataFunctions, "shared analysis must match the actual registry IDs")
 					require.Equal(t, mode == "mixed", features.DecimalDivisionSemantics)
 					require.Equal(t, mode == "calendar", features.DateNumericResultContracts)
-					require.Equal(t, defines.MORPCVersion113, remoteExpressionProtocolVersion(features))
+					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
+					require.Equal(t, defines.MORPCVersion114, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion113, persistedVersion)
+					require.Equal(t, defines.MORPCVersion114, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion113 {
+						if version == defines.MORPCVersion114 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
 						} else if version == 0 && mode == "mixed" {
 							require.ErrorContains(t, err, "remote destination does not support decimal division")
 						} else if version < defines.MORPCVersion112 && mode == "calendar" {
 							require.ErrorContains(t, err, "remote destination does not support signed date result contracts")
+						} else if version < defines.MORPCVersion113 && mode == "statistical" {
+							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 113)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 114)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
