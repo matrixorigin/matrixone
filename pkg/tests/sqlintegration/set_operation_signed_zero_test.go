@@ -121,6 +121,58 @@ func TestSetOperationSignedZero(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []string{"4:1:1:1"}, readWindowNullRows(t, rows))
 		})
+		t.Run("correlated-union", func(t *testing.T) {
+			for _, q := range []string{
+				"create table ci_inner(oref int,grp int,ie int)",
+				"insert into ci_inner values(1,1,1),(1,1,1),(1,2,NULL),(2,1,3),(3,1,4),(3,2,NULL)",
+				"create table ci_outer(id int,oref int,a int)",
+				"insert into ci_outer values(1,1,1),(2,2,2),(3,3,3),(4,4,NULL),(5,2,NULL)",
+			} {
+				_, err := conn.ExecContext(ctx, q)
+				require.NoError(t, err, q)
+			}
+			for _, tc := range []struct {
+				name, query string
+				want        []string
+			}{
+				{"exists", "select id from ci_outer o where exists ((select 1 from ci_inner i where i.oref=o.oref) union (select 1 from ci_inner i where i.oref=o.oref)) order by id", []string{"1", "2", "3", "5"}},
+				{"multiple-identities", "select id from ci_outer o where exists (select 1 from ci_inner i where i.oref=o.oref and i.ie=o.a union select 1 from ci_inner i where i.oref=o.oref and i.ie=o.a) order by id", []string{"1"}},
+				{"non-equality", "select id from ci_outer o where exists (select 1 from ci_inner i where i.oref>o.oref union select 1 from ci_inner i where i.oref>o.oref) order by id", []string{"1", "2", "5"}},
+				{"membership", "select id,a in (select ie from ci_inner i where i.oref=o.oref union select ie from ci_inner i where i.oref=o.oref) from ci_outer o order by id", []string{"1:1", "2:0", "3:NULL", "4:0", "5:NULL"}},
+				{"aggregate", "select id,a in (select max(ie) from ci_inner i where i.oref=o.oref group by grp union select max(ie) from ci_inner i where i.oref=o.oref group by grp) from ci_outer o order by id", []string{"1:1", "2:0", "3:NULL", "4:0", "5:NULL"}},
+				{"scalar-identities", "select id,(select 1 from ci_inner i where i.oref=o.oref union select 1 from ci_inner i where i.oref=o.oref) from ci_outer o order by id", []string{"1:1", "2:1", "3:1", "4:NULL", "5:1"}},
+				{"float-identities", "select id,(select 1 from zeros i where i.d=o.d union select 1 from zeros i where i.d=o.d) from zeros o where id<=4 order by id", []string{"1:1", "2:1", "3:1", "4:1"}},
+				{"float-members", "select id,cast((select d from zeros i where i.id=o.id union select d from zeros i where i.id=o.id) as varchar) from zeros o where id<=4 order by id", []string{"1:-0", "2:0", "3:-0", "4:0"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rows, err := conn.QueryContext(ctx, tc.query)
+					require.NoError(t, err, tc.query)
+					require.Equal(t, tc.want, readWindowNullRows(t, rows), tc.query)
+				})
+			}
+			t.Run("opposite-float-members", func(t *testing.T) {
+				var value float64
+				err := conn.QueryRowContext(ctx, "select (select d from zeros i where i.id=o.id union select -d from zeros i where i.id=o.id) from zeros o where id=1").Scan(&value)
+				require.ErrorContains(t, err, "Subquery returns more than 1 row")
+			})
+			t.Run("view", func(t *testing.T) {
+				_, err := conn.ExecContext(ctx, "create view ci_view as select id from ci_outer o where exists ((select 1 from ci_inner i where i.oref=o.oref) union (select 1 from ci_inner i where i.oref=o.oref))")
+				require.NoError(t, err)
+				rows, err := conn.QueryContext(ctx, "select id from ci_view order by id")
+				require.NoError(t, err)
+				require.Equal(t, []string{"1", "2", "3", "5"}, readWindowNullRows(t, rows))
+			})
+			t.Run("prepared-float-identities", func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, "select id,(select ? from zeros i where i.d=o.d union select ? from zeros i where i.d=o.d) from zeros o where id<=4 order by id")
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, value := range []any{int64(1), float64(1), int64(1)} {
+					rows, err := stmt.QueryContext(ctx, value, value)
+					require.NoError(t, err)
+					require.Equal(t, []string{"1:1", "2:1", "3:1", "4:1"}, readWindowNullRows(t, rows))
+				}
+			})
+		})
 		t.Run("prepared-reuse", func(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx, "select count(*) from (select d from zeros where id=? union select d from zeros where id=?) s")
 			require.NoError(t, err)
@@ -139,6 +191,16 @@ func TestSetOperationSignedZero(t *testing.T) {
 				left, right any
 				count       int
 			}{{math.Copysign(0, -1), float64(0), 2}, {int64(0), int64(0), 1}, {"0", "0", 1}, {nil, nil, 1}, {math.Copysign(0, -1), float64(0), 2}} {
+				var count int
+				require.NoError(t, stmt.QueryRowContext(ctx, tc.left, tc.right).Scan(&count))
+				require.Equal(t, tc.count, count)
+			}
+		})
+		t.Run("prepared-branch-predicates", func(t *testing.T) {
+			stmt, err := conn.PrepareContext(ctx, "select count(*) from (select 1 where ? union select 1 where ?) s")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct{ left, right, count int }{{0, 1, 1}, {1, 0, 1}, {0, 0, 0}, {1, 1, 1}, {0, 1, 1}} {
 				var count int
 				require.NoError(t, stmt.QueryRowContext(ctx, tc.left, tc.right).Scan(&count))
 				require.Equal(t, tc.count, count)
