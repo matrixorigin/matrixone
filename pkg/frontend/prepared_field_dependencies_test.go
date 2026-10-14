@@ -15,11 +15,13 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,6 +32,14 @@ func TestPreparedFieldNumericModeAffectsTypes(t *testing.T) {
 	}
 	unsigned := call("-", types.T_uint64, value(types.T_uint64), value(types.T_int64))
 	folded := &plan.Expr{Typ: unsigned.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: unsigned}}}
+	uncapped := value(types.T_decimal64)
+	uncapped.Typ.Width, uncapped.Typ.Scale = 10, 2
+	decimal := value(types.T_decimal256)
+	decimal.Typ.Width, decimal.Typ.Scale = 65, 30
+	transport := value(types.T_text)
+	transport.Expr = &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}
+	unsignedTransport := call("cast", types.T_uint64, transport)
+	inferenceCast := call("cast", types.T_int64, unsignedTransport)
 	adapter := call("cast", types.T_int8, value(types.T_bool))
 	explicit := call("cast", types.T_int8, value(types.T_bool))
 	explicit.GetF().SyntaxExplicitCast = true
@@ -42,10 +52,12 @@ func TestPreparedFieldNumericModeAffectsTypes(t *testing.T) {
 		{"unrelated expression", value(types.T_text), true, true, true, false},
 		{"signed subtraction", call("-", types.T_int64, value(types.T_int64), value(types.T_int64)), false, true, false, false},
 		{"unsigned subtraction", unsigned, false, true, false, true},
+		{"runtime unsigned transport", call("-", types.T_int64, value(types.T_int64), inferenceCast), false, true, false, true},
 		{"floating subtraction", call("-", types.T_float64, value(types.T_uint64), value(types.T_float64)), false, true, false, false},
 		{"folded unsigned subtraction", folded, false, true, false, true},
 		{"nested unsigned subtraction", call("coalesce", types.T_uint64, unsigned), false, true, false, true},
-		{"decimal division", call("/", types.T_decimal128, value(types.T_int64), value(types.T_int64)), false, false, true, true},
+		{"decimal division", call("/", types.T_decimal64, uncapped, uncapped), false, false, true, true},
+		{"decimal precision capped", call("/", types.T_decimal256, decimal, decimal), false, false, true, false},
 		{"floating division", call("/", types.T_float64, value(types.T_float64), value(types.T_float64)), false, false, true, false},
 		{"integer sum", call("sum", types.T_int64, value(types.T_int64)), true, false, false, false},
 		{"boolean sum", call("sum", types.T_int64, value(types.T_bool)), true, false, false, true},
@@ -55,10 +67,16 @@ func TestPreparedFieldNumericModeAffectsTypes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{tc.expr}}}}}}
-			require.Equal(t, tc.want, preparedFieldNumericModeAffectsTypes(p, tc.boolSumAvg, tc.unsignedSubtraction, tc.divisionPrecision))
+			previous := function.WithDivPrecisionIncrement(context.Background(), 4)
+			previous = function.WithNoUnsignedSubtraction(previous, false)
+			current := function.WithNoUnsignedSubtraction(previous, tc.unsignedSubtraction)
+			if tc.divisionPrecision {
+				current = function.WithDivPrecisionIncrement(current, 8)
+			}
+			require.Equal(t, tc.want, preparedFieldNumericModeAffectsTypes(p, previous, current, tc.boolSumAvg))
 		})
 	}
-	require.False(t, preparedFieldNumericModeAffectsTypes(nil, true, true, true))
+	require.False(t, preparedFieldNumericModeAffectsTypes(nil, context.Background(), context.Background(), true))
 }
 
 func TestPreparedFieldDependenciesChanged(t *testing.T) {

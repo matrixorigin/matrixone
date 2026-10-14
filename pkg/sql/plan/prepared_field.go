@@ -200,10 +200,9 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		values = fn.Args[1:]
 	case "coalesce", "greatest", "least":
 		values = fn.Args
-	case "concat", "concat_ws":
-		// These functions always return strings. Every string contributor can
-		// supply a binary domain; numeric and NULL arguments retain TEXT as the
-		// default declaration. Keep parameter dependencies for enclosing CASEs.
+	case "concat_ws":
+		// Unlike CONCAT, NULL value arguments are skipped and do not supply
+		// the composite NULL declaration. Keep its existing inference rule.
 		previous := r.defaultMarker
 		r.defaultMarker = fieldStringText
 		result = r.common(fn.Args)
@@ -213,12 +212,29 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			result.kind = fieldStringText
 		}
 		return result
+	case "concat":
+		// String consumers combine declarations, not first-execution payloads.
+		// Literal NULL stays neutral; a NULL composite can declare BLOB.
+		previous := r.defaultMarker
+		r.defaultMarker = fieldStringText
+		domains := make([]preparedFieldStringDomain, len(fn.Args))
+		for i, arg := range fn.Args {
+			domains[i] = fieldStringArgumentDeclaration(r.expr(arg))
+		}
+		result = r.commonDomains(domains)
+		r.defaultMarker = previous
+		result.resolved = types.Type{}
+		if result.kind != fieldStringBinary {
+			result.kind = fieldStringText
+		}
+		return result
 	case "lag", "lead":
 		if len(fn.Args) > 0 {
-			values = []*Expr{fn.Args[0]}
+			domains := []preparedFieldStringDomain{materializedFieldStringDomain(r.expr(fn.Args[0]))}
 			if len(fn.Args) > 2 {
-				values = append(values, fn.Args[2])
+				domains = append(domains, materializedFieldStringDomain(r.expr(fn.Args[2])))
 			}
+			return r.commonDomains(domains)
 		}
 	case "any_value":
 		if len(fn.Args) > 0 {
@@ -242,7 +258,7 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		}
 	default:
 		if pos := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
-			result = r.expr(fn.Args[pos])
+			result = fieldStringArgumentDeclaration(r.expr(fn.Args[pos]))
 			result.parameterDeclaration = false
 			result.resolved = types.Type{}
 			if result.kind != fieldStringBinary {
@@ -257,19 +273,9 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			inputs := make([]types.Type, len(fn.Args))
 			dependent := false
 			for i, arg := range fn.Args {
-				domain := r.expr(arg)
+				domain := fieldStringArgumentDeclaration(r.expr(arg))
 				dependent = dependent || domain.parameter
-				if domain.parameterDeclaration {
-					domain = materializedFieldStringDomain(domain)
-				}
 				inputs[i] = fieldDomainType(domain, makeTypeByPlan2Expr(arg))
-				if domain.kind == fieldStringNull && domain.parameter && !domain.directParameter {
-					// T_any is also the overload resolver's untyped-NULL input.
-					// A parameter-dependent NULL composite has a binary declaration;
-					// a literal NULL peer stays untyped and neutral. Do not let a
-					// string function replace the composite's domain with TEXT.
-					inputs[i] = types.T_blob.ToType()
-				}
 			}
 			if dependent {
 				if resolved, err := function.GetFunctionByName(r.binder.GetContext(), name, inputs); err == nil {
@@ -294,16 +300,35 @@ func materializedFieldStringDomain(domain preparedFieldStringDomain) preparedFie
 	return domain
 }
 
+// Function arguments consume a transparent wrapper's parameter declaration,
+// and a NULL composite's BLOB declaration. A bare NULL marker remains available
+// for contextual inference (including numeric peers); literal NULL is neutral.
+func fieldStringArgumentDeclaration(domain preparedFieldStringDomain) preparedFieldStringDomain {
+	if domain.parameterDeclaration {
+		domain = materializedFieldStringDomain(domain)
+	}
+	if domain.kind == fieldStringNull && domain.parameter && !domain.directParameter {
+		domain.kind = fieldStringBinary
+	}
+	return domain
+}
+
 func (r *preparedFieldStringResolver) common(args []*Expr) preparedFieldStringDomain {
 	domains := make([]preparedFieldStringDomain, len(args))
-	peer := preparedFieldStringDomain{kind: fieldStringMarker}
-	result := preparedFieldStringDomain{kind: fieldStringNull}
 	for i, arg := range args {
 		domains[i] = r.expr(arg)
-		result.parameter = result.parameter || domains[i].parameter
-		result.history = result.history || domains[i].history
-		if peer.kind == fieldStringMarker && domains[i].kind != fieldStringMarker {
-			peer = domains[i]
+	}
+	return r.commonDomains(domains)
+}
+
+func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStringDomain) preparedFieldStringDomain {
+	peer := preparedFieldStringDomain{kind: fieldStringMarker}
+	result := preparedFieldStringDomain{kind: fieldStringNull}
+	for _, domain := range domains {
+		result.parameter = result.parameter || domain.parameter
+		result.history = result.history || domain.history
+		if peer.kind == fieldStringMarker && domain.kind != fieldStringMarker {
+			peer = domain
 		}
 	}
 	if peer.kind == fieldStringMarker {

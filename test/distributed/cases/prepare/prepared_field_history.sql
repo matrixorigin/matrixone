@@ -297,6 +297,17 @@ SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
 
+-- Window outputs consume bare marker declarations; string functions consume
+-- the BLOB declaration of a parameter-dependent composite NULL.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0) OVER () ELSE NULL END,''A'',''a'') AS lag_f, FIELD(CASE WHEN ? THEN LEAD(?,0) OVER () ELSE NULL END,''A'',''a'') AS lead_f, FIELD(CASE WHEN ? THEN CONCAT(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS concat_f, FIELD(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS lower_f, FIELD(CASE WHEN ? THEN REVERSE(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS reverse_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
@@ -350,6 +361,39 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 SET SESSION div_precision_increment = @field_old_div_precision;
 EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+
+-- A mode rebuild must use runtime unsigned domains, not signed seed markers.
+-- The reused FIELD query agrees with a fresh handle and a non-FIELD projection.
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+SET @field_condition = 1, @field_unsigned = CAST(0 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+SET @field_unsigned = CAST(1 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT CASE WHEN ? THEN 0-? ELSE NULL END AS difference';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+DEALLOCATE PREPARE p_field_history;
+
+-- At maximum DECIMAL precision, changing the increment changes neither the
+-- result declaration nor the value and must not start a new FIELD generation.
+SET SESSION div_precision_increment = 4;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END,''A'',''a'') AS f, CAST(? AS DECIMAL(65,30))/CAST(1 AS DECIMAL(65,30)) AS d';
+SET @field_value = NULL, @field_decimal = 5;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+SET SESSION div_precision_increment = 0;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+DEALLOCATE PREPARE p_field_history;
+SET SESSION div_precision_increment = @field_old_div_precision;
 SET SESSION sql_mode = @field_old_sql_mode;
 
 SET @field_old_locale = @@lc_time_names;
