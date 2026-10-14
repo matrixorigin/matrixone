@@ -4841,8 +4841,9 @@ func isSessionSQLModeSet(stmt tree.Statement) bool {
 	return false
 }
 
-func hasStatement(fragment string, parserSQLMode string) bool {
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+func hasStatement(input mysql.SQLContinuation, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, input.SQL, mysql.ParseSQLModeFlags(parserSQLMode))
+	scanner.CommentFlag = input.InExecutableComment
 	defer mysql.PutScanner(scanner)
 	for {
 		token, _ := scanner.Scan()
@@ -4866,7 +4867,7 @@ func prepareSQLModeStagedExecution(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	sql string,
-) (first string, remaining string, staged bool, err error) {
+) (first string, remaining mysql.SQLContinuation, staged bool, err error) {
 	lctn := parserLowerCaseTableNames(ses)
 	parserSQLMode := sessionSQLModeForParser(ses)
 	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
@@ -4881,34 +4882,34 @@ func prepareSQLModeStagedExecution(
 		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
 		freeStatements(stmts)
 		if !shouldStage {
-			return "", "", false, nil
+			return "", mysql.SQLContinuation{}, false, nil
 		}
 	} else {
-		probe := sql
+		probe := mysql.SQLContinuation{SQL: sql}
 		foundSQLModeSet := false
 		for hasStatement(probe, parserSQLMode) {
-			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			stmt, _, next, firstErr := p.ParseFirstStatementWithSQLMode(ctx, probe, lctn, parserSQLMode)
 			if firstErr != nil {
-				return "", "", false, parseErr
+				return "", mysql.SQLContinuation{}, false, parseErr
 			}
 			foundSQLModeSet = isSessionSQLModeSet(stmt)
 			stmt.Free()
-			probe = probe[end:]
+			probe = next
 			if foundSQLModeSet {
 				break
 			}
 		}
 		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
-			return "", "", false, parseErr
+			return "", mysql.SQLContinuation{}, false, parseErr
 		}
 	}
 
-	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(ctx, mysql.SQLContinuation{SQL: sql}, lctn, parserSQLMode)
 	if err != nil {
-		return "", "", false, err
+		return "", mysql.SQLContinuation{}, false, err
 	}
 	stmt.Free()
-	return sql[:end], sql[end:], true, nil
+	return first, next, true, nil
 }
 
 func nextSQLModeStatementInput(
@@ -4916,9 +4917,9 @@ func nextSQLModeStatementInput(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	input *UserInput,
-	sql string,
-) (*UserInput, string, error) {
-	stmt, end, err := p.ParseFirstWithSQLMode(
+	sql mysql.SQLContinuation,
+) (*UserInput, mysql.SQLContinuation, error) {
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(
 		ctx,
 		sql,
 		parserLowerCaseTableNames(ses),
@@ -4928,7 +4929,7 @@ func nextSQLModeStatementInput(
 		return nil, sql, err
 	}
 	stmt.Free()
-	return newSQLStatementInput(input, sql[:end]), sql[end:], nil
+	return newSQLStatementInput(input, first), next, nil
 }
 
 func newSQLStatementInput(input *UserInput, sql string) *UserInput {
@@ -6220,7 +6221,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	executionInput := input
 	stagedSQLMode := false
-	stagedRemaining := ""
+	stagedRemaining := mysql.SQLContinuation{}
 	var err error
 	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
 		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
@@ -6565,7 +6566,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				stagedRemaining,
 			)
 			if nextErr != nil {
-				return recordParseError(newSQLStatementInput(input, stagedRemaining), nextErr)
+				failedSQL := stagedRemaining.SQL
+				if stagedRemaining.InExecutableComment {
+					failedSQL = "/*! " + failedSQL
+				}
+				return recordParseError(newSQLStatementInput(input, failedSQL), nextErr)
 			}
 			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
 			if nextErr != nil {
@@ -6697,7 +6702,7 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		}
 		return []string{sql}, []string{source}, nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6710,8 +6715,8 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 	byStatement := make([]string, 0, len(fragments))
 	bySource := sources[:0]
 	for i, fragment := range fragments {
-		if parsers.FragmentHasStatement(fragment) {
-			byStatement = append(byStatement, fragment)
+		if parsers.FragmentHasStatement(fragment.SQL) {
+			byStatement = append(byStatement, fragment.SQL)
 			bySource = append(bySource, sources[i])
 		}
 	}
