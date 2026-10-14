@@ -108,15 +108,20 @@ func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 	}()
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	const sql = `select d.a, d.b, d.c, count(*) from
-			(select a, b, c from select_test.bind_select order by a, b, c) d
-			group by d.a, d.b, d.c with rollup`
 	for _, tc := range []struct {
 		name      string
+		keyCount  int
 		ndvs      []float64
 		aggregate string
 		wantSort  bool
 	}{
+		{name: "one-key-low-NDV", keyCount: 1, ndvs: []float64{4, 1, 1}, wantSort: true},
+		{name: "one-key-high-NDV", keyCount: 1, ndvs: []float64{25_000, 1, 1}, wantSort: false},
+		{name: "two-key-low-NDV", keyCount: 2, ndvs: []float64{1, 4, 1}, wantSort: true},
+		{name: "two-key-intermediate-NDV", keyCount: 2, ndvs: []float64{1, 10_000, 1}, wantSort: false},
+		{name: "two-key-high-NDV", keyCount: 2, ndvs: []float64{1, 25_000, 1}, wantSort: false},
+		{name: "two-key-AVG-low-NDV", keyCount: 2, ndvs: []float64{1, 4, 1}, aggregate: "avg(d.b)", wantSort: true},
+		{name: "two-key-AVG-intermediate-NDV", keyCount: 2, ndvs: []float64{1, 10_000, 1}, aggregate: "avg(d.b)", wantSort: false},
 		{name: "low-NDV", ndvs: []float64{4, 4, 4}, wantSort: true},
 		{name: "asymmetric-low-NDV", ndvs: []float64{1, 1, 4}, wantSort: true},
 		{name: "asymmetric-admitted-edge", ndvs: []float64{1, 1, 5_000}, wantSort: true},
@@ -131,7 +136,15 @@ func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 	} {
 		for _, keyType := range []types.T{types.T_int32, types.T_int64} {
 			t.Run(fmt.Sprintf("%s/%s", tc.name, keyType), func(t *testing.T) {
-				querySQL := sql
+				keyNames := []string{"a", "b", "c"}
+				if tc.keyCount > 0 {
+					keyNames = keyNames[:tc.keyCount]
+				}
+				sourceKeys := strings.Join(keyNames, ", ")
+				groupKeys := "d." + strings.Join(keyNames, ", d.")
+				querySQL := fmt.Sprintf(`select %s, count(*) from
+					(select %s from select_test.bind_select order by %s) d
+					group by %s with rollup`, groupKeys, sourceKeys, sourceKeys, groupKeys)
 				if tc.aggregate != "" {
 					querySQL = strings.Replace(querySQL, "count(*)", tc.aggregate, 1)
 				}

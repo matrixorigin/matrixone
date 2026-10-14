@@ -227,31 +227,42 @@ including the grand total: `G = 1 + sum_i min(N, product_{j<=i}(NDV_j))`.
 aggregate state, and recreating the single-group executor. The runtime performs
 this lifecycle for every completed prefix even when input order is already
 proven, so ordered high-NDV input must pay `F(G,L) * G * A` rather than being
-modeled as boundary checks alone. For the three-or-more-level shapes, the
-current conservative calibration uses a constant `F = 16` per completed
-prefix for `L >= 3` when any prefix has more than one estimated group.
-Rollups whose prefixes are all singletons retain `F = 2`: their state closes
-only once at EOF, without
-repeated recreation during input. Two-level rollups also retain `F = 2` because their
-selective-filter path has a separately measured benefit. The earlier ramp
-starting at 10,000 groups admitted a slower intermediate-NDV plan: at 100,000
+modeled as boundary checks alone. The conservative calibration uses a constant
+`F = 16` per completed prefix whenever any prefix has more than one estimated
+group, for every number of grouping keys. Rollups whose prefixes are all
+singletons retain `F = 2`: their state closes only once at EOF, without
+repeated recreation during input.
+
+The earlier ramp starting at 10,000 groups admitted a slower intermediate-NDV plan: at 100,000
 INT rows with NDVs `(1,1,10000)`, the reviewed Linux amd64 operator benchmark
 measured SORT at median 34.3 ms and shared HASH at 27.0 ms, with 68.2 MB versus
 7.87 MB allocated per iteration. The [exact-head review evidence](https://github.com/matrixorigin/matrixone/pull/28987#pullrequestreview-5519656710)
 used `GOMAXPROCS=4`, no race, `-benchtime=10x -count=5`. These are operator
 measurements, not SQL-service latency or peak memory.
 
-Applying the former ramp ceiling to every completed prefix of a non-singleton
-deep rollup removes its underpriced intermediate portion. For these rollups the new
-charge is never below the old one, so it cannot introduce a new automatic SORT
-admission in that domain. All-singleton and two-level controls keep their baseline. Public planner tests retain the low-NDV
-SORT control and keep the 10,000/25,000/50,000 late-prefix controls on shared
-HASH for COUNT and the tested AVG boundaries. The 5,000-value COUNT control remains
-an admitted neighboring shape; the heavier AVG control conservatively retains
-HASH while its four-value control retains SORT. This is conservative admission, not a claim
-that 16 is a platform-independent elapsed-time coefficient or that every
-intermediate shape has been measured. Forced SORT remains available for
-experiments; no aggregate-state reuse or executor lifecycle changes are made.
+A follow-up [same-head review](https://github.com/matrixorigin/matrixone/pull/28987#pullrequestreview-5524358845)
+exposed the same lifecycle cost in two-key rollups: with 100,000 INT rows and
+NDVs `(1,25000)`, SORT measured 72.9 ms versus shared HASH's 20.5 ms, with
+162.4 MB versus 5.8 MB allocated per operation. The `(1,10000)` control measured
+33.7 versus 18.8 ms. The review used five samples of ten operations, identical
+inputs and derived ORDER BY work, and independent 25,002-row result oracles.
+The previous key-depth exemption was therefore not a valid performance bound.
+
+Applying the former ramp ceiling to every non-singleton ROLLUP removes both
+the underpriced intermediate portion and the shallow-rollup exemption. The
+new charge is never below the previous non-singleton charge, so it cannot
+introduce a new automatic SORT admission. All-singleton controls keep their
+baseline. Public planner tests cover INT and BIGINT with one, two, and three
+keys: low-NDV COUNT/AVG retain SORT; two-key 10,000/25,000-value COUNT and
+10,000-value AVG controls retain shared HASH. The three-key
+10,000/25,000/50,000-value controls also retain HASH; 5,000-value COUNT remains
+admitted, while the heavier AVG control conservatively retains HASH.
+
+This is conservative admission, not a claim that 16 is a platform-independent
+elapsed-time coefficient or that every intermediate shape has been measured.
+The cited timings measure operators, not SQL-service latency or peak resident
+memory. Forced SORT remains available for experiments; aggregate-state reuse
+and executor lifecycle are unchanged.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
