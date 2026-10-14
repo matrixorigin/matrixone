@@ -39,10 +39,6 @@ func AddColumn(
 
 	tableDef := alterPlan.CopyTableDef
 
-	if len(tableDef.Cols) == TableColumnCountLimit {
-		return false, moerr.NewErrTooManyFields(ctx.GetContext())
-	}
-
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
 	newColName := specNewColumn.Name.ColName()
