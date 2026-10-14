@@ -543,3 +543,43 @@ func TestTTLPrivilegesAndReferencedParent(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// Reuse the package's existing one-CN fixture. One value just over the discovery
+// width boundary proves the SQL-side CASE projection, including NULL output;
+// the following small policy proves that a skipped row cannot block progress.
+func TestTTLDiscoveryMetadataWidthBound(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		db := strings.ToLower(testutils.GetDatabaseName(t))
+		ttlExec(t, ctx, exec, "", "create database "+db, 0)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		padding := strings.Repeat("x", ttl.DefaultDiscoveryOptions().MaxConstraintBytes+1)
+		ttlExec(t, ctx, exec, db, "create table plain(id int) properties('padding'="+sqlquote.String(padding)+")", 0)
+		ttlExec(t, ctx, exec, db, fmt.Sprintf("create table wide(id int primary key, ts datetime) ttl ts + interval %d second properties('padding'=%s)", ttlTestSeconds, sqlquote.String(padding)), 0)
+		ttlExec(t, ctx, exec, db, "insert into wide values(1,'2026-12-31')", 0)
+		ttlExec(t, ctx, exec, db, fmt.Sprintf("create table small(id int primary key, ts datetime) ttl ts + interval %d second", ttlTestSeconds), 0)
+		ttlExec(t, ctx, exec, db, "insert into small values(1,'2026-12-31'),(2,'2027-01-02')", 0)
+		candidates, err := ttl.Discover(ctx, exec)
+		require.ErrorContains(t, err, "discovery bounds")
+		var found bool
+		for _, c := range candidates {
+			require.LessOrEqual(t, len(c.Constraint), ttl.DefaultDiscoveryOptions().MaxConstraintBytes)
+			if c.Database == db {
+				require.NotEqual(t, "wide", c.Table)
+				if c.Table == "small" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+		options := ttl.DefaultWorkerOptions()
+		options.Discovery.PageSize = 1 // An oversized row yields an all-NULL constraint projection.
+		require.ErrorContains(t, ttl.Run(ctx, exec, ttlTestNow(), options), "discovery bounds")
+		require.Equal(t, []int32{1}, ttlIDs(t, ctx, exec, db, "wide", 0))
+		require.Equal(t, []int32{2}, ttlIDs(t, ctx, exec, db, "small", 0))
+	})
+}

@@ -72,7 +72,7 @@ func Duration(amount uint64, unit string) (uint64, error) {
 }
 
 func (p Policy) Validate() error {
-	if p.Version != 1 || p.Column == "" || p.Seqnum > 65535 || p.Seconds == 0 || p.Seconds > MaxDurationSeconds {
+	if p.Version != 1 || p.Column == "" || len(p.Column) > maxDiscoveryNameBytes || p.Seqnum > 65535 || p.Seconds == 0 || p.Seconds > MaxDurationSeconds {
 		return moerr.NewInvalidInputNoCtxf("invalid TTL policy")
 	}
 	return nil

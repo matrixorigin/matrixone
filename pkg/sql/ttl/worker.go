@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,10 +45,11 @@ type WorkerOptions struct {
 	MaxBatchesPerTable int
 	TableTimeout       time.Duration
 	RunTimeout         time.Duration
+	Discovery          DiscoveryOptions
 }
 
 func DefaultWorkerOptions() WorkerOptions {
-	return WorkerOptions{BatchSize: 1024, MaxBatchesPerTable: 8, TableTimeout: 5 * time.Second, RunTimeout: 50 * time.Second}
+	return WorkerOptions{BatchSize: 1024, MaxBatchesPerTable: 8, TableTimeout: 5 * time.Second, RunTimeout: 50 * time.Second, Discovery: DefaultDiscoveryOptions()}
 }
 
 type Candidate struct {
@@ -66,9 +66,16 @@ type Candidate struct {
 // lengths, skipping unrelated index/FK protobufs. The generic legacy decoder
 // allocates from unchecked counts; maintenance must not trust those counts.
 func PolicyFromConstraint(data []byte) (*Policy, error) {
-	var props []*plan.Property
+	return policyFromConstraint(context.Background(), data)
+}
+
+func policyFromConstraint(ctx context.Context, data []byte) (*Policy, error) {
+	var result *Policy
 	offset := 0
 	readLength := func() (uint64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if len(data)-offset < 8 {
 			return 0, moerr.NewInternalErrorNoCtxf("truncated TTL constraint length")
 		}
@@ -107,11 +114,20 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 					return nil, moerr.NewInternalErrorNoCtxf("truncated constraint item")
 				}
 				if kind == engine.StreamConfig {
-					prop := new(plan.Property)
+					var prop plan.Property
 					if err := prop.Unmarshal(data[offset : offset+int(size)]); err != nil {
 						return nil, err
 					}
-					props = append(props, prop)
+					if prop.Key == PropertyKey {
+						if result != nil {
+							return nil, moerr.NewInvalidInputNoCtx("TTL specified more than once")
+						}
+						p, err := Decode(prop.Value)
+						if err != nil {
+							return nil, err
+						}
+						result = p
+					}
 				}
 				offset += int(size)
 			}
@@ -119,38 +135,10 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("unsupported TTL constraint kind %d", kind)
 		}
 	}
-	return FromProperties(props)
-}
-
-// Discover is provisional. DeleteBatch validates the physical table identity and
-// the entire policy-bearing constraint again under a table lock in tenant context.
-func Discover(ctx context.Context, exec executor.SQLExecutor) ([]Candidate, error) {
-	res, err := exec.Exec(ctx, "SELECT account_id, rel_id, rel_version, reldatabase, relname, `constraint` FROM mo_catalog.mo_tables WHERE relkind = 'r' AND reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') AND partitioned = 0 ORDER BY account_id, rel_id", executor.Options{}.WithAccountID(catalog.System_Account).WithTimeZone(time.UTC))
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	defer res.Close()
-	var candidates []Candidate
-	var decodeErr error
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accounts := vector.MustFixedColNoTypeCheck[uint32](cols[0])
-		ids := vector.MustFixedColNoTypeCheck[uint64](cols[1])
-		versions := vector.MustFixedColNoTypeCheck[uint32](cols[2])
-		for i := 0; i < rows; i++ {
-			data := cols[5].GetBytesAt(i)
-			p, e := PolicyFromConstraint(data)
-			if e != nil {
-				decodeErr = errors.Join(decodeErr, moerr.NewInternalErrorNoCtxf("TTL metadata for account %d table %d: %v", accounts[i], ids[i], e))
-				continue
-			}
-			if p == nil {
-				continue
-			}
-			candidates = append(candidates, Candidate{AccountID: accounts[i], TableID: ids[i], Version: versions[i], Database: cols[3].GetStringAt(i), Table: cols[4].GetStringAt(i), Constraint: bytes.Clone(data), Policy: *p})
-		}
-		return true
-	})
-	return candidates, decodeErr
+	return result, nil
 }
 
 // DeleteBatch takes the same exclusive table lock as DDL before revalidation.
@@ -208,7 +196,7 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 			return err
 		}
 		opts := executor.StatementOption{}.WithAccountID(c.AccountID)
-		checkSQL := fmt.Sprintf("SELECT rel_id, rel_version, `constraint` FROM mo_catalog.mo_tables WHERE account_id = %d AND reldatabase = %s AND relname = %s AND relkind = 'r' AND partitioned = 0", c.AccountID, sqlquote.String(c.Database), sqlquote.String(c.Table))
+		checkSQL := fmt.Sprintf("SELECT rel_id, rel_version, CASE WHEN LENGTH(`constraint`) = %d THEN `constraint` ELSE NULL END FROM mo_catalog.mo_tables WHERE account_id = %d AND reldatabase = %s AND relname = %s AND relkind = 'r' AND partitioned = 0", len(c.Constraint), c.AccountID, sqlquote.String(c.Database), sqlquote.String(c.Table))
 		res, err := tx.Exec(checkSQL, opts)
 		if err != nil {
 			return err
@@ -216,7 +204,7 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 		matches := 0
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				if vector.MustFixedColNoTypeCheck[uint64](cols[0])[i] == c.TableID && vector.MustFixedColNoTypeCheck[uint32](cols[1])[i] == c.Version && bytes.Equal(cols[2].GetBytesAt(i), c.Constraint) {
+				if !cols[2].IsNull(uint64(i)) && vector.MustFixedColNoTypeCheck[uint64](cols[0])[i] == c.TableID && vector.MustFixedColNoTypeCheck[uint32](cols[1])[i] == c.Version && bytes.Equal(cols[2].GetBytesAt(i), c.Constraint) {
 					matches++
 				}
 			}
@@ -267,31 +255,41 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 	return affected, nil
 }
 func Run(ctx context.Context, exec executor.SQLExecutor, now time.Time, options WorkerOptions) error {
+	var cursor discoveryCursor
+	return run(ctx, exec, now, options, &cursor)
+}
+
+func run(ctx context.Context, exec executor.SQLExecutor, now time.Time, options WorkerOptions, cursor *discoveryCursor) error {
 	if options.BatchSize <= 0 || options.MaxBatchesPerTable <= 0 || options.TableTimeout <= 0 || options.RunTimeout <= 0 {
-		return moerr.NewInternalErrorNoCtxf("invalid TTL worker options")
+		return moerr.NewInternalErrorNoCtx("invalid TTL worker options")
+	}
+	limits := options.Discovery
+	if limits == (DiscoveryOptions{}) {
+		limits = DefaultDiscoveryOptions()
+	}
+	if err := limits.validate(); err != nil {
+		return err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, options.RunTimeout)
 	defer cancel()
-	candidates, result := Discover(runCtx, exec)
-	if len(candidates) == 0 {
-		return result
+	var diagnostics discoveryDiagnostics
+	window, err := discoverWindow(runCtx, exec, *cursor, limits, &diagnostics)
+	if err != nil {
+		if runCtx.Err() != nil {
+			return runCtx.Err()
+		}
+		diagnostics.add(0, 0, err.Error())
+		return diagnostics.err()
 	}
-	// Rotate the starting point across ticks so a busy first table cannot starve
-	// later tables when the run's wall-clock budget is exhausted.
-	start := int(uint64(now.Unix()/60) % uint64(len(candidates)))
-	for i := range candidates {
-		if err := ctx.Err(); err != nil {
+	for _, c := range window.candidates {
+		if err := runCtx.Err(); err != nil {
 			return err
 		}
-		if runCtx.Err() != nil {
-			break
-		}
-		c := candidates[(start+i)%len(candidates)]
 		tableCtx, tableCancel := context.WithTimeout(runCtx, options.TableTimeout)
 		for batch := 0; batch < options.MaxBatchesPerTable; batch++ {
 			affected, err := DeleteBatch(tableCtx, exec, c, now, options.BatchSize)
 			if err != nil {
-				result = errors.Join(result, moerr.NewInternalErrorNoCtxf("TTL account %d table %d", c.AccountID, c.TableID), err)
+				diagnostics.add(c.AccountID, c.TableID, err.Error())
 				break
 			}
 			if affected < uint64(options.BatchSize) {
@@ -299,17 +297,36 @@ func Run(ctx context.Context, exec executor.SQLExecutor, now time.Time, options 
 			}
 		}
 		tableCancel()
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
+		// Publish only a completed table attempt. A canceled invocation leaves
+		// this candidate and all later candidates for the next invocation.
+		*cursor = discoveryCursor{after: discoveryKey{c.AccountID, c.TableID}, upper: window.upper, active: true}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := runCtx.Err(); err != nil {
 		return err
 	}
-	if runCtx.Err() != nil {
-		result = errors.Join(result, runCtx.Err())
+	*cursor = discoveryCursor{after: window.last, upper: window.upper, active: true}
+	if window.exhausted {
+		*cursor = discoveryCursor{}
 	}
-	return result
+	return diagnostics.err()
 }
+
 func TaskExecutor(exec executor.SQLExecutor) taskservice.TaskExecutor {
+	var cursor discoveryCursor
+	admission := make(chan struct{}, 1)
 	return func(ctx context.Context, _ task.Task) error {
-		return Run(ctx, exec, time.Now().UTC(), DefaultWorkerOptions())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case admission <- struct{}{}:
+			defer func() { <-admission }()
+		default:
+			return moerr.NewInternalError(ctx, "TTL worker invocation already running")
+		}
+		return run(ctx, exec, time.Now().UTC(), DefaultWorkerOptions(), &cursor)
 	}
 }
