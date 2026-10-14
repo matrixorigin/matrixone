@@ -226,6 +226,9 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		if err != nil {
 			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Polygon: %v", err)
 		}
+		if err := validateGeoJSONPolygonRings(rings); err != nil {
+			return nil, err
+		}
 		return Polygon{Rings: rings}, nil
 	case "MultiPoint":
 		var rows [][]float64
@@ -266,6 +269,9 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 			rings, err := parseRings(rp)
 			if err != nil {
 				return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPolygon: %v", err)
+			}
+			if err := validateGeoJSONPolygonRings(rings); err != nil {
+				return nil, err
 			}
 			polys[i] = Polygon{Rings: rings}
 		}
@@ -326,4 +332,16 @@ func parseRings(data json.RawMessage) ([][]Coord, error) {
 		rings[i] = seq
 	}
 	return rings, nil
+}
+
+func validateGeoJSONPolygonRings(rings [][]Coord) error {
+	for _, ring := range rings {
+		if len(ring) == 0 {
+			return ValidateLinearRingStructure(0, Coord{}, Coord{})
+		}
+		if err := ValidateLinearRingStructure(len(ring), ring[0], ring[len(ring)-1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
