@@ -52,6 +52,7 @@ Read a reference when its trigger applies:
 | Need | Read |
 |---|---|
 | Change/risk map, efficient validation order, CI/local evidence reuse | [references/validation-evidence.md](references/validation-evidence.md) |
+| Create/update a GitHub PR or issue, or diagnose a PR-description/commit-message check | [references/github-delivery.md](references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [references/race-validation.md](references/race-validation.md) |
 | Large/complex feature or major refactor; design document review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
 | UT/BVT purpose, orthogonality, fixture reuse, cost/flakiness, result and execution evidence | [references/testing-contract.md](references/testing-contract.md) |
@@ -239,6 +240,7 @@ Before delivery, the record must show:
 □ UT/BVT and specialized-domain decisions recorded
 □ every required proof is validly reused or passed; gaps/pending work are explicit
 □ generated/delivery artifacts, diff stat, and unintended files checked
+□ PR/issue delivery in scope: current-template and LF-body preflight passed; verify remote body after publication
 □ `mo-self-review` has zero unresolved blockers
 ```
 
