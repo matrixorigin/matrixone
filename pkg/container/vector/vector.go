@@ -12218,8 +12218,12 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
-	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-		return err
+	// Legacy/binary copies need no Unicode validation. Avoid extracting the
+	// source bytes (including inline values) solely for a no-op validation.
+	if types.IsUnicodeCollation(vec.typ.Charset) {
+		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+			return err
+		}
 	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)

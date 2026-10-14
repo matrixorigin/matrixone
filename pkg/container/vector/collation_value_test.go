@@ -15,12 +15,55 @@
 package vector
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCopyVarlenaPreservesCollationValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		value   []byte
+		invalid bool
+	}{
+		{"legacy opaque", 0, []byte{0xff}, false},
+		{"unicode invalid", types.CharsetUTF8MB4UnicodeCI, []byte{0xff}, true},
+		{"mb3 supplementary", types.CharsetUTF8MB3UnicodeCI, []byte("😀"), true},
+		{"mb4 supplementary", types.CharsetUTF8MB4UnicodeCI, []byte("😀"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, prefix := range []string{"", "external-varlena-padding-"} {
+				func() {
+					mp := mpool.MustNewZero()
+					defer func() { require.Zero(t, mp.CurrNB()) }()
+					src := NewVec(types.T_varbinary.ToType())
+					defer src.Free(mp)
+					value := append([]byte(prefix), tc.value...)
+					require.NoError(t, AppendBytes(src, value, false, mp))
+					dst := NewVec(types.NewWithCharset(types.T_varchar, 64, 0, tc.charset))
+					defer dst.Free(mp)
+					var out types.Varlena
+					before := out
+					in := MustFixedColNoTypeCheck[types.Varlena](src)[0]
+					area := src.GetArea()
+					err := BuildVarlenaFromVarlena(dst, &out, &in, &area, mp)
+					if tc.invalid {
+						require.Error(t, err)
+						require.Equal(t, before, out)
+						require.Empty(t, dst.GetArea())
+					} else {
+						require.NoError(t, err)
+						require.True(t, bytes.Equal(value, out.GetByteSlice(dst.GetArea())))
+					}
+				}()
+			}
+		})
+	}
+}
 
 func TestAppendBytesRejectsInvalidNativeUnicodeValue(t *testing.T) {
 	mp := mpool.MustNewZero()
