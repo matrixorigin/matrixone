@@ -131,14 +131,14 @@ func (c *distinctSpillController) close() {
 	c.closed = true
 	for bucket := range c.root {
 		if c.root[bucket] != nil {
-			c.freeOwnedBucket(c.root[bucket])
+			c.ctr.freeSpillBucket(c.root[bucket])
 			c.root[bucket] = nil
 		}
 	}
 	for level := range c.result {
 		for bucket := range c.result[level] {
 			if c.result[level][bucket] != nil {
-				c.freeOwnedBucket(c.result[level][bucket])
+				c.ctr.freeSpillBucket(c.result[level][bucket])
 				c.result[level][bucket] = nil
 			}
 		}
@@ -147,12 +147,12 @@ func (c *distinctSpillController) close() {
 	for c.partialPendingCount > 0 {
 		c.partialPendingCount--
 		if c.partialPending[c.partialPendingCount] != nil {
-			c.freeOwnedBucket(c.partialPending[c.partialPendingCount])
+			c.ctr.freeSpillBucket(c.partialPending[c.partialPendingCount])
 			c.partialPending[c.partialPendingCount] = nil
 		}
 	}
 	if c.partialActive != nil {
-		c.freeOwnedBucket(c.partialActive)
+		c.ctr.freeSpillBucket(c.partialActive)
 		c.partialActive = nil
 	}
 	c.partialActiveOffset = 0
@@ -185,14 +185,6 @@ func (c *distinctSpillController) close() {
 	clear(c.appliedLevel3[:])
 	for level := range c.resultSplit {
 		c.resultSplit[level] = nil
-	}
-}
-
-func (c *distinctSpillController) freeOwnedBucket(bucket *spillBucket) {
-	if err := bucket.free(); err != nil && c.ctr != nil && bucket.fileFS != nil {
-		// The controller is about to discard its bucket arrays. Transfer
-		// ownership to the outer Group so a later cleanup can retry.
-		c.ctr.spillCleanupPending = append(c.ctr.spillCleanupPending, bucket)
 	}
 }
 
@@ -784,13 +776,13 @@ func (c *distinctSpillController) newPrivateWave() ([spillNumBuckets]*spillBucke
 	return wave, nil
 }
 
-func freeDistinctWave(wave *[spillNumBuckets]*spillBucket) {
+func (ctr *container) freeDistinctWave(wave *[spillNumBuckets]*spillBucket) {
 	if wave == nil {
 		return
 	}
 	for bucket := range wave {
 		if wave[bucket] != nil {
-			_ = wave[bucket].free()
+			_ = ctr.freeSpillBucket(wave[bucket])
 			wave[bucket] = nil
 		}
 	}
@@ -855,7 +847,7 @@ func (c *distinctSpillController) mergeCommittedWave(
 		target.cnt += source.cnt
 		c.bytes += uint64(written)
 		c.keys += uint64(source.cnt)
-		if err := source.free(); err != nil {
+		if err := c.ctr.freeSpillBucket(source); err != nil {
 			return err
 		}
 		wave[bucket] = nil
@@ -887,7 +879,7 @@ func (c *distinctSpillController) repartition(
 	success := false
 	defer func() {
 		if !success {
-			freeDistinctWave(&children)
+			c.ctr.freeDistinctWave(&children)
 		}
 	}()
 	for bucket := range children {
@@ -953,7 +945,7 @@ func (c *distinctSpillController) repartition(
 	}
 	progress = nonEmpty > 1 && largest < partition.cnt
 	if !progress {
-		freeDistinctWave(&children)
+		c.ctr.freeDistinctWave(&children)
 		return children, false, nil
 	}
 	c.repartitions++
@@ -1108,28 +1100,28 @@ func (c *distinctSpillController) flushSortSet(
 		return nil, err
 	}
 	if err = c.ctr.openSpillBucket(proc, spillfs, run); err != nil {
-		_ = run.free()
+		_ = c.ctr.freeSpillBucket(run)
 		return nil, err
 	}
 	it := set.NewIter(nil, nil)
 	defer it.Close()
 	for ok, key, _ := it.First(); ok; ok, key, _ = it.Next() {
 		if err, canceled := vm.CancelCheck(proc); canceled {
-			_ = run.free()
+			_ = c.ctr.freeSpillBucket(run)
 			return nil, err
 		}
 		if err := writeDistinctSortKey(run.writer, key); err != nil {
-			_ = run.free()
+			_ = c.ctr.freeSpillBucket(run)
 			return nil, err
 		}
 		run.cnt++
 	}
 	if run.cnt == 0 {
-		_ = run.free()
+		_ = c.ctr.freeSpillBucket(run)
 		return nil, moerr.NewInternalErrorNoCtx("empty distinct sort run")
 	}
 	if err := run.flushWriter(); err != nil {
-		_ = run.free()
+		_ = c.ctr.freeSpillBucket(run)
 		return nil, err
 	}
 	return run, nil
@@ -1174,17 +1166,17 @@ func (c *distinctSpillController) mergeSortRuns(
 		return nil, err
 	}
 	if err = c.ctr.openSpillBucket(proc, spillfs, out); err != nil {
-		_ = out.free()
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
 	leftKey, leftEOF, err := readDistinctSortKey(leftReader, c.mergeLeft)
 	if err != nil {
-		_ = out.free()
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
 	rightKey, rightEOF, err := readDistinctSortKey(rightReader, c.mergeRight)
 	if err != nil {
-		_ = out.free()
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
 	write := func(key []byte) error {
@@ -1196,7 +1188,7 @@ func (c *distinctSpillController) mergeSortRuns(
 	}
 	for !leftEOF || !rightEOF {
 		if err, canceled := vm.CancelCheck(proc); canceled {
-			_ = out.free()
+			_ = c.ctr.freeSpillBucket(out)
 			return nil, err
 		}
 		comparison := 0
@@ -1209,19 +1201,19 @@ func (c *distinctSpillController) mergeSortRuns(
 		}
 		if comparison < 0 {
 			if err := write(leftKey); err != nil {
-				_ = out.free()
+				_ = c.ctr.freeSpillBucket(out)
 				return nil, err
 			}
 			leftKey, leftEOF, err = readDistinctSortKey(leftReader, c.mergeLeft)
 		} else if comparison > 0 {
 			if err := write(rightKey); err != nil {
-				_ = out.free()
+				_ = c.ctr.freeSpillBucket(out)
 				return nil, err
 			}
 			rightKey, rightEOF, err = readDistinctSortKey(rightReader, c.mergeRight)
 		} else {
 			if err := write(leftKey); err != nil {
-				_ = out.free()
+				_ = c.ctr.freeSpillBucket(out)
 				return nil, err
 			}
 			leftKey, leftEOF, err = readDistinctSortKey(leftReader, c.mergeLeft)
@@ -1231,20 +1223,20 @@ func (c *distinctSpillController) mergeSortRuns(
 			}
 		}
 		if err != nil {
-			_ = out.free()
+			_ = c.ctr.freeSpillBucket(out)
 			return nil, err
 		}
 	}
 	if err := out.flushWriter(); err != nil {
-		_ = out.free()
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
-	if err := left.free(); err != nil {
-		_ = out.free()
+	if err := c.ctr.freeSpillBucket(left); err != nil {
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
-	if err := right.free(); err != nil {
-		_ = out.free()
+	if err := c.ctr.freeSpillBucket(right); err != nil {
+		_ = c.ctr.freeSpillBucket(out)
 		return nil, err
 	}
 	return out, nil
@@ -1256,10 +1248,14 @@ func (c *distinctSpillController) addSortRun(
 	slots *[64]*spillBucket,
 	run *spillBucket,
 ) error {
+	// This function owns the current run, which may change after a merge.
+	// The caller only knows the original run and cannot clean an intermediate.
+	defer func() { _ = c.ctr.freeSpillBucket(run) }()
 	for level := 0; level < len(slots); level++ {
 		if slots[level] == nil {
 			run.lv = level
 			slots[level] = run
+			run = nil
 			return nil
 		}
 		merged, err := c.mergeSortRuns(proc, spillfs, slots[level], run)
@@ -1269,7 +1265,6 @@ func (c *distinctSpillController) addSortRun(
 		slots[level] = nil
 		run = merged
 	}
-	_ = run.free()
 	return moerr.NewInternalErrorNoCtx("distinct external sort level overflow")
 }
 
@@ -1319,7 +1314,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 	defer func() {
 		for i := range slots {
 			if slots[i] != nil {
-				_ = slots[i].free()
+				_ = c.ctr.freeSpillBucket(slots[i])
 				slots[i] = nil
 			}
 		}
@@ -1343,7 +1338,6 @@ func (c *distinctSpillController) externalSortH0Partition(
 			return err
 		}
 		if err := c.addSortRun(proc, spillfs, &slots, run); err != nil {
-			_ = run.free()
 			return err
 		}
 		c.ctr.mp.Free(buffer)
@@ -1409,6 +1403,13 @@ func (c *distinctSpillController) externalSortH0Partition(
 	}
 
 	var final *spillBucket
+	defer func() {
+		if final != nil {
+			if err := c.ctr.freeSpillBucket(final); retErr == nil && err != nil {
+				retErr = err
+			}
+		}
+	}()
 	for level := range slots {
 		if slots[level] == nil {
 			continue
@@ -1428,13 +1429,6 @@ func (c *distinctSpillController) externalSortH0Partition(
 	if final == nil {
 		return make([]uint64, aggregateCount), nil
 	}
-	defer func() {
-		if final != nil {
-			if err := final.free(); retErr == nil && err != nil {
-				retErr = err
-			}
-		}
-	}()
 	if err := final.flushWriter(); err != nil {
 		return nil, err
 	}
@@ -1570,7 +1564,7 @@ func (ctr *container) drainExactCountDistinct(
 	if err != nil {
 		return false, err
 	}
-	defer freeDistinctWave(&wave)
+	defer ctr.freeDistinctWave(&wave)
 	spillfs, err := proc.GetSpillFileService()
 	if err != nil {
 		return false, err
@@ -1854,7 +1848,7 @@ func (ctr *container) finalizeH0DistinctPartition(
 	owned := true
 	defer func() {
 		if owned {
-			if err := partition.free(); retErr == nil && err != nil {
+			if err := ctr.freeSpillBucket(partition); retErr == nil && err != nil {
 				retErr = err
 			}
 		}
@@ -1885,8 +1879,8 @@ func (ctr *container) finalizeH0DistinctPartition(
 			return repartitionErr
 		}
 		if progress {
-			if err := partition.free(); err != nil {
-				freeDistinctWave(&children)
+			if err := ctr.freeSpillBucket(partition); err != nil {
+				ctr.freeDistinctWave(&children)
 				return err
 			}
 			owned = false
@@ -1898,7 +1892,7 @@ func (ctr *container) finalizeH0DistinctPartition(
 				if err := ctr.finalizeH0DistinctPartition(
 					proc, controller, child, groups); err != nil {
 					children[bucket] = nil
-					freeDistinctWave(&children)
+					ctr.freeDistinctWave(&children)
 					return err
 				}
 				children[bucket] = nil
@@ -2144,7 +2138,7 @@ func (ctr *container) finalizeGroupedDistinctPartition(
 	owned := true
 	defer func() {
 		if owned {
-			if err := partition.free(); retErr == nil && err != nil {
+			if err := ctr.freeSpillBucket(partition); retErr == nil && err != nil {
 				retErr = err
 			}
 		}
@@ -2163,8 +2157,8 @@ func (ctr *container) finalizeGroupedDistinctPartition(
 			return err
 		}
 		if progress {
-			if err := partition.free(); err != nil {
-				freeDistinctWave(&children)
+			if err := ctr.freeSpillBucket(partition); err != nil {
+				ctr.freeDistinctWave(&children)
 				return err
 			}
 			owned = false
@@ -2176,7 +2170,7 @@ func (ctr *container) finalizeGroupedDistinctPartition(
 				if err := ctr.finalizeGroupedDistinctPartition(
 					proc, controller, child, groups, toResultSpool); err != nil {
 					children[bucket] = nil
-					freeDistinctWave(&children)
+					ctr.freeDistinctWave(&children)
 					return err
 				}
 				children[bucket] = nil
@@ -2207,8 +2201,8 @@ func (ctr *container) finalizeGroupedDistinctPartition(
 			return repartitionErr
 		}
 		if progress {
-			if freeErr := partition.free(); freeErr != nil {
-				freeDistinctWave(&children)
+			if freeErr := ctr.freeSpillBucket(partition); freeErr != nil {
+				ctr.freeDistinctWave(&children)
 				return freeErr
 			}
 			owned = false
@@ -2220,7 +2214,7 @@ func (ctr *container) finalizeGroupedDistinctPartition(
 				if err := ctr.finalizeGroupedDistinctPartition(
 					proc, controller, child, groups, toResultSpool); err != nil {
 					children[bucket] = nil
-					freeDistinctWave(&children)
+					ctr.freeDistinctWave(&children)
 					return err
 				}
 				children[bucket] = nil
@@ -2595,7 +2589,7 @@ func (c *distinctSpillController) repartitionContributions(
 	}
 	if parent == nil || parent.cnt == 0 {
 		if parent != nil {
-			if err := parent.free(); err != nil {
+			if err := c.ctr.freeSpillBucket(parent); err != nil {
 				return err
 			}
 			if err := c.setContributionPartition(path, pathLen, nil); err != nil {
@@ -2629,7 +2623,7 @@ func (c *distinctSpillController) repartitionContributions(
 	var children [spillNumBuckets]*spillBucket
 	defer func() {
 		if retErr != nil {
-			freeDistinctWave(&children)
+			c.ctr.freeDistinctWave(&children)
 		}
 	}()
 	for bucket := range children {
@@ -2661,7 +2655,7 @@ func (c *distinctSpillController) repartitionContributions(
 	}
 	for bucket := range children {
 		if children[bucket].cnt == 0 {
-			if err := children[bucket].free(); err != nil {
+			if err := c.ctr.freeSpillBucket(children[bucket]); err != nil {
 				return err
 			}
 			children[bucket] = nil
@@ -2674,7 +2668,7 @@ func (c *distinctSpillController) repartitionContributions(
 	if err := c.setContributionPartition(path, pathLen, nil); err != nil {
 		return err
 	}
-	if err := parent.free(); err != nil {
+	if err := c.ctr.freeSpillBucket(parent); err != nil {
 		return err
 	}
 	for bucket := range children {
@@ -2846,7 +2840,7 @@ func (ctr *container) applyDistinctContributions(
 		bucket.path, bucket.pathLen, nil); err != nil {
 		return err
 	}
-	return partition.free()
+	return ctr.freeSpillBucket(partition)
 }
 
 // finalizeGroupedExactCountDistinctViaSpill externalizes the ordinary group
@@ -3059,7 +3053,7 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 	owned := false
 	defer func() {
 		if retErr != nil && owned && partition != nil {
-			_ = partition.free()
+			_ = ctr.freeSpillBucket(partition)
 		}
 	}()
 	if controller.partialActive != nil {
@@ -3097,14 +3091,14 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 		if !progress {
 			break
 		}
-		if err := partition.free(); err != nil {
-			freeDistinctWave(&children)
+		if err := ctr.freeSpillBucket(partition); err != nil {
+			ctr.freeDistinctWave(&children)
 			return false, err
 		}
 		owned = false
 		partition = nil
 		if err := controller.pushPartialChildren(&children); err != nil {
-			freeDistinctWave(&children)
+			ctr.freeDistinctWave(&children)
 			return false, err
 		}
 	}
@@ -3170,7 +3164,7 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 		return false, moerr.NewInternalErrorNoCtx(
 			"distinct partial continuation produced an empty leaf")
 	}
-	if err := partition.free(); err != nil {
+	if err := ctr.freeSpillBucket(partition); err != nil {
 		return false, err
 	}
 	owned = false

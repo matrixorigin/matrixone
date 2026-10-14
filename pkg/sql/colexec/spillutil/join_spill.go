@@ -2675,7 +2675,14 @@ func (e *SpillEngine) DeferCleanup() {
 	}
 	e.orphanFiles = nil
 	for i := range e.orphanWriters {
-		writer := e.orphanWriters[i]
+		// Do not copy spillFS: it is an interior pointer into the engine,
+		// which retains query callbacks. Close needs only these file fields.
+		source := &e.orphanWriters[i]
+		writer := BucketWriter{
+			Name: source.Name, fileFS: source.fileFS,
+			created: source.created, diskReservation: source.diskReservation,
+		}
+		*source = BucketWriter{}
 		spillcleanup.Enqueue(writer.Close)
 	}
 	e.orphanWriters = nil
@@ -2728,5 +2735,6 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
+	e.probeKeyEval = nil
 	e.releaseScatterScratch()
 }
