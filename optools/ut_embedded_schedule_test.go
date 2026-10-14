@@ -1052,6 +1052,11 @@ kill -KILL $$
 func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
 	const sql = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
+	const embed = "github.com/matrixorigin/matrixone/pkg/embed"
+	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
+	const upgrade = "github.com/matrixorigin/matrixone/pkg/tests/upgrade"
+	const extraScope = embed + "\n" + isolated + "\n" + upgrade
+	const extraBatches = "batch:" + embed + ":4:2:2:independent\nconsume\nbatch:" + isolated + ":4:2:2:independent\nconsume\nbatch:" + upgrade + ":4:2:2:independent\nconsume\n"
 	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
 	for _, tc := range []struct {
 		name, scope, mode, ordinaryStatus, batchStatus, consumeStatus, want string
@@ -1063,6 +1068,9 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 		{name: "only-audited", scope: dml + "\n" + sql, mode: "4", want: batches},
 		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
 		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:2:2:cleanup-only\nconsume\n"},
+		{name: "expensive-owners", scope: extraScope, mode: "4", want: extraBatches},
+		{name: "expensive-owners-rollback", scope: extraScope, mode: "1", want: "ordinary:" + embed + " " + isolated + " " + upgrade + "\n"},
+		{name: "mixed-audited-and-unknown", scope: extraScope + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\n" + extraBatches + batches},
 		{name: "neither", scope: "example/a", mode: "4", want: "ordinary:example/a\n"},
 		{name: "empty", mode: "4"},
 		{name: "ordinary-failure-continues", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
