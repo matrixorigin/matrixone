@@ -1807,6 +1807,9 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,
 	depth int32,
 ) (numericAstTypeScan, error) {
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return numericAstTypeScan{}, err
+	}
 	var owner *tree.Select
 	switch selectStmt := subquery.Select.(type) {
 	case *tree.Select:
