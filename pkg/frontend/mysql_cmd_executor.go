@@ -1483,6 +1483,7 @@ func doSetVar(
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
+		setNamesCollation       string
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
@@ -1509,11 +1510,7 @@ func doSetVar(
 			names := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
-			if assign.Reserved != nil {
-				names = append(names, "collation_connection")
-			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
-				names = append(names, "collation_connection")
-			}
+			names = append(names, "collation_connection")
 			for _, name := range names {
 				captureSystemReplayability(name)
 			}
@@ -1598,9 +1595,35 @@ func doSetVar(
 		if err := validateCharsetAssignment(assign, value); err != nil {
 			return evaluatedAssignment{}, err
 		}
+		setNamesCollation := ""
+		if assign.SetNames {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			switch {
+			case assign.Reserved != nil:
+				literal, literalOK := assign.Reserved.(*tree.NumVal)
+				if !literalOK {
+					return evaluatedAssignment{}, moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
+				}
+				setNamesCollation = literal.String()
+			case isDefault:
+				setNamesCollation, evalErr = resolveSetNamesDefaultCollation(ses)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			default:
+				setNamesCollation, evalErr = resolveImplicitSetNamesCollation(ses, value)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			}
+			if evalErr = validateCharsetSystemVariable("collation_connection", setNamesCollation); evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
+		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
+			setNamesCollation:       setNamesCollation,
 			userVarIsBin:            isBin,
 			userVarRuntimeDomain:    runtimeDomain,
 			valueType:               valueType,
@@ -1673,11 +1696,7 @@ func doSetVar(
 			names := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
-			if assign.Reserved != nil {
-				names = append(names, "collation_connection")
-			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
-				names = append(names, "collation_connection")
-			}
+			names = append(names, "collation_connection")
 			for _, name := range names {
 				mark(name, replayable)
 			}
@@ -1726,32 +1745,11 @@ func doSetVar(
 					return err
 				}
 			}
-			// SET NAMES ... COLLATE ... also changes the connection collation.
-			// The parser keeps COLLATE in Reserved so the charset and collation
-			// are validated together before any session variable is mutated.
-			if assign.Reserved != nil {
-				literal, ok := assign.Reserved.(*tree.NumVal)
-				if !ok {
-					return moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
-				}
-				if err = setVarFunc(true, false, "collation_connection", literal.String(), sql); err != nil {
-					return err
-				}
-			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
-				// A plain SET NAMES DEFAULT resets the implicit connection
-				// collation together with the three character-set variables. Keep
-				// an explicit COLLATE clause above authoritative, but do not leave
-				// a collation from a previous SET NAMES request behind.
-				defaultCollation, getErr := ses.GetGlobalSysVar("collation_server")
-				if getErr != nil {
-					return getErr
-				}
-				if defaultCollation == nil {
-					defaultCollation = gSysVarsDefs["collation_server"].Default
-				}
-				if err = setVarFunc(true, false, "collation_connection", defaultCollation, sql); err != nil {
-					return err
-				}
+			// SET NAMES always changes the implicit connection collation when
+			// COLLATE is omitted. Explicit COLLATE and DEFAULT resolution were
+			// validated while evaluating the assignment, before any writes.
+			if err = setVarFunc(true, false, "collation_connection", item.setNamesCollation, sql); err != nil {
+				return err
 			}
 		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 			switch scope {

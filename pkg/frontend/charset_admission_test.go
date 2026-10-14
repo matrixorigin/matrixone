@@ -12,6 +12,7 @@ package frontend
 
 import (
 	"encoding/binary"
+	"strconv"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -204,6 +205,63 @@ func TestSetNamesDefaultCompatibility(t *testing.T) {
 	got, err := ses.GetSessionSysVar("collation_connection")
 	require.NoError(t, err)
 	require.Equal(t, wantCollation, got)
+}
+
+func TestSetNamesImplicitCollation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	wantUTF8MB4, err := ses.GetSessionSysVar("default_collation_for_utf8mb4")
+	require.NoError(t, err)
+	if wantUTF8MB4 == nil {
+		wantUTF8MB4 = gSysVarsDefs["default_collation_for_utf8mb4"].Default
+	}
+
+	cases := []struct {
+		sql         string
+		wantCharset string
+		wantName    string
+	}{
+		{sql: "set names utf8mb4", wantCharset: "utf8mb4", wantName: wantUTF8MB4.(string)},
+		{sql: "set names utf8", wantCharset: "utf8", wantName: "utf8_general_ci"},
+		{sql: "set names binary", wantCharset: "binary", wantName: "binary"},
+	}
+
+	for _, tc := range cases {
+		for _, prepared := range []bool{false, true} {
+			t.Run(tc.sql+"/prepared="+strconv.FormatBool(prepared), func(t *testing.T) {
+				setup, setupErr := parsers.ParseOne(ctx, dialect.MYSQL,
+					"set names utf8 collate utf8_unicode_ci", 1)
+				require.NoError(t, setupErr)
+				setupExecCtx := newTestExecCtx(ctx, ctrl)
+				setupExecCtx.ses = ses
+				setupExecCtx.singleStatementQuery = true
+				require.NoError(t, doSetVar(ses, setupExecCtx, setup.(*tree.SetVar),
+					"set names utf8 collate utf8_unicode_ci", prepared))
+				setup.Free()
+
+				stmt, parseErr := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, parseErr)
+				defer stmt.Free()
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				execCtx.singleStatementQuery = true
+				require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), tc.sql, prepared))
+				for _, name := range []string{
+					"character_set_client", "character_set_connection", "character_set_results",
+				} {
+					got, getErr := ses.GetSessionSysVar(name)
+					require.NoError(t, getErr)
+					require.Equal(t, tc.wantCharset, got)
+				}
+				got, getErr := ses.GetSessionSysVar("collation_connection")
+				require.NoError(t, getErr)
+				require.Equal(t, tc.wantName, got)
+			})
+		}
+	}
 }
 
 func TestCharsetAdmissionHandshake(t *testing.T) {

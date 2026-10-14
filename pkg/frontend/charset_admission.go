@@ -96,6 +96,53 @@ func validateCharsetAssignment(assign *tree.VarAssignmentExpr, value interface{}
 	return nil
 }
 
+// resolveImplicitSetNamesCollation returns the collation that MySQL applies
+// when SET NAMES changes a charset without an explicit COLLATE clause. The
+// utf8mb4 default is configurable; the other admitted charset defaults are
+// owned by the collation registry.
+func resolveImplicitSetNamesCollation(ses *Session, charsetValue interface{}) (string, error) {
+	charsetName, ok := charsetValue.(string)
+	if !ok {
+		return "", moerr.NewInvalidInputNoCtx("character set must be a string")
+	}
+	charsetName = collation.CanonicalCharsetName(strings.TrimSpace(charsetName))
+	if charsetName == "utf8mb4" {
+		value, err := ses.GetSessionSysVar("default_collation_for_utf8mb4")
+		if err != nil {
+			return "", err
+		}
+		if value == nil {
+			value = gSysVarsDefs["default_collation_for_utf8mb4"].Default
+		}
+		collationName, ok := value.(string)
+		if !ok {
+			return "", moerr.NewInvalidInputNoCtx("default collation for utf8mb4 must be a string")
+		}
+		return collationName, nil
+	}
+	for _, definition := range collation.Definitions() {
+		if definition.Default && definition.Charset.Name() == charsetName {
+			return definition.Name, nil
+		}
+	}
+	return "", moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", charsetValue)
+}
+
+func resolveSetNamesDefaultCollation(ses *Session) (string, error) {
+	value, err := ses.GetGlobalSysVar("collation_server")
+	if err != nil {
+		return "", err
+	}
+	if value == nil {
+		value = gSysVarsDefs["collation_server"].Default
+	}
+	collationName, ok := value.(string)
+	if !ok {
+		return "", moerr.NewInvalidInputNoCtx("server collation must be a string")
+	}
+	return collationName, nil
+}
+
 func lookupSupportedProtocolCollation(id int) (charsetCollationName, bool) {
 	if id < 0 || id > 65535 {
 		return charsetCollationName{}, false
