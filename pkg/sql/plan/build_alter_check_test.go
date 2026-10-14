@@ -263,6 +263,61 @@ func TestAlterCheckPreservesFinalCopyIndexNames(t *testing.T) {
 }
 
 func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
+	for _, test := range []struct {
+		name, definition, clause, index string
+		primary, ambiguous              bool
+	}{
+		{"inline unique", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop constraint w", "", false, true},
+		{"modify unique", "id int primary key,v int,w int,constraint w check(v>0)", "modify column w int unique,drop constraint w", "", false, true},
+		{"change unique", "id int primary key,v int,x int,constraint w check(v>0)", "change column x w int unique,drop constraint w", "", false, true},
+		{"inline primary", "id int,v int,constraint `PRIMARY` check(v>0)", "add column w int primary key,drop constraint `PRIMARY`", "", false, true},
+		{"modify primary", "id int,v int,w int,constraint `PRIMARY` check(v>0)", "modify column w int primary key,drop constraint `PRIMARY`", "", false, true},
+		{"change primary", "id int,v int,x int,constraint `PRIMARY` check(v>0)", "change column x w int primary key,drop constraint `PRIMARY`", "", false, true},
+		{"inline unique suffix", "id int primary key,v int,key w(v),constraint w_2 check(id>0)", "add column w int unique,drop constraint w_2", "", false, true},
+		{"deferred unique before inline", "id int primary key,v int,constraint w_2 check(v>0)", "add unique(w),add column w int unique,drop constraint w_2", "", false, true},
+		{"deferred unique after inline", "id int primary key,v int,constraint w_2 check(v>0)", "add column w int unique,add unique(w),drop constraint w_2", "", false, true},
+		{"inline name survives later source column drop", "id int primary key,v int,key w(v),constraint w_2 check(id>0)", "add column w int unique,drop column v,drop constraint w_2", "", false, true},
+		{"inline name reuses earlier source column drop", "id int primary key,v int,key w(v),constraint w_2 check(id>0)", "drop column v,add column w int unique,drop constraint w_2", "w", false, false},
+		{"inline name survives later functional index drop", "id int primary key,v int,key w((v+1)),constraint w_2 check(v>0)", "add column w int unique,drop index w,drop constraint w_2", "", false, true},
+		{"inline name reuses earlier functional index drop", "id int primary key,v int,key w((v+1)),constraint w_2 check(v>0)", "drop index w,add column w int unique,drop constraint w_2", "w", false, false},
+		{"dropped inline unique no longer conflicts", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop column w,drop constraint w", "", false, false},
+		{"dropped inline primary no longer conflicts", "id int,v int,constraint `PRIMARY` check(v>0)", "add column w int primary key,drop column w,drop constraint `PRIMARY`", "", false, false},
+		{"renamed inline unique keeps name", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,rename column w to x,drop constraint w", "", false, true},
+		{"generic check drop precedes inline unique", "id int primary key,v int,constraint w check(v>0)", "drop constraint w,add column w int unique", "w", false, false},
+		{"explicit check drop retains inline unique", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop check w", "w", false, false},
+		{"explicit check drop retains inline primary", "id int,v int,constraint `PRIMARY` check(v>0)", "add column w int primary key,drop check `PRIMARY`", "", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t("+test.definition+")")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table check_t "+test.clause, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			astBefore := tree.String(stmt, dialect.MYSQL)
+			for range 2 {
+				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				if test.ambiguous {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+					require.ErrorContains(t, err, "ambiguous constraint name")
+				} else {
+					require.NoError(t, err)
+					copy := p.GetDdl().GetAlterTable().CopyTableDef
+					require.Empty(t, copy.Checks)
+					if test.index != "" {
+						require.Len(t, copy.Indexes, 1)
+						require.Equal(t, test.index, copy.Indexes[0].IndexName)
+						require.True(t, copy.Indexes[0].Unique)
+					}
+					if test.primary {
+						require.Equal(t, "w", copy.Pkey.PkeyColName)
+					}
+				}
+				require.Equal(t, before, source)
+				require.Equal(t, astBefore, tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
 	t.Run("dropped primary no longer conflicts with check", func(t *testing.T) {
 		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,w int,constraint `PRIMARY` check(w>0))")
 		p, err := runOneStmt(mock, t, "alter table check_t drop column id,drop constraint `PRIMARY`")

@@ -228,4 +228,55 @@ select index_name,non_unique from information_schema.statistics
 where table_schema=database() and table_name='ordered_indexes' order by index_name;
 index_name    non_unique
 v_2    1
+create table inline_unique(id int primary key,v int,constraint w check(v>0));
+insert into inline_unique values (1,1);
+alter table inline_unique add column w int unique,drop constraint w;
+invalid input: ambiguous constraint name 'w'; use constraint-specific DROP syntax
+select * from inline_unique order by id;
+id    v
+1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='inline_unique' and constraint_type='CHECK';
+count(*)
+1
+insert into inline_unique values (2,-1);
+constraint violation: Check constraint 'w' is violated
+alter table inline_unique add column w int,add unique(w),drop constraint w;
+invalid input: ambiguous constraint name 'w'; use constraint-specific DROP syntax
+alter table inline_unique add column w int unique,drop check w;
+insert into inline_unique values (2,-1,2);
+select * from inline_unique order by id;
+id    v    w
+1    1    null
+2    -1    2
+select index_name,non_unique from information_schema.statistics
+where table_schema=database() and table_name='inline_unique' order by index_name;
+index_name    non_unique
+PRIMARY    0
+w    0
+create table inline_primary(id int,v int,constraint `PRIMARY` check(v>0));
+insert into inline_primary values (1,1);
+alter table inline_primary add column w int primary key default 1,drop constraint `PRIMARY`;
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+select * from inline_primary order by id;
+id    v
+1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='inline_primary' and constraint_type='CHECK';
+count(*)
+1
+insert into inline_primary values (2,-1);
+constraint violation: Check constraint 'primary' is violated
+alter table inline_primary add column w int default 1,add primary key(w),drop constraint `PRIMARY`;
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+alter table inline_primary add column w int primary key default 1,drop check `PRIMARY`;
+insert into inline_primary values (2,-1,2);
+select * from inline_primary order by id;
+id    v    w
+1    1    1
+2    -1    2
+select column_name from information_schema.key_column_usage
+where table_schema=database() and table_name='inline_primary' and constraint_name='PRIMARY';
+column_name
+w
 drop database alter_check_constraints;

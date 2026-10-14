@@ -156,4 +156,34 @@ select v from ordered_indexes order by v;
 select index_name,non_unique from information_schema.statistics
     where table_schema=database() and table_name='ordered_indexes' order by index_name;
 
+-- Generic DROP must reject inline UNIQUE/PRIMARY ambiguity atomically.
+create table inline_unique(id int primary key,v int,constraint w check(v>0));
+insert into inline_unique values (1,1);
+alter table inline_unique add column w int unique,drop constraint w;
+select * from inline_unique order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='inline_unique' and constraint_type='CHECK';
+insert into inline_unique values (2,-1);
+-- Table-level spelling has the same ambiguity; explicit CHECK is selective.
+alter table inline_unique add column w int,add unique(w),drop constraint w;
+alter table inline_unique add column w int unique,drop check w;
+insert into inline_unique values (2,-1,2);
+select * from inline_unique order by id;
+select index_name,non_unique from information_schema.statistics
+    where table_schema=database() and table_name='inline_unique' order by index_name;
+
+create table inline_primary(id int,v int,constraint `PRIMARY` check(v>0));
+insert into inline_primary values (1,1);
+alter table inline_primary add column w int primary key default 1,drop constraint `PRIMARY`;
+select * from inline_primary order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='inline_primary' and constraint_type='CHECK';
+insert into inline_primary values (2,-1);
+alter table inline_primary add column w int default 1,add primary key(w),drop constraint `PRIMARY`;
+alter table inline_primary add column w int primary key default 1,drop check `PRIMARY`;
+insert into inline_primary values (2,-1,2);
+select * from inline_primary order by id;
+select column_name from information_schema.key_column_usage
+    where table_schema=database() and table_name='inline_primary' and constraint_name='PRIMARY';
+
 drop database alter_check_constraints;
