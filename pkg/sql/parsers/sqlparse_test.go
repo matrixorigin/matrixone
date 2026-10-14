@@ -214,6 +214,53 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 		want    []string
 	}{
 		{
+			name: "multiple statements inside versioned comment",
+			sql:  "/*!50000 select 1; select 2 */",
+			want: []string{"/*!50000 select 1 */", "/*! select 2 */"},
+		},
+		{
+			name: "ordinary prefix and outer delimiter",
+			sql:  "select 1; /*!50000 select 2; select 3 */;",
+			want: []string{"select 1", "/*!50000 select 2 */", "/*! select 3 */"},
+		},
+		{
+			name: "inner and outer final delimiters",
+			sql:  "/*!50000 select 1; select 2; */; select 3",
+			want: []string{"/*!50000 select 1 */", "/*! select 2; */", "", "select 3"},
+		},
+		{
+			name: "statement crosses both wrapper endpoints",
+			sql:  "select /*! 1; select 2 */ + 3; select 4",
+			want: []string{"select /*! 1 */", "/*! select 2 */ + 3", "select 4"},
+		},
+		{
+			name: "consecutive comments and empty inner statement",
+			sql:  "/*! select 1;; select 2 */; /*! select 3; select 4 */",
+			want: []string{"/*! select 1 */", "/*!  */", "/*! select 2 */", "/*! select 3 */", "/*! select 4 */"},
+		},
+		{
+			name: "quoted semicolon and terminator in continuation",
+			sql:  "/*! select 1; select 'x*/y;z' */",
+			want: []string{"/*! select 1 */", "/*! select 'x*/y;z' */"},
+		},
+		{
+			name: "compound statement inside executable comment",
+			sql:  "/*! begin select 1; select 2; end; select 3 */",
+			want: []string{"/*! begin select 1; select 2; end */", "/*! select 3 */"},
+		},
+		{
+			name:    "multiple statements with ANSI_QUOTES",
+			sql:     `/*! select "x*/y"; select "z" */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    []string{`/*! select "x*/y" */`, `/*! select "z" */`},
+		},
+		{
+			name:    "multiple statements with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! select 'x\'; select 'y\' */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! select 'x\' */`, `/*! select 'y\' */`},
+		},
+		{
 			name: "single versioned statement",
 			sql:  "/*!40101 use mysql_ddl_test_db_3; */",
 			want: []string{"/*!40101 use mysql_ddl_test_db_3; */"},
@@ -297,6 +344,31 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			got, err := SplitSqlByStatementWithSQLMode(ctx, test.sql, test.sqlMode)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
+			fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, test.sql, test.sqlMode)
+			require.NoError(t, err)
+			var splitASTs []string
+			previousEnd := 0
+			for _, fragment := range fragments {
+				require.GreaterOrEqual(t, fragment.Start, previousEnd)
+				require.True(t, fragment.MatchesSource(test.sql))
+				previousEnd = fragment.End
+				if !FragmentHasStatement(fragment.SQL) {
+					continue
+				}
+				stmts, err := ParseWithSQLMode(ctx, dialect.MYSQL, fragment.SQL, 1, test.sqlMode)
+				require.NoError(t, err, fragment.SQL)
+				require.Len(t, stmts, 1, fragment.SQL)
+				splitASTs = append(splitASTs, tree.String(stmts[0], dialect.MYSQL))
+				stmts[0].Free()
+			}
+			stmts, err := ParseWithSQLMode(ctx, dialect.MYSQL, test.sql, 1, test.sqlMode)
+			require.NoError(t, err)
+			var fullASTs []string
+			for _, stmt := range stmts {
+				fullASTs = append(fullASTs, tree.String(stmt, dialect.MYSQL))
+				stmt.Free()
+			}
+			require.Equal(t, fullASTs, splitASTs)
 		})
 	}
 }
