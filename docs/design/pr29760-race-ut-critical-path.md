@@ -121,8 +121,8 @@ only those audited packages present in the scope, runs all remaining packages in
 one ordinary command, then compiles and executes each audited package in order:
 four round-robin batches, at most two processes, GOMAXPROCS=2 per process.
 Do not invoke Go with an empty ordinary scope. Explicit prebuild execution keeps
-its existing package policy. The implementation initially defaults to `1` until
-the complete-wave comparison passes.
+its existing package policy. Make defaults to `4` after the complete-wave and
+full-UT gates below passed; direct script invocation retains `1`.
 
 Publish a batched report/binary only after the preceding command joins; consume
 and release them before the next package. Ordinary test failure still executes
@@ -158,6 +158,13 @@ scope subsets, budgets, TestMain cleanup failure, preparation fallback and
 undrained ownership through the existing runner harness. Before delivery, also
 run the complete repository race UT through the real Make entry point and
 incremental SCA for the changed package closure.
+
+The matched eight-CPU/16-GiB pair saves 454.06 seconds (1717.49 to 1263.43)
+for issues plus all ten embedded packages, with identical 475 roots and 2636
+terminal tests. CPU falls 13.38%, cgroup peak 15.42%, and PSS occupancy 16.65%.
+This measures the changed wave; the whole-CI ten-minute target is unverified.
+The complete local Make race selection subsequently passes with explicit batch
+count `4`, and incremental SCA passes for all five changed Go packages.
 
 ## PR29795 amendment: optional bounded process waves
 

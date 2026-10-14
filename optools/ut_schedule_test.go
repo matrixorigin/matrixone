@@ -175,7 +175,7 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		accepted        bool
 		validationError string
 	}{
-		{name: "embedded-batches-opt-in", args: []string{"UT_EMBEDDED_BATCHES=4"}, want: "8 2 1 0", embeddedBatches: "4", accepted: true},
+		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 1 0", embeddedBatches: "1", accepted: true},
 		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 1 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 1 0", accepted: true},
 		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 1 0", accepted: true},
@@ -193,7 +193,7 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.embeddedBatches == "" {
-				tc.embeddedBatches = "1"
+				tc.embeddedBatches = "4"
 			}
 			tc.want += " " + tc.embeddedBatches
 			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)

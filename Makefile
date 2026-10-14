@@ -607,14 +607,14 @@ UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Split issues roots under one shared package deadline.
 # Shorter process lifetimes bound catalog and race-detector retention. The
 # eight-batch pool shares four Go execution cores across two complete clusters.
-# One/four batches retain the serial rollback; embedded packages stay serial.
+# One/four issues batches retain the serial rollback.
 UT_ISSUES_BATCHES ?= 8
 UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
 UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
 # Audited DML/SQL batching applies only to the ordinary, non-prebuild path.
-UT_EMBEDDED_BATCHES ?= 1
+UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping two clusters increases the memory peak. The new
-# issues default uses the existing serial embedded command instead. Preserve
+# issues default prepares embedded packages on demand instead. Preserve
 # the prebuild policy for rollback modes and explicit embedded pool users.
 UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2:1,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL):$(UT_EMBEDDED_PACKAGE_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
