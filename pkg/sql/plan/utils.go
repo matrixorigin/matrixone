@@ -1669,24 +1669,12 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
+		// Set membership can differ from ordinary SELECT DISTINCT (for example,
+		// FLOAT signed zero). Retain both arms until their equality keys are bound.
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
@@ -8021,7 +8009,6 @@ func refreshPreparedSetOperationPhysicalKeys(
 		return nil
 	}
 	required := make([]bool, len(node.ProjectList))
-	anyRequired := false
 	for colPos, output := range node.ProjectList {
 		if output == nil || (types.T(output.Typ.Id) != types.T_varchar && types.T(output.Typ.Id) != types.T_text) {
 			continue
@@ -8041,26 +8028,10 @@ func refreshPreparedSetOperationPhysicalKeys(
 			hasPromotedChar = hasPromotedChar || hasPadSpaceStringProvenance(expr)
 		}
 		required[colPos] = hasPromotedChar || hasChar && hasVariableString
-		anyRequired = anyRequired || required[colPos]
 	}
-	if !anyRequired {
-		node.PhysicalEqualityKeyList = nil
-		return nil
-	}
-	keys := make([]*plan.Expr, len(node.ProjectList))
-	for colPos, expr := range node.ProjectList {
-		if expr == nil {
-			return moerr.NewInternalErrorf(ctx,
-				"prepared set-operation output has a nil projection at column %d", colPos)
-		}
-		keys[colPos] = DeepCopyExpr(expr)
-		if required[colPos] {
-			var err error
-			keys[colPos], err = appendSetOperationCastBeforeExpr(ctx, keys[colPos], keys[colPos].Typ)
-			if err != nil {
-				return err
-			}
-		}
+	keys, err := buildSetOperationPhysicalKeys(ctx, node.ProjectList, required)
+	if err != nil {
+		return err
 	}
 	node.PhysicalEqualityKeyList = keys
 	return nil

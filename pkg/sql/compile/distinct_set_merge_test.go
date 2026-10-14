@@ -17,6 +17,7 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -73,6 +74,28 @@ func TestCompileUnionRetainsGlobalDistinctMerge(t *testing.T) {
 	result[0].FreeOperator(c)
 	result[0].release()
 	c.proc.Free()
+}
+
+func TestCompileUnionFloatKeyRetainsVisibleType(t *testing.T) {
+	c := newDistinctSetTestCompile(t)
+	visible := plan2.GetColExpr(plan.Type{Id: int32(types.T_float64)}, 0, 0)
+	key, err := plan2.BindFuncExprImplByPlanExpr(t.Context(), "set_operation_float_key", []*plan.Expr{plan2.DeepCopyExpr(visible)})
+	require.NoError(t, err)
+	node := &plan.Node{ProjectList: []*plan.Expr{visible}, PhysicalEqualityKeyList: []*plan.Expr{key}}
+	result := c.compileUnion(node, []*Scope{newDistinctSetTestScope(c)}, []*Scope{newDistinctSetTestScope(c)})
+	t.Cleanup(func() {
+		result[0].FreeOperator(c)
+		result[0].release()
+		c.proc.Free()
+	})
+	require.Len(t, result, 1)
+	g := result[0].RootOp.(*group.Group)
+	require.Len(t, g.GroupBy, 2)
+	require.Equal(t, []int32{1}, g.GroupByHashKey)
+	require.Equal(t, key.GetF(), g.GroupBy[1].GetF())
+	require.Len(t, g.ProjectList, 1)
+	require.Equal(t, visible.Typ, g.ProjectList[0].Typ)
+	require.Zero(t, g.ProjectList[0].GetCol().ColPos)
 }
 
 func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {

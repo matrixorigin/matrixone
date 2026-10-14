@@ -912,12 +912,15 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 616
+	SET_OPERATION_FLOAT_KEY = 616
+
+	FUNCTION_END_NUMBER = 617
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
+	"set_operation_float_key":      SET_OPERATION_FLOAT_KEY,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
