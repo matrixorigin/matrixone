@@ -76,7 +76,8 @@ func (indexJoin *IndexJoin) Release() {
 func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	indexJoin.ctr.state = Probe
 	if indexJoin.ctr.buf != nil {
-		indexJoin.ctr.buf.CleanOnlyData()
+		indexJoin.ctr.buf.Clean(proc.Mp())
+		indexJoin.ctr.buf = nil
 	}
 }
 
