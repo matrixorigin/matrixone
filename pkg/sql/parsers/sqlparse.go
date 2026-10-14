@@ -243,6 +243,12 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, sqlMode str
 	return mysql.SplitSqlByStatementWithSQLMode(ctx, sql, 1, sqlMode)
 }
 
+// SplitSqlByStatementFragmentsWithSQLMode retains raw source spans alongside
+// independently parseable SQL, including synthesized executable-comment ends.
+func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]mysql.SQLFragment, error) {
+	return mysql.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, sqlMode)
+}
+
 // FragmentHasStatement reports whether a semicolon-separated fragment carries an
 // actual statement rather than being blank or comment-only. The scanner skips
 // every comment form (-- , #, //, /* */, /*+ */) so the first token of a

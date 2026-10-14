@@ -669,6 +669,29 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		return chains["db.t"]
 	}
+	t.Run("executable comment statements retain rewrite and source boundaries", func(t *testing.T) {
+		ses := newSession(t, "select id from db.t where id = 1", "")
+		defer ses.Close()
+		sql := "/*!50000 select * from db.t; /* save_result */ select * from db.t */"
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 2)
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
+		fragments, sources, err := schedulingSQLByStatementWithSQLMode(ctx, rewritten, "", false)
+		require.NoError(t, err)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{constant.ExternSql, constant.CloudUserSql}, sources)
+		for _, fragment := range fragments {
+			require.Equal(t, []string{"select id from db.t where id = 1"}, decodeChain(t, fragment))
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, fragment, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		}
+	})
+
 	t.Run("source indexes survive materialization", func(t *testing.T) {
 		ses := newSession(t, "select id from db.t where id = 1", "")
 		defer ses.Close()
