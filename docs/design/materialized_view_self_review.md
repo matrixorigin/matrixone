@@ -217,3 +217,11 @@ Eight package suites, 30 repeated root cases, refreshed configured lint/vet,
 137 native BVT statements, 67 main MV checks and 180 causal two-CN checks pass.
 No unresolved blocker for this correction; current-head full CI and the existing
 Draft production-release gates remain separately tracked.
+
+Final main alignment at `f02952f7bf9c3294d5cb7876a07888d2380d48a9`: clean
+merge, complete compile and plan suites pass, configured lint reports zero
+issues. Both MV gates and main's ordinary-view admission are retained. One
+redundant, identical empty-index early return is removed; the retained return
+has the same no-op contract and owning-suite evidence is semantically valid.
+Native evidence reuse is bounded to the unchanged non-ODKU/non-view-replacement
+paths, as recorded in the CI triage document. No unresolved merge blocker.

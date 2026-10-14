@@ -229,3 +229,12 @@ scripts, with zero failed/ignored/abnormal statements. The native MV suite passe
 one-million-row performance observations keep their historical SHA; the current
 10,000-row run is diagnostic evidence. New full CI must be evaluated at the
 pushed correction head.
+
+The follow-up main merge at `f02952f7bf9c3294d5cb7876a07888d2380d48a9` is clean.
+Both complete compile and plan suites pass again. Its delta affects ordinary
+view replacement admission and primary-key ODKU binding/partition locking;
+MV-only admission remains aligned and protocol 112 remains main's latest.
+The native MV/JSON/NULLIF fixtures contain no ODKU or ordinary-view replacement,
+so their relevant execution branches are unchanged and their evidence is reused.
+Configured compile/plan lint is refreshed for this integration. Full CI remains
+separate and must be read at the final pushed head.
