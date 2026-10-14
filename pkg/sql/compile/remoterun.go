@@ -2297,8 +2297,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
 	}
-	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
-		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 113")
+	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
+		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 114")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
