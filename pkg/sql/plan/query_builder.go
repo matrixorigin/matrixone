@@ -1514,8 +1514,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
+			inputType := col.Typ
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.ExternScan != nil &&
+				node.ExternScan.Type == int32(plan.ExternType_LOAD) {
+				inputType = loadTimeInputType(node.ExternScan.Format, inputType)
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
+				Typ: inputType,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1528,8 +1533,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		if remapping.preserveRowCount && len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
 			remapping.addColRef(internalRemapping.localToGlobal[0])
+			inputType := node.TableDef.Cols[0].Typ
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.ExternScan != nil &&
+				node.ExternScan.Type == int32(plan.ExternType_LOAD) {
+				inputType = loadTimeInputType(node.ExternScan.Format, inputType)
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.TableDef.Cols[0].Typ,
+				Typ: inputType,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,

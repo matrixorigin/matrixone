@@ -136,6 +136,31 @@ func ParseTime(s string, scale int32) (Time, error) {
 	return parseTime(s, scale, nil, nil)
 }
 
+// TruncateTemporalFractionForParse discards excess digits only from a complete
+// trailing fractional field. Malformed suffixes remain intact for validation.
+// It does not parse the value or apply a public temporal domain limit.
+func TruncateTemporalFractionForParse(s string, scale int32) string {
+	s = strings.TrimSpace(s)
+	dot := strings.LastIndexByte(s, '.')
+	if dot < 0 {
+		return s
+	}
+	end := dot + 1
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == dot+1 || end != len(s) {
+		return s
+	}
+	if end-dot-1 <= int(scale) {
+		return s
+	}
+	if scale == 0 {
+		return s[:dot]
+	}
+	return s[:dot+1+int(scale)]
+}
+
 // parseTime optionally reports whether syntactically valid TIME input exceeds
 // MatrixOne's internal representation. The public ParseTime error remains a
 // *moerr.Error so existing callers retain its classification contract.
