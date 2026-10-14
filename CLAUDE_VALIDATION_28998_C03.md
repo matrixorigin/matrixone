@@ -227,3 +227,14 @@ P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch
 - **失败保留与修复界限**：parser noop冲突编译、upgrade旧112夹具失败profile（仅夹具升级至113）、lint首轮包加载10m超时退出4完整保存，不计成功；只终止该失败lint在本worktree的精确PPID1孤儿compiler61033，未碰其它任务。初次BVT被17GiB准入拒绝，未运行断言。公开首轮**2809/2807/1失败/1原ignore**、driver91.50s exit1完整保存：第三处native_defaults.raw SHOW oracle仍binary；仅纠正该NULL单元格，保留两处information_schema binary/binary及所有字符/generated控制。另两处explicit_binary SHOW单元格同合同纠正；无golden重生成/SQL或数据改动。修复后完整双轮闭包成功，不隐藏首轮。
 - **资源/交付**：16GiB reserve/>17GiB准入不变。仅经hash/mtime/完整活动root importcfg及response pins/open-handle复核回收再生Go archive；所有逻辑字节与实测物理余量分开记录，空候选安全拒绝，不调用bare lsof。保留source/WIP/database/native/module/evidence/worktree及其它进程。原PR ready历史不改，正常merge commit/普通push；私有TODO/driver/report/profile/cache/mirror/self-review不提交。远端Linux绿与BLOCKED门尚未确认，单次交付SHA/mergeability核验不替代CI终态。
 - **冻结输入纠正**：最终父对象校验发现初始记录2ce4不是实际MERGE_HEAD；实际fcad62a8ff是其直接子，只有已在本轮全部source/owner输入中的ADD COLUMN列表grammar/parser/32行测试。完整阅读该差分，原TestAlterAddParenthesizedColumns已在完整parser包PASS；源码/测试未再变。按精确父对象重跑descriptor、AST paths/coverage（AST列表完全相同、仍609/756）及14包静态均PASS，修正文档；不把错误父对象记录当验收。
+
+
+## CI 后续修复：跨 CN 普通读取因果边界（95f9 起点）
+
+- 远端精确输入：`95f9d05305b2bb4369d03914a66b8973bb68a9b2`，run `38512534886` / coverage job `115685024687`。诊断 artifact `11871971761` 确认 `TestDatabaseDefaultsTwoCNPreparedFreshness` 原第137行期望2、实际0；其余 coverage 失败事件是同一包的终态。379秒准入等待不等于 SQL 超时失败。
+- 修复仅涉及 `pkg/tests/sqlintegration/multicn/database_defaults_test.go`：CN1 INSERT→CN0 SELECT，以及两CN提交→CN1代际读取，使用实际 `GetLatestCommitTS()` 与现有 `WaitLogTailAppliedAt()` 建立因果边界，并断言返回 snapshot 严格晚于提交。每次等待有10秒子预算，继承原120秒上下文；失败仍直接终止，不重试、不 sleep。
+- **保留产品新鲜度的原测试强度**：ALTER DATABASE→prepared EXECUTE 之间没有插入屏障；text/binary协议、metadata、比较结果2、version恰好+2、取消清理和同名identity替换全部保持原断言。没有生产代码、协议、SQL/data/result修改。
+- 本地 Go1.27.1/native CGo：完整 multicn 包 `-count=3 -covermode=atomic` PASS / exit0，15个top-level及45个含子用例PASS事件，包终态115.626秒；原失败测试分别6.10、6.16、7.31秒。vet、增量lint及diff whitespace检查通过。端口排除租约已释放，资格driver终态完成。
+- 该包仅含测试代码，coverprofile只有 `mode: atomic` 头，**明确排除为覆盖证据**；首次要求非空profile的资格校验拒绝保留，不将其冒充生产覆盖率。本次新增生产可执行token为0；既有生产输入完全不变，因此不扩张上一轮严格609/756=80.56%或race/restart/upgrade/public BVT的资格范围。未重新跑完整Linux coverage。
+- 被取消的普通UT/PROXY不算成功或产品失败；PROXY诊断日志未见panic/fatal/data-race签名，但不是完整测试通过证明。CI Required失败是门禁汇总结果。修复交付后远端Linux green仍须终态证据，不能从本地PASS推断。
+- 本轮未合并新上游：fetch所得 `mo/main=2e139d84bf8ad297fd3c08782c5b9c113213416d` 留作上下文；当前请求限CI修复，不扩大为11个新上游提交的维护重验。

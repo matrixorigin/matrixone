@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -54,6 +55,23 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 		return conn
 	}
 	writer, reader, competingWriter := open(0), open(1), open(1)
+	// 跨 CN 的普通数据读取须显式越过写入端的提交边界；SQL 返回成功
+	// 不代表另一 CN 的 logtail 已应用。此屏障不用于 prepared DDL 的
+	// freshness 检查，后者仍必须由产品的锁时校验保证。
+	waitCrossCN := func(writerIndex, readerIndex int) {
+		t.Helper()
+		writerCN, err := cluster.GetCNService(writerIndex)
+		require.NoError(t, err)
+		readerCN, err := cluster.GetCNService(readerIndex)
+		require.NoError(t, err)
+		frontier := writerCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty(), "writer must publish a commit timestamp")
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		snapshot, err := readerCN.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(snapshot), "reader snapshot must advance past the writer commit")
+	}
 	exec := func(conn *sql.Conn, statement string) {
 		t.Helper()
 		_, err := conn.ExecContext(ctx, statement)
@@ -131,6 +149,7 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 			}
 			// 实际比较必须来自执行时依赖，而非仅改展示。
 			exec(reader, "insert into defaults_two_cn."+table+" values ('a'),('A')")
+			waitCrossCN(1, 0)
 			var matched int
 			require.NoError(t, writer.QueryRowContext(ctx,
 				"select count(*) from defaults_two_cn."+table+" where v='a'").Scan(&matched))
@@ -179,6 +198,7 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 	for _, err := range writerErrors {
 		require.NoError(t, err)
 	}
+	waitCrossCN(0, 1)
 	var after uint64
 	require.NoError(t, reader.QueryRowContext(ctx, versionSQL).Scan(&after))
 	require.Equal(t, before+2, after)
