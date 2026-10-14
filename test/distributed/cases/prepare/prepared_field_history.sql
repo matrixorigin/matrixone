@@ -308,6 +308,25 @@ SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
 DEALLOCATE PREPARE p_field_history;
 
+-- An explicit NULL window default is not an omitted default declaration.
+-- NULL-only wrapped values do not contribute their inferred BLOB to CONCAT_WS.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_null_f, FIELD(CASE WHEN ? THEN LEAD(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lead_null_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_lower_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',REVERSE(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_reverse_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',CONCAT(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_concat_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_null_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_lower_f, FIELD(CASE WHEN ? THEN CONCAT_WS(_binary '''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_binary_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',CAST(NULL AS BINARY),?) ELSE NULL END,''A'',''a'') AS ws_declared_f';
+SET @field_condition = '1', @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
@@ -396,6 +415,23 @@ DEALLOCATE PREPARE p_field_history;
 SET SESSION div_precision_increment = @field_old_div_precision;
 SET SESSION sql_mode = @field_old_sql_mode;
 
+-- A rejected parameter count must not publish numeric modes or erase history.
+SET SESSION sql_mode = '';
+SET SESSION div_precision_increment = 4;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END,''A'',''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+EXECUTE p_field_history USING @field_condition;
+EXECUTE p_field_history USING @field_condition,@field_value;
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition;
+EXECUTE p_field_history USING @field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+SET SESSION div_precision_increment = @field_old_div_precision;
 SET @field_old_locale = @@lc_time_names;
 SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
 SET @field_old_auto_mode = @@enable_vector_auto_mode_by_default;

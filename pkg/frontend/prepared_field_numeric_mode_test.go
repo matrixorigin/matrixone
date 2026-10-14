@@ -39,6 +39,8 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 		{"static unsigned", "sql_mode", "cast(? as unsigned)-cast(1 as unsigned)", "", "NO_UNSIGNED_SUBTRACTION", false, true, false},
 		{"runtime unsigned", "sql_mode", "0-?", "", "NO_UNSIGNED_SUBTRACTION", true, true, false},
 		{"runtime unsigned early rejection", "sql_mode", "0-?", "", "NO_UNSIGNED_SUBTRACTION", true, true, true},
+		{"unrelated unsigned mode early rejection", "sql_mode", "?", "", "NO_UNSIGNED_SUBTRACTION", false, false, true},
+		{"unrelated precision early rejection", "div_precision_increment", "?", int64(4), int64(8), false, false, true},
 		{"decimal scale changes", "div_precision_increment", "cast(? as decimal(10,2))/cast(1 as decimal(10,2))", int64(4), int64(8), false, true, false},
 		{"decimal scale capped", "div_precision_increment", "cast(? as decimal(65,30))/cast(1 as decimal(65,30))", int64(4), int64(8), false, false, false},
 	} {
@@ -115,7 +117,13 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 				earlyRejection = true
 				execute(false, 0, false)
 				require.Same(t, snapshot, prepared.fieldTypes)
-				require.True(t, prepared.fieldTypesResetPending)
+				require.False(t, prepared.fieldTypesResetPending)
+				// Unknown contracts must be compared on retry, not discarded.
+				if tc.setting == "sql_mode" {
+					require.False(t, prepared.NoUnsignedSubtraction)
+				} else {
+					require.Equal(t, tc.before, prepared.divPrecisionIncrement)
+				}
 				earlyRejection = false
 			}
 			writer := ec.resper.MysqlRrWr().(*testMysqlWriter)
@@ -140,7 +148,7 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 				require.Same(t, snapshot, prepared.fieldTypes)
 			}
 			require.False(t, prepared.fieldTypesResetPending)
-			if tc.setting == "sql_mode" {
+			if tc.setting == "sql_mode" && tc.changed {
 				require.Equal(t, int32(types.T_uint64), before.Id)
 				require.Equal(t, int32(types.T_int64), after.Id)
 			} else if tc.changed {

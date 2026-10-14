@@ -1512,7 +1512,6 @@ func initExecuteStmtParamWithResolverInSession(
 		previousNumericContext = function.WithNoUnsignedSubtraction(reqCtx, prepareStmt.NoUnsignedSubtraction)
 		previousNumericContext = function.WithDivPrecisionIncrement(previousNumericContext, int32(prepareStmt.divPrecisionIncrement))
 	}
-	numericContractChecked := previousNumericContext == nil
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false
 	rebuildCommitted := false
@@ -1525,7 +1524,7 @@ func initExecuteStmtParamWithResolverInSession(
 			// pair the new plan with the previous wire metadata.
 			prepareStmt.needsRebuild = true
 			prepareStmt.compileNeedsRebuild = true
-			if resetFieldTypes || !numericContractChecked {
+			if resetFieldTypes {
 				prepareStmt.fieldTypesResetPending = true
 			}
 		}
@@ -1596,11 +1595,6 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
-		prepareStmt.BoolSumAvg = currentBoolSumAvg
-		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
-		prepareStmt.divPrecisionIncrement = currentDivPrecisionIncrement
-		prepareStmt.sqlModeFlagsSet = true
-		prepareStmt.divPrecisionIncrementSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -1896,7 +1890,6 @@ func initExecuteStmtParamWithResolverInSession(
 						return candidateErr
 					}
 					changed := preparedFieldNumericModeAffectsTypes(candidate.Plan, previousNumericContext, reqCtx, boolModeMismatch)
-					numericContractChecked = true
 					if changed {
 						resetFieldTypes = true
 						bound = candidate
@@ -2008,6 +2001,16 @@ func initExecuteStmtParamWithResolverInSession(
 		// succeed. A rejected execution leaves the previous snapshot intact.
 		prepareStmt.fieldTypes = fieldTypes
 		prepareStmt.fieldTypesResetPending = false
+	}
+	if needRebuild {
+		// These describe the last successfully bound numeric environment, not
+		// merely the rebuilt seed plan. An early parameter/binding rejection
+		// must leave the old modes available for contract comparison on retry.
+		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
+		prepareStmt.divPrecisionIncrement = currentDivPrecisionIncrement
+		prepareStmt.sqlModeFlagsSet = true
+		prepareStmt.divPrecisionIncrementSet = true
 	}
 	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil

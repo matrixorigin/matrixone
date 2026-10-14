@@ -41,8 +41,12 @@ type preparedFieldStringDomain struct {
 	// A transparent value wrapper is not a bare marker, but relational and
 	// function consumers still use its operand's parameter declaration.
 	parameterDeclaration bool
-	history              bool
-	resolved             types.Type
+	// NULL/unspecified-marker peers can infer BLOB without a declared binary
+	// contributor. Value wrappers preserve it; CONCAT_WS does not consume it
+	// as an explicit binary declaration (unlike CAST(NULL AS BINARY)).
+	inferredBinary bool
+	history        bool
+	resolved       types.Type
 }
 
 // This resolver runs while logical binding tags still identify their owners.
@@ -201,11 +205,19 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	case "coalesce", "greatest", "least":
 		values = fn.Args
 	case "concat_ws":
-		// Unlike CONCAT, NULL value arguments are skipped and do not supply
-		// the composite NULL declaration. Keep its existing inference rule.
+		// NULL-derived BLOB domains are not binary contributors, even through
+		// value wrappers. Keep explicit binary declarations and the separator.
 		previous := r.defaultMarker
 		r.defaultMarker = fieldStringText
-		result = r.common(fn.Args)
+		domains := make([]preparedFieldStringDomain, len(fn.Args))
+		for i, arg := range fn.Args {
+			domains[i] = r.expr(arg)
+			if i > 0 && domains[i].inferredBinary {
+				domains[i].kind = fieldStringNull
+			}
+		}
+		result = r.commonDomains(domains)
+		result.inferredBinary = false
 		r.defaultMarker = previous
 		result.resolved = types.Type{}
 		if result.kind != fieldStringBinary {
@@ -230,11 +242,13 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		return result
 	case "lag", "lead":
 		if len(fn.Args) > 0 {
-			domains := []preparedFieldStringDomain{materializedFieldStringDomain(r.expr(fn.Args[0]))}
 			if len(fn.Args) > 2 {
-				domains = append(domains, materializedFieldStringDomain(r.expr(fn.Args[2])))
+				// An explicit default supplies the peer declaration, including
+				// NULL. Only the omitted-default form independently materializes
+				// the value marker's default text declaration.
+				return r.common([]*Expr{fn.Args[0], fn.Args[2]})
 			}
-			return r.commonDomains(domains)
+			return materializedFieldStringDomain(r.expr(fn.Args[0]))
 		}
 	case "any_value":
 		if len(fn.Args) > 0 {
@@ -308,6 +322,7 @@ func fieldStringArgumentDeclaration(domain preparedFieldStringDomain) preparedFi
 		domain = materializedFieldStringDomain(domain)
 	}
 	if domain.kind == fieldStringNull && domain.parameter && !domain.directParameter {
+		domain.inferredBinary = true
 		domain.kind = fieldStringBinary
 	}
 	return domain
@@ -339,9 +354,11 @@ func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStrin
 	}
 	if peer.kind == fieldStringNull {
 		peer.kind = fieldStringBinary
+		peer.inferredBinary = true
 		peer.resolved = types.Type{}
 	}
 	var numeric []types.Type
+	inferredBinary, declaredBinary := false, false
 	for _, domain := range domains {
 		if domain.kind == fieldStringMarker {
 			domain = peer
@@ -354,11 +371,16 @@ func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStrin
 				numeric = append(numeric, domain.resolved)
 			}
 		default:
+			if domain.kind == fieldStringBinary {
+				inferredBinary = inferredBinary || domain.inferredBinary
+				declaredBinary = declaredBinary || !domain.inferredBinary
+			}
 			if result.kind == fieldStringNull || domain.kind == fieldStringBinary {
 				result.kind = domain.kind
 			}
 		}
 	}
+	result.inferredBinary = inferredBinary && !declaredBinary
 	if result.kind != fieldStringNull || len(numeric) == 0 {
 		return result
 	}
