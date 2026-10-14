@@ -30,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 )
 
 func starlarkOutputTestSession(t *testing.T) *Session {
@@ -153,32 +154,97 @@ func TestStarlarkOutputDeclaredTypes(t *testing.T) {
 
 func TestStarlarkVectorINOUTReuse(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		typ  string
-		want any
+		name, typ, literal string
+		want               any
 	}{
-		{"vecf32", "vecf32(2)", []float32{0, 0}},
-		{"vecf64", "vecf64(2)", []float64{0, 0}},
+		{"vecf32", "vecf32(2)", "[0,0]", []float32{0, 0}},
+		{"vecf64", "vecf64(2)", "[0,0]", []float64{0, 0}},
+		{"vecbf16", "vecbf16(2)", "[1.5,-2]", types.Float32ToBF16Slice([]float32{1.5, -2})},
+		{"vecf16", "vecf16(2)", "[1.5,-2]", types.Float32ToFloat16Slice([]float32{1.5, -2})},
+		{"vecint8", "vecint8(2)", "[-128,127]", []int8{-128, 127}},
+		{"vecuint8", "vecuint8(2)", "[0,255]", []uint8{0, 255}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := starlarkOutputTestSession(t)
 			interp, _ := starlarkOutputTestInterpreter(t, ses, "inout v "+tc.typ)
-			require.NoError(t, ses.SetUserDefinedVar("v", "[0,0]", ""))
-			for call := 0; call < 2; call++ {
-				require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false))
+			require.NoError(t, ses.SetUserDefinedVar("v", tc.literal, ""))
+			for call := 0; call < 3; call++ {
+				require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false), "call %d", call+1)
 				got, err := ses.GetUserDefinedVar("v")
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got.Value)
 			}
+			// Failure after consuming a typed vector must preserve that caller and allow reuse.
+			require.ErrorContains(t, interp.ExecuteStarlark(`out_v = "[1,2,3]"`, "test", false), "expected vector dimension 2 != actual dimension 3")
+			got, err := ses.GetUserDefinedVar("v")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.Value)
+			require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false))
+			got, err = ses.GetUserDefinedVar("v")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.Value)
 		})
 	}
 }
 
 func TestStarlarkNilVectorInputRemainsUnsupported(t *testing.T) {
-	for _, value := range []any{[]float32(nil), []float64(nil)} {
-		_, err := convertToStarlarkValue(context.Background(), value)
-		require.Error(t, err)
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"vecf32", []float32(nil)}, {"vecf64", []float64(nil)},
+		{"vecbf16", []types.BF16(nil)}, {"vecf16", []types.Float16(nil)},
+		{"vecint8", []int8(nil)}, {"vecuint8", []uint8(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := convertToStarlarkValue(context.Background(), tc.value)
+			require.ErrorContains(t, err, "type slice is not a supported starlark type")
+		})
 	}
+}
+
+func TestStarlarkVectorInputOwnsString(t *testing.T) {
+	testStarlarkVectorString(t, "vecf32", []float32{1.5, -2}, "[1.5, -2]")
+	testStarlarkVectorString(t, "vecf64", []float64{1.5, -2}, "[1.5, -2]")
+	testStarlarkVectorString(t, "vecbf16", types.Float32ToBF16Slice([]float32{1.5, -2}), "[1.5, -2]")
+	testStarlarkVectorString(t, "vecf16", types.Float32ToFloat16Slice([]float32{1.5, -2}), "[1.5, -2]")
+	testStarlarkVectorString(t, "vecint8", []int8{-128, 127}, "[-128, 127]")
+	testStarlarkVectorString(t, "vecuint8", []uint8{0, 255}, "[0, 255]")
+}
+
+func testStarlarkVectorString[T types.ArrayElement](t *testing.T, name string, values []T, want string) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		got, err := convertToStarlarkValue(context.Background(), values)
+		require.NoError(t, err)
+		require.Equal(t, starlark.String(want), got)
+		clear(values)
+		require.Equal(t, starlark.String(want), got, "serialization must own its string after input mutation")
+		empty, err := convertToStarlarkValue(context.Background(), []T{})
+		require.NoError(t, err)
+		require.Equal(t, starlark.String("[]"), empty)
+	})
+}
+
+func TestStarlarkVectorInputScalarControls(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  starlark.Value
+	}{
+		{"[1,2]", starlark.String("[1,2]")}, {"a\x00\x00", starlark.String("a\x00\x00")},
+		{int64(-7), starlark.MakeInt(-7)}, {uint64(7), starlark.MakeUint64(7)},
+		{1.25, starlark.Float(1.25)}, {true, starlark.True},
+	} {
+		got, err := convertToStarlarkValue(context.Background(), tc.value)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
+	// uint8 is the Go byte alias; non-nil []byte follows the required uint8 vector path.
+	got, err := convertToStarlarkValue(context.Background(), []byte{1, 2})
+	require.NoError(t, err)
+	require.Equal(t, starlark.String("[1, 2]"), got)
+	_, err = convertToStarlarkValue(context.Background(), []int16{1, 2})
+	require.Error(t, err)
 }
 
 func TestStarlarkOutputAtomicityAndReuse(t *testing.T) {

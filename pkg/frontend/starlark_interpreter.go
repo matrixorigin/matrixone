@@ -56,6 +56,22 @@ func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) 
 		if v != nil {
 			return starlark.String(types.ArrayToString[float64](v)), nil
 		}
+	case []types.BF16:
+		if v != nil {
+			return starlark.String(types.ArrayToString[types.BF16](v)), nil
+		}
+	case []types.Float16:
+		if v != nil {
+			return starlark.String(types.ArrayToString[types.Float16](v)), nil
+		}
+	case []int8:
+		if v != nil {
+			return starlark.String(types.ArrayToString[int8](v)), nil
+		}
+	case []uint8:
+		if v != nil {
+			return starlark.String(types.ArrayToString[uint8](v)), nil
+		}
 	}
 
 	val := reflect.ValueOf(v)
