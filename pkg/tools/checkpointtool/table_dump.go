@@ -2937,31 +2937,62 @@ func checkpointJSONLoadText(value []byte) ([]byte, error) {
 	if _, err := bytejson.StorageCompatibleDataSizeWithLimit(context.Background(), document, math.MaxInt); err != nil {
 		return nil, err
 	}
-	var validate func(bytejson.ByteJson) error
-	validate = func(node bytejson.ByteJson) error {
+	var text bytes.Buffer
+	var render func(bytejson.ByteJson) error
+	render = func(node bytejson.ByteJson) error {
 		switch node.Type {
 		case bytejson.TpCodeObject:
+			text.WriteByte('{')
 			for i := 0; i < node.GetElemCnt(); i++ {
-				if err := validate(node.GetObjectVal(i)); err != nil {
+				if i > 0 {
+					text.WriteString(", ")
+				}
+				key, err := bytejson.CreateByteJSON(string(node.GetObjectKey(i)))
+				if err != nil {
+					return err
+				}
+				encodedKey, err := key.MarshalJSON()
+				if err != nil {
+					return err
+				}
+				text.Write(encodedKey)
+				text.WriteString(": ")
+				if err := render(node.GetObjectVal(i)); err != nil {
 					return err
 				}
 			}
+			text.WriteByte('}')
 		case bytejson.TpCodeArray:
+			text.WriteByte('[')
 			for i := 0; i < node.GetElemCnt(); i++ {
-				if err := validate(node.GetArrayElem(i)); err != nil {
+				if i > 0 {
+					text.WriteString(", ")
+				}
+				if err := render(node.GetArrayElem(i)); err != nil {
 					return err
 				}
 			}
+			text.WriteByte(']')
 		case bytejson.TpCodeLiteral, bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeString:
+			encoded, err := node.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			text.Write(encoded)
+			// LOAD must retain the observable DOUBLE type even when its
+			// shortest value spelling happens to be an integer token.
+			if node.Type == bytejson.TpCodeFloat64 && !bytes.ContainsAny(encoded, ".eE") {
+				text.WriteString(".0")
+			}
 		default:
 			return moerr.NewNotSupportedNoCtx("checkpoint CSV cannot preserve typed JSON scalar")
 		}
 		return nil
 	}
-	if err := validate(document); err != nil {
+	if err := render(document); err != nil {
 		return nil, err
 	}
-	return document.MarshalJSON()
+	return text.Bytes(), nil
 }
 
 func projectCSVRow(values []string, physicalPositions []int) []string {

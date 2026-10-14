@@ -3479,3 +3479,31 @@ func TestCheckpointCSVRejectsTypedJSONLoss(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckpointCSVPreservesJSONDoubleType(t *testing.T) {
+	for _, value := range []float64{1, -1, 0, 1.25, 1e30} {
+		for _, shape := range []any{value, []any{value}, map[string]any{"n": value}} {
+			original, err := bytejson.CreateByteJSON(shape)
+			require.NoError(t, err)
+			raw, err := types.EncodeJson(original)
+			require.NoError(t, err)
+			text, err := checkpointJSONLoadText(raw)
+			require.NoError(t, err)
+			parsed, err := types.ParseStringToByteJson(string(text))
+			require.NoError(t, err)
+			expected, actual := original, parsed
+			if original.Type == bytejson.TpCodeArray {
+				expected = original.GetArrayElem(0)
+				actual = parsed.GetArrayElem(0)
+			}
+			if original.Type == bytejson.TpCodeObject {
+				expected = original.GetObjectVal(0)
+				actual = parsed.GetObjectVal(0)
+			}
+			assert.Equal(t, bytejson.TpCodeFloat64, actual.Type, "text %s", text)
+			if actual.Type == bytejson.TpCodeFloat64 {
+				assert.Equal(t, expected.GetFloat64(), actual.GetFloat64())
+			}
+		}
+	}
+}
