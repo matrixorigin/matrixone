@@ -70,7 +70,7 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 	offset := 0
 	readLength := func() (uint64, error) {
 		if len(data)-offset < 8 {
-			return 0, fmt.Errorf("truncated TTL constraint length")
+			return 0, moerr.NewInternalErrorNoCtxf("truncated TTL constraint length")
 		}
 		n := binary.BigEndian.Uint64(data[offset : offset+8])
 		offset += 8
@@ -86,17 +86,17 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 		switch kind {
 		case engine.PrimaryKey:
 			if n > uint64(len(data)-offset) {
-				return nil, fmt.Errorf("truncated primary key constraint")
+				return nil, moerr.NewInternalErrorNoCtxf("truncated primary key constraint")
 			}
 			offset += int(n)
 		case engine.RefChildTable:
 			if n > uint64((len(data)-offset)/8) {
-				return nil, fmt.Errorf("truncated child table constraint")
+				return nil, moerr.NewInternalErrorNoCtxf("truncated child table constraint")
 			}
 			offset += int(n) * 8
 		case engine.Index, engine.ForeignKey, engine.StreamConfig:
 			if n > uint64((len(data)-offset)/8) {
-				return nil, fmt.Errorf("invalid constraint item count")
+				return nil, moerr.NewInternalErrorNoCtxf("invalid constraint item count")
 			}
 			for i := uint64(0); i < n; i++ {
 				size, err := readLength()
@@ -104,7 +104,7 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 					return nil, err
 				}
 				if size > uint64(len(data)-offset) {
-					return nil, fmt.Errorf("truncated constraint item")
+					return nil, moerr.NewInternalErrorNoCtxf("truncated constraint item")
 				}
 				if kind == engine.StreamConfig {
 					prop := new(plan.Property)
@@ -116,7 +116,7 @@ func PolicyFromConstraint(data []byte) (*Policy, error) {
 				offset += int(size)
 			}
 		default:
-			return nil, fmt.Errorf("unsupported TTL constraint kind %d", kind)
+			return nil, moerr.NewInternalErrorNoCtxf("unsupported TTL constraint kind %d", kind)
 		}
 	}
 	return FromProperties(props)
@@ -140,7 +140,7 @@ func Discover(ctx context.Context, exec executor.SQLExecutor) ([]Candidate, erro
 			data := cols[5].GetBytesAt(i)
 			p, e := PolicyFromConstraint(data)
 			if e != nil {
-				decodeErr = errors.Join(decodeErr, fmt.Errorf("TTL metadata for account %d table %d: %w", accounts[i], ids[i], e))
+				decodeErr = errors.Join(decodeErr, moerr.NewInternalErrorNoCtxf("TTL metadata for account %d table %d: %v", accounts[i], ids[i], e))
 				continue
 			}
 			if p == nil {
@@ -186,7 +186,9 @@ func isRetryable(err error) bool {
 	err = underlying
 	return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockConflict)
+		moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout)
 }
 func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, now time.Time, batchSize int) (uint64, error) {
 	storedPolicy, err := PolicyFromConstraint(c.Constraint)
@@ -194,7 +196,7 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 		return 0, err
 	}
 	if storedPolicy == nil || *storedPolicy != c.Policy {
-		return 0, fmt.Errorf("TTL candidate policy does not match its durable metadata")
+		return 0, moerr.NewInternalErrorNoCtxf("TTL candidate policy does not match its durable metadata")
 	}
 	sql, err := DeleteSQL(c.Database, c.Table, &c.Policy, now, batchSize)
 	if err != nil {
@@ -247,7 +249,7 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 		})
 		res.Close()
 		if valid != 1 {
-			return fmt.Errorf("TTL source column identity changed for table %d", c.TableID)
+			return moerr.NewInternalErrorNoCtxf("TTL source column identity changed for table %d", c.TableID)
 		}
 		res, err = tx.Exec(sql, opts)
 		if err != nil {
@@ -266,7 +268,7 @@ func deleteBatch(ctx context.Context, exec executor.SQLExecutor, c Candidate, no
 }
 func Run(ctx context.Context, exec executor.SQLExecutor, now time.Time, options WorkerOptions) error {
 	if options.BatchSize <= 0 || options.MaxBatchesPerTable <= 0 || options.TableTimeout <= 0 || options.RunTimeout <= 0 {
-		return fmt.Errorf("invalid TTL worker options")
+		return moerr.NewInternalErrorNoCtxf("invalid TTL worker options")
 	}
 	runCtx, cancel := context.WithTimeout(ctx, options.RunTimeout)
 	defer cancel()
@@ -289,7 +291,7 @@ func Run(ctx context.Context, exec executor.SQLExecutor, now time.Time, options 
 		for batch := 0; batch < options.MaxBatchesPerTable; batch++ {
 			affected, err := DeleteBatch(tableCtx, exec, c, now, options.BatchSize)
 			if err != nil {
-				result = errors.Join(result, fmt.Errorf("TTL account %d table %d: %w", c.AccountID, c.TableID, err))
+				result = errors.Join(result, moerr.NewInternalErrorNoCtxf("TTL account %d table %d", c.AccountID, c.TableID), err)
 				break
 			}
 			if affected < uint64(options.BatchSize) {

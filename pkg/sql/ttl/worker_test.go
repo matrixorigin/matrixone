@@ -31,13 +31,17 @@ import (
 // transaction, be bounded, preserve permanent failures and respect cancellation.
 type retryExecutor struct {
 	executor.SQLExecutor
-	calls  int
-	err    error
-	cancel context.CancelFunc
+	calls        int
+	succeedAfter int
+	err          error
+	cancel       context.CancelFunc
 }
 
 func (e *retryExecutor) ExecTxn(ctx context.Context, _ func(executor.TxnExecutor) error, _ executor.Options) error {
 	e.calls++
+	if e.succeedAfter > 0 && e.calls > e.succeedAfter {
+		return nil
+	}
 	if e.cancel != nil {
 		e.cancel()
 	}
@@ -74,4 +78,41 @@ func TestTTLRetryBoundsAndCancellation(t *testing.T) {
 	options := DefaultWorkerOptions()
 	options.BatchSize = 0
 	require.Error(t, Run(t.Context(), nil, time.Now(), options))
+}
+
+// Lock wait timeouts doom the current transaction, but a new transaction may
+// progress after the competing owner releases its lock. Permanent errors must
+// not be retried, and retries must retain their existing attempt/cancel bounds.
+func TestTTLRetryLockWaitTimeout(t *testing.T) {
+	c := validRetryCandidate(t)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"local", moerr.NewLockWaitTimeoutNoCtx()},
+		{"remote", moerr.NewRemoteLockWaitTimeoutNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			joined := errors.Join(tc.err, errors.New("rollback diagnostic"))
+			require.True(t, isRetryable(joined))
+			retry := &retryExecutor{err: joined, succeedAfter: 1}
+			n, err := DeleteBatch(t.Context(), retry, c, time.Now(), 1)
+			require.NoError(t, err)
+			require.Zero(t, n)
+			require.Equal(t, 2, retry.calls)
+			exhausted := &retryExecutor{err: joined}
+			_, err = DeleteBatch(t.Context(), exhausted, c, time.Now(), 1)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, 8, exhausted.calls)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stopped := &retryExecutor{err: joined, cancel: cancel}
+			_, err = DeleteBatch(ctx, stopped, c, time.Now(), 1)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 1, stopped.calls)
+		})
+	}
+	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, moerr.NewInvalidInputNoCtx("bad policy")} {
+		require.False(t, isRetryable(err))
+	}
 }

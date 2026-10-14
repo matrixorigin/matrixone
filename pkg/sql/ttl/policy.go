@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -62,17 +63,17 @@ func Duration(amount uint64, unit string) (uint64, error) {
 	case "WEEK":
 		multiplier = 604800
 	default:
-		return 0, fmt.Errorf("TTL supports SECOND, MINUTE, HOUR, DAY and WEEK intervals")
+		return 0, moerr.NewInvalidInputNoCtxf("TTL supports SECOND, MINUTE, HOUR, DAY and WEEK intervals")
 	}
 	if amount == 0 || amount > MaxDurationSeconds/multiplier {
-		return 0, fmt.Errorf("TTL interval must be positive and at most 100 years")
+		return 0, moerr.NewInvalidInputNoCtxf("TTL interval must be positive and at most 100 years")
 	}
 	return amount * multiplier, nil
 }
 
 func (p Policy) Validate() error {
 	if p.Version != 1 || p.Column == "" || p.Seqnum > 65535 || p.Seconds == 0 || p.Seconds > MaxDurationSeconds {
-		return fmt.Errorf("invalid TTL policy")
+		return moerr.NewInvalidInputNoCtxf("invalid TTL policy")
 	}
 	return nil
 }
@@ -81,10 +82,10 @@ func Decode(s string) (*Policy, error) {
 	decoder := json.NewDecoder(strings.NewReader(s))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&p); err != nil {
-		return nil, fmt.Errorf("invalid TTL metadata: %w", err)
+		return nil, moerr.NewInvalidInputNoCtxf("invalid TTL metadata: %v", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, fmt.Errorf("invalid trailing TTL metadata")
+		return nil, moerr.NewInvalidInputNoCtxf("invalid trailing TTL metadata")
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -105,7 +106,7 @@ func FromProperties(properties []*plan.Property) (*Policy, error) {
 			continue
 		}
 		if result != nil {
-			return nil, fmt.Errorf("TTL specified more than once")
+			return nil, moerr.NewInvalidInputNoCtxf("TTL specified more than once")
 		}
 		p, err := Decode(prop.Value)
 		if err != nil {
@@ -157,7 +158,7 @@ func ValidateColumn(def *plan.TableDef, p *Policy) error {
 		}
 		break
 	}
-	return fmt.Errorf("TTL requires an existing DATE, DATETIME or TIMESTAMP column with matching identity")
+	return moerr.NewInvalidInputNoCtxf("TTL requires an existing DATE, DATETIME or TIMESTAMP column with matching identity")
 }
 func Clause(p *Policy) string {
 	return fmt.Sprintf("TTL %s + INTERVAL %d SECOND DELETE", sqlquote.Ident(p.Column), p.Seconds)
@@ -171,11 +172,11 @@ func DeleteSQL(database, table string, p *Policy, now time.Time, batchSize int) 
 		return "", err
 	}
 	if batchSize <= 0 {
-		return "", fmt.Errorf("TTL batch size must be positive")
+		return "", moerr.NewInvalidInputNoCtxf("TTL batch size must be positive")
 	}
 	cutoff := now.UTC().Add(-time.Duration(p.Seconds) * time.Second)
 	if cutoff.Year() < 1 || cutoff.Year() > 9999 {
-		return "", fmt.Errorf("TTL cutoff outside supported temporal range")
+		return "", moerr.NewInvalidInputNoCtxf("TTL cutoff outside supported temporal range")
 	}
 	return fmt.Sprintf("DELETE FROM %s WHERE %s <= CAST('%s' AS DATETIME(6)) LIMIT %d", sqlquote.QualifiedIdent(database, table), sqlquote.Ident(p.Column), cutoff.Format("2006-01-02 15:04:05.000000"), batchSize), nil
 }
