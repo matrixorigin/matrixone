@@ -2755,8 +2755,7 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		jsonBytes, null1 := p1.GetStrValue(i)
-		pathBytes, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
+		if null1 {
 			rs.AppendMustNullForBytesResult()
 			continue
 		}
@@ -2770,6 +2769,11 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
 		}
+		pathBytes, null2 := p2.GetStrValue(i)
+		if null2 {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		path, err := types.ParseStringToPath(string(pathBytes))
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid path expression")
@@ -2777,8 +2781,8 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if !path.IsSimple() {
 			return moerr.NewInvalidJSONPathWildcard(proc.Ctx)
 		}
-		val := bj.Query([]*bytejson.Path{&path})
-		if val.IsNull() || val.Type != bytejson.TpCodeObject {
+		val, exists := bj.QuerySimpleNoWrap(&path)
+		if !exists || val.IsNull() || val.Type != bytejson.TpCodeObject {
 			rs.AppendMustNullForBytesResult()
 			continue
 		}

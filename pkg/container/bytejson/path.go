@@ -274,14 +274,14 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	}
 	pg.trimSpace()
 	if pg.tryNext(toKeyLen) == toKey {
-		if pg.pathStr[pg.pos-1] != ' ' {
+		if !unicode.IsSpace(rune(pg.pathStr[pg.pos-1])) {
 			return nil, false
 		}
 		pg.skip(toKeyLen)
 		if !pg.hasNext() {
 			return nil, false
 		}
-		if pg.front() != ' ' {
+		if !unicode.IsSpace(rune(pg.front())) {
 			return nil, false
 		}
 		pg.trimSpace()

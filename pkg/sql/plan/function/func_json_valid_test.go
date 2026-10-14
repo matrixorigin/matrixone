@@ -248,6 +248,7 @@ func TestJsonKeys(t *testing.T) {
 			{name: "array wildcard", path: `$[*]`},
 			{name: "double wildcard", path: `$**.x`},
 			{name: "array range", path: `$[0 to 1]`},
+			{name: "whitespace range", path: "$[0\tto\n1]"},
 		}
 
 		for _, path := range paths {
@@ -306,6 +307,7 @@ func TestJsonKeys(t *testing.T) {
 			{name: "array wildcard", path: `$[*]`},
 			{name: "double wildcard", path: `$**.x`},
 			{name: "array range", path: `$[0 to 1]`},
+			{name: "whitespace range", path: "$[0\tto\n1]"},
 		}
 
 		for _, path := range paths {
@@ -387,6 +389,68 @@ func TestJsonKeys(t *testing.T) {
 		require.ErrorAs(t, err, &moErr)
 		require.Equal(t, moerr.ErrInvalidArg, moErr.ErrorCode())
 	})
+	t.Run("invalid JSON takes precedence over NULL path", func(t *testing.T) {
+		allocatedBefore := proc.Mp().CurrNB()
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), JsonKeys)
+		t.Cleanup(func() {
+			fcTC.Free()
+			require.Equal(t, allocatedBefore, proc.Mp().CurrNB())
+		})
+		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+		_, err := fcTC.DebugRun()
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ErrInvalidArg, moErr.ErrorCode())
+	})
+	t.Run("NULL path validates active document and preserves masks", func(t *testing.T) {
+		for _, constPath := range []bool{false, true} {
+			for _, masked := range []bool{false, true} {
+				t.Run(fmt.Sprintf("const=%v/masked=%v", constPath, masked), func(t *testing.T) {
+					newPath := NewFunctionTestInput
+					if constPath {
+						newPath = NewFunctionTestConstInput
+					}
+					allocatedBefore := proc.Mp().CurrNB()
+					fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"ok":1}`, `not json`}, []bool{false, false}),
+						newPath(types.T_varchar.ToType(), []string{``, ``}, []bool{true, true}),
+					}, NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), JsonKeys)
+					if masked {
+						fcTC = fcTC.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+					}
+					t.Cleanup(func() { fcTC.Free(); require.Equal(t, allocatedBefore, proc.Mp().CurrNB()) })
+					require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+					vec, err := fcTC.DebugRun()
+					if masked {
+						require.NoError(t, err)
+						require.True(t, vec.IsNull(0))
+						require.True(t, vec.IsNull(1))
+					} else {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg))
+						require.Contains(t, err.Error(), "invalid JSON document")
+					}
+				})
+			}
+		}
+	})
+
+	t.Run("simple path does not wrap objects as arrays", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`, `{"a":1}`, `{"a":{"x":1}}`, `[{"x":1}]`, `{"a":[{"x":1}]}`}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[0]`, `$[last]`, `$.a[0]`, `$[0]`, `$.a[0]`}, []bool{false, false, false, false, false}),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, []string{``, ``, ``, mustJsonBinaryString(t, `["x"]`), mustJsonBinaryString(t, `["x"]`)}, []bool{true, true, true, false, false}), JsonKeys)
+		ok, info := fcTC.RunAndFree()
+		require.True(t, ok, info)
+	})
+
 	t.Run("malformed range precedes wildcard validation", func(t *testing.T) {
 		for _, path := range []string{`$[1 to 0]`, `$[2 to 1]`, `$[last to last-1]`} {
 			t.Run(path, func(t *testing.T) {
