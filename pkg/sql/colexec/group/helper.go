@@ -1810,7 +1810,13 @@ func (ctr *container) needAdaptiveSpillForGrowth(
 	if used < 0 {
 		return false, process.ErrExecutionResourceInvalid
 	}
-	limit, err := ctr.memoryGrowthParticipant.RetainedLimit(uint64(used))
+	var stats *process.OperatorStats
+	var check uint64
+	if opAnalyzer != nil {
+		stats = opAnalyzer.GetOpStats()
+		check = uint64(stats.ExtraStats["GroupAdaptiveSpillChecks"])
+	}
+	limit, err := ctr.memoryGrowthParticipant.RetainedLimitWithStats(uint64(used), check, stats)
 	if err != nil {
 		return false, err
 	}

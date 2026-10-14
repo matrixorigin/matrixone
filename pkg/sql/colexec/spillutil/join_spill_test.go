@@ -358,9 +358,10 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	initTestSpillFiles(engine, []*os.File{
 		writeBuildFile(proc, t.Name(), build),
 	}, int64(len(values)))
+	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, result, err := engine.RebuildHashmap(
 		proc,
-		process.NewAnalyzer(0, false, false, "test"),
+		analyzer,
 	)
 	require.NoError(t, err)
 	require.Equal(t, BucketReady, result)
@@ -373,20 +374,28 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, BucketQueueEmpty, result)
 	engine.Cleanup(proc)
+	extra := analyzer.GetOpStats().ExtraStats
+	require.EqualValues(t, 1, extra["JoinSpillRecoveryBuckets"])
+	require.EqualValues(t, 1, extra["JoinSpillRecoveryRecords"])
+	require.EqualValues(t, 1, extra["JoinSpillCopySamples"])
+	require.Positive(t, extra["JoinSpillBuildMapNanos"])
+	engine.Cleanup(proc)
+	require.EqualValues(t, 1, extra["JoinSpillRecoveryRecords"], "cleanup publishes once")
 }
 
 func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	builder := &hashbuild.HashmapBuilder{}
+	var groupingSeen bool
 	builder.Batches.MemSize = 120_000
 
 	spill, adaptive, err := shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, nil,
+		builder, nil, math.MaxInt64, nil, &groupingSeen, nil,
 	)
 	require.NoError(t, err)
 	require.False(t, spill)
 	require.False(t, adaptive)
 
-	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil)
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil, &groupingSeen, nil)
 	require.NoError(t, err)
 	require.True(t, spill)
 	require.False(t, adaptive)
@@ -403,7 +412,7 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	require.NoError(t, err)
 
 	spill, adaptive, err = shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, first,
+		builder, nil, math.MaxInt64, first, &groupingSeen, nil,
 	)
 	require.NoError(t, err)
 	require.True(t, spill)
