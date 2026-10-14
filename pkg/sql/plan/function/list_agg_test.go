@@ -97,6 +97,26 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	}
 }
 
+func TestStatisticalAggBoolEnumResolution(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+		for _, input := range []struct {
+			typ, target types.T
+		}{
+			{types.T_bool, types.T_int8},
+			{types.T_enum, types.T_uint16},
+		} {
+			t.Run(name+"/"+input.typ.String(), func(t *testing.T) {
+				got, err := GetFunctionByName(t.Context(), name, []types.Type{input.typ.ToType()})
+				require.NoError(t, err)
+				casts, shouldCast := got.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.Type{input.target.ToType()}, casts)
+				require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+			})
+		}
+	}
+}
+
 func TestJSONNumericAggResolution(t *testing.T) {
 	for _, name := range []string{
 		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
@@ -120,7 +140,7 @@ func TestJSONNumericAggResolutionRejectsInvalidShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := GetFunctionByName(context.Background(), name, nil)
 			require.Error(t, err)
-			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_bool.ToType()})
+			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_uuid.ToType()})
 			require.Error(t, err)
 		})
 	}
@@ -329,7 +349,7 @@ func TestMySQLNumericAggTypeCheckRejectsAndHandlesSpecialTypes(t *testing.T) {
 	result = mysqlNumericAggTypeCheck([]types.Type{types.T_int64.ToType()})
 	require.Equal(t, succeedMatched, result.status)
 
-	result = mysqlNumericAggTypeCheck([]types.Type{types.T_bool.ToType()})
+	result = mysqlNumericAggTypeCheck([]types.Type{types.T_uuid.ToType()})
 	require.Equal(t, failedAggParametersWrong, result.status)
 }
 
