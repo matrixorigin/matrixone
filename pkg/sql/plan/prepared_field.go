@@ -107,6 +107,7 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 				peer := r.expr(source.peer)
 				if peer.kind == fieldStringBinary {
 					result.kind = fieldStringBinary
+					result.inferredBinary = peer.inferredBinary
 				} else if peer.kind == fieldStringOther && peer.resolved.Oid != types.T_any {
 					// NULLIF's comparison also supplies a bare marker's numeric
 					// declaration. A composite first operand keeps its own domain.

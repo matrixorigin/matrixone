@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -191,6 +192,105 @@ func TestPreparedFieldWindowDefaultParameters(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPreparedFieldRetainedProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		expr   string
+		peer   bool
+		binary bool
+	}{
+		{"case when ? then concat_ws('',nullif(?,lower(coalesce(?,null)))) else null end", true, false},
+		{"case when ? then concat_ws('',nullif(?,cast(? as binary(1)))) else null end", true, true},
+		{"case when ? then concat_ws('',nullif(coalesce(?,null),lower(coalesce(?,null)))) else null end", true, false},
+		{"concat_ws('',case when ? then lower(coalesce(?,null)) else null end)", false, false},
+		{"concat_ws('',case when ? then lower(coalesce(?,null)) else _binary '' end)", false, true},
+		{"concat_ws('',case when ? then (case when true then lower(coalesce(?,null)) else null end) else null end)", false, false},
+		{"concat_ws('',case when ? then elt(1,coalesce(?,null)) else null end)", false, false},
+	} {
+		for _, textCondition := range []bool{false, true} {
+			name := "/numeric"
+			if textCondition {
+				name = "/text"
+			}
+			t.Run(tc.expr+name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select field("+tc.expr+",'A','a')", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				var snapshot *PreparedFieldTypes
+				for _, oid := range []types.T{types.T_any, types.T_varchar, types.T_blob} {
+					condition, value, peer := types.T_int64.ToType(), any("a"), any("x")
+					var c any = int64(1)
+					if textCondition {
+						condition, c = types.T_varchar.ToType(), "1"
+					}
+					if oid == types.T_any {
+						value, peer = nil, nil
+					}
+					bindings := []PreparedSourceBinding{{Position: 0, Type: condition}, {Position: 1, Type: oid.ToType()}}
+					values := []any{ParamValue{Value: c, SourceType: condition, HasSourceType: true}, ParamValue{Value: value, SourceType: oid.ToType(), HasSourceType: true}}
+					if tc.peer {
+						bindings = append(bindings, PreparedSourceBinding{Position: 2, Type: oid.ToType()})
+						values = append(values, ParamValue{Value: peer, SourceType: oid.ToType(), HasSourceType: true})
+					}
+					prior := snapshot
+					var facts map[int]preparedFieldCaseType
+					if prior != nil {
+						facts = maps.Clone(prior.cases)
+					}
+					ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					require.NoError(t, err)
+					require.NotNil(t, bound.FieldTypes)
+					if prior != nil {
+						require.Same(t, prior, bound.FieldTypes)
+						require.Equal(t, facts, prior.cases, "binding must not mutate published facts")
+					}
+					snapshot = bound.FieldTypes
+					for _, fact := range snapshot.cases {
+						require.Equal(t, !tc.peer && !tc.binary, fact.inferredBinary)
+					}
+					if oid != types.T_any {
+						field := findPlanFunctionExpr(bound.Plan, "field")
+						require.NotNil(t, field)
+						require.Equal(t, tc.binary, types.StaticStringDomain(makeTypeByPlan2Expr(field.GetF().Args[0])) == types.StringDomainBinary)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPreparedFieldProvenanceReprepare(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select field(concat_ws('',case when ? then lower(coalesce(?,null)) else null end),'A','a')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	var snapshot *PreparedFieldTypes
+	for i := range 2 {
+		condition, source := types.T_varchar, types.T_any
+		var c, value any = "1", nil
+		if i == 1 {
+			condition, source, c, value = types.T_int64, types.T_blob, int64(1), "a"
+		}
+		bindings := []PreparedSourceBinding{{Position: 0, Type: condition.ToType()}, {Position: 1, Type: source.ToType()}}
+		values := []any{ParamValue{Value: c, SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
+		ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
+		bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+		require.NoError(t, err)
+		require.NotNil(t, bound.FieldTypes)
+		require.Len(t, bound.FieldTypes.cases, 1)
+		require.Equal(t, i == 0, bound.FieldTypes.cases[0].inferredBinary)
+		if snapshot != nil {
+			require.NotSame(t, snapshot, bound.FieldTypes)
+			require.Equal(t, snapshot.cases[0].result, bound.FieldTypes.cases[0].result, "provenance can change without changing the declaration type")
+			require.Greater(t, bound.FieldTypes.Revision(), snapshot.Revision())
+			require.True(t, snapshot.cases[0].inferredBinary, "reprepare must not mutate the old declaration provenance")
+		}
+		snapshot = bound.FieldTypes
 	}
 }
 
