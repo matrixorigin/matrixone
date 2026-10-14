@@ -420,17 +420,28 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 		opts)
 }
 
+// autoColumnPolicyTableKey redirects only the table-metadata half of a reset
+// read. TRUNCATE has already replaced the old mo_columns rows, but its allocator
+// rows remain until Reset migrates them. The new physical table owns the
+// columns.
+type autoColumnPolicyTableKey struct{}
+
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) ([]AutoColumn, error) {
+	policyTableID := tableID
+	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
+		policyTableID = replacement
+	}
 	// A column named __mo_fake_pk_col alone does not establish ownership: legacy
 	// CREATE accepts a user-visible column with that name. Confirm, in this same
 	// snapshot, a single hidden catalog column with that name -- only then is it
 	// the allocator-owned internal fake primary key whose value must not surface
-	// as LAST_INSERT_ID (#29903).
+	// as LAST_INSERT_ID (#29903). RESET resolves ownership against the
+	// replacement table, while still reading allocator offsets from the original.
 	internalSQL := fmt.Sprintf(`(select count(*) = 1 and max(att_is_hidden) = 1 from mo_columns where att_relname_id = %d and attname = '%s')`,
-		tableID, sqlquote.EscapeString(catalog.FakePrimaryKeyColName))
+		policyTableID, sqlquote.EscapeString(catalog.FakePrimaryKeyColName))
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step, %s as fake_pk_hidden from %s where table_id = %d order by col_index`,
 		internalSQL,
 		incrTableName,

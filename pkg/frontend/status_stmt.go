@@ -344,9 +344,9 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetLastInsertID()
-			if execCtx.proc.GetLastInsertID() != 0 {
-				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
 			}
 		case *tree.CreateDatabase:
 			if databaseWasCreated(execCtx.runResult) {

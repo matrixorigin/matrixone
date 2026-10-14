@@ -4826,6 +4826,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
+		// The process is reused for every statement in a multi-statement
+		// COM_QUERY.  The generated-key field belongs to this statement's OK
+		// packet, so clear it before executing each statement while leaving the
+		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
+		proc.SetStatementLastInsertID(0)
 		execCtx.authorizationSnapshot = timestamp.Timestamp{}
 		execCtx.prepareStmt = nil
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)

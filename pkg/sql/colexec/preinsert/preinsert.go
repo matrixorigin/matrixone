@@ -509,14 +509,15 @@ retryInsertValues:
 	}
 
 	// A zero return means this table generated no user-visible auto-increment
-	// value for the statement -- either nothing was generated, or only the
-	// allocator-owned hidden fake primary key MO appends to a PK-less table
-	// (the hidden fulltext/vector index tables among them) was. Publishing it
-	// would clobber the base table's real key with 0, or, before the
-	// incrservice fix, with the hidden key's own value (#29903). Only a
-	// non-zero, user-visible value becomes LAST_INSERT_ID.
+	// value: nothing was generated, or only the hidden fake primary key of a
+	// PK-less table (the hidden fulltext/vector index tables among them) was
+	// (#29903). It publishes nothing, so it neither clobbers the base table's
+	// value nor reports a value the statement did not generate. A generated
+	// value becomes this statement's OK-packet insert id and the
+	// session-visible LAST_INSERT_ID.
 	if lastInsertValue != 0 {
 		proc.SetLastInsertID(lastInsertValue)
+		proc.SetStatementLastInsertID(lastInsertValue)
 	}
 	return nil
 }

@@ -2056,3 +2056,71 @@ func TestInsertValuesExcludesInternalFakePKFromLastInsertID(t *testing.T) {
 			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0], "fake PK still populated")
 		})
 }
+
+// ownershipStore models the SQL store's ownership read over committed rows: a column is internal only
+// when the table GetColumns resolves ownership against (the replacement table under
+// autoColumnPolicyTableKey) has a hidden __mo_fake_pk_col.
+type ownershipStore struct {
+	IncrValueStore
+	hidden map[uint64]bool
+}
+
+func (s *ownershipStore) GetColumns(ctx context.Context, tableID uint64, _ client.TxnOperator) ([]AutoColumn, error) {
+	// the committed rows: memStore keys a txn's view by its uncommitted writes only
+	cols, err := s.IncrValueStore.GetColumns(ctx, tableID, nil)
+	if err != nil {
+		return nil, err
+	}
+	owner := tableID
+	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
+		owner = replacement
+	}
+	for i := range cols {
+		cols[i].isInternal = cols[i].ColName == catalog.FakePrimaryKeyColName && s.hidden[owner]
+	}
+	return cols, nil
+}
+
+// TRUNCATE (DELETE optimized to truncate) recreates the table and Reset moves the
+// counters to the new ID after the old catalog rows are gone. The hidden fake
+// primary key must stay internal: an explicit user id then publishes nothing.
+func TestResetResolvesFakePKOwnershipFromReplacementTable(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := &ownershipStore{IncrValueStore: NewMemStore(), hidden: map[uint64]bool{5: true}}
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		u64 := types.New(types.T_uint64, 0, 0)
+		gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+		explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 5, []AutoColumn{
+			{ColName: "id", ColIndex: 0, Step: 1},
+			{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+		}, op))
+		require.NoError(t, op.Commit(ctx))
+
+		last, err := s.InsertValues(ctx, 5, 0, nil, []*vector.Vector{gen(), gen()}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+
+		// the truncate removed table 5's catalog rows and created table 6
+		store.hidden = map[uint64]bool{6: true}
+		op, err = tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Reset(ctx, 5, 6, true, op))
+		require.NoError(t, op.Commit(ctx))
+
+		fakeVec := gen()
+		last, err = s.InsertValues(ctx, 6, 0, nil, []*vector.Vector{explicit(100), fakeVec}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), last, "the hidden fake PK must not surface after reset")
+		require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0])
+	})
+}

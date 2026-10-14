@@ -795,3 +795,44 @@ func TestSQLStoreGetColumnsMarksInternalFakePK(t *testing.T) {
 	require.False(t, cols[0].isInternal)
 	require.False(t, cols[1].isInternal)
 }
+
+// Reset reads allocator rows from the old table and ownership from its
+// replacement: the ownership subquery names the replacement table ID.
+func TestSQLStoreGetColumnsOwnershipFromReplacementTable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), 12)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	var executedSQLs []string
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			executedSQLs = append(executedSQLs, sql)
+			memRes := executor.NewMemResult(
+				[]types.Type{
+					types.T_varchar.ToType(),
+					types.T_int32.ToType(),
+					types.T_uint64.ToType(),
+					types.T_uint64.ToType(),
+					types.T_bool.ToType(),
+				}, mp)
+			memRes.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(memRes, 0, []string{catalog.FakePrimaryKeyColName}))
+			require.NoError(t, executor.AppendFixedRows(memRes, 1, []int32{1}))
+			require.NoError(t, executor.AppendFixedRows(memRes, 2, []uint64{1}))
+			require.NoError(t, executor.AppendFixedRows(memRes, 3, []uint64{1}))
+			require.NoError(t, executor.AppendFixedRows(memRes, 4, []bool{true}))
+			return memRes.GetResult(), nil
+		},
+		nil,
+	)
+	s := &sqlStore{exec: sqlExecutor}
+
+	_, err := s.GetColumns(ctx, 10, nil)
+	require.NoError(t, err)
+	_, err = s.GetColumns(context.WithValue(ctx, autoColumnPolicyTableKey{}, uint64(20)), 10, nil)
+	require.NoError(t, err)
+	require.Len(t, executedSQLs, 2)
+	require.Contains(t, executedSQLs[0], "att_relname_id = 10 ")
+	require.Contains(t, executedSQLs[0], "where table_id = 10 ")
+	require.Contains(t, executedSQLs[1], "att_relname_id = 20 ")
+	require.Contains(t, executedSQLs[1], "where table_id = 10 ")
+}

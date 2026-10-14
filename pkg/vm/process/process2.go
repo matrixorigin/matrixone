@@ -86,8 +86,9 @@ func NewTopProcess(
 		TaskService:      taskService,
 
 		// 2. fields from make.
-		LastInsertID: new(uint64),
-		AffectedRows: new(int64),
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+		AffectedRows:          new(int64),
 
 		// 3. other fields.
 		logger:             util.GetLogger(sid),

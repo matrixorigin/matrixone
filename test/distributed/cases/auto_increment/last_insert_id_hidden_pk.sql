@@ -24,5 +24,19 @@ insert into li_p2(id,v) values(100,2);
 select last_insert_id();
 select id, v from li_p2 order by id;
 
+-- DELETE optimized to truncate recreates the table; the hidden fake primary key
+-- stays internal afterwards
+set delete_opt_to_truncate = 1;
+drop table if exists li_p3;
+create table li_p3(id bigint auto_increment, v int, unique key(id));
+insert into li_p3(v) values(1);
+select last_insert_id();
+delete from li_p3;
+insert into li_p3(id,v) values(100,2);
+-- unchanged: 1
+select last_insert_id();
+select id, v from li_p3 order by id;
+
 drop table if exists li_p1;
 drop table if exists li_p2;
+drop table if exists li_p3;
