@@ -46,14 +46,14 @@ st_astext(st_difference(o.g, i.g)) as difference_result,
 st_astext(st_symdifference(o.g, i.g)) as xor_result
 from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
 ➤ intersection[12,65535,0]  ¦  union_result[12,65535,0]  ¦  difference_result[12,65535,0]  ¦  xor_result[12,65535,0]  𝄀
-POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))
+POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))
 select
 st_area(st_intersection(o.g, i.g)) as intersection_area_m2,
 st_area(st_union(o.g, i.g)) as union_area_m2,
 st_area(st_difference(o.g, i.g)) as difference_area_m2
 from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
 ➤ intersection_area_m2[8,53,31]  ¦  union_area_m2[8,53,31]  ¦  difference_area_m2[8,53,31]  𝄀
-1.2364502783544256E10  ¦  4.94598932679109E10  ¦  3.709539048436664E10
+1.2364502783544266E10  ¦  4.94598932679109E10  ¦  3.709539048436664E10
 select st_contains(o.g, i.g), st_intersects(o.g, i.g), st_overlaps(o.g, i.g)
 from antimeridian_pairs o join antimeridian_pairs i on o.id = 3 and i.id = 4;
 ➤ st_contains(o.g, i.g)[-7,1,0]  ¦  st_intersects(o.g, i.g)[-7,1,0]  ¦  st_overlaps(o.g, i.g)[-7,1,0]  𝄀
@@ -79,7 +79,7 @@ select st_astext(st_intersection(o.g, i.g)),
 st_area(st_intersection(o.g, i.g))
 from antimeridian_geometry32 o join antimeridian_geometry32 i on o.id = 1 and i.id = 2;
 ➤ st_astext(st_intersection(o.g, i.g))[12,65535,0]  ¦  st_area(st_intersection(o.g, i.g))[7,23,31]  𝄀
-POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))  ¦  1.2364503E10
+POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))  ¦  1.2364503E10
 drop table if exists antimeridian_index;
 create table antimeridian_index(
 id int primary key,

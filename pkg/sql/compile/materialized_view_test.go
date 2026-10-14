@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -53,6 +54,64 @@ func TestMaterializedViewExecutionCapability(t *testing.T) {
 	require.Error(t, c.validateMaterializedViewWrite(def))
 	def.TableType = catalog.SystemOrdinaryRel
 	require.NoError(t, c.validateMaterializedViewWrite(def))
+}
+
+func TestMaterializedViewCompileProtocolAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		protocol, floor int64
+		register        bool
+		ordinary        bool
+		wantErr         bool
+	}{
+		{"old scan protocol", defines.MORPCVersion112, defines.MORPCVersion113, false, false, true},
+		{"current scan protocol", defines.MORPCVersion113, defines.MORPCVersion113, false, false, false},
+		{"ordinary scan", defines.MORPCVersion112, defines.MORPCVersion112, false, true, false},
+		{"old registration protocol", defines.MORPCVersion112, defines.MORPCVersion113, true, false, true},
+		{"old registration floor", defines.MORPCVersion113, defines.MORPCVersion112, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte("execution")}).AnyTimes()
+			proc.Base.TxnOperator = op
+			proc.Ctx = defines.WithMaterializedViewWrite(proc.Ctx, 7, 99, []byte("execution"))
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			for key, value := range map[string]int64{
+				moruntime.MOProtocolVersion: tc.protocol, moruntime.PersistedExpressionProtocolAuthoringFloor: tc.floor,
+			} {
+				old, present := rt.GetGlobalVariables(key)
+				rt.SetGlobalVariables(key, value)
+				t.Cleanup(func() {
+					if present {
+						rt.SetGlobalVariables(key, old)
+					} else {
+						rt.CompareAndDeleteGlobalVariables(key, value)
+					}
+				})
+			}
+			def := &plan.TableDef{TableType: catalog.SystemMaterializedViewRel, TblId: 99,
+				Props: []*plan.PropertyDef{{Key: catalog.MaterializedViewProperty,
+					Value: `{"format_version":1,"query":"select * from t","sources":[{"table":"t"}]}`}}}
+			if tc.ordinary {
+				def.TableType = catalog.SystemOrdinaryRel
+			}
+			c := &Compile{proc: proc}
+			var err error
+			if tc.register {
+				// Rejection must precede relation lookup and catalog publication.
+				err = c.registerMaterializedView(nil, "db", "mv", def)
+			} else {
+				err = c.validateMaterializedViewScan(def)
+			}
+			if tc.wantErr {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 type materializedViewNestedExecutor struct {

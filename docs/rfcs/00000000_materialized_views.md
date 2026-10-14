@@ -842,3 +842,18 @@ scope and release gates remain unchanged.
 
 See [CI triage and regression verification](../design/materialized_view_ci_triage.md)
 for exact failure evidence, root causes, test cases, and validation boundaries.
+
+
+### Current main integration — 2026-10-13
+
+At main `bcd4cb99e7fa3f8fa750e773d5409a7bb803b0bf`, protocol 112 is allocated
+to signed WEEK/DAYOFYEAR result vectors. Native MV authoring, catalog upgrade
+4.0.15 and the latest protocol therefore move together to **113**. The planner
+checks reject both a cluster protocol of 112 and an authoring floor of 112.
+Earlier 110/112 records retain their historical evidence boundary.
+
+The merge adopts the authoritative index-search JSON EXPLAIN implementation
+from main's #30111, including its detailed plugin hooks and complete BVT script.
+Vector output retains `query_vector`, fulltext uses `query_payload`, and probe
+settings use the plugin's `NProbe` description. MV's additional malformed
+metadata/fulltext/opaque-option controls and lossless option field are retained.

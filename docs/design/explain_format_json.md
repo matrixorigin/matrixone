@@ -389,7 +389,8 @@ successful text EXPLAIN comparison.
 ### Index search protocol compatibility
 
 The renderer consumes `INDEX_SEARCH_SCAN` / `IndexSearchScan`, including the
-common `query_payload` and named `algo_exprs`. Algorithm descriptions come from
+common `QueryPayload` and named `algo_exprs`. Vector output retains the
+`query_vector` label; fulltext output uses `query_payload`. Algorithm descriptions come from
 the existing search plugin `ExplainHooks`; the SQL layer does not decode
 algorithm-specific options. The optional node field `algorithm_options` carries
 opaque option bytes as a base64 JSON string, preserving settings not described

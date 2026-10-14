@@ -201,3 +201,19 @@ state, wait, persistence format or native dependency was introduced; prior MV
 race/restart proof remains valid for its unchanged contracts. Delivery review
 has no unresolved blockers for this merge correction. Complete merge-head CI
 and the previously recorded Draft production-release gaps remain separate.
+
+
+Continuation review (2026-10-14): exact integration inputs `cb53485ffe` + main
+`bcd4cb99e7`; ordinary compatibility/fixture corrections, approved MV design
+revision unchanged. R2 renderer/grammar closure adopts main's producer/hook/BVT
+contract without removing prior oracles. R3 protocol admission is closed across
+planner, frontend, compile, upgrade and latest-version consumers with 112/113
+negative/control cases. R1 NULLIF and private-ledger fixtures preserve stronger
+complete-state/serialization/resource oracles. R3 topology proof includes the
+actual Push-mode commit handoff; it makes no global-freshness claim. Created
+private generation/ledger cleanup is registered immediately and occurs after
+operators/scopes finish; cleanup does not abort before releasing resources.
+Eight package suites, 30 repeated root cases, refreshed configured lint/vet,
+137 native BVT statements, 67 main MV checks and 180 causal two-CN checks pass.
+No unresolved blocker for this correction; current-head full CI and the existing
+Draft production-release gates remain separately tracked.

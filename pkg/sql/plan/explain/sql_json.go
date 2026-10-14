@@ -636,7 +636,7 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	direction := spec.Direction.String()
 	switch spec.Direction {
 	case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
-		// valid index scan directions
+		// valid vector scan directions
 	default:
 		return nil, moerr.NewInvalidInputf(ctx, "index search scan has unknown direction %d", spec.Direction)
 	}
@@ -644,22 +644,23 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	settings, err := indexSearchScanSettings(spec)
+	settings, err := indexSearchScanSettings(spec, true)
 	if err != nil {
 		return nil, err
 	}
 	values = append(values, settings...)
-	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
-		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
-	}
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
+	}
+	payloadName := "query_vector"
+	if isFulltextIndexSearchScan(spec) {
+		payloadName = "query_payload"
 	}
 	for _, field := range []struct {
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_payload", expr: spec.QueryPayload},
+		{name: payloadName, expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
@@ -670,17 +671,18 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 			values = append(values, field.name+"="+value)
 		}
 	}
+	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
+		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
+	}
 	for i, expr := range spec.AlgoExprs {
-		if spec.AlgoExprNames[i] == "" {
-			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression name is missing")
+		if spec.AlgoExprNames[i] == "" || expr == nil {
+			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression metadata is missing")
 		}
 		value, err := sqlJSONExpr(ctx, expr, options)
 		if err != nil {
 			return nil, err
 		}
-		if value != "" {
-			values = append(values, spec.AlgoExprNames[i]+"="+value)
-		}
+		values = append(values, spec.AlgoExprNames[i]+"="+value)
 	}
 	if spec.DistanceRange != nil {
 		for _, bound := range []struct {
@@ -698,7 +700,9 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s expression is missing", bound.name)
 			}
 			boundType := bound.boundType.String()
-			if boundType == "" {
+			switch bound.boundType {
+			case plan.BoundType_UNBOUNDED, plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
+			default:
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s has unknown bound type %d", bound.name, bound.boundType)
 			}
 			value, err := sqlJSONExpr(ctx, bound.expr, options)

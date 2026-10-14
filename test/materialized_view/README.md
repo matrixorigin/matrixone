@@ -93,3 +93,13 @@ terminal errors. The publication binary/config/data are retained under
 `/workspace/mv-publish-artifacts`; use `runtime/etc/launch.toml` and the matching
 native libraries in `/workspace/matrixone-mv-pr` when reproducing that build.
 See the execution report for the distinct prototype/publication evidence.
+
+
+For cross-CN checks, default MO Push mode permits an independently connected CN
+to select an older applied snapshot. The harness uses `mo_ctl('cn','synccommit','')`
+at cross-connection commit handoffs, then checks the complete published values
+and exact unpopulated error. No timed sleep or repeated read is used. These
+checks prove visibility after that causal handoff, not globally fresh reads in
+the default asynchronous mode. Current integration reserves protocol 113 for MV
+after main allocated 112 to WEEK/DAYOFYEAR; older protocol records above describe
+their historical runs.

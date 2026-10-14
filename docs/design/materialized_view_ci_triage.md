@@ -170,3 +170,62 @@ closure with zero new issues; standalone `go vet` passed the same closure.
 recover diagnostics in unchanged main-side serialization helpers. Their bodies
 match main exactly: vector cleanup is deferred, and malformed serialization is
 converted into an error. No diagnostic was suppressed or cleanup removed.
+
+
+## Remaining CI correction and integration (2026-10-14)
+
+At `cb53485ffe`, run 38383781049 passed shared build, arm64 SCA, Pessimistic
+BVT and Connector/J E2E. PROXY BVT had exactly three failing assertions in
+`optimizer/explain_format_json.sql` (83,197 successful statements, three failed,
+455 ignored). They still expected the original payload/probe labels after the
+first renderer migration. Ordinary UT failed source checkout with a TLS handshake
+termination; coverage UT timed out at checkout after five minutes. Neither UT
+job reached test execution. Coverage aggregation and CI Required failed their
+prerequisites. Product failures and source-fetch failures are separate.
+
+The correction merges main `bcd4cb99e7fa3f8fa750e773d5409a7bb803b0bf`, adopting
+#30111's complete index-search renderer, detailed plugin hooks and expanded BVT.
+Existing additional metadata/fulltext/opaque-option oracles remain. Main owns
+protocol 112 for WEEK/DAYOFYEAR; MV planner authoring, frontend admission, compile
+registration/read admission, catalog upgrade and latest protocol now use 113.
+Typed tests reject 112 before catalog access, accept private scans at 113, reject
+an authoring floor of 112, and preserve ordinary scans at 112.
+
+A clean-source main worktree reproduced four NULLIF rebind failures in the
+merged #30095 fixtures. The main binder consumes unsupported assignments and
+continues collecting later valid NULLIF rules; the fixtures still expected the
+older prefix-only behavior. They now assert the complete maps on all 20 rebinds,
+assert every expression was consumed, and exercise JSON round trips for those
+previously excluded cases. Production NULLIF behavior is unchanged.
+
+The nested UNION allocation-owner test also encountered the host's automatic
+spill-disk margin: less than 16 GiB free storage allowed only the previous
+fixture's 128-byte explicit floor. The ownership test now uses the existing
+private-ledger testing API with its original 1 MiB query limit and a bounded
+4 MiB aggregate. Result and terminal allocation assertions remain; cleanup also
+checks memory, disk and FD reservations before closing the generation and ledger.
+No production quota or resource policy was changed. This test, the existing
+128-byte spill-budget test and the five-case compile protocol test each passed
+ten repeats, followed by the complete compile suite.
+
+Topology diagnosis found that default Push mode allows an independently connected
+CN to read an older applied snapshot. An immediate cross-connection read could
+therefore still observe an unpopulated/previous view. The topology harness now
+uses MO's existing bounded `SYNCCOMMIT` handoff after DDL, source commits and MV
+publication. Latest complete values, stable identity, monotonic source coverage,
+at least one concurrent success and terminal history assertions are preserved.
+The unpopulated check now requires the exact error class and `MV_NOT_POPULATED`
+marker. No sleep or query retry is used. These checks prove atomic publication
+after a causal handoff, not stronger freshness than MO's configured read mode.
+
+Final Linux/amd64 local verification: eight owning suites passed with Go 1.27.1,
+repository CGo wrapper, `-mod=readonly -p=1 -count=1 -short -tags matrixone_test`.
+Configured lint and vet passed the eight-package integration closure; the final
+compile/frontend changes and test harness passed their refreshed checks. The
+error-constructor policy passed. The final rebuilt service passed all 137
+statements in the complete JSON EXPLAIN, external NULLIF and LOAD-variable
+scripts, with zero failed/ignored/abnormal statements. The native MV suite passed
+67 checks; 20 independent causal two-CN scenarios passed all 180 checks. Original
+one-million-row performance observations keep their historical SHA; the current
+10,000-row run is diagnostic evidence. New full CI must be evaluated at the
+pushed correction head.
