@@ -2054,6 +2054,11 @@ func constantFoldWithPreparedExactSource(
 	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
 		return expr, nil
 	}
+	// Keep the selected-consumer ELT identity visible to remote and persisted
+	// admission. Its executor owns lazy folding of the selected value subtree.
+	if requiresJSON, jsonErr := plan.RequiresMORPCVersion113JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
+		return expr, nil
+	}
 	if f.CannotFold() {
 		return expr, nil
 	}

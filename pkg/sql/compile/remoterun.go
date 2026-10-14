@@ -136,7 +136,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +145,12 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
+	}
+	if requiredVectorProtocol != nil && features.JSONMinMaxTypedComparison {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
+	}
+	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2045,6 +2051,11 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+		if aggregateUsesJSONMinMax(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2205,7 +2216,7 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
@@ -2231,6 +2242,12 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 114")
+	}
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 113")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
@@ -2845,6 +2862,10 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	default:
 		return false
 	}
+}
+
+func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
+	return plan.IsJSONMinMaxAggregate(agg.GetAggID(), agg.GetArgExpressions())
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

@@ -9055,7 +9055,9 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
+		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >=
+			requiredExpressionContractProtocolVersion(plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}))
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
