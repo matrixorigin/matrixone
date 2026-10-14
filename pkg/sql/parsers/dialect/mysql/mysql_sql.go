@@ -23853,6 +23853,13 @@ yydefault:
 		var yyLOCAL *tree.CTE
 //line mysql_sql.y:7422
 		{
+			// stmt has an EMPTY alternative used for bare trailing semicolons.
+			// Inside a CTE body that produces a nil Stmt and panics in Format
+			// (CTAS / PREPARE). Reject like MySQL. See #30146.
+			if yyDollar[5].statementUnion() == nil {
+				yylex.Error("empty common table expression body")
+				goto ret1
+			}
 			yyLOCAL = &tree.CTE{
 				Name: &tree.AliasClause{Alias: tree.Identifier(yyDollar[1].cstrUnion().Compare()), Cols: yyDollar[2].identifierListUnion()},
 				Stmt: yyDollar[5].statementUnion(),
