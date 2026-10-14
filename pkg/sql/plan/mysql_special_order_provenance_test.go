@@ -436,6 +436,59 @@ func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 	}
 }
 
+func TestMySQLSpecialBitwiseAggregateIdentity(t *testing.T) {
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name   string
+			prefix string
+			suffix string
+		}{
+			{"direct", "select ", " from enum_order_t"},
+			{"grouped", "select id, ", " from enum_order_t group by id"},
+			{"window", "select ", " over (order by id rows between unbounded preceding and current row) from enum_order_t"},
+			{"derived", "select ", " from (select id, e, s from enum_order_t) d"},
+			{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+			{"prepared", "prepare stmt1 from 'select ", " from (select id, e, s from enum_order_t) d where id = ?'"},
+		} {
+			for _, operand := range []string{"e", "s"} {
+				t.Run(name+"/"+tc.name+"/"+operand, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+name+"("+operand+")"+tc.suffix)
+					require.NoError(t, err)
+					if p.GetDcl().GetPrepare() != nil {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					if tc.name == "window" {
+						fn = firstWindowSpec(t, p).WindowFunc
+					}
+					require.NotNil(t, fn)
+					require.Equal(t, name, fn.GetF().Func.ObjName)
+					require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+					arg := fn.GetF().Args[0]
+					want := types.T_uint16
+					if operand == "s" {
+						want = types.T_uint64
+					}
+					require.Equal(t, int32(want), arg.Typ.Id)
+					require.False(t, isEnumOrSetPlanType(&arg.Typ), "aggregate must consume an ordinary integer domain")
+					require.False(t, isBitwiseAggregatePrivateCast(arg))
+				})
+			}
+		}
+		for _, operand := range []string{"v", "cast(e as char)", "concat(e, '')"} {
+			t.Run(name+"/string/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select "+name+"("+operand+") from enum_order_t")
+				require.NoError(t, err)
+				fn := findPlanFunctionExpr(p, name)
+				require.NotNil(t, fn)
+				arg := fn.GetF().Args[0]
+				require.True(t, isBitwiseAggregatePrivateCast(arg))
+				require.Equal(t, int32(types.T_varchar), arg.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
 func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 	for _, target := range []string{"unsigned", "decimal(10,2)", "double"} {
 		for _, source := range []string{

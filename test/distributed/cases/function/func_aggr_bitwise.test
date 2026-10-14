@@ -273,3 +273,38 @@ DROP TABLE bitwise_ctas_xor_29323;
 DROP TABLE bitwise_ctas_or_29323;
 DROP TABLE bitwise_ctas_and_29323;
 DROP TABLE bitwise_ctas_src_29323;
+
+-- ENUM bit aggregates consume member ordinals, including through query boundaries (#30198).
+DROP TABLE IF EXISTS bitwise_enum_30198;
+DROP TABLE IF EXISTS bitwise_enum_result_30198;
+DROP TABLE IF EXISTS bitwise_enum_edge_30198;
+CREATE TABLE bitwise_enum_30198 (id INT PRIMARY KEY, g INT, e ENUM('z','a','m'), n ENUM('8','16'));
+INSERT INTO bitwise_enum_30198 VALUES (1,1,'z','8'), (2,1,'a','16'), (3,2,'z','8'), (4,2,'z','8'), (5,3,NULL,NULL);
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(e + 0) AS a, BIT_OR(e + 0) AS o, BIT_XOR(e + 0) AS x FROM bitwise_enum_30198;
+SELECT g, BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198 GROUP BY g ORDER BY g;
+SELECT id, BIT_AND(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a, BIT_OR(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS o, BIT_XOR(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS x FROM bitwise_enum_30198 ORDER BY id;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT e FROM bitwise_enum_30198) d;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT e FROM bitwise_enum_30198 ORDER BY id LIMIT 4) d;
+CREATE TABLE bitwise_enum_result_30198 AS SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198;
+SELECT a, o, x FROM bitwise_enum_result_30198;
+SELECT BIT_AND(n) AS a, BIT_OR(n) AS o, BIT_XOR(n) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(CAST(n AS CHAR)) AS a, BIT_OR(CAST(n AS CHAR)) AS o, BIT_XOR(CAST(n AS CHAR)) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198 WHERE id < 0;
+PREPARE bitwise_enum_stmt_30198 FROM 'SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT id, e FROM bitwise_enum_30198) d WHERE id <= ?';
+SET @bitwise_enum_id_30198 = 4;
+EXECUTE bitwise_enum_stmt_30198 USING @bitwise_enum_id_30198;
+SET @bitwise_enum_id_30198 = 1;
+EXECUTE bitwise_enum_stmt_30198 USING @bitwise_enum_id_30198;
+DEALLOCATE PREPARE bitwise_enum_stmt_30198;
+SET @bitwise_enum_id_30198 = NULL;
+DROP TABLE bitwise_enum_result_30198;
+DROP TABLE bitwise_enum_30198;
+
+-- Empty labels and the INSERT IGNORE error member still have numeric ordinals.
+CREATE TABLE bitwise_enum_edge_30198 (id INT PRIMARY KEY, e ENUM('', '99'));
+INSERT INTO bitwise_enum_edge_30198 VALUES (1, ''), (2, '99');
+SELECT id, BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_edge_30198 GROUP BY id ORDER BY id;
+INSERT IGNORE INTO bitwise_enum_edge_30198 VALUES (3, 'invalid');
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_edge_30198 WHERE id = 3;
+DROP TABLE bitwise_enum_edge_30198;
