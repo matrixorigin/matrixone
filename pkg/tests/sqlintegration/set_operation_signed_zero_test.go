@@ -150,6 +150,50 @@ func TestSetOperationSignedZero(t *testing.T) {
 					require.Equal(t, tc.want, readWindowNullRows(t, rows), tc.query)
 				})
 			}
+
+			t.Run("retained-correlation-shapes", func(t *testing.T) {
+				for _, tc := range []struct {
+					name, predicate string
+					want            []string
+				}{
+					{"multiple", "i.oref=o.oref and i.ie=o.a", []string{"1"}},
+					{"range", "i.oref>o.oref", []string{"1", "2", "5"}},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						q := "select id from ci_outer o where exists (select cast(ie as double) from ci_inner i where " + tc.predicate + " union select cast(ie as double) from ci_inner i where " + tc.predicate + ") order by id"
+						rows, err := conn.QueryContext(ctx, q)
+						require.NoError(t, err, q)
+						require.Equal(t, tc.want, readWindowNullRows(t, rows))
+						q = "select id from ci_outer o where exists (select 1 from ci_inner i where " + tc.predicate + " and ? union select 1 from ci_inner i where " + tc.predicate + " and ?) order by id"
+						stmt, err := conn.PrepareContext(ctx, q)
+						require.NoError(t, err)
+						defer stmt.Close()
+						for _, args := range [][2]int{{0, 1}, {1, 0}, {0, 0}, {1, 1}, {0, 1}} {
+							rows, err := stmt.QueryContext(ctx, args[0], args[1])
+							require.NoError(t, err, q)
+							want := tc.want
+							if args == [2]int{0, 0} {
+								want = nil
+							}
+							require.Equal(t, want, readWindowNullRows(t, rows))
+						}
+					})
+				}
+
+				rows, err := conn.QueryContext(ctx, "select id,cast((select cast(ie as double) from ci_inner i where i.oref=o.oref and i.ie=o.a union select cast(ie as double) from ci_inner i where i.oref=o.oref and i.ie=o.a) as varchar) from ci_outer o order by id")
+				require.NoError(t, err)
+				require.Equal(t, []string{"1:1", "2:NULL", "3:NULL", "4:NULL", "5:NULL"}, readWindowNullRows(t, rows))
+				rows, err = conn.QueryContext(ctx, "select id,a in (select cast(ie as double) from ci_inner i where i.oref=o.oref and i.ie=o.a union select cast(ie as double) from ci_inner i where i.oref=o.oref and i.ie=o.a) from ci_outer o order by id")
+				require.NoError(t, err)
+				require.Equal(t, []string{"1:1", "2:0", "3:0", "4:0", "5:0"}, readWindowNullRows(t, rows))
+				var rejected float64
+				err = conn.QueryRowContext(ctx, "select (select cast(ie as double) from ci_inner i where i.oref>o.oref union select cast(ie as double) from ci_inner i where i.oref>o.oref) from ci_outer o").Scan(&rejected)
+				require.ErrorContains(t, err, "correlated UNION")
+				q := "select id from ci_outer o where not exists (select cast(ie as double) from ci_inner i where i.oref>o.oref union select cast(ie as double) from ci_inner i where i.oref>o.oref) order by id"
+				rows, err = conn.QueryContext(ctx, q)
+				require.NoError(t, err, q)
+				require.Equal(t, []string{"3", "4"}, readWindowNullRows(t, rows))
+			})
 			t.Run("opposite-float-members", func(t *testing.T) {
 				var value float64
 				err := conn.QueryRowContext(ctx, "select (select d from zeros i where i.id=o.id union select -d from zeros i where i.id=o.id) from zeros o where id=1").Scan(&value)
@@ -163,15 +207,39 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, []string{"1", "2", "3", "5"}, readWindowNullRows(t, rows))
 			})
 			t.Run("prepared-float-identities", func(t *testing.T) {
-				stmt, err := conn.PrepareContext(ctx, "select id,(select ? from zeros i where i.d=o.d union select ? from zeros i where i.d=o.d) from zeros o where id<=4 order by id")
-				require.NoError(t, err)
-				defer stmt.Close()
-				for _, value := range []any{int64(1), float64(1), int64(1)} {
-					rows, err := stmt.QueryContext(ctx, value, value)
-					require.NoError(t, err)
-					require.Equal(t, []string{"1:1", "2:1", "3:1", "4:1"}, readWindowNullRows(t, rows))
+				for _, predicate := range []string{"i.d=o.d", "i.id=o.id and i.d=o.d"} {
+					func() {
+						q := "select id,(select ? from zeros i where " + predicate + " union select ? from zeros i where " + predicate + ") from zeros o where id<=4 order by id"
+						stmt, err := conn.PrepareContext(ctx, q)
+						require.NoError(t, err)
+						defer stmt.Close()
+						for _, value := range []any{int64(1), float64(1), int64(1)} {
+							rows, err := stmt.QueryContext(ctx, value, value)
+							require.NoError(t, err)
+							require.Equal(t, []string{"1:1", "2:1", "3:1", "4:1"}, readWindowNullRows(t, rows))
+						}
+					}()
 				}
 			})
+		})
+
+		t.Run("keyed-filter-results", func(t *testing.T) {
+			for _, op := range []string{"union", "intersect", "except"} {
+				q := "select id,cast(d as varchar) from (select id,d from zeros " + op + " select id,d from zeros) u where id=1"
+				rows, err := conn.QueryContext(ctx, q)
+				require.NoError(t, err)
+				want := []string{"1:-0"}
+				if op == "except" {
+					want = nil
+				}
+				require.Equal(t, want, readWindowNullRows(t, rows))
+			}
+			rows, err := conn.QueryContext(ctx, "select id,cast(d as varchar) from (select id,d from zeros union select id,d from zeros) u where id=6 and d>0")
+			require.NoError(t, err)
+			require.Equal(t, []string{"6:1.25"}, readWindowNullRows(t, rows))
+			rows, err = conn.QueryContext(ctx, "select s from (select cast('a' as char(4)) s,1 k except select cast('a ' as varchar(4)),1) u where k=1 and hex(s)='61'")
+			require.NoError(t, err)
+			require.Empty(t, readWindowNullRows(t, rows), "equivalent members must cancel before the byte-sensitive predicate")
 		})
 		t.Run("prepared-reuse", func(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx, "select count(*) from (select d from zeros where id=? union select d from zeros where id=?) s")

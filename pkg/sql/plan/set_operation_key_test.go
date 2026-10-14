@@ -150,7 +150,7 @@ func TestCorrelatedUnionRejectsMismatchedIdentity(t *testing.T) {
 	for _, query := range []string{
 		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i)`,
 		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_REGIONKEY)`,
-		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY UNION SELECT 2 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY)`,
+		`SELECT (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY UNION SELECT 2 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY) FROM NATION o`,
 	} {
 		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.ErrorContains(t, err, "correlated UNION", query)
@@ -216,4 +216,97 @@ func TestPreparedUnionKeepsScalarFloatIdentity(t *testing.T) {
 			require.NotNil(t, node.PhysicalEqualityKeyList[0].GetF(), "a different slot is not an identity marker")
 		})
 	}
+}
+
+func TestRetainedUnionCorrelationShapes(t *testing.T) {
+	for _, predicate := range []string{
+		"i.N_NATIONKEY=o.N_NATIONKEY AND i.N_REGIONKEY=o.N_REGIONKEY",
+		"i.N_NATIONKEY>o.N_NATIONKEY",
+	} {
+		query := "SELECT 1 FROM NATION o WHERE EXISTS (SELECT CAST(i.N_REGIONKEY AS DOUBLE) FROM NATION i WHERE " + predicate +
+			" UNION SELECT CAST(i.N_REGIONKEY AS DOUBLE) FROM NATION i WHERE " + predicate + ")"
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+		require.NoError(t, err, query)
+		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+		found := false
+		for _, n := range p.GetQuery().Nodes {
+			if n.NodeType != planpb.Node_UNION {
+				continue
+			}
+			found = true
+			if predicate == "i.N_NATIONKEY>o.N_NATIONKEY" {
+				require.Len(t, n.ProjectList, 2)
+			} else {
+				require.Len(t, n.ProjectList, 3)
+			}
+			for i := 1; i < len(n.ProjectList); i++ {
+				require.NotNil(t, n.PhysicalEqualityKeyList[i].GetCol())
+				require.Equal(t, n.ProjectList[i].GetCol().RelPos, n.PhysicalEqualityKeyList[i].GetCol().RelPos)
+				require.Equal(t, n.ProjectList[i].GetCol().ColPos, n.PhysicalEqualityKeyList[i].GetCol().ColPos)
+			}
+			require.Len(t, n.PhysicalEqualityKeyList, len(n.ProjectList))
+			for _, child := range n.Children {
+				require.Len(t, p.GetQuery().Nodes[child].ProjectList, len(n.ProjectList))
+			}
+		}
+		require.True(t, found)
+	}
+}
+
+func TestKeyedSetPushesUnchangedIntegerPredicate(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"SELECT k,d FROM (SELECT N_NATIONKEY k,CAST(N_REGIONKEY AS DOUBLE) d FROM NATION UNION SELECT N_NATIONKEY k,CAST(N_REGIONKEY AS DOUBLE) d FROM NATION) u WHERE k=1")
+	require.NoError(t, err)
+	scans := 0
+	for _, n := range p.GetQuery().Nodes {
+		if n.NodeType == planpb.Node_TABLE_SCAN {
+			scans++
+			require.NotEmpty(t, n.FilterList, "integer predicate must enter each branch scan")
+		}
+	}
+	require.Equal(t, 2, scans)
+}
+
+func TestKeyedSetKeepsUnsafePredicateAbove(t *testing.T) {
+	for _, predicate := range []string{"d>0", "k=1 AND d>0", "k=1 AND rand()>0.5"} {
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"SELECT k,d FROM (SELECT N_NATIONKEY k,CAST(N_REGIONKEY AS DOUBLE) d FROM NATION UNION SELECT N_NATIONKEY k,CAST(N_REGIONKEY AS DOUBLE) d FROM NATION) u WHERE "+predicate)
+		require.NoError(t, err)
+		q := p.GetQuery()
+		scans := 0
+		residual := false
+		for _, n := range q.Nodes {
+			if n.NodeType == planpb.Node_TABLE_SCAN {
+				scans++
+				if predicate == "d>0" {
+					require.Empty(t, n.FilterList)
+				} else {
+					require.Len(t, n.FilterList, 1)
+				}
+				for _, filter := range n.FilterList {
+					require.False(t, ContainsVolatileFunction(filter))
+				}
+			}
+			if n.NodeType == planpb.Node_FILTER && len(n.FilterList) > 0 {
+				residual = true
+			}
+		}
+		require.Equal(t, 2, scans)
+		require.True(t, residual, "unsafe conjunct must remain above the set operation")
+	}
+}
+
+func TestSetKeyInvarianceRejectsInvalidSlots(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	output := GetColExpr(typ, 1, 0)
+	node := &planpb.Node{BindingTags: []int32{2}, ProjectList: []*planpb.Expr{output}, PhysicalEqualityKeyList: []*planpb.Expr{DeepCopyExpr(output)}}
+	filter := GetColExpr(typ, 2, 0)
+	require.True(t, setFilterPreservesEquality(filter, node))
+	for _, invalid := range []*planpb.Expr{GetColExpr(typ, 3, 0), GetColExpr(typ, 2, -1), GetColExpr(typ, 2, 1)} {
+		require.False(t, setFilterPreservesEquality(invalid, node))
+	}
+	node.PhysicalEqualityKeyList[0] = GetColExpr(typ, 1, 1)
+	require.False(t, setFilterPreservesEquality(filter, node), "a key for another slot is not equality proof")
+	node.PhysicalEqualityKeyList = nil
+	require.False(t, setFilterPreservesEquality(filter, node), "a missing key is not equality proof")
 }
