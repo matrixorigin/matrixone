@@ -2397,6 +2397,7 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
+  int64 nprobe = 2; // Query-level base probe count; zero uses the session default.
 }
 
 message AlterTableAutoIncrement {

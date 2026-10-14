@@ -65,7 +65,7 @@ date_trunc('month', cast('0001-01-01 00:00:00' as timestamp)) as minimum_timesta
 select dayofyear(cast('0000-00-00' as date)) as zero_dayofyear,
 week(cast('0000-00-00' as date)) as zero_week_date,
 week(cast('0000-00-00 00:00:00' as datetime)) as zero_week_datetime;
-➤ zero_dayofyear[5,16,0]  ¦  zero_week_date[-6,8,0]  ¦  zero_week_datetime[-6,8,0]  𝄀
+➤ zero_dayofyear[-5,4,0]  ¦  zero_week_date[-5,3,0]  ¦  zero_week_datetime[-5,3,0]  𝄀
 null  ¦  null  ¦  null
 select weekofyear(cast('0000-00-00' as date)) as zero_weekofyear_date,
 weekofyear(cast('0000-00-00 00:00:00' as datetime)) as zero_weekofyear_datetime,
