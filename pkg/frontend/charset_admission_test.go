@@ -154,14 +154,28 @@ func TestSetNamesDefaultCompatibility(t *testing.T) {
 	defer ses.Close()
 	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
 
+	// Start from a valid native-UCA connection setup. A subsequent plain
+	// SET NAMES DEFAULT must reset the implicit connection collation as well as
+	// the three character-set variables.
+	setupStmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"set names utf8 collate utf8_unicode_ci", 1)
+	require.NoError(t, err)
+	setupExecCtx := newTestExecCtx(ctx, ctrl)
+	setupExecCtx.ses = ses
+	setupExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(ses, setupExecCtx, setupStmt.(*tree.SetVar),
+		"set names utf8 collate utf8_unicode_ci", false))
+	setupStmt.Free()
+	setupCollation, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, "utf8_unicode_ci", setupCollation)
+
 	charsetVars := []string{
 		"character_set_client", "character_set_connection", "character_set_results",
 	}
 	for _, name := range charsetVars {
-		require.NoError(t, ses.SetSessionSysVar(ctx, name, "binary"))
 		require.NoError(t, ses.SetUserDefinedVar(name, "user-before", t.Name()))
 	}
-	require.NoError(t, ses.SetSessionSysVar(ctx, "collation_connection", "utf8mb4_unicode_ci"))
 
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set names default", 1)
 	require.NoError(t, err)
@@ -185,11 +199,11 @@ func TestSetNamesDefaultCompatibility(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "user-before", userVar.Value)
 	}
-	// SET NAMES DEFAULT has no COLLATE clause, so it does not overwrite the
-	// connection collation independently of the character-set reset.
+	wantCollation, err := ses.GetGlobalSysVar("collation_server")
+	require.NoError(t, err)
 	got, err := ses.GetSessionSysVar("collation_connection")
 	require.NoError(t, err)
-	require.Equal(t, "utf8mb4_unicode_ci", got)
+	require.Equal(t, wantCollation, got)
 }
 
 func TestCharsetAdmissionHandshake(t *testing.T) {

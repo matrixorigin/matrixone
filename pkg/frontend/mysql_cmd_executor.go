@@ -1511,6 +1511,8 @@ func doSetVar(
 			}
 			if assign.Reserved != nil {
 				names = append(names, "collation_connection")
+			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				names = append(names, "collation_connection")
 			}
 			for _, name := range names {
 				captureSystemReplayability(name)
@@ -1673,6 +1675,8 @@ func doSetVar(
 			}
 			if assign.Reserved != nil {
 				names = append(names, "collation_connection")
+			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				names = append(names, "collation_connection")
 			}
 			for _, name := range names {
 				mark(name, replayable)
@@ -1731,6 +1735,21 @@ func doSetVar(
 					return moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
 				}
 				if err = setVarFunc(true, false, "collation_connection", literal.String(), sql); err != nil {
+					return err
+				}
+			} else if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				// A plain SET NAMES DEFAULT resets the implicit connection
+				// collation together with the three character-set variables. Keep
+				// an explicit COLLATE clause above authoritative, but do not leave
+				// a collation from a previous SET NAMES request behind.
+				defaultCollation, getErr := ses.GetGlobalSysVar("collation_server")
+				if getErr != nil {
+					return getErr
+				}
+				if defaultCollation == nil {
+					defaultCollation = gSysVarsDefs["collation_server"].Default
+				}
+				if err = setVarFunc(true, false, "collation_connection", defaultCollation, sql); err != nil {
 					return err
 				}
 			}
