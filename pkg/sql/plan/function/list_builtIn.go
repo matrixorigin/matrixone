@@ -11976,51 +11976,41 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_date},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
-				},
+				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
-					return DateToTimestamp
+					return timestampAsDatetime
 				},
 			},
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
-				},
+				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
-					return DatetimeToTimestamp
+					return timestampAsDatetime
 				},
 			},
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_timestamp},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
-				},
+				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
-					return TimestampToTimestamp
+					return timestampAsDatetime
 				},
 			},
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
-				},
+				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
-					return DateStringToTimestamp
+					return timestampAsDatetime
 				},
 			},
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_char},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
-				},
+				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
-					return DateStringToTimestamp
+					return timestampAsDatetime
 				},
 			},
 			{

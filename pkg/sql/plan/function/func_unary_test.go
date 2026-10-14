@@ -5194,26 +5194,13 @@ func initToTimestampCase() []tcTemp {
 	}
 }
 
-func TestToTimeStamp(t *testing.T) {
-	testCases := initToTimestampCase()
-
-	// do the test work.
+// Released stored plans can still request the original TIMESTAMP vector.
+func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
-		case types.T_datetime:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
-		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	for _, tc := range initToTimestampCase() {
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, timestampAsDatetime)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
