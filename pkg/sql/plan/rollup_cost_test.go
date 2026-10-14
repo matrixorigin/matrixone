@@ -120,30 +120,34 @@ func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 		{name: "low-NDV", ndvs: []float64{4, 4, 4}, wantSort: true},
 		{name: "asymmetric-low-NDV", ndvs: []float64{1, 1, 4}, wantSort: true},
 		{name: "asymmetric-admitted-edge", ndvs: []float64{1, 1, 5_000}, wantSort: true},
-		{name: "asymmetric-intermediate-NDV", ndvs: []float64{1, 1, 10_000}, wantSort: true},
+		{name: "asymmetric-intermediate-NDV", ndvs: []float64{1, 1, 10_000}, wantSort: false},
+		{name: "asymmetric-AVG-intermediate-NDV", ndvs: []float64{1, 1, 10_000}, aggregate: "avg(d.c)", wantSort: false},
 		{name: "asymmetric-middle-NDV", ndvs: []float64{1, 1, 25_000}, wantSort: false},
 		{name: "asymmetric-high-NDV", ndvs: []float64{1, 1, 50_000}, wantSort: false},
-		{name: "asymmetric-AVG-edge", ndvs: []float64{1, 1, 5_000}, aggregate: "avg(d.c)", wantSort: true},
+		{name: "asymmetric-AVG-low-NDV", ndvs: []float64{1, 1, 4}, aggregate: "avg(d.c)", wantSort: true},
+		{name: "asymmetric-AVG-edge", ndvs: []float64{1, 1, 5_000}, aggregate: "avg(d.c)", wantSort: false},
 		{name: "asymmetric-AVG-high-NDV", ndvs: []float64{1, 1, 25_000}, aggregate: "avg(d.c)", wantSort: false},
 		{name: "unique-keys", ndvs: []float64{100_000, 100_000, 100_000}, wantSort: false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			querySQL := sql
-			if tc.aggregate != "" {
-				querySQL = strings.Replace(querySQL, "count(*)", tc.aggregate, 1)
-			}
-			query := buildAutoRollupPlanSQLWithStats(t, 100_000,
-				querySQL, tc.ndvs...).GetQuery()
-			require.Equal(t, tc.wantSort, planHasSortRollup(query),
-				"order reuse must preserve the low-NDV win while rejecting expensive group finalization")
-			shape := reachableGroupingSetShape(query)
-			require.Equal(t, 1, shape.tableScans)
-			require.Equal(t, 1, shape.aggregates)
-			if !tc.wantSort {
-				require.Equal(t, 1, shape.expandProjects,
-					"the high-NDV HASH control must use the current shared topology")
-			}
-		})
+		for _, keyType := range []types.T{types.T_int32, types.T_int64} {
+			t.Run(fmt.Sprintf("%s/%s", tc.name, keyType), func(t *testing.T) {
+				querySQL := sql
+				if tc.aggregate != "" {
+					querySQL = strings.Replace(querySQL, "count(*)", tc.aggregate, 1)
+				}
+				query := buildAutoRollupPlanSQLWithTypedStats(t, 100_000,
+					querySQL, keyType, tc.ndvs...).GetQuery()
+				require.Equal(t, tc.wantSort, planHasSortRollup(query),
+					"order reuse must preserve the low-NDV win while rejecting expensive group finalization")
+				shape := reachableGroupingSetShape(query)
+				require.Equal(t, 1, shape.tableScans)
+				require.Equal(t, 1, shape.aggregates)
+				if !tc.wantSort {
+					require.Equal(t, 1, shape.expandProjects,
+						"the high-NDV HASH control must use the current shared topology")
+				}
+			})
+		}
 	}
 }
 
@@ -735,15 +739,23 @@ func buildAutoRollupPlanWithStats(t *testing.T, rows float64, grouping string, s
 
 func buildAutoRollupPlanSQLWithStats(t *testing.T, rows float64, sql string, ndvs ...float64) *Plan {
 	t.Helper()
+	return buildAutoRollupPlanSQLWithTypedStats(t, rows, sql, types.T_int64, ndvs...)
+}
+
+func buildAutoRollupPlanSQLWithTypedStats(t *testing.T, rows float64, sql string, keyType types.T, ndvs ...float64) *Plan {
+	t.Helper()
 	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
+	for _, column := range table.Cols {
+		column.Typ.Id = int32(keyType)
+	}
 	statsCache := NewStatsCache()
 	stats := NewStatsInfo()
 	stats.TableName = "bind_select"
 	stats.TableCnt = rows
 	for _, column := range []string{"a", "b", "c"} {
 		stats.NdvMap[column] = 10
-		stats.SizeMap[column] = uint64(rows * 8)
+		stats.SizeMap[column] = uint64(rows * float64(keyType.ToType().TypeSize()))
 	}
 	stats.NdvMap["a"] = 1000
 	stats.NdvMap["b"] = 100
