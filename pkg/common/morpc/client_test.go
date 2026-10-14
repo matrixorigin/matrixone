@@ -410,39 +410,29 @@ func TestCloseIdleBackends(t *testing.T) {
 }
 
 func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
-	rc, err := NewClient(
-		"",
-		newTestBackendFactory(),
-		WithClientMaxBackendPerHost(2),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1),
-		WithClientEnableAutoCreateBackend())
-	assert.NoError(t, err)
-	c := rc.(*client)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
+	// A zero last-active time means inactive, not idle: inactive GC is
+	// allowed to remove even a locked backend. Exercise idle GC directly
+	// with live, aged backends so the global GC schedule cannot choose the
+	// wrong lifecycle path or race the assertion.
+	lastActive := time.Now().Add(-time.Hour)
+	locked := &testBackend{locked: true, activeTime: lastActive}
+	idle := &testBackend{activeTime: lastActive}
+	t.Cleanup(locked.Close)
+	t.Cleanup(idle.Close)
+	c := &client{metrics: newMetrics("locked-idle-gc")}
+	c.options.maxIdleDuration = time.Minute
+	c.mu.backends = map[string][]Backend{"b1": {locked, idle}}
 
-	// Get backend with lock, may need retry
-	var b Backend
-	for i := 0; i < 10; i++ {
-		b, err = c.getBackend("b1", true)
-		if err == nil && b != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
-	assert.True(t, b.Locked())
-	b.(*testBackend).RWMutex.Lock()
-	b.(*testBackend).activeTime = time.Time{}
-	b.(*testBackend).RWMutex.Unlock()
+	require.Equal(t, 1, c.closeIdleBackends())
+	require.Equal(t, []Backend{locked}, c.mu.backends["b1"])
+	require.False(t, locked.closed)
+	require.True(t, idle.closed)
 
-	time.Sleep(time.Second * 1)
-	c.mu.Lock()
-	assert.Equal(t, 1, len(c.mu.backends["b1"]))
-	c.mu.Unlock()
+	// Once unlocked, the same live backend becomes eligible for idle GC.
+	locked.Unlock()
+	require.Equal(t, 1, c.closeIdleBackends())
+	require.Empty(t, c.mu.backends["b1"])
+	require.True(t, locked.closed)
 }
 
 func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
