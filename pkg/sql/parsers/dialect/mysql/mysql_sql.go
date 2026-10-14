@@ -35833,11 +35833,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:16004
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = int32(value)
+			yyLOCAL = value
 		}
 		yyVAL.union = yyLOCAL
 	case 2362:
@@ -35853,11 +35853,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:16015
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = int32(value)
+			yyLOCAL = value
 		}
 		yyVAL.union = yyLOCAL
 	case 2364:
@@ -35865,11 +35865,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:16023
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = tree.GetDisplayWith(int32(value))
+			yyLOCAL = tree.GetDisplayWith(value)
 		}
 		yyVAL.union = yyLOCAL
 	case 2365:
@@ -35888,12 +35888,12 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16038
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(value)),
+				DisplayWith: tree.GetDisplayWith(value),
 				Scale:       tree.NotDefineDec,
 			}
 		}
@@ -35903,17 +35903,17 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16047
 		{
-			width, ok := signedIntegral(yylex, yyDollar[2].item)
+			width, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			scale, ok := signedIntegral(yylex, yyDollar[4].item)
+			scale, ok := typeLengthIntegral(yylex, yyDollar[4].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(width)),
-				Scale:       int32(scale),
+				DisplayWith: tree.GetDisplayWith(width),
+				Scale:       scale,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -35933,12 +35933,12 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16067
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(value)),
+				DisplayWith: tree.GetDisplayWith(value),
 				Scale:       0,
 			}
 		}
@@ -35948,17 +35948,17 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16076
 		{
-			width, ok := signedIntegral(yylex, yyDollar[2].item)
+			width, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			scale, ok := signedIntegral(yylex, yyDollar[4].item)
+			scale, ok := typeLengthIntegral(yylex, yyDollar[4].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(width)),
-				Scale:       int32(scale),
+				DisplayWith: tree.GetDisplayWith(width),
+				Scale:       scale,
 			}
 		}
 		yyVAL.union = yyLOCAL
