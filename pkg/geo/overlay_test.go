@@ -103,7 +103,8 @@ func TestOverlaySharedEdge(t *testing.T) {
 	a := wkt(t, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))")
 	b := wkt(t, "POLYGON((4 0, 8 0, 8 4, 4 4, 4 0))")
 
-	_, inter := overlayArea(t, a, b, OpIntersection)
+	intersection, inter := overlayArea(t, a, b, OpIntersection)
+	require.Equal(t, "LINESTRING(4 0,4 4)", WriteWKT(intersection))
 	require.InDelta(t, 0.0, inter, 1e-9) // touching only along an edge
 
 	uni, union := overlayArea(t, a, b, OpUnion)
@@ -475,4 +476,108 @@ func TestOverlayNonConvexFloat(t *testing.T) {
 func TestOverlayNonAreal(t *testing.T) {
 	_, err := Overlay(wkt(t, "POINT(0 0)"), wkt(t, "POLYGON((0 0,1 0,1 1,0 1,0 0))"), OpUnion)
 	require.Error(t, err)
+}
+
+func TestOverlayIntersectionDimensions(t *testing.T) {
+	square := "POLYGON((0 0,1 0,1 1,0 1,0 0))"
+	for _, tc := range []struct{ name, a, b, want string }{
+		{"edge", square, "POLYGON((1 0,2 0,2 1,1 1,1 0))", "LINESTRING(1 0,1 1)"},
+		{"corner", square, "POLYGON((1 1,2 1,2 2,1 2,1 1))", "POINT(1 1)"},
+		{"partial edge", square, "POLYGON((1 0.25,2 0.25,2 0.75,1 0.75,1 0.25))", "LINESTRING(1 0.25,1 0.75)"},
+		{"vertex on edge", square, "POLYGON((1 0.5,2 0,2 1,1 0.5))", "POINT(1 0.5)"},
+		{"hole rim", "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))", "POLYGON((1 1,3 1,3 3,1 3,1 1))", "LINESTRING(1 1,1 3,3 3,3 1,1 1)"},
+		{"area line point", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,5 0,5 1,4 1,4 0)),((8 0,9 0,9 1,8 1,8 0)))", "MULTIPOLYGON(((1 0,3 0,3 2,1 2,1 0)),((5 0,6 0,6 1,5 1,5 0)),((9 1,10 1,10 2,9 2,9 1)))", "GEOMETRYCOLLECTION(POLYGON((1 0,2 0,2 2,1 2,1 0)),LINESTRING(5 0,5 1),POINT(9 1))"},
+		{"asymmetric area point", square, "MULTIPOLYGON(((0.5 0,2 0,2 0.5,0.5 0.5,0.5 0)),((1 1,2 1,2 2,1 2,1 1)),((4 4,5 4,5 5,4 5,4 4)))", "GEOMETRYCOLLECTION(POLYGON((0.5 0,1 0,1 0.5,0.5 0.5,0.5 0)),POINT(1 1))"},
+		{"asymmetric line point", square, "MULTIPOLYGON(((1 0,2 0,2 0.5,1 0.5,1 0)),((1 1,2 1,2 2,1 2,1 1)),((4 4,5 4,5 5,4 5,4 4)))", "GEOMETRYCOLLECTION(LINESTRING(1 0,1 0.5),POINT(1 1))"},
+		{"covered contacts", square, square, square},
+		{"near disjoint", square, "POLYGON((1.00000001 0,2 0,2 1,1.00000001 1,1.00000001 0))", "POLYGON EMPTY"},
+		{"empty", square, "POLYGON EMPTY", "POLYGON EMPTY"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := wkt(t, tc.a), wkt(t, tc.b)
+			for _, pair := range [][2]Geometry{{a, b}, {b, a}} {
+				g, err := Overlay(pair[0], pair[1], OpIntersection)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, WriteWKT(g))
+			}
+		})
+	}
+}
+
+func TestConnectEdgesRejectsOpenAreaBeforeContacts(t *testing.T) {
+	// A corrupt selected boundary must fail even when another segment could
+	// supply a valid line-only contact. Contact assembly cannot mask the error.
+	selected := newEvent(Coord{X: 0, Y: 0}, true, true)
+	selected.other = newEvent(Coord{X: 1, Y: 0}, false, true)
+	selected.other.other = selected
+	selected.inResult = true
+	contact := newEvent(Coord{X: 2, Y: 0}, true, true)
+	contact.other = newEvent(Coord{X: 3, Y: 0}, false, true)
+	contact.other.other = contact
+	contact.kind = edgeDifferentTransition
+	g, err := connectEdges([]*ovEvent{selected, contact}, OpIntersection)
+	require.ErrorContains(t, err, "invalid overlay boundary graph")
+	require.Nil(t, g)
+}
+
+func TestOverlayIntersectionSnapRows(t *testing.T) {
+	for _, scale := range []float64{snapScale, geodeticOverlaySnapScale, 1e3} {
+		for _, allowSnapError := range []bool{false, true} {
+			for _, cells := range []float64{0.25, 1} {
+				a := Polygon{Rings: [][]Coord{{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}, {X: 0, Y: 1}, {X: 0, Y: 0}}}}
+				x := 1 + cells/scale
+				b := Polygon{Rings: [][]Coord{{{X: x, Y: 0}, {X: 2, Y: 0}, {X: 2, Y: 1}, {X: x, Y: 1}, {X: x, Y: 0}}}}
+				want := "POLYGON EMPTY"
+				if cells < 0.5 {
+					want = "LINESTRING(1 0,1 1)"
+				}
+				for _, pair := range [][2]Geometry{{a, b}, {b, a}} {
+					g, err := overlayWithOptions(pair[0], pair[1], OpIntersection, scale, allowSnapError)
+					require.NoError(t, err)
+					require.Equal(t, want, WriteWKT(g), "scale=%g tolerant=%t cells=%g", scale, allowSnapError, cells)
+				}
+			}
+		}
+	}
+}
+
+func TestConnectEdgesKeepsLinesWithoutPointCandidates(t *testing.T) {
+	for _, subject := range []bool{false, true} {
+		for _, oppositePresent := range []bool{false, true} {
+			contact := newEvent(Coord{X: 2, Y: 0}, true, subject)
+			contact.other = newEvent(Coord{X: 3, Y: 0}, false, subject)
+			contact.other.other = contact
+			contact.kind = edgeDifferentTransition
+			events := []*ovEvent{contact}
+			if oppositePresent {
+				// This synthetic transition deliberately has no matching opposite
+				// endpoint. Point-set bounds must never override line classification.
+				other := newEvent(Coord{X: 4, Y: 0}, true, !subject)
+				other.other = newEvent(Coord{X: 5, Y: 0}, false, !subject)
+				other.other.other = other
+				events = append(events, other)
+			}
+			g, err := connectEdges(events, OpIntersection)
+			require.NoError(t, err)
+			require.Equal(t, "LINESTRING(2 0,3 0)", WriteWKT(g))
+		}
+	}
+}
+
+func TestConnectEdgesNaNBoundsKeepFinitePointCandidates(t *testing.T) {
+	segment := func(a, b Coord, subject bool) *ovEvent {
+		e := newEvent(a, true, subject)
+		e.other = newEvent(b, false, subject)
+		e.other.other = e
+		return e
+	}
+	// A malformed endpoint poisons a candidate box. The unordered bounds must
+	// fall back to complete discovery, preserving the independent finite corner.
+	g, err := connectEdges([]*ovEvent{
+		segment(Coord{X: 1, Y: 1}, Coord{X: 2, Y: 1}, true),
+		segment(Coord{X: 1, Y: 1}, Coord{X: 1, Y: 2}, false),
+		segment(Coord{X: math.NaN(), Y: 0}, Coord{X: -100, Y: 0}, true),
+	}, OpIntersection)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 1)", WriteWKT(g))
 }
