@@ -22,6 +22,8 @@ readonly CN_PORT_OFFSET=48
 readonly FRONTEND_PORT_OFFSET=72
 readonly STATUS_PORT_OFFSET=73
 
+source "$ROOT_DIR/optools/mo_e2e_common.bash"
+
 log() { printf '[mongodb-ci] %s\n' "$*"; }
 die() { printf '[mongodb-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
@@ -66,17 +68,8 @@ cleanup() {
   # Cleanup must continue even when artifact collection itself fails. Preserve
   # the original test status and make every teardown action best-effort.
   set +e
-  if [[ -n "$MO_PID" ]] && kill -0 "$MO_PID" >/dev/null 2>&1; then
-    kill "$MO_PID" >/dev/null 2>&1 || true
-    for _ in {1..40}; do
-      kill -0 "$MO_PID" >/dev/null 2>&1 || break
-      sleep 0.25
-    done
-    if kill -0 "$MO_PID" >/dev/null 2>&1; then
-      kill -KILL "$MO_PID" >/dev/null 2>&1 || true
-    fi
-    wait "$MO_PID" >/dev/null 2>&1 || true
-  fi
+  mo_e2e_stop_service "$MO_PID"
+  MO_PID=""
   collect
   if [[ -n "$TMP_DIR" ]]; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
@@ -114,19 +107,8 @@ wait_mongo() {
 }
 
 wait_mo_port() {
-  local deadline=$((SECONDS + 120)) port=""
-  while (( SECONDS < deadline )); do
-    if [[ -n "$MO_PID" ]] && ! kill -0 "$MO_PID" >/dev/null 2>&1; then
-      die "MatrixOne exited before publishing its frontend listener"
-    fi
-    port="$(sed -nE 's/.*Server Listening on : [^ ]*:([0-9]+).*/\1/p' "$TMP_DIR/mo-service.log" | tail -1)"
-    if [[ "$port" =~ ^[1-9][0-9]*$ ]]; then
-      printf '%s\n' "$port"
-      return
-    fi
-    sleep 0.25
-  done
-  die "MatrixOne did not publish its frontend listener"
+  mo_e2e_wait_frontend_port "$MO_PID" "$TMP_DIR/mo-service.log" || \
+    die "MatrixOne did not publish its frontend listener"
 }
 
 wait_primary() {
@@ -140,109 +122,25 @@ wait_primary() {
 }
 
 port_block_candidates() {
-  python3 - <<'PY'
-import random
-
-# Keep every MatrixOne listener in one 80-port block. Availability is checked
-# after a host-wide lease has been acquired for each candidate.
-width = 80
-candidates = list(range(36000, 57000 - width, width))
-random.shuffle(candidates)
-for base in candidates:
-    print(base)
-PY
+  mo_port_block_candidates "$PORT_BLOCK_WIDTH"
 }
 
 port_block_is_available() {
-  local base="$1"
-  python3 - "$base" "$PORT_BLOCK_WIDTH" <<'PY'
-import socket
-import sys
-
-base = int(sys.argv[1])
-width = int(sys.argv[2])
-sockets = []
-try:
-    for port in range(base, base + width):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", port))
-        sockets.append(sock)
-except OSError:
-    raise SystemExit(1)
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  mo_port_block_is_available "$1" "$PORT_BLOCK_WIDTH"
 }
 
 acquire_port_block_lease() {
-  local base="$1" lease_dir status_file status=""
-  # TMPDIR may be scoped to an individual CI job. The default lock directory
-  # must instead be stable for every process running under this host user.
-  lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-/tmp/mo-mongodb-port-leases-$(id -u)}"
-  mkdir -p "$lease_dir" || die "could not create MongoDB E2E port lease directory"
-  chmod 700 "$lease_dir" || die "could not secure MongoDB E2E port lease directory"
-  local lease_file="$lease_dir/$base.lock"
-  status_file="$(mktemp "${TMPDIR:-/tmp}/mo-mongodb-port-lease.XXXXXX")" || \
-    die "could not create MongoDB E2E port lease status file"
-
-  python3 - "$lease_file" "$status_file" "$$" <<'PY' &
-import fcntl
-import os
-import signal
-import sys
-import time
-
-lease_file, status_file, parent_pid = sys.argv[1:]
-parent_pid = int(parent_pid)
-with open(lease_file, "a+") as lease:
-    try:
-        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        with open(status_file, "w") as status:
-            status.write("busy\n")
-        raise SystemExit(1)
-    with open(status_file, "w") as status:
-        status.write("locked\n")
-
-    def release(_signal, _frame):
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, release)
-    signal.signal(signal.SIGINT, release)
-    # The shell trap handles ordinary cleanup. If the shell is killed, the
-    # child is reparented and must close its flock without waiting for a signal.
-    while os.getppid() == parent_pid:
-        time.sleep(0.05)
-PY
-  PORT_LEASE_PID=$!
-
-  for _ in {1..100}; do
-    if [[ -s "$status_file" ]]; then
-      status="$(cat "$status_file")"
-      break
-    fi
-    if ! kill -0 "$PORT_LEASE_PID" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 0.05
-  done
-  rm -f -- "$status_file"
-
-  if [[ "$status" == "locked" ]]; then
-    return
+  local lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-/tmp/mo-mongodb-port-leases-$(id -u)}"
+  local status=0
+  mo_port_block_acquire_lease "$1" "$lease_dir" "${TMPDIR:-/tmp}" || status=$?
+  if (( status == 2 )); then
+    die "could not create or secure MongoDB E2E port-block lease"
   fi
-  wait "$PORT_LEASE_PID" >/dev/null 2>&1 || true
-  PORT_LEASE_PID=""
-  return 1
+  return "$status"
 }
 
 release_port_block_lease() {
-  if [[ -n "$PORT_LEASE_PID" ]]; then
-    kill "$PORT_LEASE_PID" >/dev/null 2>&1 || true
-    wait "$PORT_LEASE_PID" >/dev/null 2>&1 || true
-  fi
-  PORT_LEASE_PID=""
+  mo_port_block_release_lease
 }
 
 is_tcp_port() {
@@ -392,57 +290,14 @@ print_port_plan() {
 }
 
 generate_mo_config() {
-  local source_dir="$ROOT_DIR/etc/launch"
   local generated_dir="$TMP_DIR/mo-config"
-  mkdir -p "$generated_dir"
-  for name in log tn; do
-    sed -e "s#\./mo-data#$TMP_DIR/mo-data#g" -e "s#\"mo-data/#\"$TMP_DIR/mo-data/#g" \
-      -e "s#^status-port = [0-9][0-9]*#status-port = $STATUS_PORT#" \
-      -e "s#^port-base = [0-9][0-9]*#port-base = $TN_PORT_BASE#" \
-      "$source_dir/$name.toml" >"$generated_dir/$name.toml"
-  done
-  sed -e "s#\./mo-data#$TMP_DIR/mo-data#g" -e "s#\"mo-data/#\"$TMP_DIR/mo-data/#g" \
-      -e "s#^status-port = [0-9][0-9]*#status-port = $STATUS_PORT#" \
-      -e "s#^port-base = [0-9][0-9]*#port-base = $CN_PORT_BASE#" \
-      "$source_dir/cn.toml" | awk -v port="$MO_PORT" '
-        /^\[cn\.frontend\.iceberg\]$/ && !inserted {
-          print "[cn.frontend]"
-          print "port = " port
-          print ""
-          inserted = 1
-        }
-        { print }
-        END { if (!inserted) exit 42 }
-      ' >"$generated_dir/cn.toml"
-  {
-    printf '\n[logservice]\n'
-    printf 'raft-port = %s\n' "$LOG_RAFT_PORT"
-    printf 'logservice-port = %s\n' "$LOG_SERVICE_PORT"
-    printf 'gossip-port = %s\n' "$LOG_GOSSIP_PORT"
-    printf 'gossip-seed-addresses = ["127.0.0.1:%s"]\n' "$LOG_GOSSIP_PORT"
-  } >>"$generated_dir/log.toml"
-  {
-    printf '\n[hakeeper-client]\n'
-    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
-  } >>"$generated_dir/log.toml"
-  {
-    printf '\n[hakeeper-client]\n'
-    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
-  } >>"$generated_dir/tn.toml"
-  {
-    printf '\n[hakeeper-client]\n'
-    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
-  } >>"$generated_dir/cn.toml"
+  mo_e2e_generate_launch_config "$ROOT_DIR" "$TMP_DIR" "$LOG_PORT_BASE" "$MO_PORT" "$STATUS_PORT"
   {
     printf '\n[cn.frontend.mongodb]\n'
     printf 'enable = true\nallow-loopback = true\n'
     printf 'connect-timeout = "10s"\nserver-selection-timeout = "10s"\nsocket-timeout = "30s"\n'
     printf 'batch-rows = 2\nmax-batch-bytes = 1048576\nmax-value-bytes = 524288\nmax-source-concurrency = 2\n'
   } >>"$generated_dir/cn.toml"
-  sed -e "s#\./etc/launch/log.toml#$generated_dir/log.toml#" \
-      -e "s#\./etc/launch/tn.toml#$generated_dir/tn.toml#" \
-      -e "s#\./etc/launch/cn.toml#$generated_dir/cn.toml#" \
-      "$source_dir/launch.toml" >"$generated_dir/launch.toml"
 }
 
 run_e2e() {
