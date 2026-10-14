@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -40,6 +39,8 @@ const jsonSubcolumnMaxPaths = 32
 const jsonSubcolumnMaxCandidates = 256
 const jsonSubcolumnMaxBytes = 8 << 20
 const JSONProjectionPrefix = "mo-json-subcolumns-v1:"
+const jsonProjectionMaxColumns = 64
+const jsonProjectionMaxBytes = 64 << 10
 
 type JSONPathProjection map[uint16][]string
 type jsonProjectionContextKey struct{}
@@ -52,21 +53,33 @@ func JSONPathProjectionFromContext(ctx context.Context) JSONPathProjection {
 	return p
 }
 func EncodeJSONPathProjection(p JSONPathProjection) string {
-	b, _ := json.Marshal(p)
-	return JSONProjectionPrefix + string(b)
+	// This is an optional optimization. Only emit contracts the receiving scan
+	// admits; an empty result leaves the original JSON read path in place.
+	if len(p) == 0 || len(p) > jsonProjectionMaxColumns {
+		return ""
+	}
+	b, err := json.Marshal(p)
+	if err != nil || len(JSONProjectionPrefix)+len(b) > jsonProjectionMaxBytes {
+		return ""
+	}
+	encoded := JSONProjectionPrefix + string(b)
+	if _, err := DecodeJSONPathProjection(encoded); err != nil {
+		return ""
+	}
+	return encoded
 }
 func DecodeJSONPathProjection(s string) (JSONPathProjection, error) {
 	if s == "" {
 		return nil, nil
 	}
-	if !strings.HasPrefix(s, JSONProjectionPrefix) || len(s) > 64<<10 {
+	if !strings.HasPrefix(s, JSONProjectionPrefix) || len(s) > jsonProjectionMaxBytes {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON projection contract")
 	}
 	var p JSONPathProjection
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(s, JSONProjectionPrefix)), &p); err != nil {
 		return nil, err
 	}
-	if len(p) > 64 {
+	if len(p) > jsonProjectionMaxColumns {
 		return nil, moerr.NewInvalidInputNoCtx("too many JSON projection columns")
 	}
 	for _, paths := range p {
@@ -111,7 +124,8 @@ func jsonObjectKeyPath(keys []string) string {
 	b.WriteByte('$')
 	for _, key := range keys {
 		b.WriteByte('.')
-		b.WriteString(strconv.Quote(key))
+		quoted, _ := json.Marshal(key)
+		b.Write(quoted)
 	}
 	return b.String()
 }
@@ -241,7 +255,9 @@ func buildJSONSubcolumns(bat *batch.Batch, seqnums *Seqnums, block uint16) (*bat
 			}
 			parsed, err := bytejson.ParseJsonPath(p)
 			if err != nil {
-				return nil, err
+				// A candidate the path parser cannot represent must not prevent
+				// persistence of the valid source document.
+				continue
 			}
 			values := vector.NewVec(types.T_json.ToType())
 			used := n*(types.VarlenaSize+1) + 1024
@@ -510,19 +526,21 @@ func ReadProjectedJSONColumns(ctx context.Context, header ObjectMeta, name strin
 		for i, entry := range values.Entries {
 			obj, e := DecodeCached(entry.CachedData)
 			if e != nil {
-				values.Release()
 				for _, v := range vectors {
 					if v != nil {
 						v.Free(nil)
 					}
 				}
+				values.Release()
 				return result, e
 			}
 			vectors[i] = obj.(*vector.Vector)
 		}
-		values.Release()
 		output := vector.NewVec(types.T_json.ToType())
 		materializeErr := func() error {
+			// Fixed-width root flags borrow the IOVector's backing storage.
+			// Release the decoded views first, then their owner, on every exit.
+			defer values.Release()
 			defer func() {
 				for _, v := range vectors {
 					v.Free(nil)

@@ -155,6 +155,8 @@ func proveJSONPathProjection(q *pb.Query) {
 		for seq := range projection {
 			sort.Strings(projection[seq])
 		}
+		// The encoder shares receiver admission checks. Oversized projections
+		// decline the optimization instead of making TableScan.Prepare fail.
 		scan.ExtraOptions = objectio.EncodeJSONPathProjection(projection)
 	}
 }

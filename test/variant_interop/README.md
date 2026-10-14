@@ -42,3 +42,12 @@ python3 test/variant_interop/duckdb_instances.py verify --dir "$MO_VARIANT_INTER
 ```
 
 This loads and flushes both DuckDB files and the Doris export in the built MO service, checks every full document and exact DECIMAL path value, and verifies the SQL OUTFILE result in DuckDB.
+
+For the PR #30071 review regressions, run the updated source build:
+
+```bash
+go test ./pkg/objectio ./pkg/objectio/ioutil ./pkg/sql/plan ./pkg/sql/colexec/table_scan -count=1
+python3 test/variant_interop/review_json_subcolumns.py --port 16001
+```
+
+The SQL script creates a uniquely named `review_json_30071_*` database and drops only that database on exit. It checks C0/DEL/C1 and quoted/Unicode keys after flush, full-document preservation, 63/64/65 JSON-column queries, exact 64 KiB projection-contract boundaries and JSON-escape expansion beyond the limit. It requires PyMySQL and the local test account `root`/`111`; it does not start or configure a server. The native Go regression also poisons allocator buffers on final release to exercise the borrowed BOOL ownership boundary that ordinary MemoryFS alone cannot expose.

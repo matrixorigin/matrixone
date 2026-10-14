@@ -10,6 +10,8 @@ Agent observations contain a few frequently accessed attributes and a large tail
 
 Normal object writers automatically discover scalar object-key paths in the first 1,024 rows of each JSON source block. Discovery is bounded to 256 candidates, depth 16, 512-byte keys and 32 selected paths per block; selection orders frequency descending and canonical path ascending. Arrays are preserved as fragment values if a selected scalar path subsequently drifts to an array, but array element paths are not discovered. All-null or object-only paths may remain in the source column.
 
+Canonical quoted keys use JSON string encoding, including `\u0000`/`\u0001` and other control characters. Go-only `\x` or `\a` escapes are not emitted. If a discovered candidate cannot be represented by the path parser, that candidate is skipped while the valid source document is still persisted. Manifest key arrays remain unchanged, so existing objects do not require a rewrite for this encoding repair.
+
 The source JSON is always written unchanged to `SchemaData`. A reserved additive ObjectMeta V3 sub-meta section (`CkpMetaEnd + 1`, section index 29) stores one auxiliary block per source block, in the same immutable object:
 
 1. A constant VARCHAR manifest describes version, source block ordinal, row count, source physical sequence numbers, root-null columns and exact key arrays for fragment columns.
@@ -32,7 +34,11 @@ Before column remapping, a single-step unary TABLE_SCAN/PROJECT/FILTER/SORT/AGG 
 
 The proof records source physical sequence numbers in TABLE_SCAN's extra options and is carried in an additive pipeline TableScan field. Older receivers ignore that field and read the source column. Reader summaries disable partial-document projection. `LoadColumnsData` and the modern destination/selected-row loader pass the proof through the read context.
 
+The encoder applies the receiver's admission checks before attaching extra options: at most 64 projected JSON columns, at most 32 paths per column and at most 65,536 encoded bytes, including the version prefix and JSON escaping. Exact byte-boundary contracts are accepted. A larger or otherwise unsupported optimization returns an empty contract and the scan reads full JSON; valid wide/long-path SQL must not fail during `TableScan.Prepare` because of an optional projection. The receiver continues rejecting malformed or oversized nonempty wire contracts.
+
 For an eligible persisted column, the reader fetches the manifest, source-null flag and only requested fragment extents. It constructs private minimal JSON documents so existing JSON functions continue to execute without a new scalar evaluator. Ancestors are inserted last to preserve complete selected container values. Partial documents are never stored in the file cache under the raw JSON extent. Other columns and visibility metadata retain their ordinary read paths. In-memory rows retain complete JSON.
+
+Fixed-width root-null vectors borrow their IOVector's backing allocation. The complete input IOVector stays alive through materialization and decoded-vector cleanup, including cancellation and failure exits. Only independently owned output bytes escape. This lifetime also applies when the cache bypasses or declines a read, or drops its own reference during eviction.
 
 ## Tests and evidence
 
@@ -43,6 +49,11 @@ For an eligible persisted column, the reader fetches the manifest, source-null f
 | `TestJSONSubcolumnsDiscoveryBudgetAndCorruption` | Bounded candidate/path/serialized sizes, corrupted section identities/offsets reject without panic, ancestor/descendant extraction remains correct. |
 | `TestJSONSubcolumnsVisibilityAndSelection` | 1,000 appendable rows retain commit timestamp/abort masks; selected row order and SQL NULL are preserved. |
 | `TestJSONSubcolumnProjectionProof` | Safe fixed paths accepted; complete/raw/unsupported consumption declines, including raw scan filters. |
+| `TestJSONSubcolumnsPoisonOnRelease` | A real object read uses an allocator wrapper that overwrites buffers on final release. SQL NULL flags, fragment tags/bytes and allocation/release counts remain correct. The pre-fix code turned row 0 from non-NULL into SQL NULL. |
+| `TestJSONSubcolumnsReleaseOnError` | Cancellation during materialization and a failed fragment decode release every input allocation and expose no partially owned result. |
+| `TestJSONSubcolumnsControlCharacterKeys` | 73 distinct empty/quoted/Unicode/C0/DEL/C1 key cases at root and nested positions; real object writes and projected reads preserve exact numbers, missing/JSON null/SQL NULL and scalar/container drift without reading the source extent. |
+| `TestJSONSubcolumnProjectionAdmission` | 1/63/64/65/4096 columns; encoded lengths 65,535/65,536/65,537 and escaping amplification. Admitted contracts decode; over-limit plans retain full-document reads. |
+| `review_json_subcolumns.py` | Real LOG/TN/CN SQL, three forced table flushes, 73 key cases plus full-source verification, 63/64/65-column queries and all encoded-size boundaries. Run with the newly built service and retain its JSON summary. |
 | `TestCastExactJSONDecimal` | Real SQL testing exposed a DOUBLE conversion in JSON CAST; exact integer/DECIMAL to DECIMAL64/128 now parses its exact text and retains legacy FLOAT conversion. |
 | `mo_local.py` | Real built local LOG/TN/CN service: 10,000 input rows, forced flush, rollback, concurrent update with observed READ-COMMITTED semantics, deletion, complete/path/DECIMAL checks on 9,677 surviving rows. The same 9,677 values also pass after a complete service restart with the final binary. |
 | race | Targeted objectio/ioutil/planner tests pass. |
