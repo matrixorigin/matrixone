@@ -7210,12 +7210,10 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
-		if bitmap, ok := storedSetBitmapExpr(args[0]); ok {
-			// SET's display wrapper is a VARCHAR presentation of a stored uint64
-			// bitmap. Bitwise aggregates are numeric consumers: use that bitmap
-			// directly so it retains the native uint64 aggregate path instead of
-			// routing an unsupported uint64 input through the numeric CAST4 helper.
-			args[0] = bitmap
+		if storage, ok := storedMySQLSpecialTypeExpr(args[0]); ok {
+			// ENUM/SET display labels must not enter the string conversion.
+			// Resolve their ordinals/bitmaps through the existing integer domains.
+			args[0] = storage
 		} else {
 			argType := makeTypeByPlan2Expr(args[0])
 			if isBitwiseAggregateConversionInput(argType) {
@@ -11082,9 +11080,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
-	// labels. Resolve storage before the generic string-numeric conversion.
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	// Numeric aggregates consume ENUM ordinals and SET bitmaps. Resolve
+	// storage before the generic string-numeric conversion.
+	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11116,6 +11114,18 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 		}
 	}
 	return result
+}
+
+func usesMySQLSpecialNumericAggregateInput(name string, argCount int) bool {
+	if argCount != 1 {
+		return false
+	}
+	switch name {
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor":
+		return true
+	default:
+		return false
+	}
 }
 
 // An IN list is represented as a plan.ExprList and is not assigned one scalar
