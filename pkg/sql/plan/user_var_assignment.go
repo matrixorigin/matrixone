@@ -236,6 +236,7 @@ func validateUserVarAssignmentScope(
 	hasAssignment := false
 	assignmentProjections := 0
 	priorUserVariableReads := make(map[string]struct{})
+	assignedUserVariables := make(map[string]struct{})
 	for _, selectExpr := range clause.Exprs {
 		if containsUserVarAssignment(selectExpr.Expr) {
 			hasAssignment = true
@@ -243,6 +244,7 @@ func validateUserVarAssignmentScope(
 				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
 			}
 			for assignedName := range userVarAssignmentNames(selectExpr.Expr) {
+				assignedUserVariables[assignedName] = struct{}{}
 				if _, readBefore := priorUserVariableReads[assignedName]; readBefore {
 					return userVarAssignmentNotSupported(ctx,
 						"reading a user variable before its assignment projection")
@@ -257,6 +259,14 @@ func validateUserVarAssignmentScope(
 	}
 	if clause.Where != nil && containsUserVarAssignment(clause.Where.Expr) {
 		return userVarAssignmentNotSupported(ctx, "WHERE")
+	}
+	if hasAssignment && clause.Where != nil {
+		for name := range userVariableReadsBeforeAssignment(clause.Where.Expr) {
+			if _, assigned := assignedUserVariables[name]; assigned {
+				return userVarAssignmentNotSupported(ctx,
+					"reading a user variable in WHERE before its assignment projection")
+			}
+		}
 	}
 	if clause.From != nil && containsUserVarAssignmentValue(reflect.ValueOf(clause.From), make(map[assignmentVisit]struct{})) {
 		return userVarAssignmentNotSupported(ctx, "FROM/JOIN")
