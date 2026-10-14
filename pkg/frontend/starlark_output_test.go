@@ -183,7 +183,35 @@ func TestStarlarkVectorINOUTReuse(t *testing.T) {
 			got, err = ses.GetUserDefinedVar("v")
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got.Value)
+			// SQL NULL is None, distinct from an unsupported typed nil slice.
+			require.NoError(t, ses.SetUserDefinedVar("v", nil, ""))
+			require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false))
+			got, err = ses.GetUserDefinedVar("v")
+			require.NoError(t, err)
+			require.Nil(t, got.Value)
+			for call := 0; call < 3; call++ {
+				require.NoError(t, interp.ExecuteStarlark(`out_v = "`+tc.literal+`" if v == None else v`, "test", false))
+				got, err = ses.GetUserDefinedVar("v")
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got.Value)
+			}
 		})
+	}
+}
+
+func TestStarlarkNullScalarINOUTReuse(t *testing.T) {
+	ses := starlarkOutputTestSession(t)
+	interp, _ := starlarkOutputTestInterpreter(t, ses, "inout v int")
+	require.NoError(t, ses.SetUserDefinedVar("v", nil, ""))
+	require.NoError(t, interp.ExecuteStarlark("out_v = v", "test", false))
+	got, err := ses.GetUserDefinedVar("v")
+	require.NoError(t, err)
+	require.Nil(t, got.Value)
+	for call := 0; call < 3; call++ {
+		require.NoError(t, interp.ExecuteStarlark("out_v = 12 if v == None else v + 1", "test", false))
+		got, err = ses.GetUserDefinedVar("v")
+		require.NoError(t, err)
+		require.Equal(t, int32(12+call), got.Value)
 	}
 }
 

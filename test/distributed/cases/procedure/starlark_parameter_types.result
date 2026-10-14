@@ -944,4 +944,137 @@ call sql_vector(@vector);
 select @vector=cast('[1,2]' as vecf64(2)) as matches;
 matches
 1
+create or replace procedure typed_value(inout v int) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v int) language 'starlark' $$out_v = 12 if v == None else v + 1$$;
+call typed_value(@v);
+select @v=12 as matches;
+matches
+1
+call typed_value(@v);
+select @v=13 as matches;
+matches
+1
+call typed_value(@v);
+select @v=14 as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "[0,0]" if v == None else v$$;
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf32(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf32(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf32(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf64(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf64(2)) language 'starlark' $$out_v = "[0,0]" if v == None else v$$;
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf64(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf64(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[0,0]' as vecf64(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecbf16(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecbf16(2)) language 'starlark' $$out_v = "[1.5,-2]" if v == None else v$$;
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecbf16(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecbf16(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecbf16(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf16(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf16(2)) language 'starlark' $$out_v = "[1.5,-2]" if v == None else v$$;
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecf16(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecf16(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[1.5,-2]' as vecf16(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecint8(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecint8(2)) language 'starlark' $$out_v = "[-128,127]" if v == None else v$$;
+call typed_value(@v);
+select @v=cast('[-128,127]' as vecint8(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[-128,127]' as vecint8(2)) as matches;
+matches
+1
+call typed_value(@v);
+select @v=cast('[-128,127]' as vecint8(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecuint8(2)) language 'starlark' $$out_v = v$$;
+set @v=null;
+call typed_value(@v);
+select @v is null as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecuint8(2)) language 'starlark' $$out_v = "[0,255]" if v == None else v$$;
+call typed_value(@v);
+select hex(@v)='00FF' as matches;
+matches
+1
+call typed_value(@v);
+select hex(@v)='00FF' as matches;
+matches
+1
+call typed_value(@v);
+select hex(@v)='00FF' as matches;
+matches
+1
 drop database starlark_parameter_types;
