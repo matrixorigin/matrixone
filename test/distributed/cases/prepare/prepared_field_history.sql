@@ -327,6 +327,26 @@ SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
 DEALLOCATE PREPARE p_field_history;
 SET @field_condition = 1;
+-- Two window marker declarations differ from a compound value or literal NULL.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,?) OVER () ELSE NULL END,''A'',''a'') AS lag_params_f, FIELD(CASE WHEN ? THEN LEAD(?,0,?) OVER () ELSE NULL END,''A'',''a'') AS lead_params_f, FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_literal_f, FIELD(CASE WHEN ? THEN LAG(COALESCE(?,NULL),0,?) OVER () ELSE NULL END,''A'',''a'') AS lag_compound_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+DEALLOCATE PREPARE p_field_history;
+-- Registered return contracts and UNION preserve inferred, not inherent BINARY.
+-- The separator follows the same contribution rule; explicit BINARY still wins.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT_WS('''',ELT(1,COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_elt_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LTRIM(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_ltrim_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',(SELECT x FROM (SELECT LOWER(COALESCE(?,NULL)) x UNION ALL SELECT NULL) d WHERE x <> '''' LIMIT 1)) ELSE NULL END,''A'',''a'') AS ws_union_f, FIELD(CASE WHEN ? THEN CONCAT_WS(LOWER(COALESCE(?,NULL)),''a'') ELSE NULL END,''A'',''a'') AS ws_separator_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',(SELECT x FROM (SELECT LOWER(COALESCE(?,NULL)) x UNION ALL SELECT _binary '''') d WHERE x <> '''' LIMIT 1)) ELSE NULL END,''A'',''a'') AS ws_union_binary_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',UNHEX(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_intrinsic_f, FIELD(CASE WHEN ? THEN CONCAT_WS(_binary '''',COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS ws_binary_separator_f';
+SET @field_condition = '1', @field_value = NULL, @field_hex = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+SET @field_value = 'a', @field_hex = '61';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+SET @field_value = _binary 'a', @field_hex = _binary '61';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);

@@ -58,6 +58,14 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 		{"CONCAT_WS scalar inferred BLOB", "select field(case when ? then concat_ws('',(select lower(coalesce(?,NULL)) limit 1)) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"CONCAT_WS scalar declaration", "select field(case when ? then concat_ws('',(select concat(coalesce(?,NULL)) limit 1)) else null end,'A','a')", false, types.T_any, types.T_text, true},
 		{"CONCAT_WS LAG inferred BLOB", "select field(case when ? then concat_ws('',lag(?,0,NULL) over ()) else null end,'A','a')", false, types.T_any, types.T_text, true},
+		{"CONCAT_WS ELT inferred", "select field(case when ? then concat_ws('',elt(1,coalesce(?,null))) else null end,'A','a')", false, types.T_any, types.T_text, true},
+		{"CONCAT_WS LTRIM inferred", "select field(case when ? then concat_ws('',ltrim(coalesce(?,null))) else null end,'A','a')", false, types.T_any, types.T_text, true},
+		{"CONCAT_WS ELT explicit binary", "select field(case when ? then concat_ws('',elt(1,coalesce(?,null),_binary '')) else null end,'A','a')", false, types.T_any, types.T_blob, true},
+		{"CONCAT_WS inherent UNHEX binary", "select field(case when ? then concat_ws('',unhex(coalesce(?,null))) else null end,'A','a')", false, types.T_any, types.T_blob, true},
+		{"CONCAT_WS UNION inferred", "select field(case when ? then concat_ws('',(select x from (select lower(coalesce(?,null)) x union all select null) d limit 1)) else null end,'A','a')", false, types.T_any, types.T_text, true},
+		{"CONCAT_WS UNION explicit binary", "select field(case when ? then concat_ws('',(select x from (select lower(coalesce(?,null)) x union all select _binary '') d limit 1)) else null end,'A','a')", false, types.T_any, types.T_blob, true},
+		{"CONCAT_WS separator inferred", "select field(case when ? then concat_ws(lower(coalesce(?,null)),'a') else null end,'A','a')", false, types.T_any, types.T_text, true},
+		{"CONCAT_WS ELT separator inferred", "select field(case when ? then concat_ws(elt(1,coalesce(?,null)),'a') else null end,'A','a')", false, types.T_any, types.T_text, true},
 		{"CONCAT_WS binary separator", "select field(case when ? then concat_ws(_binary '',lower(coalesce(?,NULL))) else null end,'A','a')", false, types.T_any, types.T_blob, false},
 		{"CONCAT_WS explicit binary NULL", "select field(case when ? then concat_ws('',cast(NULL as binary),?) else null end,'A','a')", false, types.T_any, types.T_blob, false},
 		{"LOWER compound", "select field(case when ? then lower(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
@@ -127,6 +135,62 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 				snapshot = bound.FieldTypes
 			}
 		})
+	}
+}
+
+func TestPreparedFieldWindowDefaultParameters(t *testing.T) {
+	for _, tc := range []struct {
+		expr string
+		want types.T
+	}{
+		{"lag(?,0,?) over ()", types.T_text},
+		{"lead(?,0,?) over ()", types.T_text},
+		{"lag(?,1,?) over ()", types.T_text},
+		{"lead(?,1,?) over ()", types.T_text},
+		{"lag(coalesce(?,null),0,?) over ()", types.T_any},
+		{"lag(?,0,coalesce(?,null)) over ()", types.T_any},
+		{"lag(?,0,cast(? as binary)) over ()", types.T_blob},
+	} {
+		for _, textCondition := range []bool{false, true} {
+			conditionName := "/numeric"
+			if textCondition {
+				conditionName = "/text"
+			}
+			t.Run(tc.expr+conditionName, func(t *testing.T) {
+				ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+					"select field(case when ? then "+tc.expr+" else null end,'A','a')", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				var snapshot *PreparedFieldTypes
+				for _, oid := range []types.T{types.T_any, types.T_varchar, types.T_blob} {
+					condition, value := types.T_int64.ToType(), any("a")
+					var c any = int64(1)
+					if textCondition {
+						condition, c = types.T_varchar.ToType(), "1"
+					}
+					if oid == types.T_any {
+						value = nil
+					}
+					bindings := []PreparedSourceBinding{{Position: 0, Type: condition}, {Position: 1, Type: oid.ToType()}, {Position: 2, Type: oid.ToType()}}
+					values := []any{ParamValue{Value: c, SourceType: condition, HasSourceType: true}, ParamValue{Value: value, SourceType: oid.ToType(), HasSourceType: true}, ParamValue{Value: value, SourceType: oid.ToType(), HasSourceType: true}}
+					ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					require.NoError(t, err)
+					require.NotNil(t, bound.FieldTypes)
+					require.Len(t, bound.FieldTypes.cases, 1)
+					want := tc.want
+					if textCondition && want == types.T_any {
+						want = types.T_blob
+					}
+					require.Equal(t, want, bound.FieldTypes.cases[0].result.Oid)
+					if snapshot != nil {
+						require.Same(t, snapshot, bound.FieldTypes)
+					}
+					snapshot = bound.FieldTypes
+				}
+			})
+		}
 	}
 }
 
