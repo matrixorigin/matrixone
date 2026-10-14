@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -78,6 +79,59 @@ func TestBackupObjectStorageUsesDedicatedConnectionPool(t *testing.T) {
 	args.MaxConnsPerHost = 7
 	setBackupConnectionPool(&args)
 	assert.Equal(t, 7, args.MaxConnsPerHost)
+}
+
+func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "s3 disk", path: "s3,disk,region,bucket,key,secret,prefix:file", want: true},
+		{name: "s3 opts disk", path: "s3-opts,endpoint=disk,bucket=/tmp/file:file", want: true},
+		{name: "s3 opts caller hdfs is normalized away", path: "s3-opts,endpoint=disk,is-hdfs=true,bucket=/tmp/file:file", want: true},
+		{name: "hdfs disk endpoint is hdfs provider", path: "hdfs,endpoint=disk:file", want: false},
+		{name: "minio disk endpoint is minio provider", path: "s3-opts,endpoint=disk,is-minio=true,bucket=/tmp/file:file", want: false},
+		{name: "remote s3", path: "s3-opts,endpoint=https://s3.example,bucket=b:file", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, err := ParsePath(tt.path)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, PathUsesLocalETLBackend(path))
+		})
+	}
+}
+
+func TestGetForETLDynamicS3OptsDiskRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	bucket := t.TempDir()
+	spec := JoinPath("s3-opts,endpoint=disk,bucket="+bucket+",prefix=roundtrip", "object")
+
+	fs, path, err := GetForETL(ctx, nil, spec)
+	assert.NoError(t, err)
+	assert.Equal(t, "object", path)
+	defer fs.Close(ctx)
+
+	payload := []byte("owned dynamic fixture")
+	assert.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: path,
+		Entries:  []IOEntry{{Data: payload, Size: int64(len(payload))}},
+	}))
+
+	var reader io.ReadCloser
+	assert.NoError(t, fs.Read(ctx, &IOVector{
+		FilePath: path,
+		Entries:  []IOEntry{{Size: -1, ReadCloserForRead: &reader}},
+	}))
+	got, readErr := io.ReadAll(reader)
+	assert.NoError(t, readErr)
+	assert.NoError(t, reader.Close())
+	assert.Equal(t, payload, got)
+
+	entry, err := fs.StatFile(ctx, path)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(payload)), entry.Size)
 }
 
 type dummyFileService struct{ name string }

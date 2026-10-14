@@ -63,6 +63,40 @@ func etlParallelMode(ctx context.Context) ParallelMode {
 	return ParallelOff
 }
 
+// PathUsesLocalETLBackend reports whether an argumented ETL path selects the
+// process-local disk backend.  Keep this classification next to GetForETL so
+// authorization and construction use the same provider selection rules.  It
+// only parses the already supplied path arguments; it does not create a
+// backend or touch the filesystem.
+func PathUsesLocalETLBackend(path Path) bool {
+	if len(path.ServiceArguments) == 0 {
+		return path.Service == ""
+	}
+
+	switch strings.ToLower(path.Service) {
+	case "s3", "s3-no-key":
+		return len(path.ServiceArguments) > 0 &&
+			strings.EqualFold(path.ServiceArguments[0], "disk")
+	case "s3-opts", "opts", "options", "hdfs":
+		var args ObjectStorageArguments
+		if err := args.SetFromString(path.ServiceArguments); err != nil {
+			return false
+		}
+		// GetForETL normalizes this field from the service name immediately
+		// before constructing the provider. Mirror that normalization here;
+		// caller-supplied is-hdfs must not make a disk endpoint look remote.
+		isHDFS := path.Service == "hdfs"
+		if isHDFS || args.IsMinio {
+			return false
+		}
+		return strings.EqualFold(args.Endpoint, "disk")
+	default:
+		// minio and unknown providers are not constructed as the disk backend
+		// by GetForETL.
+		return false
+	}
+}
+
 // GetForETL get or creates a FileService instance for ETL operations
 // if service part of path is empty, a LocalETLFS will be created
 // if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
@@ -79,10 +113,20 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 	if err != nil {
 		return nil, "", err
 	}
+	return GetForETLWithParsedPath(ctx, fs, path, fsPath)
+}
+
+// GetForETLWithParsedPath is the parsed-path form used by callers that must
+// authorize a target before resolving it. rawPath is retained because an
+// absolute service-less path has information that ParsePath intentionally
+// removes from Path.File. Keeping the parsed value avoids a second CSV/path
+// parse on each SQL file operation without moving provider construction into
+// the authorization package.
+func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string, fsPath Path) (res ETLFileService, readPath string, err error) {
 
 	if fsPath.Service == "" {
 		// no service, create local ETL fs
-		dir, file := filepath.Split(path)
+		dir, file := filepath.Split(rawPath)
 		res, err = NewLocalETLFS("etl", dir)
 		if err != nil {
 			return nil, "", err
@@ -128,7 +172,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
-				return
+				return nil, "", err
 			}
 
 		case "s3-no-key":
@@ -161,6 +205,9 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				true,
 				NoDefaultCredentialsForETL,
 			)
+			if err != nil {
+				return nil, "", err
+			}
 
 		case "s3-opts", "opts", "options", "hdfs":
 			var args ObjectStorageArguments
@@ -179,7 +226,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
-				return
+				return nil, "", err
 			}
 
 		case "minio":
@@ -219,7 +266,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
-				return
+				return nil, "", err
 			}
 
 		default:
@@ -234,7 +281,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 		if err != nil {
 			return nil, "", err
 		}
-		readPath = path
+		readPath = rawPath
 	}
 
 	return

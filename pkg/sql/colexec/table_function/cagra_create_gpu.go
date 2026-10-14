@@ -195,10 +195,11 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 	logutil.Infof("CAGRA create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
 		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
+	storageProc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
 	for i, s := range sqls {
 		logutil.Infof("CAGRA create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
 		t0 := time.Now()
-		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
+		res, err := cagra_runSql(storageProc, s)
 		if err != nil {
 			logutil.Errorf("CAGRA create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
 			return err

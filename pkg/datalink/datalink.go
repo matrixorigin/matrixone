@@ -15,12 +15,14 @@
 package datalink
 
 import (
+	"context"
 	"encoding/csv"
 	"io"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/datalink/docx"
@@ -36,6 +38,11 @@ type Datalink struct {
 	Offset int64
 	Size   int64
 	MoPath string
+	path   fileservice.Path
+	// fromStage preserves the authority boundary after stage:// resolution.
+	// The resolved path alone cannot distinguish a user supplied local path from
+	// a tenant-owned stage consumed by trusted internal CDC SQL.
+	fromStage bool
 }
 
 func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
@@ -49,7 +56,22 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	if err != nil {
 		return Datalink{}, err
 	}
-	return Datalink{Url: u, Offset: int64(offsetSize[0]), Size: int64(offsetSize[1]), MoPath: moUrl}, nil
+	path, err := fileservice.ParsePath(moUrl)
+	if err != nil {
+		return Datalink{}, err
+	}
+	fromStage := strings.EqualFold(u.Scheme, stage.STAGE_PROTOCOL)
+	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, fromStage); err != nil {
+		return Datalink{}, err
+	}
+	return Datalink{
+		Url:       u,
+		Offset:    int64(offsetSize[0]),
+		Size:      int64(offsetSize[1]),
+		MoPath:    moUrl,
+		path:      path,
+		fromStage: fromStage,
+	}, nil
 }
 
 func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
@@ -86,8 +108,15 @@ func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
 }
 
 func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
+	path, err := d.parsedPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+		return nil, err
+	}
 
-	return fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
+	return fileservice.NewFileServiceWriterWithFileService(proc.GetFileService(), d.MoPath, proc.Ctx)
 }
 
 // ParseDatalink extracts data from a Datalink string
@@ -153,9 +182,19 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 }
 
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
+	path, err := d.parsedPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+		return nil, err
+	}
 	fs := proc.GetFileService()
-	fs, readPath, err := fileservice.GetForETL(proc.Ctx, fs, d.MoPath)
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(proc.Ctx, fs, d.MoPath, path)
 	if fs == nil || err != nil {
+		if fs != nil && d.ownsService(path) {
+			fs.Close(proc.Ctx)
+		}
 		return nil, err
 	}
 	var r io.ReadCloser
@@ -171,7 +210,68 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 	}
 	err = fs.Read(proc.Ctx, &vec)
 	if err != nil {
+		if d.ownsService(path) {
+			fs.Close(proc.Ctx)
+		}
 		return nil, err
 	}
+	if d.ownsService(path) {
+		return &readCloserWithFileService{
+			ReadCloser:  r,
+			FileService: fs,
+			Ctx:         proc.Ctx,
+		}, nil
+	}
 	return r, nil
+}
+
+// StatFile authorizes and stats the resolved target while closing a temporary
+// ETL service on every exit path. Configured named services are borrowed and
+// remain owned by the process registry.
+func (d Datalink) StatFile(proc *process.Process) (*fileservice.DirEntry, error) {
+	path, err := d.parsedPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeSQLFileAccessPathWithOrigin(proc, path, d.fromStage); err != nil {
+		return nil, err
+	}
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(proc.Ctx, proc.GetFileService(), d.MoPath, path)
+	if fs == nil || err != nil {
+		if fs != nil && d.ownsService(path) {
+			fs.Close(proc.Ctx)
+		}
+		return nil, err
+	}
+	if d.ownsService(path) {
+		defer fs.Close(proc.Ctx)
+	}
+	return fs.StatFile(proc.Ctx, readPath)
+}
+
+func (d Datalink) ownsService(path fileservice.Path) bool {
+	return path.Service == "" || len(path.ServiceArguments) > 0
+}
+
+type readCloserWithFileService struct {
+	io.ReadCloser
+	FileService fileservice.FileService
+	Ctx         context.Context
+	once        sync.Once
+	err         error
+}
+
+func (r *readCloserWithFileService) Close() error {
+	r.once.Do(func() {
+		r.err = r.ReadCloser.Close()
+		r.FileService.Close(r.Ctx)
+	})
+	return r.err
+}
+
+func (d Datalink) parsedPath() (fileservice.Path, error) {
+	if d.path.File != "" || d.path.Service != "" || len(d.path.ServiceArguments) != 0 {
+		return d.path, nil
+	}
+	return fileservice.ParsePath(d.MoPath)
 }

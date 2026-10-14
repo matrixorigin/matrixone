@@ -89,6 +89,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				}
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+						storageProc := sqlproc.WithSystemFileAccess()
 						startChunk, err := fulltext2.NextTailChunkId(sqlproc, w.cfg)
 						if err != nil {
 							return err
@@ -105,7 +106,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
 							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
-							res, e := sqlexec.RunSql(sqlproc, s)
+							res, e := sqlexec.RunSql(storageProc, s)
 							if e != nil {
 								return e
 							}

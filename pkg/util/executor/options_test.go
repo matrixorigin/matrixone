@@ -100,3 +100,18 @@ func TestStatementOptionOptimizerHints(t *testing.T) {
 	// Overwriting replaces rather than appends.
 	require.Equal(t, "x=1", set.WithOptimizerHints("x=1").OptimizerHints())
 }
+
+func TestStatementOptionSessionIdentity(t *testing.T) {
+	var base StatementOption
+	account, role := base.SessionIdentity()
+	require.Empty(t, account)
+	require.Empty(t, role)
+
+	set := base.WithSessionIdentity("sys", "moadmin")
+	account, role = set.SessionIdentity()
+	require.Equal(t, "sys", account)
+	require.Equal(t, "moadmin", role)
+	account, role = base.SessionIdentity()
+	require.Empty(t, account)
+	require.Empty(t, role)
+}

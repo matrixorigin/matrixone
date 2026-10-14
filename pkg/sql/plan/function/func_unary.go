@@ -5855,12 +5855,36 @@ func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, e
 }
 
 func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
+	return ReadFromFileOffsetSizeWithContext(context.TODO(), Filepath, fs, offset, size)
+}
+
+// ReadFromFileOffsetSizeWithContext is the context-aware entry point used by
+// SQL execution. The legacy wrapper above remains for callers that do not
+// have a request context.
+func ReadFromFileOffsetSizeWithContext(ctx context.Context, Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path, err := fileservice.ParsePath(Filepath)
+	if err != nil {
+		return nil, err
+	}
+	return readFromParsedPath(ctx, Filepath, path, fs, offset, size)
+}
+
+func readFromParsedPath(ctx context.Context, rawPath string, path fileservice.Path, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ownsService := path.Service == "" || len(path.ServiceArguments) > 0
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(ctx, fs, rawPath, path)
 	if fs == nil || err != nil {
+		if fs != nil && ownsService {
+			fs.Close(ctx)
+		}
 		return nil, err
 	}
 	var r io.ReadCloser
-	ctx := context.TODO()
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
@@ -5873,13 +5897,46 @@ func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 	}
 	err = fs.Read(ctx, &vec)
 	if err != nil {
+		if ownsService {
+			fs.Close(ctx)
+		}
 		return nil, err
+	}
+	if ownsService {
+		return &readCloserWithFileService{
+			ReadCloser:  r,
+			FileService: fs,
+			Ctx:         ctx,
+		}, nil
 	}
 	return r, nil
 }
 
+type readCloserWithFileService struct {
+	io.ReadCloser
+	FileService fileservice.FileService
+	Ctx         context.Context
+	once        sync.Once
+	err         error
+}
+
+func (r *readCloserWithFileService) Close() error {
+	r.once.Do(func() {
+		r.err = r.ReadCloser.Close()
+		r.FileService.Close(r.Ctx)
+	})
+	return r.err
+}
+
 func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {
-	r, err := ReadFromFile(filePath, proc.GetFileService())
+	path, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := datalink.AuthorizeSQLFileAccessPath(proc, path); err != nil {
+		return nil, err
+	}
+	r, err := readFromParsedPath(proc.Ctx, filePath, path, proc.GetFileService(), 0, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -5964,11 +6021,7 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 	}
 	size := dl.Size
 	if size < 0 {
-		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-		if err != nil {
-			return nil, err
-		}
-		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		entry, err := dl.StatFile(proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6064,9 +6117,22 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // CDC parity with the synchronous build.
 func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6103,10 +6169,23 @@ func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // WriteFileDatalink write content to file service and return number of byte written
 func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
 			if err := rs.Append(int64(0), true); err != nil {
@@ -6115,11 +6194,6 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
-
-		dl, err := datalink.NewDatalink(filePath, proc)
-		if err != nil {
-			return err
-		}
 
 		_content, null2 := contentVec.GetStrValue(i)
 		if null2 {
@@ -6130,24 +6204,28 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		content := util.UnsafeBytesToString(_content)
 
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+
 		err = func() error {
 			writer, err := dl.NewWriter(proc)
 			if err != nil {
 				return err
 			}
 
-			defer writer.Close()
-
 			n, err := writer.Write([]byte(content))
 			if err != nil {
+				writer.Abort(err)
 				return err
 			}
 
-			if err = rs.Append(int64(n), false); err != nil {
+			if err = writer.Close(); err != nil {
 				return err
 			}
 
-			return nil
+			return rs.Append(int64(n), false)
 		}()
 
 		if err != nil {

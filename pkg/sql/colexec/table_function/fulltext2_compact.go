@@ -117,7 +117,7 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 	if !u.inited {
 		return nil
 	}
-	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
 	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity, u.postingCap); err != nil {
 		return err
 	}

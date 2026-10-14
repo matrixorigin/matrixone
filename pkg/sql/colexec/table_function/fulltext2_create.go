@@ -190,7 +190,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
 	if !u.basesCleared {
 		for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
 			res, e := fulltext2_runSql(sqlproc, s)

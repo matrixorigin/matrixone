@@ -267,6 +267,19 @@ func (opts StatementOption) HasRoleID() bool {
 	return opts.roleId > 0
 }
 
+// WithSessionIdentity carries the already-authenticated session names into a
+// synchronous child SQL process.  It is intentionally separate from the
+// numeric account/role overrides, which are used for catalog execution scope.
+func (opts StatementOption) WithSessionIdentity(accountName, roleName string) StatementOption {
+	opts.accountName = accountName
+	opts.roleName = roleName
+	return opts
+}
+
+func (opts StatementOption) SessionIdentity() (accountName, roleName string) {
+	return opts.accountName, opts.roleName
+}
+
 func (opts StatementOption) WithUserID(userID uint32) StatementOption {
 	opts.userId = userID
 	return opts

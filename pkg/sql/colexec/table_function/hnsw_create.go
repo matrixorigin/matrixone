@@ -57,7 +57,7 @@ type hnswCreateState struct {
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
-	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc := sqlexec.NewSqlProcess(proc).WithSystemFileAccess()
 
 	// The TVF owns clear+rebuild (the compile layer no longer pre-deletes on the sync path).
 	// tblcfg is populated in prepare (const-fold) so it is available even on a zero-row rebuild.

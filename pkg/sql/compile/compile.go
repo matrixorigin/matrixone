@@ -11202,6 +11202,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	// Internal SQL created synchronously by a user statement runs in a fresh
+	// process. Carry the parent session names explicitly so SQL file
+	// authorization sees the same authenticated identity after planning. This
+	// is independent of accountId, which only selects catalog execution scope.
+	var accountName, roleName string
+	if c.proc != nil && c.proc.Base != nil {
+		parentInfo := c.proc.GetSessionInfo()
+		accountName, roleName = parentInfo.Account, parentInfo.Role
+	}
+	options = options.WithSessionIdentity(accountName, roleName)
 	// Propagate the IsFrontend signal from the outer Compile's proc
 	// to the sub-execution. Without this, sub-Compiles spawned for
 	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)

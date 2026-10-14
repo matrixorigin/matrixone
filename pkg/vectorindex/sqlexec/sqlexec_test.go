@@ -131,6 +131,8 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	proc.ReplaceTopCtx(subscriberCtx)
 	proc.Base.TxnOperator = txnOp
 	proc.Base.SessionInfo.Database = "subscriber_db"
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	proc.Base.SessionInfo.TimeZone = time.FixedZone("subscriber-zone", 8*60*60)
 	proc.Base.IsFrontend = true
 	resolveVariable := func(varName string, _, _ bool) (interface{}, error) {
@@ -153,6 +155,9 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 		require.Equal(t, "resolved:test_variable", value)
 		require.True(t, spy.opts.StatementOption().HasAccountID())
 		require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+		accountName, roleName := spy.opts.StatementOption().SessionIdentity()
+		require.Equal(t, "sys", accountName)
+		require.Equal(t, "moadmin", roleName)
 	}
 
 	_, err := RunSql(sqlproc, "select 1")
@@ -176,6 +181,26 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	require.Same(t, txnOp, proc.GetTxnOperator())
 	require.Equal(t, "subscriber_db", proc.Base.SessionInfo.Database)
 	require.Equal(t, "subscriber", proc.GetTopContext().Value(key))
+}
+
+func TestSqlProcessSystemFileAccessIsScoped(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc.Base.SessionInfo.Account = "tenant"
+	proc.Base.SessionInfo.Role = "accountadmin"
+
+	regular := NewSqlProcess(proc)
+	account, role := regular.StatementOption().SessionIdentity()
+	require.Equal(t, "tenant", account)
+	require.Equal(t, "accountadmin", role)
+
+	storage := regular.WithSystemFileAccess()
+	require.NotSame(t, regular, storage)
+	account, role = storage.StatementOption().SessionIdentity()
+	require.Equal(t, "sys", account)
+	require.Equal(t, "moadmin", role)
+	account, role = regular.StatementOption().SessionIdentity()
+	require.Equal(t, "tenant", account)
+	require.Equal(t, "accountadmin", role)
 }
 
 func TestSqlTxnError(t *testing.T) {
