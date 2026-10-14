@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,6 +55,11 @@ type DiskCache struct {
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	directoryMu  sync.RWMutex
+	// diskFullEviction is held by the single eviction that responds to
+	// disk-full write failures.
+	diskFullEviction atomic.Bool
+	// statFilesystem overrides statDiskCacheFilesystem in tests.
+	statFilesystem func(path string) (diskCacheFilesystemStat, bool)
 
 	async         diskCacheAsyncState
 	writeFailures diskCacheWriteFailureState
@@ -628,6 +634,62 @@ func (d *DiskCache) removeEmptyDirectory(path string) {
 	_ = os.Remove(path)
 }
 
+type diskCacheFilesystemStat struct {
+	availableBytes uint64
+	totalInodes    uint64
+	freeInodes     uint64
+}
+
+// evictForDiskFull frees cache space after a cache write failed because the
+// disk is full.
+func (d *DiskCache) evictForDiskFull(ctx context.Context, err error) {
+	var sourceErr *diskCacheSourceError
+	if errors.As(err, &sourceErr) {
+		// Reading the source failed; the cache filesystem is not involved.
+		return
+	}
+	kind := classifyDiskFull(err)
+	if kind == notDiskFull {
+		return
+	}
+	n := d.capacityFunc() / 10
+	if n <= 0 {
+		return
+	}
+	// Concurrent failures observe the same shortage. Each additional eviction
+	// would cut another n bytes before the first one has freed anything, so
+	// only one runs at a time, and the shortage is checked inside it so that a
+	// failure observed before a completed eviction does not evict again.
+	if !d.diskFullEviction.CompareAndSwap(false, true) {
+		return
+	}
+	defer d.diskFullEviction.Store(false)
+	if kind == diskNoSpace && !d.filesystemExhausted(n) {
+		// ENOSPC while blocks and inodes are available comes from a structural
+		// limit such as a full directory index. Evicting cannot fix that and
+		// would only discard cached data on every failed write.
+		return
+	}
+	d.cache.ForceEvictWithWait(ctx, n)
+}
+
+func (d *DiskCache) filesystemExhausted(wantBytes int64) bool {
+	statFilesystem := statDiskCacheFilesystem
+	if d.statFilesystem != nil {
+		statFilesystem = d.statFilesystem
+	}
+	stat, ok := statFilesystem(d.path)
+	if !ok {
+		// Unknown: keep evicting, as before ENOSPC was distinguished.
+		return true
+	}
+	if stat.availableBytes < uint64(wantBytes) {
+		return true
+	}
+	// Filesystems with dynamic inode allocation report zero total inodes.
+	return stat.totalInodes > 0 && stat.freeInodes < stat.totalInodes/100
+}
+
 func (d *DiskCache) createCacheTempFile(dir string) (*os.File, error) {
 	d.directoryMu.RLock()
 	defer d.directoryMu.RUnlock()
@@ -647,11 +709,8 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	asyncFinalize bool,
 	claimPublication func() bool,
 ) (written bool, err error) {
-	// evict if disk is full
 	defer func() {
-		if isDiskFull(err) {
-			d.cache.ForceEvict(ctx, d.capacityFunc()/10)
-		}
+		d.evictForDiskFull(ctx, err)
 	}()
 	asyncSlotOwned := false
 	if asyncFinalize {
@@ -834,12 +893,56 @@ const (
 	cacheFileTempSuffix = cacheFileSuffix + ".tmp"
 )
 
+// Cache files are spread over diskCacheShardCount sub-directories so that no
+// single directory accumulates every cached object: filesystems cap the
+// entries of one directory independently of free space (ext4 without
+// large_dir fails with ENOSPC once a directory's htree index is full).
+//
+// The shard must be stable across processes and versions, otherwise a restart
+// or upgrade would no longer find existing cache files. Do not change the hash
+// or the shard count without handling the previous layout.
+const (
+	diskCacheShardHexDigits = 3
+	diskCacheShardCount     = 1 << (4 * diskCacheShardHexDigits)
+)
+
+func diskCacheShard(path string) string {
+	// FNV-1a, 32 bit.
+	h := uint32(2166136261)
+	for i := 0; i < len(path); i++ {
+		h ^= uint32(path[i])
+		h *= 16777619
+	}
+	h %= diskCacheShardCount
+	const digits = "0123456789abcdef"
+	var shard [diskCacheShardHexDigits]byte
+	for i := len(shard) - 1; i >= 0; i-- {
+		shard[i] = digits[h&0xf]
+		h >>= 4
+	}
+	return string(shard[:])
+}
+
+func isDiskCacheShard(name string) bool {
+	if len(name) != diskCacheShardHexDigits {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	if entry.Size < 0 {
 		panic("should not cache size -1 entry")
 	}
 	return filepath.Join(
 		d.path,
+		diskCacheShard(path),
 		fmt.Sprintf("%d-%d%s%s", entry.Offset, entry.Size, toOSPath(path), cacheFileSuffix),
 	)
 }
@@ -847,16 +950,22 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 func (d *DiskCache) pathForFile(path string) string {
 	return filepath.Join(
 		d.path,
+		diskCacheShard(path),
 		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
 	)
 }
 
 var ErrNotCacheFile = errorStr("not a cache file")
 
+// decodeFilePath accepts both the sharded layout and the unsharded layout
+// written by earlier versions, which may still be present after an upgrade.
 func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	path, err := filepath.Rel(d.path, diskPath)
 	if err != nil {
 		return "", err
+	}
+	if shard, rest, ok := strings.Cut(path, string(filepath.Separator)); ok && isDiskCacheShard(shard) {
+		path = rest
 	}
 	if !strings.HasPrefix(path, "full") {
 		return "", ErrNotCacheFile
