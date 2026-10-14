@@ -4260,6 +4260,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// filter/message generations, execute those regions exactly once with the
 		// existing FORCE path rather than replaying either side.
 		builder.forceMultipleAdaptiveVectorRegions(rootID)
+		// Keep the current root visible to vector rules that prove ancestor consumers.
+		builder.qry.Steps[i] = rootID
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
