@@ -48,7 +48,7 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	require.Empty(t, resp.PrepareStmts)
 	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true))
 	require.Len(t, resp.PrepareStmts, 1)
-	require.Equal(t, defines.MORPCVersion112, resp.PrepareStmts[0].RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion113, resp.PrepareStmts[0].RequiredProtocolVersion)
 	require.Equal(t, prepared.Sql, resp.PrepareStmts[0].SQL)
 }
 
@@ -61,17 +61,17 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 		}
 	}()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 	ses.SetLastFoundRows(23)
 	ses.SetLastInsertID(7)
 	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
 		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
-		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion112}},
+		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion113}},
 	})
-	require.ErrorContains(t, err, "requires protocol version 112")
+	require.ErrorContains(t, err, "requires protocol version 113")
 	require.Equal(t, uint64(23), ses.GetLastFoundRows())
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
 	require.Equal(t, []*PrepareStmt{prepared}, ses.GetPrepareStmts())

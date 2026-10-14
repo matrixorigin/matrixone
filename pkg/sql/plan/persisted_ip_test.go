@@ -1190,13 +1190,34 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 	}
 }
 
-func TestPersistedDependentProgramRequiresV112(t *testing.T) {
+func TestPersistedDependentProgramRequiresV113(t *testing.T) {
 	for _, expr := range []*planpb.Expr{
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
 	} {
 		version, err := RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion112, version)
+		require.Equal(t, defines.MORPCVersion113, version)
 	}
+	dateExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0)},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}},
+	}
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: dateExpr}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}},
+		}}},
+	}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.DateNumericResultContracts)
+	require.True(t, features.DependentPrograms)
+	version, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion113, version, "compose independent capabilities by maximum")
 }

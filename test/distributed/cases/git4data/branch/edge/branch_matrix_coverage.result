@@ -107,7 +107,7 @@ INSERTED  ¦  0  ¦  0  𝄀
 DELETED  ¦  0  ¦  0  𝄀
 UPDATED  ¦  1  ¦  1
 data branch merge geometry32_branch into geometry32_base;
-internal error: conflict: geometry32_branch DELETE and geometry32_base DELETE on pk(1) with different values
+internal error: conflict: geometry32_branch UPDATE and geometry32_base UPDATE on pk(1)
 data branch merge geometry32_branch into geometry32_base when conflict accept;
 select id,
 st_astext(g) as g,

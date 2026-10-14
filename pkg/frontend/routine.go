@@ -840,7 +840,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			if len(preparedStatementProtocolSupported) > 0 && !preparedStatementProtocolSupported[0] {
 				return moerr.GetOkExpectedNotSafeToStartTransfer()
 			}
-			requiredVersions[i] = defines.MORPCVersion112
+			requiredVersions[i] = defines.MORPCVersion113
 		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.

@@ -55,7 +55,7 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	optimizer := plan2.NewMockOptimizer(true, proc)
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT n1.N_NATIONKEY, (SELECT (SELECT n1.N_NATIONKEY + n2.N_REGIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY = n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n1`, 1)
 	require.NoError(t, err)

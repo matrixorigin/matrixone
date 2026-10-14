@@ -75,15 +75,15 @@ func TestDependentCoordinatorAdmissionBeforeSourceWork(t *testing.T) {
 	// Neither source metadata nor a cached execution may initialize when the
 	// deployment capability is below the program's contract.
 	_, err := c.compileDependentQuery(nil)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
 	op := &dependent.Operator{}
-	require.ErrorContains(t, op.Prepare(proc), "protocol version 112")
+	require.ErrorContains(t, op.Prepare(proc), "protocol version 113")
 }
 
 func TestDependentWriteTargetAdmission(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
 	defer proc.Free()
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	shared := &plan.TableDef{Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
 		Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: catalog.PropFromPublication, Value: "true"}}},
 	}}}}
