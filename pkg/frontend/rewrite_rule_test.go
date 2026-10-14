@@ -403,6 +403,9 @@ func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
 				tenant: &TenantInfo{Tenant: sysAccountName},
 			},
 			ruleCache: map[string]string{"db.t": "select 1 from db.t"},
+			prepareStmts: map[string]*PrepareStmt{
+				"old": {Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true},
+			},
 		}
 		ses.setRoutineManager(rm)
 		rm.sessionManager.AddSession(ses)
@@ -419,6 +422,10 @@ func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
 	otherSession.ruleCacheMu.RLock()
 	require.Nil(t, otherSession.ruleCache)
 	otherSession.ruleCacheMu.RUnlock()
+	for _, ses := range []*Session{mutatingSession, otherSession} {
+		_, err := ses.GetPrepareStmt(context.Background(), "old")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	}
 }
 
 // TestConcurrentRuleCacheAccess tests concurrent access to rule cache
@@ -548,6 +555,7 @@ func TestCaptureRewritePolicyReloadsAfterInFlightInvalidation(t *testing.T) {
 	}
 	require.NoError(t, captured.err)
 	require.Equal(t, "select * from db.t where version = 2", captured.policy.roleRules["db.t"])
+	require.Equal(t, ses.rewritePolicyGeneration, captured.policy.generation)
 
 	// The stale in-flight result must not have been published. The next
 	// request uses the fresh cache without another catalog read.
