@@ -54,7 +54,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IncompleteTemporalStrings, defines.MORPCVersion130,
 			"incomplete temporal strings require a versioned remote destination",
 			"remote destination does not support incomplete temporal strings (MORPC version %d)"},
-		{features.PythonRoutineContract, defines.MORPCVersion113,
+		{features.PythonRoutineContract, defines.MORPCVersion114,
 			"Python routine execution requires a versioned remote destination",
 			"remote destination does not support Python routine execution (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,

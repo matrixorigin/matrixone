@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r11-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r13-2026-10-15`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -211,3 +211,23 @@ unchanged.
 Historical r11 and earlier artifacts above remain immutable. Independent
 Architecture and SQL/Planner approval of r12 remains pending; mechanical
 rebase and validation do not supply an approval decision.
+
+## r13 protocol allocation addendum (2026-10-15)
+
+Official main `8c8f829f9d3e9576d3b7371333e0eb1147a008e4` assigns
+MORPC 113 to DECIMAL variance/stddev DOUBLE result contracts. The governing
+`python-udf-current-stage-r13-2026-10-15` revision moves Python's single new
+capability to 114, with 113 as the immediate predecessor rejection case.
+The upstream statistical result contract remains at 113; signed date results
+remain at 112 and IndexSearchScan remains at 111.
+
+Shared revision publication and reads, cached/prepared/evaluator checks,
+actual remote-destination admission, receiver validation, catalog repair
+metadata and login compensation, and `GetPythonUdfStatus` all require Python
+capability 114. Predecessor-only and mixed 114/113 CNs are rejected before
+catalog mutation. Ordinary SQL UDFs retain their pre-floor legacy fallback.
+The nine idempotent shared-function entries and catalog repair 4.0.15 are
+unchanged; this revision adds no execution, production or security scope.
+
+Independent Architecture and SQL/Planner approval of r13 remains pending.
+Mechanical rebase, protocol allocation and validation do not supply it.
