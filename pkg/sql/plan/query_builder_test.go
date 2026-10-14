@@ -1464,6 +1464,70 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 	}
 }
 
+func TestQueryBuilderSortRollupPreservesDistinctAggregates(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	for _, aggregate := range []string{"count", "sum", "avg"} {
+		for _, rollup := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/rollup=%v", aggregate, rollup), func(t *testing.T) {
+				sql := fmt.Sprintf("select a, %s(distinct b) from select_test.bind_select group by a", aggregate)
+				if rollup {
+					sql += " with rollup"
+				}
+				stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+				require.NoError(t, err)
+				query := queryPlan.GetQuery()
+				seen := make(map[int32]bool)
+				var aggregates []*plan.Node
+				var visit func(int32)
+				visit = func(id int32) {
+					if seen[id] {
+						return
+					}
+					seen[id] = true
+					node := query.Nodes[id]
+					if node.NodeType == plan.Node_AGG {
+						aggregates = append(aggregates, node)
+					}
+					for _, child := range node.Children {
+						visit(child)
+					}
+				}
+				for _, root := range query.Steps {
+					visit(root)
+				}
+				if rollup {
+					require.Len(t, aggregates, 1, "detail-pair deduplication cannot replace per-prefix DISTINCT state")
+					node := aggregates[0]
+					require.True(t, IsSortRollupOption(node.ExtraOptions))
+					require.Len(t, node.AggList, 1)
+					require.NotZero(t, uint64(node.AggList[0].GetF().Func.Obj)&function.Distinct)
+					require.Equal(t, plan.Node_SORT, query.Nodes[node.Children[0]].NodeType)
+				} else {
+					require.Greater(t, len(aggregates), 1, "ordinary GROUP BY retains its distinct-pair rewrite")
+					for _, node := range aggregates {
+						require.False(t, IsSortRollupOption(node.ExtraOptions))
+						for _, expr := range node.AggList {
+							require.Zero(t, uint64(expr.GetF().Func.Obj)&function.Distinct)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestQueryBuilderSortRollupFallsBackForDistinct(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
