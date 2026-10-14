@@ -32,16 +32,20 @@ func TestLocalWriterCloseCleanup(t *testing.T) {
 				root := t.TempDir()
 				var fs ReaderWriterFileService
 				var dirs map[string]*os.File
+				// nativeRoot is the root the file service actually uses. LocalETLFS
+				// resolves symlinks (for example /var -> /private/var on macOS), so
+				// directory-cache keys must be derived from it rather than from root.
+				var nativeRoot string
 				if kind == "local" {
 					local, err := NewLocalFS(ctx, "local", root, DisabledCacheConfig, nil)
 					require.NoError(t, err)
 					t.Cleanup(func() { local.Close(ctx) })
-					fs, dirs = local, local.dirFiles
+					fs, dirs, nativeRoot = local, local.dirFiles, local.rootPath
 				} else {
 					local, err := NewLocalETLFS("etl", root)
 					require.NoError(t, err)
 					t.Cleanup(func() { local.Close(ctx) })
-					fs, dirs = local, local.dirFiles
+					fs, dirs, nativeRoot = local, local.dirFiles, local.rootPath
 				}
 				target := "target"
 				if scenario == "ensure dir" {
@@ -78,7 +82,7 @@ func TestLocalWriterCloseCleanup(t *testing.T) {
 					dir, err := os.Open(root)
 					require.NoError(t, err)
 					require.NoError(t, dir.Close())
-					parent, _ := filepath.Split(filepath.Join(root, target))
+					parent, _ := filepath.Split(filepath.Join(nativeRoot, target))
 					if old := dirs[parent]; old != nil {
 						require.NoError(t, old.Close())
 					}
