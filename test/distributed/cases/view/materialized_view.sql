@@ -31,7 +31,9 @@ delete from totals;
 truncate table totals;
 drop table totals;
 alter table totals add column extra int;
+alter table totals add column (batch_x int,batch_y varchar(8));
 alter table facts add column extra int;
+alter table facts add column (batch_x int,batch_y varchar(8));
 truncate table facts;
 drop table facts;
 drop database mv_bvt;
@@ -55,6 +57,8 @@ drop materialized view totals;
 drop materialized view if exists totals;
 -- Removing the dependency permits ordinary source DDL again.
 alter table facts add column extra int;
+alter table facts add column (batch_x int,batch_y varchar(8));
+select id,k,v,extra,batch_x,batch_y from facts order by id;
 drop table facts;
 drop database mv_bvt;
 set experimental_materialized_view=0;

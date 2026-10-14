@@ -260,3 +260,29 @@ subcases and the real BuildPlan control pass; complete planner UT passes
 format/diff checks pass. This R1 test-only merge leaves the native feature and
 coverage-consumer semantic inputs unchanged. No local conflict blocker remains;
 the merge commit's GitHub checks must be verified separately.
+
+Published-port correction review (2026-10-14): the first CI native consumer
+failed before any case because Compose exposed 6002 while both CNs listened on
+6001. This R1 configuration/consumer closure corrects both published targets and
+the runner's target lookup, preserving dynamic host ports and the ordinary proxy
+route. Old/corrected Compose-to-TOML controls distinguish the mismatch; real Docker
+greetings and 77 default-discovery checks pass on distinct CNs with proxy mode
+enabled, without DSN overrides, skips or retries. Shell syntax/diff checks pass;
+Go/product semantic inputs are unchanged, so prior owning-UT and static evidence
+remains valid. No local port-boundary blocker remains. Re-run the final head's CI;
+the failed coverage prerequisite cannot be called a threshold verdict.
+
+Latest-main parser conflict resolution (2026-10-14): main
+`fcad62a8ff06000e682824802f1155cbeea02a2f` adds parenthesized
+`ALTER TABLE ADD COLUMN (...)` (#29963). The grammar merges cleanly; regenerate
+`mysql_sql.go` with the repository goyacc instead of choosing either generated
+file. Generation reports zero shift/reduce and zero reduce/reduce conflicts.
+Retain upstream parser tests. Complete mysql parser and planner UT pass
+(0.366 and 56.890 seconds), incremental vet passes, configured lint reports zero
+issues. A freshly rebuilt native service passes 58/58 SQL statements with zero
+ignored, failed or abnormal cases, plus all 77 native checks (63 functional,
+5 rollback, 9 causal two-CN). New SQL controls reject parenthesized ADD on the
+MV and its dependent source, then allow ordinary ADD after dropping the MV and
+verify original rows plus NULL new columns. Port-boundary Docker proof above is
+separate. This resolves the local generated-parser conflict; final-head GitHub
+checks remain independent. Evidence is in `materialized_view_ci_port_results.json`.

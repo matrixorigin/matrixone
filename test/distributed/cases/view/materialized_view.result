@@ -52,7 +52,11 @@ drop table totals;
 invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
 alter table totals add column extra int;
 invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
+alter table totals add column (batch_x int,batch_y varchar(8));
+invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
 alter table facts add column extra int;
+invalid input: source has dependent materialized views; drop them before changing its schema/identity
+alter table facts add column (batch_x int,batch_y varchar(8));
 invalid input: source has dependent materialized views; drop them before changing its schema/identity
 truncate table facts;
 invalid input: source has dependent materialized views; drop them before changing its schema/identity
@@ -99,6 +103,12 @@ totals  ¦  create materialized view `mv_bvt`.`totals` refresh manual as select 
 drop materialized view totals;
 drop materialized view if exists totals;
 alter table facts add column extra int;
+alter table facts add column (batch_x int,batch_y varchar(8));
+select id,k,v,extra,batch_x,batch_y from facts order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[-5,64,0]  ¦  extra[4,32,0]  ¦  batch_x[4,32,0]  ¦  batch_y[12,8,0]  𝄀
+1  ¦  1  ¦  11  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  2  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  2  ¦  7  ¦  null  ¦  null  ¦  null
 drop table facts;
 drop database mv_bvt;
 set experimental_materialized_view=0;

@@ -1,0 +1,76 @@
+{
+  "failed_head": "07bc11c55e12d3509018333223413c76c07c2fd4",
+  "failed_run": 38500065915,
+  "failed_job": 115647614022,
+  "failed_step": "Start BVT Test",
+  "normal_proxy_sql": {
+    "total": 83990,
+    "success": 83535,
+    "existing_ignored": 455,
+    "failed": 0,
+    "mv_sql_passed": 54
+  },
+  "failure": "Native consumer initial MySQL handshake EOF: both SQL listeners were 6001, but Compose and runner exposed/queried 6002. Zero native cases ran.",
+  "changed_contract": "Publish and discover CN SQL target 6001 with dynamic host ports; preserve proxy host 6001/container 6009.",
+  "validation": {
+    "docker": "28.4.0",
+    "compose": "v2.40.3",
+    "topology": "Two real Docker CNs, each SQL port 6001 and proxy-enabled=true; shared TN/LOG and DISK-V2; same feature production inputs as the tested head. Local image ABI matches Debian 13 build host.",
+    "dsn_overrides": false,
+    "mysql_greeting_bytes": [
+      95,
+      95
+    ],
+    "old_target_missing_listener": true,
+    "corrected_target_matches_listener": true,
+    "functional": 63,
+    "native_failure": 5,
+    "causal_two_cn": 9,
+    "total": 77,
+    "entry_wall_seconds": 90,
+    "benchmark_in_bvt": false,
+    "added_retries_or_skips": false
+  },
+  "report_sha256": {
+    "functional": "819db761cb7a69162eb5c09d918f9424c57e990309f2d443d28751c43bb079c5",
+    "failure": "e4800412a5ef7791a9ac82aff388484c570f7f06129fdca5fe57498d54d73d87",
+    "multi-cn": "74f536f20fa6599c61f5913d8b9a278be185dd0945d93f2c88f3bc20d4b95a4c"
+  },
+  "source_sha256": {
+    "etc/launch-tae-compose/compose.yaml": "b201aea62b130b94663f39952897ba822683ea96c69c75503a85f7776b50954e",
+    "optools/run_materialized_view_bvt.sh": "438253c14d36e817c7192c42570c262f22f0eb6b3af85c9b8789e9e48f7048d6"
+  },
+  "ci_scope": "Local proof of the corrected port boundary, not final-head GitHub CI success. Previous coverage job failed prerequisites, not its coverage threshold.",
+  "latest_main_validation": {
+    "merged_main": "fcad62a8ff06000e682824802f1155cbeea02a2f",
+    "upstream_change": "#29963 parenthesized ALTER TABLE ADD COLUMN",
+    "resolution": "Merge grammar and regenerate mysql_sql.go using the repository goyacc; retain upstream parser controls.",
+    "yacc_shift_reduce_conflicts": 0,
+    "yacc_reduce_reduce_conflicts": 0,
+    "owning_package_tests": {
+      "mysql": "pass (0.366s)",
+      "plan": "pass (56.890s)"
+    },
+    "incremental_vet": "pass",
+    "configured_lint_issues": 0,
+    "sql_bvt": {
+      "total": 58,
+      "success": 58,
+      "failed": 0,
+      "ignored": 0
+    },
+    "sql_controls": "Parenthesized ADD rejects MV writes and dependent source schema changes; succeeds after dropping the MV and preserves source rows with NULL new columns.",
+    "native_checks": {
+      "functional": 63,
+      "failure": 5,
+      "multi-cn": 9
+    },
+    "report_sha256": {
+      "functional": "888148aa928be4627ad7fd8af16a1468b436177cbdd725e46278c1f54b4eff93",
+      "failure": "d6f5103f1b9ebccd354e8bad42671ed1b742e10591e718f038ed45735c5ad68a",
+      "multi-cn": "513ea1e5aff259c5e38bb6f0ae46dc2d9a40ba079f8d10ce5d9d2f122e02d5f4"
+    },
+    "service_sha256": "4fbe9f283b873fb07f0d26c4051ab35ff414b161e35c43186126fd41f9a422ea",
+    "scope": "Fresh native service built from the merged parser and feature; two host CNs. The distinct Docker default-discovery port proof remains recorded above. Not final-head GitHub CI success."
+  }
+}

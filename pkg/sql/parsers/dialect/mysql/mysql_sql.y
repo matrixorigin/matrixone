@@ -1071,9 +1071,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <fillMode> fill_mode
 
 %start start_command
-
 // python udf
 %type<str> func_handler func_handler_opt
+%type <alterTableOptions> alter_add_column_list
 %%
 
 start_command:
@@ -16894,5 +16894,27 @@ nth_value_from_first_opt:
 //    PROPERTIES
 //  BSI
 //  ZONEMAP
+
+alter_option_list:
+    ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = $4
+    }
+|   alter_option_list ',' ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = append($1, $6...)
+    }
+
+alter_add_column_list:
+    column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = tree.AlterTableOptions{tree.NewAlterAddCol($1, position)}
+    }
+|   alter_add_column_list ',' column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = append($1, tree.NewAlterAddCol($3, position))
+    }
 
 %%

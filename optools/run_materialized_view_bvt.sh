@@ -16,7 +16,7 @@ rm -f "${report_dir}/functional.json" "${report_dir}/failure.json" "${report_dir
 cn_dsn() {
     local endpoint port
     endpoint=$(docker compose -f "${repo_root}/etc/launch-tae-compose/compose.yaml" \
-        --profile launch-multi-cn port "$1" 6002)
+        --profile launch-multi-cn port "$1" 6001)
     port=${endpoint##*:}
     [[ "${port}" =~ ^[0-9]+$ ]]
     printf 'dump:111@tcp(127.0.0.1:%s)/?timeout=5s&readTimeout=330s&writeTimeout=330s' "${port}"

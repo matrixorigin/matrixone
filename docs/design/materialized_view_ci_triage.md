@@ -298,3 +298,51 @@ profile; that empty attempt is not evidence. The corrected build includes the
 service entry and emits nonempty metadata/counters on graceful shutdown. The
 automated CI build already instruments its entry through its normal `-cover`
 build. Match the client's `set` coverage mode to that existing server build.
+
+### Published CN SQL port (2026-10-14)
+
+Run `38500065915`, head `07bc11c55e`, passed the shared build, arm64 SCA,
+coverage UT, Connector/J and full pessimistic BVT. PROXY's existing mo-tester
+selection also passed: 83990 statements, 83535 successful, 455 existing ignored,
+zero failures, including all 54 new MV SQL statements. Its subsequent native
+consumer failed before its first case with `packets.go:58 unexpected EOF` and
+`invalid connection`. Coverage merge then correctly rejected its prerequisite;
+this run did not produce an independent coverage threshold verdict.
+
+The CN TOMLs and runtime log both show SQL listening on container port 6001.
+Compose instead published container port 6002, and the new native runner queried
+that incorrect target. CI's docker listing showed `32772->6002` and `32773->6002`
+while the native report contained zero passed cases. The normal proxy route used
+port 6009 inside its own container, so its success did not validate CN publication.
+
+Publish each CN's actual port 6001 with a dynamically allocated host port and
+query that same target in the native runner. Keep the proxy's `6001:6009` mapping.
+No database, authentication, fixture assertions, timeout, retry, or coverage policy
+changes are needed.
+
+Validation checks both old and corrected Compose JSON against the existing CN
+TOMLs: the old targets omit the listener and corrected targets include it. An
+isolated real Docker deployment uses two independently published CNs, both with
+`proxy-enabled=true` and SQL port 6001, sharing TN/LOG and DISK-V2 storage. The
+runner uses its default Docker port discovery, with no DSN override. Both mapped
+ports return real MySQL greetings; all 77 contract checks pass (63 functional,
+5 rollback, 9 causal cross-CN) in 90 seconds including client build. The local
+image matches the Debian 13 native binary ABI; this environment adaptation is
+not a CI image or product change. Task-owned containers are stopped/removed after
+verification. Evidence is in `materialized_view_ci_port_results.json`. New-head
+CI remains independent of this local port-boundary proof.
+
+Latest-main parser conflict resolution (2026-10-14): main
+`fcad62a8ff06000e682824802f1155cbeea02a2f` adds parenthesized
+`ALTER TABLE ADD COLUMN (...)` (#29963). The grammar merges cleanly; regenerate
+`mysql_sql.go` with the repository goyacc instead of choosing either generated
+file. Generation reports zero shift/reduce and zero reduce/reduce conflicts.
+Retain upstream parser tests. Complete mysql parser and planner UT pass
+(0.366 and 56.890 seconds), incremental vet passes, configured lint reports zero
+issues. A freshly rebuilt native service passes 58/58 SQL statements with zero
+ignored, failed or abnormal cases, plus all 77 native checks (63 functional,
+5 rollback, 9 causal two-CN). New SQL controls reject parenthesized ADD on the
+MV and its dependent source, then allow ordinary ADD after dropping the MV and
+verify original rows plus NULL new columns. Port-boundary Docker proof above is
+separate. This resolves the local generated-parser conflict; final-head GitHub
+checks remain independent. Evidence is in `materialized_view_ci_port_results.json`.
