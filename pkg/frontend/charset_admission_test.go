@@ -171,7 +171,11 @@ func TestSetNamesDefaultCompatibility(t *testing.T) {
 	execCtx.singleStatementQuery = true
 	require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), "set names default", false))
 
-	wantCharset := gSysVarsDefs["character_set_client"].Default
+	wantCharset, err := ses.GetGlobalSysVar("character_set_server")
+	require.NoError(t, err)
+	if wantCharset == nil {
+		wantCharset = gSysVarsDefs["character_set_server"].Default
+	}
 	for _, name := range charsetVars {
 		got, err := ses.GetSessionSysVar(name)
 		require.NoError(t, err)

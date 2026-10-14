@@ -1577,18 +1577,24 @@ func doSetVar(
 				}
 			}
 		}
-		if err := validateCharsetAssignment(assign, value); err != nil {
-			return evaluatedAssignment{}, err
-		}
 		// SET NAMES DEFAULT is represented by a synthetic "names" assignment,
 		// so it cannot use the ordinary system-variable DEFAULT resolution above.
 		// The generic expression evaluator intentionally materializes DEFAULT as
-		// a boolean marker; resolve the SET NAMES form to the effective default
-		// character set before the string system-variable setters see it.
+		// a boolean marker; resolve the SET NAMES form to the effective server
+		// default character set before the string system-variable setters see it.
 		if assign.SetNames {
 			if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
-				value = gSysVarsDefs["character_set_client"].Default
+				value, evalErr = ses.GetGlobalSysVar("character_set_server")
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				if value == nil {
+					value = gSysVarsDefs["character_set_server"].Default
+				}
 			}
+		}
+		if err := validateCharsetAssignment(assign, value); err != nil {
+			return evaluatedAssignment{}, err
 		}
 		return evaluatedAssignment{
 			assign:                  assign,
