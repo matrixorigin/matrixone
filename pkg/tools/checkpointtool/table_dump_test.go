@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -3430,5 +3431,51 @@ func TestLogicalCSVJSONVisibleRoundTrip(t *testing.T) {
 	require.NoError(t, renderLogicalCSVJSON(row, columnTypes, []bool{true, false}))
 	for _, malformed := range []string{"", "bad", "\x01"} {
 		require.Error(t, renderLogicalCSVJSON([]string{malformed}, columnTypes, []bool{false}))
+	}
+}
+
+func TestCheckpointCSVRejectsTypedJSONLoss(t *testing.T) {
+	opaque, err := bytejson.NewMySQLOpaque(defines.MORPCVersion52, 253, []byte("x"))
+	require.NoError(t, err)
+	values := []any{opaque, []any{opaque}, map[string]any{"kind": []any{opaque}}}
+	for _, scalar := range []struct {
+		kind bytejson.TpCode
+		text string
+	}{
+		{bytejson.TpCodeDecimal, "1.25"},
+		{bytejson.TpCodeDate, "2024-01-01"},
+		{bytejson.TpCodeTime, "12:34:56"},
+		{bytejson.TpCodeDatetime, "2024-01-01 12:34:56"},
+		{bytejson.TpCodeBit, "\x01"},
+	} {
+		typed := bytejson.ByteJson{Type: scalar.kind, Data: append([]byte{byte(len(scalar.text))}, []byte(scalar.text)...)}
+		values = append(values, typed, map[string]any{"nested": []any{typed}})
+	}
+	for _, value := range values {
+		bj, err := bytejson.CreateByteJSON(value)
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		t.Run(bj.String(), func(t *testing.T) {
+			row := []string{string(raw)}
+			assert.Error(t, renderLogicalCSVJSON(row, []types.Type{types.T_json.ToType()}, []bool{false}))
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(types.T_json.ToType())
+			defer func() { vec.Free(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+			var buf bytes.Buffer
+			assert.Error(t, writeSQLLoadCSVFieldFromVec(&buf, types.T_json.ToType(), []*vector.Vector{vec}, 0, 0))
+			assert.Empty(t, buf.String(), "rejection precedes this field's output")
+			schema := &TableSchema{Columns: []TableColumn{{Name: "j", SQLType: "JSON", Position: 1, PhysicalPosition: 0}}}
+			view := &LogicalTableView{Headers: []string{"object", "block", "row", "col_0"}, Rows: [][]string{{"obj", "0", "0", string(raw)}}}
+			buf.Reset()
+			assert.Error(t, WriteCSV(&buf, schema, view, WithCSVHeader(false), WithCSVMetaComments(false)))
+			assert.Empty(t, buf.String())
+			visible, err := types.ParseStringToByteJson(bj.String())
+			require.NoError(t, err)
+			plain, err := types.EncodeJson(visible)
+			require.NoError(t, err)
+			require.NoError(t, renderLogicalCSVJSON([]string{string(plain)}, []types.Type{types.T_json.ToType()}, []bool{false}), "ordinary JSON with the same visible text remains supported")
+		})
 	}
 }

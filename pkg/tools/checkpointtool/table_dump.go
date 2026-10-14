@@ -2918,16 +2918,50 @@ func renderLogicalCSVJSON(row []string, columnTypes []types.Type, nulls []bool) 
 		if i < len(nulls) && nulls[i] {
 			continue
 		}
-		if len(value) == 0 {
-			return moerr.NewInternalErrorNoCtx("invalid checkpoint JSON value")
-		}
-		document := bytejson.ByteJson{Type: bytejson.TpCode(value[0]), Data: []byte(value[1:])}
-		if _, err := bytejson.StorageCompatibleDataSizeWithLimit(context.Background(), document, math.MaxInt); err != nil {
+		text, err := checkpointJSONLoadText([]byte(value))
+		if err != nil {
 			return err
 		}
-		row[i] = document.String()
+		row[i] = string(text)
 	}
 	return nil
+}
+
+// checkpointJSONLoadText rejects scalar extensions whose JSON text would lose
+// their stored type on LOAD DATA. Validation precedes traversal of encoded data.
+func checkpointJSONLoadText(value []byte) ([]byte, error) {
+	if len(value) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid checkpoint JSON value")
+	}
+	document := bytejson.ByteJson{Type: bytejson.TpCode(value[0]), Data: value[1:]}
+	if _, err := bytejson.StorageCompatibleDataSizeWithLimit(context.Background(), document, math.MaxInt); err != nil {
+		return nil, err
+	}
+	var validate func(bytejson.ByteJson) error
+	validate = func(node bytejson.ByteJson) error {
+		switch node.Type {
+		case bytejson.TpCodeObject:
+			for i := 0; i < node.GetElemCnt(); i++ {
+				if err := validate(node.GetObjectVal(i)); err != nil {
+					return err
+				}
+			}
+		case bytejson.TpCodeArray:
+			for i := 0; i < node.GetElemCnt(); i++ {
+				if err := validate(node.GetArrayElem(i)); err != nil {
+					return err
+				}
+			}
+		case bytejson.TpCodeLiteral, bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeString:
+		default:
+			return moerr.NewNotSupportedNoCtx("checkpoint CSV cannot preserve typed JSON scalar")
+		}
+		return nil
+	}
+	if err := validate(document); err != nil {
+		return nil, err
+	}
+	return document.MarshalJSON()
 }
 
 func projectCSVRow(values []string, physicalPositions []int) []string {
@@ -3038,6 +3072,16 @@ func writeSQLLoadCSVFieldFromVec(
 	}
 	vec := vecs[pos]
 	rowIdx = vectorRowIndex(vec, rowIdx)
+	if vec.GetType().Oid == types.T_json {
+		text, err := checkpointJSONLoadText(vec.GetBytesAt(rowIdx))
+		if err != nil {
+			return err
+		}
+		w.WriteByte('"')
+		appendEscapedSQLLoadBytes(w, text, '"')
+		w.WriteByte('"')
+		return nil
+	}
 	if shouldQuoteSQLLoadType(typ) {
 		w.WriteByte('"')
 		appendCSVQuotedVecValue(w, vec, rowIdx)
@@ -3060,8 +3104,6 @@ func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
 		appendEscapedSQLLoadBytes(w, vec.GetBytesAt(rowIdx), '"')
-	case types.T_json:
-		appendEscapedSQLLoadString(w, types.DecodeJson(vec.GetBytesAt(rowIdx)).String(), '"')
 	case types.T_bit:
 		appendEscapedSQLLoadBytes(w, bitValueToLoadBytes(vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx], vec.GetType().Width), '"')
 	default:
