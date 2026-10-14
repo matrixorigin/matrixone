@@ -206,13 +206,13 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		values = fn.Args
 	case "concat_ws":
 		// NULL-derived BLOB domains are not binary contributors, even through
-		// value wrappers. Keep explicit binary declarations and the separator.
+		// value wrappers or in the separator. Explicit binary declarations remain.
 		previous := r.defaultMarker
 		r.defaultMarker = fieldStringText
 		domains := make([]preparedFieldStringDomain, len(fn.Args))
 		for i, arg := range fn.Args {
 			domains[i] = r.expr(arg)
-			if i > 0 && domains[i].inferredBinary {
+			if domains[i].inferredBinary {
 				domains[i].kind = fieldStringNull
 			}
 		}
@@ -243,10 +243,15 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	case "lag", "lead":
 		if len(fn.Args) > 0 {
 			if len(fn.Args) > 2 {
-				// An explicit default supplies the peer declaration, including
-				// NULL. Only the omitted-default form independently materializes
-				// the value marker's default text declaration.
-				return r.common([]*Expr{fn.Args[0], fn.Args[2]})
+				value, fallback := r.expr(fn.Args[0]), r.expr(fn.Args[2])
+				// Two parameter declarations share their default text contract.
+				// A compound operand or literal NULL instead supplies its own peer
+				// domain; materializing either marker first would erase that peer.
+				if (value.directParameter || value.parameterDeclaration) && (fallback.directParameter || fallback.parameterDeclaration) {
+					value = materializedFieldStringDomain(value)
+					fallback = materializedFieldStringDomain(fallback)
+				}
+				return r.commonDomains([]preparedFieldStringDomain{value, fallback})
 			}
 			return materializedFieldStringDomain(r.expr(fn.Args[0]))
 		}
@@ -285,16 +290,35 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		// type. Unresolved markers have their declaration, not their wire type.
 		if r.unresolvedParameters || r.parameterTypes != nil {
 			inputs := make([]types.Type, len(fn.Args))
+			var declaredInputs []types.Type
 			dependent := false
 			for i, arg := range fn.Args {
 				domain := fieldStringArgumentDeclaration(r.expr(arg))
 				dependent = dependent || domain.parameter
 				inputs[i] = fieldDomainType(domain, makeTypeByPlan2Expr(arg))
+				if declaredInputs != nil {
+					declaredInputs[i] = inputs[i]
+				}
+				if domain.inferredBinary {
+					if declaredInputs == nil {
+						declaredInputs = append([]types.Type(nil), inputs...)
+					}
+					declaredInputs[i] = types.T_text.ToType()
+				}
 			}
 			if dependent {
 				if resolved, err := function.GetFunctionByName(r.binder.GetContext(), name, inputs); err == nil {
 					typ := resolved.GetReturnType()
 					result = fieldStringStaticDomain(&Expr{Typ: makePlan2Type(&typ)})
+					if result.kind == fieldStringBinary && declaredInputs != nil {
+						// Ask the same registered contract whether BINARY came only
+						// from inferred inputs. Intrinsically binary functions (e.g.
+						// UNHEX) and real binary peers remain explicit contributors.
+						if declared, err := function.GetFunctionByName(r.binder.GetContext(), name, declaredInputs); err == nil {
+							typ := declared.GetReturnType()
+							result.inferredBinary = typ.Oid.IsMySQLString() && types.StaticStringDomain(typ) != types.StringDomainBinary
+						}
+					}
 				}
 			}
 		}
@@ -409,21 +433,17 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 		return fallback
 	}
 	if isPreparedSetOperationNode(node.NodeType) {
-		result := preparedFieldStringDomain{kind: fieldStringNull}
+		domains := make([]preparedFieldStringDomain, 0, len(node.Children))
 		for _, child := range node.Children {
 			// UNION consumes materialized branch declarations before merging
 			// them, just as scalar and column references consume projections.
 			domain := materializedFieldStringDomain(r.output(child, -1, pos, fallback))
-			result.parameter = result.parameter || domain.parameter
-			result.history = result.history || domain.history
 			if domain.kind == fieldStringOther {
 				return fallback
 			}
-			if domain.kind != fieldStringNull && (result.kind == fieldStringNull || domain.kind == fieldStringBinary) {
-				result.kind = domain.kind
-			}
+			domains = append(domains, domain)
 		}
-		return result
+		return r.commonDomains(domains)
 	}
 	values := node.ProjectList
 	switch node.NodeType {
