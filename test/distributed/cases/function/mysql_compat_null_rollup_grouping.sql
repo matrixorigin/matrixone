@@ -72,6 +72,9 @@ with input as (select * from t_empty)
 select k, sum(v) as total from input group by rollup(k);
 select k, row_number() over(order by k) as rn
 from t_empty group by k with rollup;
+-- Alias resolution and the empty-input guard both precede window ranking.
+select k as x, sum(v) as s, row_number() over(order by sum(v)) as rn
+from t_empty group by x with rollup;
 select k, count(*) as n from t_empty group by k with rollup
 having count(*)=0 or sum(v)>0;
 select k, sum(v) as total, count(*) as n, grouping(k) as g

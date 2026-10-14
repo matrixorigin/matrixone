@@ -107,6 +107,7 @@ func TestRollupEmptyInput(t *testing.T) {
 			{"having zero", rolled + " having count(*)=0"},
 			{"having OR", rolled + " having count(*)=0 or sum(v)>0"},
 			{"window", "select k,sum(v),row_number() over(order by sum(v)) from src group by k with rollup"},
+			{"alias with window", "select k as x,sum(v) as s,row_number() over(order by sum(v)) as rn from src group by x with rollup"},
 			{"derived", "select * from (" + rolled + ") r"},
 			{"CTE reused", "with r as (" + rolled + ") select * from r union all select * from r"},
 		} {

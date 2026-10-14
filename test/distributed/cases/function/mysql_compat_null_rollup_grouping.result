@@ -86,6 +86,9 @@ k    total
 select k, row_number() over(order by k) as rn
 from t_empty group by k with rollup;
 k    rn
+select k as x, sum(v) as s, row_number() over(order by sum(v)) as rn
+from t_empty group by x with rollup;
+x    s    rn
 select k, count(*) as n from t_empty group by k with rollup
 having count(*)=0 or sum(v)>0;
 k    n
