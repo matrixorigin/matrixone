@@ -2306,14 +2306,79 @@ func TestCTEMultiReferencePruningCounterexamples(t *testing.T) {
 }
 
 func TestCTEMultiReferenceUnionKeepsVariableWidthAdmissionGuard(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	logicPlan, err := runOneStmt(mock, t, `
-		with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey)
-		select l_suppkey from (
-			select l_suppkey,payload from c
-			union all select l_suppkey,payload from c
-		) u`)
-	require.NoError(t, err)
-	require.Zero(t, countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN),
-		"column pruning must not relax variable-width spill admission")
+	for _, tc := range []struct{ name, consumer string }{
+		{"explicit-projections", `select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`},
+		{"count-only-first", `select count(*) from c union all select max(l_suppkey) from c`},
+		{"count-only-last", `select max(l_suppkey) from c union all select count(*) from c`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, `with c as (select l_suppkey,max(l_comment) payload from lineitem group by l_suppkey) `+tc.consumer)
+			require.NoError(t, err)
+			require.Zero(t, countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN),
+				"explicit and fallback projections must not relax variable-width spill admission")
+		})
+	}
+}
+
+func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
+	const aggregate = `select n_regionkey g,sum(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`
+	for _, tc := range []struct {
+		name, producer, consumer string
+		producerWidth            int
+		readerInputs             [][]int32
+	}{
+		{"filtered-row", `select n_regionkey g,n_nationkey total,n_regionkey n,n_nationkey+10 mx from nation where n_nationkey>0`,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
+		{"aggregate-middle", aggregate,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
+		{"aggregate-first", aggregate,
+			`select total,mx from r union all select total,mx from r`, 2, [][]int32{{0, 1}, {0, 1}}},
+		{"asymmetric", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
+			`select a.g,a.total,b.g,b.mx from r a join r b on a.g=b.g`, 3, [][]int32{{0, 1}, {0, 2}}},
+		{"single-late-output", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
+			`select a.mx,b.total from r a join r b on a.mx=b.total`, 2, [][]int32{{1}, {0}}},
+		{"in-range-stale-position", `select n_regionkey g,sum(n_nationkey) total,count(*) n,max(n_nationkey) mx,min(n_nationkey) mn from nation group by n_regionkey`,
+			`select g,total,mx,mn from r union all select g,total,mx,mn from r`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+		{"one-reader-preserves-middle", aggregate,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total,b.n from r a join r b on a.g<=>b.g and a.mx=b.mx`, 4, [][]int32{{0, 1, 3}, {0, 1, 2, 3}}},
+		{"full-projection", aggregate,
+			`select a.*,b.* from r a join r b on a.g<=>b.g and a.mx=b.mx`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+		{"count-only-fallback", aggregate,
+			`select count(*) from r union all select max(mx) from r`, 4, [][]int32{{0, 1, 2, 3}, {3}}},
+		{"both-count-only", aggregate,
+			`select count(*) from r union all select count(*) from r`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, "with r as ("+tc.producer+") "+tc.consumer)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+			require.Equal(t, len(tc.readerInputs), countReachableNodeType(query, planpb.Node_SINK_SCAN))
+			var inputs [][]int32
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType != planpb.Node_SINK_SCAN {
+					continue
+				}
+				require.Len(t, node.SourceStep, 1)
+				sink := query.Nodes[query.Steps[node.SourceStep[0]]]
+				require.Equal(t, planpb.Node_SINK, sink.NodeType)
+				require.Equal(t, materialized.CTESinkOption, sink.ExtraOptions)
+				require.Len(t, sink.ProjectList, tc.producerWidth)
+				var positions []int32
+				for _, expr := range node.ProjectList {
+					col := expr.GetCol()
+					require.NotNil(t, col)
+					require.Zero(t, col.RelPos)
+					require.GreaterOrEqual(t, col.ColPos, int32(0))
+					require.Less(t, int(col.ColPos), len(sink.ProjectList))
+					positions = append(positions, col.ColPos)
+				}
+				inputs = append(inputs, positions)
+			}
+			require.ElementsMatch(t, tc.readerInputs, inputs, "each reader must address the shared producer's compacted layout")
+		})
+	}
 }
