@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 	"time"
 
@@ -253,11 +254,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_geometry, types.T_geometry32:
-		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
-		if err != nil {
-			return err
-		}
-		row[i] = []byte(text)
+		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -669,11 +666,7 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
 	case types.T_geometry, types.T_geometry32:
-		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)))
-		if err != nil {
-			return nil, err
-		}
-		return []byte(text), nil
+		return encodeMySQLGeometry(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), *vec.GetType())
 	default:
 		return nil, moerr.NewInternalError(slices.ctx, "invalid bytes based slice")
 	}
@@ -900,4 +893,15 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		return moerr.NewInternalErrorf(ctx, "convertVectorToSlice : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
+}
+
+// encodeMySQLGeometry belongs to the MySQL boundary. Internal row extraction
+// continues to produce WKT; persisted payloads remain bare WKB.
+func encodeMySQLGeometry(payload []byte, typ types.Type) ([]byte, error) {
+	out, srid, err := planfunction.AppendGeometryPayloadToStandardWKB(make([]byte, 4), payload, typ)
+	if err != nil {
+		return nil, err
+	}
+	binary.LittleEndian.PutUint32(out, srid)
+	return out, nil
 }

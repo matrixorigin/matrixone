@@ -296,7 +296,8 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 		return nil
 	}
 	return &plan.RankOption{
-		Mode: opt.Mode,
+		Mode:   opt.Mode,
+		Nprobe: opt.Nprobe,
 	}
 }
 

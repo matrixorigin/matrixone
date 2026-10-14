@@ -57,7 +57,6 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"sql_buffer_result": "legacy parser behavior before incremental keyword policy",
 	"sql_no_cache":      "legacy parser behavior before incremental keyword policy",
 	"strict":            "legacy parser behavior before incremental keyword policy",
-	"subscription":      "legacy parser behavior before incremental keyword policy",
 	"sync":              "legacy parser behavior before incremental keyword policy",
 	"sync_interval":     "legacy parser behavior before incremental keyword policy",
 	"temporary":         "legacy parser behavior before incremental keyword policy",
