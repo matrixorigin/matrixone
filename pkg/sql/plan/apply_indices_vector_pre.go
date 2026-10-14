@@ -61,6 +61,7 @@ func (builder *QueryBuilder) membershipJoinBuildable(vecCtx *vectorSortContext) 
 func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext, in vectorPreFilterInput) (int32, bool, error) {
 	scanNode := in.scanNode
 	tableFuncNode := builder.qry.Nodes[in.tableFuncNodeID]
+	rowFetchFilters, membershipOnlyFilters := builder.ivfMembershipRowFetchFilters(scanNode)
 	// secondScanNode: copy original scanNode for JOIN(ivf, table)
 	secondScanNodeID := builder.copyNode(in.ctx, scanNode.NodeId)
 	secondScanNode := builder.qry.Nodes[secondScanNodeID]
@@ -276,6 +277,16 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 		OnList:   []*Expr{outerOn},
 		// Don't set Limit/Offset on JOIN - they should be applied after SORT
 	}, in.ctx)
+
+	// Every surviving PK passed the complete predicate on the copied scan.
+	// Commit this only after both exact PK joins have been built, so a declined
+	// rewrite retains its MATCH filters. The membership producer keeps them.
+	if len(membershipOnlyFilters) > 0 {
+		scanNode.FilterList = rowFetchFilters
+		if in.colRefCnt != nil {
+			increaseRefCntForExprList(membershipOnlyFilters, -1, in.colRefCnt)
+		}
+	}
 
 	// Outer join doesn't add extra project, let global column pruning optimizer handle it
 	return outerJoinNodeID, true, nil

@@ -144,6 +144,7 @@ select id, match(body) against('needle') as s from t_ref_ft2 order by l2_distanc
 -- @regex("Fulltext Index Scan on", true)
 -- @regex("Vector Index Scan on", true)
 -- @regex("Join Type: SEMI", true)
+-- @regex("Fulltext Index Scan on[\s\S]*Fulltext Index Scan on", false)
 explain select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;

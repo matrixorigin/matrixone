@@ -393,6 +393,7 @@ explain select id from t_ft_hnsw where match(body) against('needle') order by l2
 -- @regex("Fulltext Index Scan on", true)
 -- @regex("Vector Index Scan on", true)
 -- @regex("Join Type: SEMI", true)
+-- @regex("Fulltext Index Scan on[\s\S]*Fulltext Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀

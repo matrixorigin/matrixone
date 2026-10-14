@@ -360,7 +360,9 @@ join or a provider row, or that the planner estimates at `LIMIT × 2` rows or fe
 A `MATCH` in the scan's filters is one more filter the PRE shape evaluates in the filtered scan.
 hnsw builds the PRE shape for it, so its hybrid top-k uses both indexes and returns the exact
 matching rows; so do cagra and ivfpq, whose GPU mask ANDs the matching keys. ivfflat keeps its
-post-filtered behavior.
+post-filtered behavior. On every index the PRE shape runs a filter-only `MATCH` once, in the
+membership producer: the row-fetch scan drops it once both primary-key joins are built (#30178,
+shared by `buildVectorPreFilterJoin`). A `MATCH` whose score the query also reads runs on both.
 
 ### Post: one search
 
