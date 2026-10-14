@@ -52,14 +52,52 @@ execute st_lag_default using @long_default;
 deallocate prepare st_lag_default;
 
 -- 公共类型不得缩窄源文本，默认值未被使用时也必须保持完整容量。
-create table wtext (v mediumtext);
-insert into wtext values (repeat('a', 65536));
+create table wtext (v mediumtext, j json);
+insert into wtext values (repeat('a', 65536), '{}');
 select length(v) as original_length,
        length(lag(v, 0) over ()) as control_length,
        length(lag(v, 0, 0) over ()) as lag_length,
        length(lead(v, 0, 0) over ()) as lead_length from wtext;
 select length(lag(v, 1, 0) over ()) as default_length from wtext;
 select length(lag(0, 1, v) over ()) as text_default_length from wtext;
+
+-- 未知 JSON 显示容量必须对应可持久化的大对象域；两种模式都不能丢失源 MEDIUMTEXT。
+set @wdefault_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wtext_json_strict as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_strict;
+select length(lg) as lg_length, length(ld) as ld_length,
+       lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_strict;
+set session sql_mode = '';
+create table wtext_json_permissive as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_permissive;
+select length(lg) as lg_length, length(ld) as ld_length,
+       lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_permissive;
+create view wtext_json_view as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show columns from wtext_json_view;
+select length(lg) as lg_length, length(ld) as ld_length from wtext_json_view;
+set session sql_mode = @wdefault_sql_mode;
+
+-- BOOL 只贡献数值 0/1，不得把整数、小数或浮点源值转为真假值。
+select lag(42,0,true) over () as lg, lead(42,0,false) over () as ld;
+select lag(cast(42.5 as double),0,true) over () as lg,
+       lead(cast(42.5 as float),0,false) over () as ld;
+select lag(42,1,true) over () as lg, lead(42,1,false) over () as ld;
+select lag(true,0,42) over () as lg, lead(false,1,42) over () as ld;
+select lag(cast(0.1 as decimal(2,2)),1,true) over () as lg,
+       lead(cast(0.1 as decimal(65,65)),0,false) over () as ld;
+select id, lag(v,0,v>0) over (order by id) as numeric_source,
+       lead(v,1,v<10) over (order by id) as bool_default,
+       lag(cast(0.1 as decimal(2,2)),1,v>0) over (order by id) as decimal_bool_default,
+       lag(v>0,1,42) over (order by id) as bool_source from wdefault order by id;
+create table wbool_copy as select lag(42,0,true) over () as lg,
+       lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_copy;
+select * from wbool_copy;
+create view wbool_view as select lag(42,0,true) over () as lg,
+       lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_view;
+select * from wbool_view;
 
 -- 数值与字符串字面量的窗口身份不同；投影顺序和单独查询不能改变类型。
 select lag(7,0,0.5) over () as num, lag(7,0,'0.5') over () as str;

@@ -8111,7 +8111,7 @@ func bindFuncExprImplByPlanExpr(
 				// COALESCE's mixed string/numeric overload starts with a generic
 				// VARCHAR capacity. Refine known display bounds, but never shrink
 				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
-				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text || commonType.Oid == types.T_blob {
 					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
 					// An unknown result bound (for example JSON -> TEXT) cannot
 					// be bounded by only the other argument's declared capacity.
@@ -8130,7 +8130,13 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 					if unbounded {
-						commonType.Width = 0
+						// Width zero casts are unbounded at runtime, but persist as
+						// ordinary TEXT/BLOB with a 65535-byte assignment limit.
+						// Publish the largest SQL-valid LOB domain instead.
+						if commonType.Oid == types.T_varchar {
+							commonType.Oid = types.T_text
+						}
+						commonType.Width = types.MaxLongTextLen
 					}
 				}
 				returnType = commonType
@@ -8161,6 +8167,15 @@ func bindFuncExprImplByPlanExpr(
 				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
+				}
+				// BOOL has no direct DECIMAL cast. Preserve its numeric 0/1
+				// value through INT64 before applying the window's exact domain.
+				if (name == "lag" || name == "lead") && argsType[idx].Oid == types.T_bool && castType.Oid.IsDecimal() {
+					integerType := types.T_int64.ToType()
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&integerType))
+					if err != nil {
+						return nil, err
+					}
 				}
 				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
 				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
@@ -8282,6 +8297,28 @@ func isXMLXPathConstant(expr *Expr) bool {
 func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueArg, defaultArg types.Type) (types.Type, bool, error) {
 	if valueArg.Oid == types.T_any || defaultArg.Oid == types.T_any {
 		return types.Type{}, false, nil
+	}
+	if (valueArg.IsNumeric() && defaultArg.Oid == types.T_bool) ||
+		(valueArg.Oid == types.T_bool && defaultArg.IsNumeric()) {
+		// A Boolean contributes 0/1 to a numeric value domain. COALESCE's
+		// Boolean overload instead truth-converts the numeric operand.
+		numeric := valueArg
+		digits := int32(1)
+		if valueArg.Oid == types.T_bool {
+			numeric = defaultArg
+		} else if lit := defaultExpr.GetLit(); lit != nil {
+			if value, ok := lit.Value.(*plan.Literal_Bval); lit.Isnull || (ok && !value.Bval) {
+				digits = 0
+			}
+		}
+		if !numeric.Oid.IsDecimal() {
+			return numeric, true, nil
+		}
+		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&numeric), plan.Type{Width: digits})
+		if !ok || common.Width > 65 {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		}
+		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
 	if valueArg.Oid.IsDecimal() && defaultArg.Oid.IsInteger() {
 		// Zero fits even DECIMAL(M,M); it needs no extra integer digit.

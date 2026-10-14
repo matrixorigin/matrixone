@@ -70,8 +70,8 @@ execute st_lag_default using @long_default;
 2  ¦  a  𝄀
 3  ¦  b
 deallocate prepare st_lag_default;
-create table wtext (v mediumtext);
-insert into wtext values (repeat('a', 65536));
+create table wtext (v mediumtext, j json);
+insert into wtext values (repeat('a', 65536), '{}');
 select length(v) as original_length,
 length(lag(v, 0) over ()) as control_length,
 length(lag(v, 0, 0) over ()) as lag_length,
@@ -84,6 +84,83 @@ select length(lag(v, 1, 0) over ()) as default_length from wtext;
 select length(lag(0, 1, v) over ()) as text_default_length from wtext;
 ➤ text_default_length[-5,64,0]  𝄀
 65536
+set @wdefault_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wtext_json_strict as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_strict;
+➤ Table[12,17,0]  ¦  Create Table[12,95,0]  𝄀
+wtext_json_strict  ¦  CREATE TABLE `wtext_json_strict` (
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_strict;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+set session sql_mode = '';
+create table wtext_json_permissive as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_permissive;
+➤ Table[12,21,0]  ¦  Create Table[12,99,0]  𝄀
+wtext_json_permissive  ¦  CREATE TABLE `wtext_json_permissive` (
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_permissive;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+create view wtext_json_view as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show columns from wtext_json_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
+select length(lg) as lg_length, length(ld) as ld_length from wtext_json_view;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  𝄀
+65536  ¦  65536
+set session sql_mode = @wdefault_sql_mode;
+select lag(42,0,true) over () as lg, lead(42,0,false) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+42  ¦  42
+select lag(cast(42.5 as double),0,true) over () as lg,
+lead(cast(42.5 as float),0,false) over () as ld;
+➤ lg[8,53,31]  ¦  ld[7,23,31]  𝄀
+42.5  ¦  42.5
+select lag(42,1,true) over () as lg, lead(42,1,false) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+1  ¦  0
+select lag(true,0,42) over () as lg, lead(false,1,42) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+1  ¦  42
+select lag(cast(0.1 as decimal(2,2)),1,true) over () as lg,
+lead(cast(0.1 as decimal(65,65)),0,false) over () as ld;
+➤ lg[3,3,2]  ¦  ld[3,65,65]  𝄀
+1.00  ¦  0.10000000000000000000000000000000000000000000000000000000000000000
+select id, lag(v,0,v>0) over (order by id) as numeric_source,
+lead(v,1,v<10) over (order by id) as bool_default,
+lag(cast(0.1 as decimal(2,2)),1,v>0) over (order by id) as decimal_bool_default,
+lag(v>0,1,42) over (order by id) as bool_source from wdefault order by id;
+➤ id[4,32,0]  ¦  numeric_source[4,32,0]  ¦  bool_default[4,32,0]  ¦  decimal_bool_default[3,3,2]  ¦  bool_source[-5,64,0]  𝄀
+1  ¦  100  ¦  10  ¦  1.00  ¦  42  𝄀
+2  ¦  10  ¦  20  ¦  0.10  ¦  1  𝄀
+3  ¦  20  ¦  0  ¦  0.10  ¦  1
+create table wbool_copy as select lag(42,0,true) over () as lg,
+lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_copy;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbool_copy;
+➤ lg[-5,64,0]  ¦  ld[8,53,31]  𝄀
+42  ¦  42.5
+create view wbool_view as select lag(42,0,true) over () as lg,
+lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbool_view;
+➤ lg[-5,64,0]  ¦  ld[8,53,31]  𝄀
+42  ¦  42.5
 select lag(7,0,0.5) over () as num, lag(7,0,'0.5') over () as str;
 ➤ num[3,20,1]  ¦  str[12,3,0]  𝄀
 7.0  ¦  7
@@ -212,7 +289,7 @@ json_valid(lead(j,0,d255) over ()) as lead_valid from wjson;
 ➤ lag_equal[-7,1,0]  ¦  lead_equal[-7,1,0]  ¦  lag_valid[-7,1,0]  ¦  lead_valid[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
 select lag(j,1,d255) over () as lg, lead(j,1,d255) over () as ld from wjson;
-➤ lg[-1,16383,0]  ¦  ld[-1,16383,0]  𝄀
+➤ lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
 {}  ¦  {}
 select length(lag(d255,1,j) over ()) as lag_default_length,
 length(lead(d255,1,j) over ()) as lead_default_length,
@@ -222,10 +299,10 @@ json_valid(lead(d255,1,j) over ()) as lead_default_valid from wjson;
 309  ¦  309  ¦  1  ¦  1
 create table wjson_copy as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
 show create table wjson_copy;
-➤ Table[12,10,0]  ¦  Create Table[12,80,0]  𝄀
+➤ Table[12,10,0]  ¦  Create Table[12,88,0]  𝄀
 wjson_copy  ¦  CREATE TABLE `wjson_copy` (
-  `lg` text DEFAULT NULL,
-  `ld` text DEFAULT NULL
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
 )
 select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_copy;
 ➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
@@ -233,8 +310,8 @@ select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_vali
 create view wjson_view as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
 show columns from wjson_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-lg  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ld  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
+lg  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
 select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
 ➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
 309  ¦  309  ¦  1  ¦  1

@@ -38,19 +38,36 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 			}{
 				{"text boundary", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, makePlan2Int64ConstExprWithType(0), types.T_text, 65535, 0},
 				{"mediumtext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_text, 16777215, 0},
-				{"unbounded text", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}}, makePlan2Int64ConstExprWithType(0), types.T_text, 0, 0},
+				{"unbounded text", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}}, makePlan2Int64ConstExprWithType(0), types.T_text, types.MaxLongTextLen, 0},
 				{"text default", makePlan2Int64ConstExprWithType(0), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 16777215}}, types.T_text, 16777215, 0},
-				{"json varchar 254", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 254}}, types.T_text, 0, 0},
-				{"json varchar 255", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 255}}, types.T_text, 0, 0},
-				{"json varchar 256", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}, types.T_text, 0, 0},
-				{"varchar 254 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 254}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, 0, 0},
-				{"varchar 255 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 255}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, 0, 0},
-				{"varchar 256 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, 0, 0},
+				{"unknown char varchar", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}}, types.T_text, types.MaxLongTextLen, 0},
+				{"json varchar 254", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 254}}, types.T_text, types.MaxLongTextLen, 0},
+				{"json varchar 255", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 255}}, types.T_text, types.MaxLongTextLen, 0},
+				{"json varchar 256", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}, types.T_text, types.MaxLongTextLen, 0},
+				{"varchar 254 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 254}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
+				{"varchar 255 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 255}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
+				{"varchar 256 json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
+				{"mediumtext json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
+				{"json mediumtext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, types.T_text, types.MaxLongTextLen, 0},
+
 				{"mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 16777215, 0},
-				{"unbounded blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob)}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 0, 0},
+				{"unbounded blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob)}}, makePlan2Int64ConstExprWithType(0), types.T_blob, types.MaxLongTextLen, 0},
 				{"blob default", makePlan2Int64ConstExprWithType(0), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, 16777215, 0},
 				{"blob text", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, types.T_blob, 16777215, 0},
-				{"text blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, 0, 0},
+				{"text blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, types.MaxLongTextLen, 0},
+				{"integer bool", makePlan2Int64ConstExprWithType(42), makePlan2BoolConstExprWithType(true), types.T_int64, 0, 0},
+				{"unsigned bool", makePlan2Uint64ConstExprWithType(42), makePlan2BoolConstExprWithType(false), types.T_uint64, 0, 0},
+				{"float bool", makePlan2Float32ConstExprWithType(42.5), makePlan2BoolConstExprWithType(true), types.T_float32, 0, 0},
+				{"double bool", makePlan2Float64ConstExprWithType(42.5), makePlan2BoolConstExprWithType(false), types.T_float64, 0, 0},
+				{"bit bool", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 3}}, makePlan2BoolConstExprWithType(true), types.T_bit, 3, 0},
+				{"bool bit", makePlan2BoolConstExprWithType(false), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 3}}, types.T_bit, 3, 0},
+				{"bool integer", makePlan2BoolConstExprWithType(true), makePlan2Int64ConstExprWithType(42), types.T_int64, 0, 0},
+				{"bool double", makePlan2BoolConstExprWithType(false), makePlan2Float64ConstExprWithType(42.5), types.T_float64, 0, 0},
+				{"decimal bool true", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 2}}, makePlan2BoolConstExprWithType(true), types.T_decimal64, 3, 2},
+				{"decimal bool column", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 2}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}}, types.T_decimal64, 3, 2},
+				{"decimal bool false", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2BoolConstExprWithType(false), types.T_decimal256, 65, 65},
+				{"decimal bool null", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, types.T_decimal256, 65, 65},
+				{"bool decimal", makePlan2BoolConstExprWithType(true), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 2}}, types.T_decimal64, 3, 2},
 				{"decimal signed zero", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(0), types.T_decimal256, 65, 65},
 				{"decimal unsigned zero", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Uint64ConstExprWithType(0), types.T_decimal256, 65, 65},
 				{"decimal typed null", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, types.T_decimal256, 65, 65},
@@ -85,6 +102,8 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				name       string
 				value, def *planpb.Expr
 			}{
+				{"bool default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2BoolConstExprWithType(true)},
+				{"bool value precision overflow", makePlan2BoolConstExprWithType(true), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
 				{"nonzero integer precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(1)},
 				{"integer domain precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}},
 				{"aligned decimal SQL precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 1}}},
@@ -103,20 +122,21 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 	for _, name := range []string{"lag", "lead"} {
 		for _, tc := range []struct {
-			sourceType   string
-			oid          types.T
-			width, scale int32
+			sourceType, defaultSQL string
+			oid                    types.T
+			width, scale           int32
 		}{
-			{"mediumblob", types.T_blob, 16777215, 0},
-			{"decimal(65,65)", types.T_decimal256, 65, 65},
+			{"mediumblob", "0", types.T_blob, 16777215, 0},
+			{"decimal(65,65)", "0", types.T_decimal256, 65, 65},
+			{"mediumtext", "cast('{}' as json)", types.T_text, types.MaxLongTextLen, 0},
 		} {
-			t.Run(name+tc.sourceType, func(t *testing.T) {
+			t.Run(name+tc.sourceType+tc.defaultSQL, func(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				source, err := buildTestCreateTableStmt(mock, "create table lag_lead_source(v "+tc.sourceType+")")
 				require.NoError(t, err)
 				mock.ctxt.tables["lag_lead_source"] = source
 				mock.ctxt.objects["lag_lead_source"] = &ObjectRef{DbName: mock.ctxt.DefaultDatabase(), ObjName: "lag_lead_source"}
-				p, err := runOneStmt(mock, t, "create table lag_lead_persisted as select "+name+"(v,0,0) over () as v from lag_lead_source")
+				p, err := runOneStmt(mock, t, "create table lag_lead_persisted as select "+name+"(v,0,"+tc.defaultSQL+") over () as v from lag_lead_source")
 				require.NoError(t, err)
 				persisted := p.GetDdl().GetCreateTable().GetTableDef()
 				require.NotNil(t, persisted)
