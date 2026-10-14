@@ -146,8 +146,8 @@ const (
 	// when a character function receives invalid UTF-8 bytes.
 	ErrCannotConvertString uint16 = 20337
 	// ErrInvalidJSONPathWildcard preserves MySQL's ER_INVALID_JSON_PATH_WILDCARD
-	// contract without reusing an internal error code already allocated on main.
-	ErrInvalidJSONPathWildcard uint16 = 20338
+	// contract without reusing main's codes or the digest dependency's 20338/20339.
+	ErrInvalidJSONPathWildcard uint16 = 20340
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
