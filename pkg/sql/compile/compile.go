@@ -1755,6 +1755,82 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	return materialization, nil
 }
 
+// Parentheses are flattened during binding, but prepared execution retains the
+// original AST. Only this wrapper chain belongs to the statement's result limit.
+func statementHasExplicitTopLevelLimit(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return false
+	}
+	for selectStmt != nil {
+		if selectStmt.Limit != nil && selectStmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := selectStmt.Select.(*tree.ParenSelect)
+		if !ok || paren == nil {
+			return false
+		}
+		selectStmt = paren.Select
+	}
+	return false
+}
+
+// materializePreparedLimitZero uses the existing empty-result topology for a
+// bound outer LIMIT. Parameterized pagination is compiled afresh by the frontend;
+// restoring the borrowed plan prevents a zero execution contaminating later ones.
+func (c *Compile) materializePreparedLimitZero(pn *plan.Plan) (func(), error) {
+	if c.isPrepare || pn == nil || !pn.IsPrepare || c.proc.GetPrepareParams() == nil || statementHasSQLCalcFoundRows(c.stmt) {
+		return nil, nil
+	}
+	if !statementHasExplicitTopLevelLimit(c.stmt) {
+		return nil, nil
+	}
+	q := pn.GetQuery()
+	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) == 0 {
+		return nil, nil
+	}
+	id := q.Steps[len(q.Steps)-1]
+	if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+		return nil, nil
+	}
+	root, node := q.Nodes[id], q.Nodes[id]
+	for depth := 0; node.Limit == nil; depth++ {
+		if depth >= len(q.Nodes) {
+			return nil, nil
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 || node.Offset != nil {
+			return nil, nil
+		}
+		id = node.Children[0]
+		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
+			return nil, nil
+		}
+		node = q.Nodes[id]
+	}
+	if node.NodeType == plan.Node_RECURSIVE_CTE || node.Limit.Typ.Id != int32(types.T_uint64) {
+		return nil, nil
+	}
+	expr := node.Limit
+	for expr.GetP() == nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
+			return nil, nil
+		}
+		expr = fn.Args[0]
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer free()
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) || vec.GetType().Oid != types.T_uint64 || vec.Length() == 0 || vector.MustFixedColWithTypeCheck[uint64](vec)[0] != 0 {
+		return nil, nil
+	}
+	original := root.Limit
+	root.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	return func() { root.Limit = original }, nil
+}
+
 // makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are
 // reused across EXECUTEs. Ordinary statements are compiled for one execution,
 // so resolve their value once and omit the default unlimited no-op entirely.
@@ -1943,11 +2019,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
-	case plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_INDEX_SEARCH_SCAN:
 		c.appendMetaTables(node.ObjRef)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileVectorIndexScan(node)
+		ss, err = c.compileIndexSearchScan(node)
 		if err != nil {
 			return nil, err
 		}
@@ -3041,7 +3117,7 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		// the matched files fill every available load scope.  Do not pay one
 		// serial footer round trip per file merely to discover that row-group
 		// fanout cannot add useful execution parallelism.
-		if c.parquetLoadFileFanoutSaturates(param, len(fileList)) {
+		if c.parquetLoadFileFanoutSaturates(node, param, len(fileList)) {
 			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
 		}
 		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
@@ -3862,7 +3938,7 @@ func (c *Compile) planArrowCompileRuntime(
 		}
 		if filePlan != nil && param.Parallel && len(fileList) == 1 && len(filePlan.RecordBatches) > 1 {
 			desiredShards := len(c.getHiveFileFanoutNodes(
-				param, min(len(filePlan.RecordBatches), arrowMaxPlannedShards),
+				node, param, min(len(filePlan.RecordBatches), arrowMaxPlannedShards),
 			))
 			if desiredShards > 1 {
 				runtime.shardsByPath[filePath], err = buildArrowRecordBatchShards(
@@ -3962,7 +4038,7 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	if len(shards) <= 1 {
 		return nil, moerr.NewInvalidInput(c.proc.Ctx, "Arrow record-batch fanout requires multiple shards")
 	}
-	nodes := c.getHiveFileFanoutNodes(param, len(shards))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(shards))
 	if len(nodes) != len(shards) {
 		return nil, moerr.NewInternalErrorf(c.proc.Ctx,
 			"Arrow planned %d record-batch shards for %d workers", len(shards), len(nodes))
@@ -4022,6 +4098,34 @@ func (c *Compile) compileExternScanMultiFileFanout(node *plan.Node, param *tree.
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
 }
 
+// TIME LOAD readers must share the coordinator's assignment implementation.
+// An older worker would decode a logical TIME before the new varchar projection
+// could classify its original text. Keep local file/row-group/offset parallelism,
+// but do not send this scan (or its assignment projection) to another CN. Parquet
+// schema is not known here, so typed TIME sources take the same conservative path.
+func loadTimeScanNeedsCoordinator(node *plan.Node, param *tree.ExternParam) bool {
+	if param == nil || param.ExternType != int32(plan.ExternType_LOAD) ||
+		param.Format == tree.ARROW || node == nil || node.TableDef == nil || node.ExternScan == nil {
+		return false
+	}
+	for _, col := range node.TableDef.Cols {
+		if col == nil || col.Hidden || col.Typ.Id != int32(types.T_time) {
+			continue
+		}
+		if field, supplied := node.ExternScan.TbColToDataCol[col.Name]; supplied && field >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) externalScanStageNodes(node *plan.Node, param *tree.ExternParam) engine.Nodes {
+	if loadTimeScanNeedsCoordinator(node, param) {
+		return nil
+	}
+	return c.queryWorkerStageNodes()
+}
+
 // multiFileFanoutEligible states the rule for parallelising a row-oriented
 // external file read: more than one file means whole files are distributed to
 // threads, one shard per scope, each file read start to finish by a single
@@ -4061,7 +4165,7 @@ func multiFileFanoutEligible(param *tree.ExternParam, fileCount int) bool {
 }
 
 func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
-	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
 		serialParam := *param
@@ -4070,7 +4174,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	}
 
 	ss := make([]*Scope, 0, len(shards))
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -4221,7 +4325,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 	rowGroups []parquetRowGroupMeta,
 	strictSqlMode bool,
 ) ([]*Scope, error) {
-	nodes := c.getHiveFileFanoutNodes(param, len(rowGroups))
+	nodes := c.getHiveFileFanoutNodes(node, param, len(rowGroups))
 	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
 	if err != nil {
 		return nil, err
@@ -4233,7 +4337,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 	}
 
 	ss := make([]*Scope, 0, len(shards))
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -4459,12 +4563,12 @@ func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
 // DOP rather than getHiveFileFanoutNodes(fileCount): the latter is capped by
 // fileCount and therefore cannot tell whether additional row-group scopes
 // would be useful.
-func (c *Compile) parquetLoadFileFanoutSaturates(param *tree.ExternParam, fileCount int) bool {
-	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(param)
+func (c *Compile) parquetLoadFileFanoutSaturates(node *plan.Node, param *tree.ExternParam, fileCount int) bool {
+	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(node, param)
 }
 
-func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
-	stageNodes := c.queryWorkerStageNodes()
+func (c *Compile) parquetLoadFileFanoutDOP(node *plan.Node, param *tree.ExternParam) int {
+	stageNodes := c.externalScanStageNodes(node, param)
 	if param != nil && param.ScanType == tree.S3 && len(stageNodes) > 0 {
 		dop := 0
 		for _, node := range stageNodes {
@@ -4496,11 +4600,11 @@ func (c *Compile) capFanoutByMaxDop(mcpu int) int {
 	return mcpu
 }
 
-func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
+func (c *Compile) getHiveFileFanoutNodes(node *plan.Node, param *tree.ExternParam, fileCount int) []engine.Node {
 	if fileCount <= 0 {
 		return nil
 	}
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
 	if param.ScanType == tree.S3 && len(stageNodes) > 0 {
 		nodes := make([]engine.Node, 0, fileCount)
 		for _, node := range stageNodes {
@@ -5007,7 +5111,10 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := c.externalScanStageNodes(node, param)
+	if len(stageNodes) == 0 && loadTimeScanNeedsCoordinator(node, param) {
+		stageNodes = engine.Nodes{{Addr: c.addr, Mcpu: c.capFanoutByMaxDop(max(c.ncpu, 1))}}
+	}
 	if len(stageNodes) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
 	}
@@ -5398,7 +5505,7 @@ func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node,
 	return s, nil
 }
 
-func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 	var nodes engine.Nodes
 	var workspace client.Workspace
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
@@ -5408,6 +5515,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	required := requiredVectorMembership(node)
 	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		plan2.IndexSearchScanPartitioned(node.IndexSearchScan) &&
 		(workspace == nil || workspace.Readonly()) &&
 		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
@@ -5420,33 +5528,28 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		version := defines.MORPCVersion96
-		if distributedPRE {
-			version = defines.MORPCVersion103
-		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
 		if err != nil {
 			return nil, err
 		}
-		if distributedPRE && !stable {
-			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
+		if !supported {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
 		}
-		if stable {
-			// Keep the query's coordinator-first list intact for other scans.
-			// Object owners depend only on the selected identities, not ingress.
-			slices.SortFunc(nodes, func(a, b engine.Node) int {
-				if n := cmp.Compare(a.Id, b.Id); n != 0 {
-					return n
-				}
-				return cmp.Compare(a.Addr, b.Addr)
-			})
-			for i := range nodes {
-				nodes[i].CNIDX = int32(i)
+		// Keep the query's coordinator-first list intact for other scans.
+		// Object owners depend only on the selected identities, not ingress.
+		slices.SortFunc(nodes, func(a, b engine.Node) int {
+			if n := cmp.Compare(a.Id, b.Id); n != 0 {
+				return n
 			}
+			return cmp.Compare(a.Addr, b.Addr)
+		})
+		for i := range nodes {
+			nodes[i].CNIDX = int32(i)
 		}
 	} else {
 		local := getEngineNode(c)
-		parallelism, err := c.vectorIndexScanParallelism(node, local.Mcpu)
+		parallelism, err := c.indexSearchScanParallelism(node, local.Mcpu)
 		if err != nil {
 			return nil, err
 		}
@@ -5467,7 +5570,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		s.TxnOffset = c.TxnOffset
 		s.DataSource = &Source{
 			node:                    nodeCopy,
-			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
+			indexSearchScanTemplate: plan2.DeepCopyIndexSearchScan(nodeCopy.IndexSearchScan),
 		}
 		op := constructTableScan(nodeCopy)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5488,8 +5591,8 @@ func requiredVectorMembership(node *plan.Node) bool {
 	return false
 }
 
-func (c *Compile) vectorIndexScanParallelism(node *plan.Node, capacity int) (int, error) {
-	if !requiredVectorMembership(node) || node.GetVectorIndexScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
+func (c *Compile) indexSearchScanParallelism(node *plan.Node, capacity int) (int, error) {
+	if !requiredVectorMembership(node) || node.GetIndexSearchScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
 		return 1, nil
 	}
 	resolve := c.proc.GetResolveVariableFunc()
@@ -5554,40 +5657,40 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	return txnOp, ctx, nil
 }
 
-// normalizeVectorIndexScanSnapshot closes the two representations of a
+// normalizeIndexSearchScanSnapshot closes the two representations of a
 // vector scan's snapshot before the generic datasource transaction selection
 // runs.  The node-level snapshot is the compiler contract; the nested copy is
 // the self-contained identity consumed by the index reader.  Keep a fallback
 // from the nested field for plans produced before the node-level field was
 // populated, then make independent copies so later expression folding or
 // remote-scope cloning cannot mutate either representation.
-func normalizeVectorIndexScanSnapshot(node *plan.Node) {
-	if node == nil || node.VectorIndexScan == nil {
+func normalizeIndexSearchScanSnapshot(node *plan.Node) {
+	if node == nil || node.IndexSearchScan == nil {
 		return
 	}
 	snapshot := node.ScanSnapshot
 	if snapshot == nil {
-		snapshot = node.VectorIndexScan.ScanSnapshot
+		snapshot = node.IndexSearchScan.ScanSnapshot
 	}
 	if snapshot == nil {
 		return
 	}
 	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
-	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+	node.IndexSearchScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
 }
 
-func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (*plan.VectorIndexScan, error) {
-	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
+func prepareIndexSearchScanForExecution(source *Source, proc *process.Process) (*plan.IndexSearchScan, error) {
+	if source == nil || source.node == nil || source.node.IndexSearchScan == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
-	if source.vectorIndexScanTemplate == nil {
-		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
+	if source.indexSearchScanTemplate == nil {
+		source.indexSearchScanTemplate = plan2.DeepCopyIndexSearchScan(source.node.IndexSearchScan)
 	}
-	spec, err := vectorscan.PrepareScalar(source.vectorIndexScanTemplate, proc)
+	spec, err := vectorscan.PrepareScalar(source.indexSearchScanTemplate, proc)
 	if err != nil {
 		return nil, err
 	}
-	source.node.VectorIndexScan = spec
+	source.node.IndexSearchScan = spec
 	return spec, nil
 }
 
@@ -5759,17 +5862,17 @@ func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFre
 	return filtered
 }
 
-func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
+func (c *Compile) compileIndexSearchScanDataSource(s *Scope) error {
 	node := s.DataSource.node
-	if node == nil || node.VectorIndexScan == nil {
+	if node == nil || node.IndexSearchScan == nil {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
-	_, err := prepareVectorIndexScanForExecution(s.DataSource, c.proc)
+	_, err := prepareIndexSearchScanForExecution(s.DataSource, c.proc)
 	if err != nil {
 		return err
 	}
-	normalizeVectorIndexScanSnapshot(node)
+	normalizeIndexSearchScanSnapshot(node)
 	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err

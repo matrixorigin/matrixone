@@ -146,7 +146,9 @@ const (
 	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
 	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
 	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
-	MORPCLatestVersion       = MORPCVersion110
+	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
+	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
+	MORPCLatestVersion       = MORPCVersion112
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

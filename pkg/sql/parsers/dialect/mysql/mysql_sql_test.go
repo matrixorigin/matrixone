@@ -174,6 +174,85 @@ func TestConfigIsNonReservedIdentifier(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSubscriptionAliases(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		aliases []string
+	}{
+		{"explicit", "select c_sub as subscription from dmz_org", []string{"subscription"}},
+		{"implicit", "select c_sub subscription from dmz_org", []string{"subscription"}},
+		{"mixed case", "select c_sub as SuBsCrIpTiOn from dmz_org", []string{"SuBsCrIpTiOn"}},
+		{"quoted control", "select c_sub as `subscription` from dmz_org", []string{"subscription"}},
+		{"plural control", "select c_sub as subscriptions from dmz_org", []string{"subscriptions"}},
+		{"native projection", "select coalesce(c_authconfig,JSON_UNQUOTE('{}')) as authconfig, coalesce(c_sub,JSON_UNQUOTE('{}')) as subscription from dmz_org", []string{"authconfig", "subscription"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.IsType(t, &tree.Select{}, stmt)
+			clause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+			require.Len(t, clause.Exprs, len(tt.aliases))
+			for i, alias := range tt.aliases {
+				require.Equal(t, alias, clause.Exprs[i].As.Origin())
+			}
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			roundTrip, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			t.Cleanup(roundTrip.Free)
+			require.Equal(t, formatted, tree.StringWithOpts(roundTrip, dialect.MYSQL, tree.WithSingleQuoteString()))
+		})
+	}
+}
+
+func TestSubscriptionIdentifiers(t *testing.T) {
+	for _, input := range []string{
+		"create database subscription",
+		"create table subscription (subscription int)",
+		"select subscription.subscription from subscription as subscription",
+	} {
+		t.Run(input, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), input, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.Equal(t, input, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSubscriptionCommands(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want tree.Statement
+	}{
+		{"show ccpr subscription 'task-1'", &tree.ShowCcprSubscriptions{TaskId: "task-1"}},
+		{"show ccpr subscriptions", &tree.ShowCcprSubscriptions{}},
+		{"drop ccpr subscription if exists 'task-1'", &tree.DropCcprSubscription{TaskID: "task-1", IfExists: true}},
+		{"pause ccpr subscription 'task-1'", &tree.PauseCcprSubscription{TaskID: "task-1"}},
+		{"resume ccpr subscription 'task-1'", &tree.ResumeCcprSubscription{TaskID: "task-1"}},
+		{"show subscriptions", &tree.ShowSubscriptions{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			require.Equal(t, tt.want, stmt)
+		})
+	}
+	for _, input := range []string{
+		"show ccpr subscription", "drop ccpr subscription",
+		"pause ccpr subscription", "resume ccpr subscription",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), input, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
@@ -1934,6 +2013,31 @@ func TestPitrInternal(t *testing.T) {
 	}
 }
 
+func TestRestoreSnapshotFromSyntaxHint(t *testing.T) {
+	const hint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
+	for _, sql := range []string{
+		"restore database ki from snapshot kis",
+		"restore account sys database ki from snapshot kis",
+		"RESTORE DATABASE `Ki` /* target */ FROM SNAPSHOT 'KiS'",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.ErrorContains(t, err, hint)
+	}
+
+	stmt, err := ParseOne(context.Background(), `restore database sys.ki{snapshot="kis"}`, 1)
+	require.NoError(t, err)
+	restored, ok := stmt.(*tree.RestoreSnapShot)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("sys"), restored.AccountName)
+	require.Equal(t, tree.Identifier("ki"), restored.DatabaseName)
+	require.Equal(t, tree.Identifier("kis"), restored.SnapShotName)
+
+	_, err = ParseOne(context.Background(), "restore database ki from nonsense kis", 1)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), hint)
+}
+
 var (
 	validSQL = []struct {
 		input  string
@@ -3514,22 +3618,22 @@ var (
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
 			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' INCLUDE (b, c) ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' ASYNC ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
-			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
 		}, {
 			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
-			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE 'vector_l2_ops' QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
 		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
@@ -5362,15 +5466,15 @@ var (
 		},
 		{
 			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS'",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE 'VECTOR_L2_OPS' ",
 		},
 		{
 			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS' ASYNC",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ASYNC ",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE 'VECTOR_L2_OPS' ASYNC ",
 		},
 		{
 			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  op_type 'vector_l2_ops' )",
-			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 OP_TYPE vector_l2_ops )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 OP_TYPE 'vector_l2_ops' )",
 		},
 		{
 			input:  "alter table t1 alter reindex idx1 hnsw",
@@ -5408,11 +5512,11 @@ var (
 		},
 		{
 			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
-			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
+			output: "create index idx using cagra on a (a) OP_TYPE 'VECTOR_L2_OPS' INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
 		},
 		{
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
-			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION INT8 BITS_PER_CODE 8 ",
 		},
 		{
 			input:  "create index idx using cagra on A (a) INCLUDE (price)",
@@ -5424,7 +5528,7 @@ var (
 		},
 		{
 			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
-			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+			output: "create index idx using cagra on a (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id) ",
 		},
 		{
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
@@ -6443,6 +6547,20 @@ func TestLimitByRank(t *testing.T) {
 	}
 }
 
+func TestLimitByRankOptionStructure(t *testing.T) {
+	for _, option := range []string{"1", "NULL", "concat('nprobe=', '1')", "'nprobe'", "'nprobe=1=2'", "'=1'", "'nprobe='"} {
+		t.Run(option, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION "+option, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "rank options must")
+		})
+	}
+	stmt, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION ' NPROBE = 1 ', 'nprobe=2'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "2", stmt.(*tree.Select).RankOption.Option["nprobe"])
+}
+
 func TestOffsetWithoutLimit(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -6887,5 +7005,37 @@ func TestLexerErrorUTF8Excerpt(t *testing.T) {
 				require.Equal(t, `You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 7 near "FROM bad";`, err.Error())
 			}
 		})
+	}
+}
+
+func TestAlterAddParenthesizedColumns(t *testing.T) {
+	tests := []struct {
+		sql       string
+		wantNames []string
+	}{
+		{
+			sql:       "alter table probe_add add column (added_tag longtext null)",
+			wantNames: []string{"added_tag"},
+		},
+		{
+			sql:       "alter table probe_add add column (added_tag longtext null, amount decimal(10, 2) default 1.25)",
+			wantNames: []string{"added_tag", "amount"},
+		},
+	}
+
+	for _, test := range tests {
+		stmt, err := ParseOne(context.Background(), test.sql, 1)
+		require.NoError(t, err)
+		alter, ok := stmt.(*tree.AlterTable)
+		require.True(t, ok)
+		require.Len(t, alter.Options, len(test.wantNames))
+
+		for i, name := range test.wantNames {
+			add, ok := alter.Options[i].(*tree.AlterAddCol)
+			require.True(t, ok)
+			require.Equal(t, name, add.Column.Name.ColName())
+			require.Equal(t, tree.ColumnPositionNone, add.Position.Typ)
+		}
+		stmt.Free()
 	}
 }

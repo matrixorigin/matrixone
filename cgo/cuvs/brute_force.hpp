@@ -551,6 +551,19 @@ public:
 
         handle.sync();
 
+        // Re-test filtered results on the host (apply_host_post_filter_locked).
+        // The user-filter mask already ANDs in the deletes; the deletes-only
+        // path reads deleted_bitset_ under a shared_lock.
+        if (bs_ptr) {
+            if (prebuilt && prebuilt->has_filter) {
+                this->apply_host_mask_post_filter(search_res, local_count, prebuilt->mask);
+            } else {
+                static const std::vector<uint32_t> kEmptyMask;
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                this->apply_host_post_filter_locked(search_res, /*start_row=*/0, local_count, kEmptyMask);
+            }
+        }
+
         // Always run map_neighbor_id: even with empty host_ids (implicit
         // IDs), the helper bounds-checks raw against local_count and
         // sentinels OOB junk (e.g. UINT32_MAX) to -1 before it leaks
@@ -741,6 +754,19 @@ public:
         }
 
         handle.sync();
+
+        // Re-test filtered results on the host (apply_host_post_filter_locked).
+        // The user-filter mask already ANDs in the deletes; the deletes-only
+        // path reads deleted_bitset_ under a shared_lock.
+        if (bs_ptr) {
+            if (prebuilt && prebuilt->has_filter) {
+                this->apply_host_mask_post_filter(search_res, local_count, prebuilt->mask);
+            } else {
+                static const std::vector<uint32_t> kEmptyMask;
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                this->apply_host_post_filter_locked(search_res, /*start_row=*/0, local_count, kEmptyMask);
+            }
+        }
 
         // Always run map_neighbor_id: even with empty host_ids (implicit
         // IDs), the helper bounds-checks raw against local_count and
