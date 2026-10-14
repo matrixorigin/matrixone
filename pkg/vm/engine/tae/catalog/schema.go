@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -241,6 +242,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.ColumnChanged = true
 		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
+		if s.Extra.NextColSeqnum >= objectio.SEQNUM_UPPER {
+			return moerr.NewErrTooManyFields(context.Background())
+		}
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
 		logicalIdx := int(add.InsertPosition)
@@ -940,6 +944,17 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
 	}
+	// Preflight before appending rowid or mutating sequence maps. On initial
+	// schemas ordinals become IDs; replay preserves existing, possibly sparse IDs.
+	for idx, def := range s.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		if s.Extra.NextColSeqnum == 0 && idx >= objectio.SEQNUM_UPPER ||
+			s.Extra.NextColSeqnum != 0 && def.SeqNum >= objectio.SEQNUM_UPPER {
+			return moerr.NewErrTooManyFields(context.Background())
+		}
+	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{
 			Name:        PhyAddrColumnName,
@@ -959,9 +974,6 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// check duplicate column names
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
-		if idx == objectio.SEQNUM_COMMITTS {
-			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
-		}
 		// Check column sequence idx validility
 		if idx != def.Idx {
 			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
