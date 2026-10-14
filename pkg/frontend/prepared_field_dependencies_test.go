@@ -18,9 +18,48 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedFieldNumericModeAffectsTypes(t *testing.T) {
+	value := func(oid types.T) *plan.Expr { return &plan.Expr{Typ: plan.Type{Id: int32(oid)}} }
+	call := func(name string, oid types.T, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}, Args: args}}}
+	}
+	unsigned := call("-", types.T_uint64, value(types.T_uint64), value(types.T_int64))
+	folded := &plan.Expr{Typ: unsigned.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: unsigned}}}
+	adapter := call("cast", types.T_int8, value(types.T_bool))
+	explicit := call("cast", types.T_int8, value(types.T_bool))
+	explicit.GetF().SyntaxExplicitCast = true
+	for _, tc := range []struct {
+		name                                                     string
+		expr                                                     *plan.Expr
+		boolSumAvg, unsignedSubtraction, divisionPrecision, want bool
+	}{
+		{"unchanged modes", unsigned, false, false, false, false},
+		{"unrelated expression", value(types.T_text), true, true, true, false},
+		{"signed subtraction", call("-", types.T_int64, value(types.T_int64), value(types.T_int64)), false, true, false, false},
+		{"unsigned subtraction", unsigned, false, true, false, true},
+		{"floating subtraction", call("-", types.T_float64, value(types.T_uint64), value(types.T_float64)), false, true, false, false},
+		{"folded unsigned subtraction", folded, false, true, false, true},
+		{"nested unsigned subtraction", call("coalesce", types.T_uint64, unsigned), false, true, false, true},
+		{"decimal division", call("/", types.T_decimal128, value(types.T_int64), value(types.T_int64)), false, false, true, true},
+		{"floating division", call("/", types.T_float64, value(types.T_float64), value(types.T_float64)), false, false, true, false},
+		{"integer sum", call("sum", types.T_int64, value(types.T_int64)), true, false, false, false},
+		{"boolean sum", call("sum", types.T_int64, value(types.T_bool)), true, false, false, true},
+		{"boolean avg adapter", call("avg", types.T_decimal128, adapter), true, false, false, true},
+		{"explicit numeric aggregate operand", call("sum", types.T_int64, explicit), true, false, false, false},
+		{"window boolean aggregate", &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{WindowFunc: call("sum", types.T_int64, adapter)}}}, true, false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{tc.expr}}}}}}
+			require.Equal(t, tc.want, preparedFieldNumericModeAffectsTypes(p, tc.boolSumAvg, tc.unsignedSubtraction, tc.divisionPrecision))
+		})
+	}
+	require.False(t, preparedFieldNumericModeAffectsTypes(nil, true, true, true))
+}
 
 func TestPreparedFieldDependenciesChanged(t *testing.T) {
 	previous := &plan.ObjectRef{Db: 1, Obj: 2, Server: 3, SchemaName: "d", ObjName: "t"}
