@@ -26,7 +26,8 @@ import sqlalchemy as sa
 def mysql_engine(connection_params):
     host, port, user, password, database = connection_params
     engine = sa.create_engine(
-        sa.engine.URL.create('mysql+pymysql', username=user, password=password, host=host, port=port, database=database)
+        sa.engine.URL.create('mysql+pymysql', username=user, password=password, host=host, port=port, database=database),
+        future=True,
     )
     try:
         yield engine
