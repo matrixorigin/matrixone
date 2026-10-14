@@ -2454,6 +2454,64 @@ func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
 	require.Equal(t, "table", legacy.OrgTable())
 }
 
+func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	computed, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name: "predicate",
+		Typ:  plan2.Type{Id: int32(types.T_bool)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(computed, int(COM_QUERY))
+	pos := HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	charset, pos, ok := proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint16(charsetBinary), charset)
+	length, pos, ok := proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(8), length)
+	typ, _, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+
+	native, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:          "flag",
+		TblName:       "t",
+		OriginTblName: "t",
+		OriginName:    "flag",
+		Typ:           plan2.Type{Id: int32(types.T_bool)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, native.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), native.Length())
+	packet = proto.makeColumnDefinition41Payload(native, int(COM_QUERY))
+	pos = HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	_, pos, ok = proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	length, pos, ok = proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(boolColumnLength), length)
+	typ, _, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string

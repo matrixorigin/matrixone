@@ -2824,6 +2824,16 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
+	// MySQL represents predicate results as numeric 0/1 values. Keep native
+	// BOOLEAN columns on the dedicated BOOL path, but advertise a computed BOOL
+	// result as a regular TINYINT so JDBC clients do not reinterpret the
+	// metadata expression as a Java Boolean. This is important for metadata
+	// queries such as Metabase's sync-fields SQL, which applies numeric helpers
+	// to equality/IS NULL results.
+	if isComputedBooleanResult(col) {
+		tiny := defines.MYSQL_TYPE_TINY
+		c.SetLength(tiny.GetLength(0))
+	}
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
@@ -2833,6 +2843,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
+}
+
+func isComputedBooleanResult(col *plan.ColDef) bool {
+	return col != nil && types.T(col.Typ.Id) == types.T_bool &&
+		col.OriginName == "" && col.OriginTblName == "" && col.TblName == ""
 }
 
 // isLegal checks if the sqls are legal parsed by the mo parser.
