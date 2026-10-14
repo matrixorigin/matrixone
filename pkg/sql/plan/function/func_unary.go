@@ -6267,11 +6267,10 @@ func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 const (
-	// SPACE returns a VARCHAR. Keep the execution bound aligned with the
-	// largest inline SQL string instead of an unrelated, smaller constant.
-	// The bound is still finite: a count supplied by a table must not turn one
-	// row into an unbounded allocation.
-	MaxAllowedValue = types.MaxVarcharLen
+	// Bound generated spaces by the supported large string result size,
+	// rather than the declared capacity of a VARCHAR column. Check this
+	// before converting the count to int or allocating the result.
+	MaxAllowedValue = types.MaxBlobLen
 )
 
 func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {

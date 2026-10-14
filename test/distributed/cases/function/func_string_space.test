@@ -19,7 +19,20 @@ drop table t1;
 #嵌套，EXTREME VALUE
 -- @separator:table
 select space(5),concat_ws('*',space(5),'*');
-SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535));
+SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535)), LENGTH(SPACE(65536)), LENGTH(SPACE(100000));
+
+-- Large SPACE results also work with column and prepared inputs.
+DROP TABLE IF EXISTS space_large_counts;
+CREATE TABLE space_large_counts (id INT, n BIGINT);
+INSERT INTO space_large_counts VALUES (1, 65535), (2, 65536), (3, 100000), (4, -1), (5, NULL);
+SELECT id, LENGTH(SPACE(n)) FROM space_large_counts ORDER BY id;
+DROP TABLE space_large_counts;
+PREPARE space_large_stmt FROM 'SELECT LENGTH(SPACE(?))';
+SET @space_large_n = 65536;
+EXECUTE space_large_stmt USING @space_large_n;
+SET @space_large_n = 100000;
+EXECUTE space_large_stmt USING @space_large_n;
+DEALLOCATE PREPARE space_large_stmt;
 SELECT LENGTH(SPACE(CAST(1.4 AS DECIMAL(4,1)))),
        LENGTH(SPACE(CAST(1.5 AS DECIMAL(4,1)))),
        LENGTH(SPACE(CAST(1.9 AS DECIMAL(4,1)))),
