@@ -30,35 +30,62 @@ import (
 
 func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 	for _, tc := range []struct {
-		setting, expr string
-		before, after any
+		name, setting, expr string
+		before, after       any
+		runtimeUnsigned     bool
+		changed             bool
+		earlyFailure        bool
 	}{
-		{"sql_mode", "cast(? as unsigned)-cast(1 as unsigned)", "", "NO_UNSIGNED_SUBTRACTION"},
-		{"div_precision_increment", "cast(? as decimal(10,2))/cast(1 as decimal(10,2))", int64(4), int64(8)},
+		{"static unsigned", "sql_mode", "cast(? as unsigned)-cast(1 as unsigned)", "", "NO_UNSIGNED_SUBTRACTION", false, true, false},
+		{"runtime unsigned", "sql_mode", "0-?", "", "NO_UNSIGNED_SUBTRACTION", true, true, false},
+		{"runtime unsigned early rejection", "sql_mode", "0-?", "", "NO_UNSIGNED_SUBTRACTION", true, true, true},
+		{"decimal scale changes", "div_precision_increment", "cast(? as decimal(10,2))/cast(1 as decimal(10,2))", int64(4), int64(8), false, true, false},
+		{"decimal scale capped", "div_precision_increment", "cast(? as decimal(65,30))/cast(1 as decimal(65,30))", int64(4), int64(8), false, false, false},
 	} {
-		t.Run(tc.setting, func(t *testing.T) {
-			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25305, "select field(case when ? then ? else null end,'A','a'),"+tc.expr)
+		t.Run(tc.name, func(t *testing.T) {
+			sql := "select field(case when ? then ? else null end,'A','a')," + tc.expr
+			if tc.runtimeUnsigned {
+				sql = "select field(case when ? then 0-? else null end,0,1)," + tc.expr
+			}
+			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25305, sql)
 			prepared.proc = cw.proc
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 			original, err := ses.GetSessionSysVar(tc.setting)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.setting, original)) })
 			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.setting, tc.before))
+			settingChanged, earlyRejection := false, false
 			execute := func(null bool, want uint64, fail bool) plan.Type {
 				cw.discardRuntimeCacheCandidate()
 				prepared.clearBinaryParamState(cw.proc)
 				prepared.params = vector.NewVec(types.T_text.ToType())
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
-				require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), null, cw.proc.Mp()))
-				require.NoError(t, vector.AppendBytes(prepared.params, []byte("5"), false, cw.proc.Mp()))
-				typ := defines.MYSQL_TYPE_VAR_STRING
+				payload, operand := "a", "5"
+				typ, operandType := defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VAR_STRING
+				var flags byte
+				if tc.runtimeUnsigned {
+					payload = "0"
+					if settingChanged {
+						payload = "1"
+					}
+					operand, typ, operandType, flags = payload, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG, 0x80
+				}
+				require.NoError(t, vector.AppendBytes(prepared.params, []byte(payload), null, cw.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(prepared.params, []byte(operand), false, cw.proc.Mp()))
 				if null {
 					typ = defines.MYSQL_TYPE_NULL
 				}
-				prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(typ), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+				prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(typ), flags, byte(operandType), flags}
+				if earlyRejection {
+					prepared.params.SetLength(2)
+				}
 				_, p, stmt, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
 				if owned && stmt != nil {
 					stmt.Free()
+				}
+				if earlyRejection {
+					require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
+					return plan.Type{}
 				}
 				if fail {
 					require.ErrorContains(t, err, "field numeric mode metadata failure")
@@ -74,9 +101,23 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 				return exprs[1].Typ
 			}
 			execute(true, 0, false)
-			before := execute(false, 2, false)
+			beforeWant, afterWant := uint64(2), uint64(1)
+			if tc.runtimeUnsigned {
+				beforeWant, afterWant = 1, 0
+			} else if !tc.changed {
+				afterWant = beforeWant
+			}
+			before := execute(false, beforeWant, false)
 			snapshot, oldPlan := prepared.fieldTypes, prepared.PreparePlan
 			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.setting, tc.after))
+			settingChanged = true
+			if tc.earlyFailure {
+				earlyRejection = true
+				execute(false, 0, false)
+				require.Same(t, snapshot, prepared.fieldTypes)
+				require.True(t, prepared.fieldTypesResetPending)
+				earlyRejection = false
+			}
 			writer := ec.resper.MysqlRrWr().(*testMysqlWriter)
 			calls := 0
 			writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
@@ -90,16 +131,22 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 			execute(false, 0, true)
 			require.NotSame(t, oldPlan, prepared.PreparePlan)
 			require.Same(t, snapshot, prepared.fieldTypes)
-			require.True(t, prepared.fieldTypesResetPending)
+			require.Equal(t, tc.changed, prepared.fieldTypesResetPending)
 			writer.makeColumnDefDataFunc = nil
-			after := execute(false, 1, false)
-			require.NotSame(t, snapshot, prepared.fieldTypes)
+			after := execute(false, afterWant, false)
+			if tc.changed {
+				require.NotSame(t, snapshot, prepared.fieldTypes)
+			} else {
+				require.Same(t, snapshot, prepared.fieldTypes)
+			}
 			require.False(t, prepared.fieldTypesResetPending)
 			if tc.setting == "sql_mode" {
 				require.Equal(t, int32(types.T_uint64), before.Id)
 				require.Equal(t, int32(types.T_int64), after.Id)
-			} else {
+			} else if tc.changed {
 				require.Greater(t, after.Scale, before.Scale)
+			} else {
+				require.Equal(t, before, after)
 			}
 		})
 	}

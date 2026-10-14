@@ -399,6 +399,20 @@ EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, 
 ➤ text_f[-5,64,0]  ¦  numeric_f[-5,64,0]  𝄀
 1  ¦  1
 DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0) OVER () ELSE NULL END,''A'',''a'') AS lag_f, FIELD(CASE WHEN ? THEN LEAD(?,0) OVER () ELSE NULL END,''A'',''a'') AS lead_f, FIELD(CASE WHEN ? THEN CONCAT(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS concat_f, FIELD(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS lower_f, FIELD(CASE WHEN ? THEN REVERSE(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS reverse_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
@@ -477,6 +491,49 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 ➤ f[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+SET @field_condition = 1, @field_unsigned = CAST(0 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+1
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+SET @field_unsigned = CAST(1 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT CASE WHEN ? THEN 0-? ELSE NULL END AS difference';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ difference[-5,64,0]  𝄀
+-1
+DEALLOCATE PREPARE p_field_history;
+SET SESSION div_precision_increment = 4;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END,''A'',''a'') AS f, CAST(? AS DECIMAL(65,30))/CAST(1 AS DECIMAL(65,30)) AS d';
+SET @field_value = NULL, @field_decimal = 5;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+0  ¦  5.000000000000000000000000000000
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+SET SESSION div_precision_increment = 0;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+DEALLOCATE PREPARE p_field_history;
+SET SESSION div_precision_increment = @field_old_div_precision;
 SET SESSION sql_mode = @field_old_sql_mode;
 SET @field_old_locale = @@lc_time_names;
 SET @field_old_prefilter = @@enable_vector_prefilter_by_default;

@@ -876,13 +876,11 @@ func preparedFieldDependenciesChanged(previous, current []*plan.ObjectRef) bool 
 	return false
 }
 
-// Plan validity and FIELD type history have different mode dependencies.
-// ONLY_FULL_GROUP_BY can reject a plan but never changes a declaration. The
-// remaining numeric settings matter only at their typed operation. Inspect the
-// seed plan (including folded literal sources) only when such a setting changes;
-// this adds no scan to the normal execute path and retains no expression graph.
-func preparedFieldNumericModeAffectsTypes(p *plan.Plan, boolSumAvg, unsignedSubtraction, divisionPrecision bool) bool {
-	if p == nil || !(boolSumAvg || unsignedSubtraction || divisionPrecision) {
+// Compare contracts in a fresh binding with actual parameter domains, not the
+// seed's provisional signed markers or casts imposed by historical FIELD facts.
+// This runs only after a numeric setting changes; no graph escapes the call.
+func preparedFieldNumericModeAffectsTypes(p *plan.Plan, previous, current context.Context, boolSumAvg bool) bool {
+	if p == nil {
 		return false
 	}
 	affected := false
@@ -893,18 +891,33 @@ func preparedFieldNumericModeAffectsTypes(p *plan.Plan, boolSumAvg, unsignedSubt
 				return nil
 			}
 			switch fn.Func.ObjName {
-			case "-":
-				if unsignedSubtraction && len(fn.Args) == 2 {
-					left, right := types.T(fn.Args[0].Typ.Id), types.T(fn.Args[1].Typ.Id)
-					affected = left.IsInteger() && right.IsInteger() && (left.IsUnsignedInt() || right.IsUnsignedInt())
+			case "-", "/":
+				args := make([]types.Type, len(fn.Args))
+				for i, source := range fn.Args {
+					// Remove inference casts, but retain explicit declarations and
+					// the last cast from a physical TEXT parameter transport.
+					for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
+						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
+						source = source.GetF().Args[0]
+					}
+					args[i] = types.New(types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale)
 				}
-			case "/":
-				affected = divisionPrecision && types.T(expr.Typ.Id).IsDecimal()
+				before, beforeErr := function.GetFunctionByName(previous, fn.Func.ObjName, args)
+				after, afterErr := function.GetFunctionByName(current, fn.Func.ObjName, args)
+				if beforeErr != nil || afterErr != nil {
+					affected = true
+					break
+				}
+				beforeCasts, beforeCast := before.ShouldDoImplicitTypeCast()
+				afterCasts, afterCast := after.ShouldDoImplicitTypeCast()
+				affected = !before.GetReturnType().Eq(after.GetReturnType()) ||
+					before.GetEncodedOverloadID() != after.GetEncodedOverloadID() ||
+					beforeCast != afterCast || !slices.Equal(beforeCasts, afterCasts)
 			case "sum", "avg":
 				if boolSumAvg && len(fn.Args) == 1 {
 					source := fn.Args[0]
 					for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
-						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 {
+						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
 						source = source.GetF().Args[0]
 					}
 					affected = source.Typ.Id == int32(types.T_bool)
@@ -1486,15 +1499,20 @@ func initExecuteStmtParamWithResolverInSession(
 	// not SQL type history. Reset only for changed captured dependencies or
 	// type-affecting mode/protocol changes. Rebinding may discover a different
 	// dependency (e.g. a temporary table shadow), checked before publication.
-	typeModeMismatch := prepareStmt.NativeMode != currentNativeMode ||
-		preparedFieldNumericModeAffectsTypes(executionPlan,
-			prepareStmt.sqlModeFlagsSet && prepareStmt.BoolSumAvg != currentBoolSumAvg,
-			prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction,
-			prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement)
-	resetFieldTypes := schemaChanged || typeModeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
+	boolModeMismatch := prepareStmt.sqlModeFlagsSet && prepareStmt.BoolSumAvg != currentBoolSumAvg
+	numericModeMismatch := boolModeMismatch ||
+		prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction ||
+		prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement
+	resetFieldTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
 	}
+	var previousNumericContext context.Context
+	if numericModeMismatch && fieldTypes != nil {
+		previousNumericContext = function.WithNoUnsignedSubtraction(reqCtx, prepareStmt.NoUnsignedSubtraction)
+		previousNumericContext = function.WithDivPrecisionIncrement(previousNumericContext, int32(prepareStmt.divPrecisionIncrement))
+	}
+	numericContractChecked := previousNumericContext == nil
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false
 	rebuildCommitted := false
@@ -1507,7 +1525,7 @@ func initExecuteStmtParamWithResolverInSession(
 			// pair the new plan with the previous wire metadata.
 			prepareStmt.needsRebuild = true
 			prepareStmt.compileNeedsRebuild = true
-			if resetFieldTypes {
+			if resetFieldTypes || !numericContractChecked {
 				prepareStmt.fieldTypesResetPending = true
 			}
 		}
@@ -1866,8 +1884,26 @@ func initExecuteStmtParamWithResolverInSession(
 				if strings.IndexByte(originSQL, '@') >= 0 {
 					planningCtx = plan2.WithPreparedUserVariableBindings(reqCtx, preparePlan.Plan)
 				}
-				planningCtx = plan2.WithPreparedFieldTypes(planningCtx, fieldTypes, preparePlan.Plan)
-				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
+				build := func(history *plan2.PreparedFieldTypes) (*plan2.PreparedExecutionPlan, error) {
+					ctx := plan2.WithPreparedFieldTypes(planningCtx, history, preparePlan.Plan)
+					return buildPreparedBoundQuery(ctx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
+				}
+				if previousNumericContext != nil && fieldTypes != nil {
+					// A history-free candidate cannot impose stale numeric casts.
+					// Reuse it if contracts change; otherwise bind with old facts.
+					candidate, candidateErr := build(nil)
+					if candidateErr != nil {
+						return candidateErr
+					}
+					changed := preparedFieldNumericModeAffectsTypes(candidate.Plan, previousNumericContext, reqCtx, boolModeMismatch)
+					numericContractChecked = true
+					if changed {
+						resetFieldTypes = true
+						bound = candidate
+						return nil
+					}
+				}
+				bound, buildErr = build(fieldTypes)
 				return buildErr
 			})
 			if err != nil {

@@ -31,6 +31,19 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 		first, want   types.T
 		textCondition bool
 	}{
+		{"LAG marker", "select field(case when ? then lag(?,0) over () else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"LEAD marker", "select field(case when ? then lead(?,0) over () else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"LAG binary default", "select field(case when ? then lag(?,0,_binary 'x') over () else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"LAG compound text default", "select field(case when ? then lag(coalesce(?,null),0,'x') over () else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"LAG compound", "select field(case when ? then lag(coalesce(?,null),0) over () else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"LEAD compound", "select field(case when ? then lead(coalesce(?,null),0) over () else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"CONCAT marker", "select field(case when ? then concat(?) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"CONCAT compound", "select field(case when ? then concat(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"CONCAT literal peer", "select field(case when ? then concat(?,'') else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"CONCAT compound literal peer", "select field(case when ? then concat(coalesce(?,null),'') else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"CONCAT_WS skips NULL compound", "select field(case when ? then concat_ws('',coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"LOWER compound", "select field(case when ? then lower(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"REVERSE compound", "select field(case when ? then reverse(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
 		{"direct ANY_VALUE marker", "select field(case when ? then any_value(?) else null end,'A','a')", false, types.T_any, types.T_any, false},
 		{"scalar ANY_VALUE marker", "select field(case when ? then (select any_value(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"derived ANY_VALUE marker", "select field(case when ? then x else null end,'A','a') from (select any_value(?) x limit 1) d", false, types.T_any, types.T_text, false},
