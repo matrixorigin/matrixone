@@ -421,7 +421,10 @@ func verifyTargetUniqueConflictRollback(ctx context.Context, db *sql.DB) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("multi-row MongoDB ingestion timed out: %w", err)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+	// Only ER_DUP_ENTRY proves the intended target-key conflict. Other MySQL
+	// errors (for example duplicate column/index names) can share its wording.
+	var mysqlErr *mysqldriver.MySQLError
+	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1062 {
 		return fmt.Errorf("multi-row MongoDB ingestion failed for an unrelated reason: %w", err)
 	}
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.unique_sink", "1"); err != nil {

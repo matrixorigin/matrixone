@@ -17,10 +17,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,14 +74,19 @@ func TestMongoDBTargetConflictOracle(t *testing.T) {
 		setupFailure            int
 		insertErr               error
 	}{
-		{name: "duplicate leaves target unchanged", insertErr: errors.New("Duplicate entry"), count: "1", seed: "seed"},
+		{name: "duplicate leaves target unchanged", insertErr: &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate entry"}, count: "1", seed: "seed"},
+		{name: "wrapped duplicate leaves target unchanged", insertErr: fmt.Errorf("insert: %w", &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate entry"}), count: "1", seed: "seed"},
+		{name: "duplicate code does not depend on wording", insertErr: &mysqldriver.MySQLError{Number: 1062, Message: "key conflict"}, count: "1", seed: "seed"},
 		{name: "create fails", setupFailure: 1, want: "prepare constrained"},
 		{name: "seed fails", setupFailure: 2, want: "prepare constrained"},
 		{name: "insert succeeds unexpectedly", want: "unexpectedly succeeded"},
 		{name: "timeout is not a duplicate", insertErr: context.DeadlineExceeded, want: "timed out"},
 		{name: "unrelated failure is rejected", insertErr: errors.New("connection unavailable"), want: "unrelated reason"},
-		{name: "partial insertion is rejected", insertErr: errors.New("duplicate key"), count: "2", want: "target changed"},
-		{name: "seed mutation is rejected", insertErr: errors.New("duplicate key"), count: "1", seed: "changed", want: "seed changed"},
+		{name: "duplicate column is not a key conflict", insertErr: &mysqldriver.MySQLError{Number: 1060, Message: "Duplicate column name 'mongo_id'"}, want: "unrelated reason"},
+		{name: "duplicate index name is not a key conflict", insertErr: &mysqldriver.MySQLError{Number: 1061, Message: "Duplicate key name 'PRIMARY'"}, want: "unrelated reason"},
+		{name: "untyped duplicate message is rejected", insertErr: errors.New("Error 1062: Duplicate entry"), want: "unrelated reason"},
+		{name: "partial insertion is rejected", insertErr: &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate entry"}, count: "2", want: "target changed"},
+		{name: "seed mutation is rejected", insertErr: &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate entry"}, count: "1", seed: "changed", want: "seed changed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock := newMongoDBE2ESQLMock(t)
@@ -112,6 +119,9 @@ func TestMongoDBTargetConflictOracle(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorContains(t, err, tc.want)
+				if tc.want == "unrelated reason" {
+					require.ErrorIs(t, err, tc.insertErr)
+				}
 			}
 			require.NoError(t, mock.ExpectationsWereMet())
 		})

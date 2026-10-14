@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +91,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
 	mock.ExpectExec("create table mongodb_ci.unique_sink").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.unique_sink values").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("insert into mongodb_ci.unique_sink select").WillReturnError(errors.New("Duplicate entry for key PRIMARY"))
+	mock.ExpectExec("insert into mongodb_ci.unique_sink select").WillReturnError(&mysqldriver.MySQLError{
+		Number: 1062, Message: "Duplicate entry for key PRIMARY",
+	})
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "seed")
 	mock.ExpectExec("insert into mongodb_ci.events").WillReturnError(errors.New("cannot insert/update/delete from external table"))
