@@ -126,6 +126,50 @@ func TestUserVariableAssignmentRejectsMultipleProjectionAssignments(t *testing.T
 	}
 }
 
+func TestUserVariableAssignmentRejectsReadBeforeWriteProjection(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a as prior, @a := @a + 1 as current", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "reading a user variable before its assignment projection")
+}
+
+func TestUserVariableAssignmentAllowsReadAfterWriteProjection(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a := 1 as written, @a as current", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+}
+
+func TestUserVariableAssignmentRejectsViewAuthoring(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "create view", sql: "create view v_user_var as select @view_var := 1 as x"},
+		{name: "replace view", sql: "create or replace view v_user_var as select @view_var := 1 as x"},
+		{name: "alter view", sql: "alter view v_user_var as select @view_var := 1 as x"},
+		{name: "cte view", sql: "create view v_user_var_cte as with cte as (select @view_var := 1 as x) select x from cte"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "view definitions is not supported")
+		})
+	}
+}
+
 func TestUserVariableAssignmentRejectsDMLBeforeBinding(t *testing.T) {
 	for _, tc := range []struct {
 		name string

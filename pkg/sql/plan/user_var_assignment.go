@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -26,6 +27,7 @@ type assignmentVisit struct {
 }
 
 var userVarAssignmentExprType = reflect.TypeOf((*tree.UserVarAssignmentExpr)(nil))
+var userVarExprType = reflect.TypeOf((*tree.VarExpr)(nil))
 
 func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]struct{}) bool {
 	if !v.IsValid() {
@@ -72,6 +74,10 @@ func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]st
 }
 
 func isUserVarAssignmentRoot(expr tree.Expr) bool {
+	return userVarAssignmentRoot(expr) != nil
+}
+
+func userVarAssignmentRoot(expr tree.Expr) *tree.UserVarAssignmentExpr {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
 		if !ok {
@@ -79,8 +85,58 @@ func isUserVarAssignmentRoot(expr tree.Expr) bool {
 		}
 		expr = paren.Expr
 	}
-	_, ok := expr.(*tree.UserVarAssignmentExpr)
-	return ok
+	assignment, _ := expr.(*tree.UserVarAssignmentExpr)
+	return assignment
+}
+
+func userVariableReadsBeforeAssignment(expr tree.Expr) map[string]struct{} {
+	names := make(map[string]struct{})
+	collectUserVariableReads(reflect.ValueOf(expr), make(map[assignmentVisit]struct{}), names)
+	return names
+}
+
+func collectUserVariableReads(
+	v reflect.Value, seen map[assignmentVisit]struct{}, names map[string]struct{},
+) {
+	if !v.IsValid() {
+		return
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return
+		}
+		if v.Type() == userVarExprType {
+			varExpr := v.Interface().(*tree.VarExpr)
+			if !varExpr.System {
+				names[strings.ToLower(varExpr.Name)] = struct{}{}
+			}
+		}
+		visit := assignmentVisit{typ: v.Type(), ptr: v.Pointer()}
+		if _, ok := seen[visit]; ok {
+			return
+		}
+		seen[visit] = struct{}{}
+		collectUserVariableReads(v.Elem(), seen, names)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			collectUserVariableReads(field, seen, names)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			collectUserVariableReads(v.Index(i), seen, names)
+		}
+	}
 }
 
 func userVarAssignmentNotSupported(ctx context.Context, scope string) error {
@@ -102,6 +158,10 @@ func rejectUserVarAssignmentInDML(ctx context.Context, stmt tree.Statement, scop
 	return userVarAssignmentNotSupported(ctx, scope)
 }
 
+func rejectUserVarAssignmentInView(ctx context.Context, stmt tree.Statement) error {
+	return rejectUserVarAssignmentInDML(ctx, stmt, "view definitions")
+}
+
 func validateUserVarAssignmentScope(
 	ctx context.Context,
 	clause *tree.SelectClause,
@@ -113,13 +173,24 @@ func validateUserVarAssignmentScope(
 	}
 	hasAssignment := false
 	assignmentProjections := 0
+	priorUserVariableReads := make(map[string]struct{})
 	for _, selectExpr := range clause.Exprs {
 		if containsUserVarAssignment(selectExpr.Expr) {
 			hasAssignment = true
 			if !isUserVarAssignmentRoot(selectExpr.Expr) {
 				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
 			}
+			assignment := userVarAssignmentRoot(selectExpr.Expr)
+			assignedName := strings.ToLower(assignment.Name)
+			if _, readBefore := priorUserVariableReads[assignedName]; readBefore {
+				return userVarAssignmentNotSupported(ctx,
+					"reading a user variable before its assignment projection")
+			}
 			assignmentProjections++
+		} else if !hasAssignment {
+			for name := range userVariableReadsBeforeAssignment(selectExpr.Expr) {
+				priorUserVariableReads[name] = struct{}{}
+			}
 		}
 	}
 	if clause.Where != nil && containsUserVarAssignment(clause.Where.Expr) {

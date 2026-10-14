@@ -4,7 +4,7 @@ Owner issue: #29909. Implementation PR: #29966. This document is the
 versioned design record for the `@name := expr` expression implemented by the
 frontend and execution engine.
 
-Version: v1 (2026-10-13)
+Version: v1.1 (2026-10-14)
 
 Status: Accepted for implementation
 
@@ -36,6 +36,11 @@ prevents a direct value binder such as INSERT's `buildValueScan` from bypassing
 the SELECT projection validator and guarantees that no DML plan can mutate data
 or publish a variable before the scope error is returned.
 
+CREATE VIEW, CREATE OR REPLACE VIEW, and ALTER VIEW reject an assignment in
+their defining SELECT before view inference or catalog mutation. This keeps an
+existing usable view intact when a rejected replacement is attempted and avoids
+persisting a definition that ordinary non-root view expansion must reject.
+
 ## SQL and binding contract
 
 The parser represents `@name := expr` as `UserVarAssignmentExpr`. Assignment
@@ -62,6 +67,13 @@ intentional: they avoid making side-effect order depend on optimizer rewrites.
 The supported form is a deterministic left-to-right projection list with at
 most one side-effecting assignment at a given projection level; nested
 assignments use the explicit right-associative expression tree.
+
+An ordinary projection sibling is evaluated over the complete physical batch.
+Consequently, a read of variable `x` in an earlier sibling than the projection
+that assigns `x` is rejected. Such a read can otherwise observe the prior
+batch's complete row history and make the result depend on physical batching.
+A read after the assignment projection remains supported because the current
+batch has a complete staged row vector by then.
 
 ## Logical-row and batch semantics
 
@@ -127,12 +139,15 @@ setter failure therefore cannot leak the overlay into a retry or a later
 statement; it can only leave the already-published setter prefix visible. The
 original execution error is retained when both execution and setter fail.
 
-Cancellation is checked before each logical row. Cancellation, context
-failure, or a panic follows the same deferred cleanup path: no row history is
-left attached to the `Process`, and a subsequent statement starts with a clean
-overlay. `DiscardUserVariableAssignments` is available to explicit abort/reset
-paths and is idempotent. `Reset`/`Free` of an executor releases cloned row
-batches and vectors through the process memory pool.
+Cancellation is checked before each logical row. Cancellation, context failure,
+or a panic follows the same deferred cleanup path: no row history is left
+attached to the `Process`, and a subsequent statement starts with a clean
+overlay. Each one-row clone is released by a per-row terminal owner, so an
+RHS panic during stack unwinding returns its memory to the execution pool
+without double-cleaning success or error paths. `DiscardUserVariableAssignments`
+is available to explicit abort/reset paths and is idempotent. `Reset`/`Free`
+of an executor releases retained result vectors through the process memory
+pool.
 
 ## Prepared statements and retries
 
@@ -187,6 +202,8 @@ The public contract is covered at the following layers:
 | real frontend execution and prepared execution | `pkg/frontend/mysql_cmd_executor_test.go`, `computation_wrapper_test.go`, and the user-variable integration cases |
 | plan serialization | generated `pkg/pb/plan/plan.pb.go` from `proto/plan.proto` |
 | DML scope admission and no-side-effect rejection | `pkg/sql/plan/user_var_assignment_test.go` (`TestUserVariableAssignmentRejectsDMLBeforeBinding`) |
+| read-before-assignment and view-authoring rejection | `pkg/sql/plan/user_var_assignment_test.go` and `pkg/tests/sqlintegration/user_var_assignment_test.go` |
+| RHS panic clone cleanup | `pkg/sql/colexec/user_var_assignment_test.go` (`TestUserVariableAssignmentExecutorReleasesClonesOnChildPanic`) |
 
 The regression set includes empty input, multiple physical batches, nested
 self-reference, skipped conditional rows, prepared reuse, cancellation, and
@@ -200,3 +217,5 @@ a new versioned design decision before code changes are approved.
   includes nested row-history reset, statement-boundary publication,
   coordinator-only placement, no-retry policy, and mixed-version fail-closed
   behavior.
+* **v1.1, 2026-10-14** — closes the read-before-assignment, view-authoring,
+  and RHS-panic cleanup boundaries found in review.

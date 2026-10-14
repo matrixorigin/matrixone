@@ -38,6 +38,8 @@ type userVariableAssignmentErrorProbe struct {
 	empty bool
 }
 
+type userVariableAssignmentPanicProbe struct{}
+
 func (p *userVariableAssignmentErrorProbe) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	if p.err != nil {
 		return nil, p.err
@@ -70,6 +72,19 @@ func (p *userVariableAssignmentBatchProbe) ResetForNextQuery() {}
 func (p *userVariableAssignmentBatchProbe) Free()              {}
 func (p *userVariableAssignmentBatchProbe) IsColumnExpr() bool { return true }
 func (p *userVariableAssignmentBatchProbe) TypeName() string   { return "batch-probe" }
+
+func (p *userVariableAssignmentPanicProbe) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	panic("injected RHS panic")
+}
+
+func (p *userVariableAssignmentPanicProbe) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return p.Eval(proc, batches, selectList)
+}
+
+func (p *userVariableAssignmentPanicProbe) ResetForNextQuery() {}
+func (p *userVariableAssignmentPanicProbe) Free()              {}
+func (p *userVariableAssignmentPanicProbe) IsColumnExpr() bool { return false }
+func (p *userVariableAssignmentPanicProbe) TypeName() string   { return "panic-probe" }
 
 func TestUserVariableAssignmentExecutorPreservesRowReadAfterWrite(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
@@ -686,4 +701,33 @@ func TestUserVariableAssignmentExecutorLifecycleAndResolverErrors(t *testing.T) 
 			p.Free()
 		})
 	}
+}
+
+func TestUserVariableAssignmentExecutorReleasesClonesOnChildPanic(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	varcharType := types.T_varchar.ToType()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(varcharType)
+	input.SetRowCount(1)
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"payload"}, nil, proc.Mp()))
+
+	before := [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+	assignment := &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), typ: varcharType,
+		child: &userVariableAssignmentPanicProbe{}, name: "panic_release",
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, _ = assignment.Eval(proc, []*batch.Batch{input}, nil)
+	}()
+	require.Equal(t, "injected RHS panic", recovered)
+
+	assignment.Free()
+	proc.DiscardUserVariableAssignments()
+	after := [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+	require.Equal(t, before, after)
+	input.Clean(proc.Mp())
+	proc.Free()
 }
