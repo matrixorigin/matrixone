@@ -247,7 +247,7 @@ select * from db2.t2 order by a;
 -- 相同 COLLATE 投影必须合并主角色和继承角色允许的行。
 alter role test_rule_role_inherit_a add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 10" on table db2.t2;
 alter role test_rule_role_inherit_b add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 20" on table db2.t2;
--- @session:id=11&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+-- @session:id=22&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 -- @session
