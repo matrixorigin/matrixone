@@ -7007,3 +7007,35 @@ func TestLexerErrorUTF8Excerpt(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterAddParenthesizedColumns(t *testing.T) {
+	tests := []struct {
+		sql       string
+		wantNames []string
+	}{
+		{
+			sql:       "alter table probe_add add column (added_tag longtext null)",
+			wantNames: []string{"added_tag"},
+		},
+		{
+			sql:       "alter table probe_add add column (added_tag longtext null, amount decimal(10, 2) default 1.25)",
+			wantNames: []string{"added_tag", "amount"},
+		},
+	}
+
+	for _, test := range tests {
+		stmt, err := ParseOne(context.Background(), test.sql, 1)
+		require.NoError(t, err)
+		alter, ok := stmt.(*tree.AlterTable)
+		require.True(t, ok)
+		require.Len(t, alter.Options, len(test.wantNames))
+
+		for i, name := range test.wantNames {
+			add, ok := alter.Options[i].(*tree.AlterAddCol)
+			require.True(t, ok)
+			require.Equal(t, name, add.Column.Name.ColName())
+			require.Equal(t, tree.ColumnPositionNone, add.Position.Typ)
+		}
+		stmt.Free()
+	}
+}
