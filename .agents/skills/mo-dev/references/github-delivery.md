@@ -13,8 +13,13 @@ body and report actionable mismatches; do not edit it without authorization.
   selected PR template). Preserve its heading text, punctuation, level, and
   order; fill its sections and applicable type checkboxes. Keep validation and
   limitations in the description section unless the template provides another
-  place. Replace placeholders with real content and link the relevant issues;
-  use closing keywords only for issues this change actually closes.
+  place. Replace placeholders with real content. MatrixOne PRs must link a real,
+  relevant issue in the issue section; do not substitute `N/A` or a PR number.
+  Search existing issues, including closed ones, before preparing a new issue.
+  Use `Related to #...` for follow-up work on a closed issue, and closing keywords
+  only for open issues this change actually closes. If no relevant issue exists,
+  prepare one with the appropriate template and publish within the authorized
+  scope; do not invent an issue number or attach unrelated work.
 - For issues, select the appropriate `.github/ISSUE_TEMPLATE/*.yml` form or
   Markdown template. CLI/API creation does not enforce GitHub issue-form
   validation: render form field labels as Markdown headings and populate the
