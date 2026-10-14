@@ -53,6 +53,9 @@ const (
 	leastGreatestTemporalOverload
 	leastGreatestJSONTemporalOverload
 	leastGreatestYearNumericOverload
+	// Appended identity: old workers must not execute collation-aware ordering
+	// through the historical byte-order overload, even after a capability probe.
+	LeastGreatestCollationOverload
 )
 
 // check input types for least and greatest function.
@@ -63,10 +66,24 @@ func leastGreatestCheck(_ []overload, inputs []types.Type) checkResult {
 	if !ok {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
+	if resolution.overloadID == leastGreatestNormalOverload && leastGreatestNeedsCollationOverload(resolution.resultType) {
+		resolution.overloadID = LeastGreatestCollationOverload
+	}
 	if len(resolution.castTypes) > 0 {
 		return newCheckResultWithCast(resolution.overloadID, resolution.castTypes)
 	}
 	return newCheckResultWithSuccess(resolution.overloadID)
+}
+
+func leastGreatestNeedsCollationOverload(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_char:
+		return true // CHAR comparison now ignores trailing spaces.
+	case types.T_varchar, types.T_text, types.T_blob, types.T_datalink:
+		return types.IsUnicodeCollation(typ.Charset)
+	default:
+		return false
+	}
 }
 
 func leastGreatestReturnType(parameters []types.Type) types.Type {
@@ -1311,6 +1328,34 @@ func leastGreatestRestoreTemporalResultType(parameters []*vector.Vector, result 
 	}
 }
 
+func leastCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, true)
+}
+
+func greatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, false)
+}
+
+func leastGreatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList, least bool) error {
+	if len(parameters) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "collation-aware LEAST/GREATEST requires an argument")
+	}
+	paramType := *parameters[0].GetType()
+	switch paramType.Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return moerr.NewNotSupported(proc.Ctx, "collation-aware LEAST/GREATEST requires a string domain")
+	}
+	compare := func(v1, v2 []byte) bool { return compareTextBytes(paramType, v1, v2) < 0 }
+	if !least {
+		compare = func(v1, v2 []byte) bool { return compareTextBytes(paramType, v1, v2) > 0 }
+	}
+	return leastGreatestFnVarlen(parameters, result, proc, length, selectList, compare)
+}
+
 func leastFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
@@ -1463,7 +1508,7 @@ func leastFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 []byte) bool {
-				return compareTextBytes(paramType, v1, v2) < 0
+				return bytes.Compare(v1, v2) < 0
 			})
 
 	case types.T_binary, types.T_varbinary:
@@ -1840,7 +1885,7 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 []byte) bool {
-				return compareTextBytes(paramType, v1, v2) > 0
+				return bytes.Compare(v1, v2) > 0
 			})
 
 	case types.T_binary, types.T_varbinary:

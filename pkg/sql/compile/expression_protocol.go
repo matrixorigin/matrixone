@@ -97,6 +97,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.DateNumericResultContracts {
 		required = max(required, defines.MORPCVersion112)
 	}
+	if features.LeastGreatestCollationSemantics {
+		required = max(required, defines.MORPCVersion113)
+	}
 	return required
 }
 

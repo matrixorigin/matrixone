@@ -253,16 +253,21 @@ func TestLeastGreatestNativeCollationPreservesValue(t *testing.T) {
 		NewFunctionTestInput(typ, []string{"B", "a", "a"}, []bool{false, false, false}),
 	}
 	for _, tc := range []struct {
-		name string
-		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
-		want []string
+		name     string
+		id       int32
+		overload int32
+		want     []string
 	}{
-		{"least", leastFn, []string{"a", "Á", "a "}},
-		{"greatest", greatestFn, []string{"B", "Á", "a "}},
+		{"collated least", LEAST, LeastGreatestCollationOverload, []string{"a", "Á", "a "}},
+		{"collated greatest", GREATEST, LeastGreatestCollationOverload, []string{"B", "Á", "a "}},
+		{"legacy least", LEAST, 0, []string{"B", "a", "a"}},
+		{"legacy greatest", GREATEST, 0, []string{"a", "Á", "a "}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionById(t.Context(), EncodeOverloadID(tc.id, tc.overload))
+			require.NoError(t, err)
 			result := NewFunctionTestResult(typ, false, tc.want, []bool{false, false, false})
-			fc := NewFunctionTestCase(proc, inputs, result, tc.fn)
+			fc := NewFunctionTestCase(proc, inputs, result, fn.newOp())
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
