@@ -742,23 +742,78 @@ func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
 }
 
 func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, consumer string
+	}{
+		{"join", "l_comment", "select a.l_suppkey from c a join c b on a.l_suppkey = b.l_suppkey where a.l_suppkey < 10"},
+		{"union-all-numeric", "l_partkey", "select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u"},
+		{"union-all-variable-width", "l_comment", "select l_suppkey from (select a.l_suppkey,a.payload from c a join c b on a.l_suppkey=b.l_suppkey union all select 0,cast(NULL as varchar(44))) u"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, "with c as (select l_suppkey, max("+tc.payload+") as payload from lineitem group by l_suppkey) "+tc.consumer)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_AGG))
+			var sourceStep []int32
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				switch node.NodeType {
+				case planpb.Node_SINK_SCAN:
+					require.Len(t, node.ProjectList, 1, "unused payload must not inflate a reader")
+					if sourceStep == nil {
+						sourceStep = node.SourceStep
+					}
+					require.Equal(t, sourceStep, node.SourceStep, "readers must retain one shared producer")
+				case planpb.Node_SINK:
+					require.Len(t, node.ProjectList, 1, "unused payload must not be materialized")
+				case planpb.Node_AGG:
+					require.Empty(t, node.AggList, "unused payload aggregate must not execute")
+					require.Len(t, node.GroupBy, 1, "grouping must preserve the row set")
+				case planpb.Node_TABLE_SCAN:
+					for _, col := range node.TableDef.Cols {
+						require.NotEqual(t, tc.payload, col.Name, "unused payload input must not be read")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCTEMultiReferenceUnionRetainsDemandedPayload(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
-			select l_suppkey, max(l_comment) as comment
+			select l_suppkey, max(l_comment) as payload
 			from lineitem group by l_suppkey
 		)
-		select a.l_suppkey from c a join c b
-			on a.l_suppkey = b.l_suppkey
-		where a.l_suppkey < 10`)
+		select l_suppkey from (
+			select l_suppkey,payload from c
+			union all select l_suppkey,payload from c
+		) u
+		union all select length(payload) from c`)
 	require.NoError(t, err)
-
 	query := logicPlan.GetQuery()
-	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 3, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_AGG))
 	for nodeID := range cteReachablePlanNodes(query) {
-		if node := query.Nodes[nodeID]; node.NodeType == planpb.Node_SINK_SCAN {
-			require.Len(t, node.ProjectList, 1,
-				"an unused variable-width payload must not inflate the shared source")
+		node := query.Nodes[nodeID]
+		switch node.NodeType {
+		case planpb.Node_SINK_SCAN:
+			require.Len(t, node.ProjectList, 1, "each reader needs only its own output")
+		case planpb.Node_SINK:
+			require.Len(t, node.ProjectList, 2, "another consumer still demands the payload")
+		case planpb.Node_AGG:
+			require.Len(t, node.AggList, 1)
+		case planpb.Node_TABLE_SCAN:
+			var names []string
+			for _, col := range node.TableDef.Cols {
+				names = append(names, col.Name)
+			}
+			require.Contains(t, names, "l_comment")
 		}
 	}
 }
@@ -1900,7 +1955,7 @@ func TestCTEReuseRejectsVolatileAuxiliaryNodeExpressions(t *testing.T) {
 		}},
 		{name: "vector index query", node: &planpb.Node{
 			NodeType:        planpb.Node_TABLE_SCAN,
-			VectorIndexScan: &planpb.VectorIndexScan{QueryVector: volatile},
+			IndexSearchScan: &planpb.IndexSearchScan{QueryPayload: volatile},
 		}},
 		{name: "dedup update expression", node: &planpb.Node{
 			NodeType:     planpb.Node_JOIN,
@@ -2210,4 +2265,55 @@ func TestCTEMultiReferenceReusePreservesConsumerBindings(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[int32]bool{0: true, 1: true}, projectedCols)
+}
+
+func TestCTEMultiReferencePruningCounterexamples(t *testing.T) {
+	for _, tc := range []struct {
+		name, query         string
+		sinkWidth, aggSlots int
+		scalar              bool
+	}{
+		{"fallible-cast", `with c as (select l_suppkey,cast(max(l_comment) as bigint) as payload from lineitem group by l_suppkey) select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`, 2, 1, false},
+		{"unproven-sum", `with c as (select l_suppkey,sum(l_partkey) as payload from lineitem group by l_suppkey) select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`, 2, 1, false},
+		{"having-demand", `with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey having max(l_comment)>'a') select l_suppkey from (select a.l_suppkey,a.payload from c a join c b on a.l_suppkey=b.l_suppkey union all select 0,cast(NULL as varchar(44))) u`, 1, 1, false},
+		{"join-count-carrier", `with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey) select count(*) from c a join c b on a.l_suppkey=b.l_suppkey`, 1, 0, false},
+		{"scalar-aggregate-carrier", `with c as (select 1 as k,max(l_comment) as payload from lineitem) select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u`, 1, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			lp, err := runOneStmt(mock, t, tc.query)
+			require.NoError(t, err)
+			q := lp.GetQuery()
+			require.Equal(t, 2, countReachableNodeType(q, planpb.Node_SINK_SCAN))
+			require.Equal(t, 1, countReachableNodeType(q, planpb.Node_SINK))
+			for id := range cteReachablePlanNodes(q) {
+				n := q.Nodes[id]
+				switch n.NodeType {
+				case planpb.Node_SINK:
+					require.Len(t, n.ProjectList, tc.sinkWidth)
+				case planpb.Node_AGG:
+					if tc.scalar {
+						if len(n.GroupBy) == 0 {
+							require.Len(t, n.AggList, tc.aggSlots, "scalar aggregate must preserve its one-row carrier")
+						}
+					} else if len(n.GroupBy) > 0 {
+						require.Len(t, n.AggList, tc.aggSlots)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCTEMultiReferenceUnionKeepsVariableWidthAdmissionGuard(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey)
+		select l_suppkey from (
+			select l_suppkey,payload from c
+			union all select l_suppkey,payload from c
+		) u`)
+	require.NoError(t, err)
+	require.Zero(t, countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN),
+		"column pruning must not relax variable-width spill admission")
 }

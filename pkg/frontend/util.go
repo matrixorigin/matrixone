@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -2075,6 +2074,18 @@ func mysqlDecimalType(precision, scale int32) types.Type {
 	}
 }
 
+// convertEngineColumnTypeToMysqlType preserves the logical integer subtype
+// when the physical vector OID is shared by INT and MEDIUMINT.
+func convertEngineColumnTypeToMysqlType(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	if typ.IsMediumInt() {
+		col.SetColumnType(defines.MYSQL_TYPE_INT24)
+	}
+	return nil
+}
+
 func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
 	if err := typ.ValidateCollation(); err != nil {
 		return err
@@ -2084,8 +2095,15 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 			return err
 		}
 	}
-	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
+	}
+	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
+		setMysqlColumnTypeMetadata(col, typ)
+		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+		return nil
 	}
 	if typ.Oid == types.T_blob {
 		length := uint32(math.MaxUint32)
@@ -2156,6 +2174,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.IsMediumInt() {
+		// ColumnDefinition41 uses MySQL's default MEDIUMINT display widths:
+		// 9 characters for signed values and 8 for unsigned values.
+		if col.IsSigned() {
+			col.SetLength(9)
+		} else {
+			col.SetLength(8)
+		}
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(4)
@@ -2235,28 +2261,11 @@ func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
 	return uint32(length)
 }
 
-// errCodeRollbackWholeTxn denotes that the error code
-// that should rollback the whole txn
-var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrRetryForCNRollingRestart: false,
-	moerr.ErrDeadLockDetected:         false,
-	moerr.ErrLockTableBindChanged:     false,
-	moerr.ErrLockTableNotFound:        false,
-	moerr.ErrDeadlockCheckBusy:        false,
-	moerr.ErrLockConflict:             false,
-	moerr.ErrRemoteLockWaitTimeout:    false,
-	moerr.ErrLockWaitTimeout:          false,
-	moerr.ErrTxnUnknown:               false,
-	moerr.ErrBackendClosed:            false,
-	moerr.ErrNoAvailableBackend:       false,
-	moerr.ErrBackendCannotConnect:     false,
-}
-
 // sessionRollsBackTxnOnError reports whether the session has opted into
 // treating this error as fatal to the whole transaction rather than to the
 // statement alone.
 //
-// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
+// The shared moerr.MustRollbackTxn policy covers infrastructure -- deadlock,
 // lock timeout, a backend that went away -- failures after which the
 // transaction genuinely cannot continue, and it is only twelve of the ~240
 // error codes MO defines. Every other error, from a syntax error to a
@@ -2294,61 +2303,7 @@ func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
-	if inputErr == nil {
-		return false
-	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok {
-		// This is not a moerr
-		return false
-	}
-	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
-		return true
-	}
-	return false
-}
-
-func getRandomErrorRollbackWholeTxn() error {
-	x := rand.Intn(len(errCodeRollbackWholeTxn))
-	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
-	for k := range errCodeRollbackWholeTxn {
-		arr = append(arr, k)
-	}
-	return newErrorRollbackWholeTxn(arr[x])
-}
-
-// newErrorRollbackWholeTxn keeps the test error factory in sync with
-// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
-// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
-func newErrorRollbackWholeTxn(code uint16) error {
-	switch code {
-	case moerr.ErrRetryForCNRollingRestart:
-		return moerr.NewRetryForCNRollingRestart()
-	case moerr.ErrDeadLockDetected:
-		return moerr.NewDeadLockDetectedNoCtx()
-	case moerr.ErrLockTableBindChanged:
-		return moerr.NewLockTableBindChangedNoCtx()
-	case moerr.ErrLockTableNotFound:
-		return moerr.NewLockTableNotFoundNoCtx()
-	case moerr.ErrDeadlockCheckBusy:
-		return moerr.NewDeadlockCheckBusyNoCtx()
-	case moerr.ErrLockConflict:
-		return moerr.NewLockConflictNoCtx()
-	case moerr.ErrRemoteLockWaitTimeout:
-		return moerr.NewRemoteLockWaitTimeoutNoCtx()
-	case moerr.ErrLockWaitTimeout:
-		return moerr.NewLockWaitTimeoutNoCtx()
-	case moerr.ErrTxnUnknown:
-		return moerr.NewTxnUnknown(context.Background(), "test")
-	case moerr.ErrBackendClosed:
-		return moerr.NewBackendClosedNoCtx()
-	case moerr.ErrNoAvailableBackend:
-		return moerr.NewNoAvailableBackendNoCtx()
-	case moerr.ErrBackendCannotConnect:
-		return moerr.NewBackendCannotConnectNoCtx("test")
-	default:
-		panic(fmt.Sprintf("unsupported error code %d", code))
-	}
+	return moerr.MustRollbackTxn(inputErr)
 }
 
 func skipClientQuit(info string) bool {
@@ -2496,6 +2451,22 @@ func hasSQLSourceTag(sql string) bool {
 	return strings.Contains(sql, cloudUserTag) || strings.Contains(sql, cloudNoUserTag) || strings.Contains(sql, saveResultTag)
 }
 
+// Source scans see ordinary comments, which are lexical space between a
+// qualification period and its identifier. Keep the previous significant token.
+func scanSQLSourceToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanWithCommentsAfterDot()
+	} else {
+		token, value = scanner.ScanWithComments()
+	}
+	if token != mysql.COMMENT {
+		*previousToken = token
+	}
+	return token, value
+}
+
 func statementSQLSource(sql, sqlMode string) string {
 	if !hasSQLSourceTag(sql) {
 		return constant.ExternSql
@@ -2503,8 +2474,9 @@ func statementSQLSource(sql, sqlMode string) string {
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	source := constant.ExternSql
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			source = sourceWithComment(source, comment)
 		}
@@ -2547,8 +2519,9 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	i := 0
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			start := scanner.Pos - len(comment)
 			for i < len(ends) && start >= ends[i] {
@@ -2574,12 +2547,13 @@ func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	var records, sources []string
 	start := 0
 	source := constant.ExternSql
+	previousToken := 0
 	appendRecord := func(end int) {
 		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
 		sources = append(sources, source)
 	}
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		switch token {
 		case mysql.COMMENT:
 			source = sourceWithComment(source, comment)

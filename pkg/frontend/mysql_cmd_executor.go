@@ -2609,7 +2609,7 @@ func writeExplainResult(
 	if err != nil {
 		return err
 	}
-	if explainSchedulingEnabled(ses) {
+	if es.Format != explain.EXPLAIN_FORMAT_JSON && explainSchedulingEnabled(ses) {
 		if rawSQL == "" {
 			rawSQL = ses.GetSql()
 		}
@@ -2633,6 +2633,9 @@ func writeExplainResult(
 	//2. fill the result set
 	//column
 	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		explainColName = "EXPLAIN"
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName(explainColName)
@@ -2789,9 +2792,16 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 	if scanner.CommentFlag {
 		scanner.TakeExecutableCommentEnd()
 		var commentEnd int
+		previousToken := mysql.FROM
 		for commentEnd == 0 {
 			previousPos := scanner.Pos
-			token, _ := scanner.Scan()
+			var token int
+			if previousToken == int('.') {
+				token, _ = scanner.ScanAfterDot()
+			} else {
+				token, _ = scanner.Scan()
+			}
+			previousToken = token
 			commentEnd = scanner.TakeExecutableCommentEnd()
 			if commentEnd == 0 &&
 				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
@@ -4019,43 +4029,85 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
 		return es, nil
-	} else {
-		for _, v := range options {
-			if strings.EqualFold(v.Name, tree.VerboseOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Verbose = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Verbose = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.AnalyzeOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Analyze = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Analyze = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.FormatOption) {
-				if strings.EqualFold(v.Value, "TEXT") {
-					es.Format = explain.EXPLAIN_FORMAT_TEXT
-				} else if strings.EqualFold(v.Value, "JSON") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else if strings.EqualFold(v.Value, "DOT") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.CheckOption) {
-				if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
-				}
-			} else {
+	}
+
+	seen := make(map[string]struct{}, len(options))
+	phyplan := false
+	check := false
+	for _, v := range options {
+		name := strings.ToLower(strings.TrimSpace(v.Name))
+		if _, ok := seen[name]; ok {
+			return nil, moerr.NewInvalidInputf(reqCtx, "duplicate explain option '%s'", v.Name)
+		}
+		seen[name] = struct{}{}
+
+		switch name {
+		case "verbose":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
 				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
+			es.Verbose = value
+		case "analyze":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			es.Analyze = value
+		case "phyplan":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			phyplan = value
+		case "format":
+			value := strings.Trim(strings.TrimSpace(v.Value), "'")
+			value = strings.Trim(value, string('"'))
+			value = strings.ToUpper(value)
+			switch value {
+			case "TEXT":
+				es.Format = explain.EXPLAIN_FORMAT_TEXT
+			case "JSON":
+				es.Format = explain.EXPLAIN_FORMAT_JSON
+			case "DOT":
+				return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
+			default:
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+		case "check":
+			check = true
+			if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
+			}
+		default:
+			return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 		}
-		return es, nil
+	}
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		if es.Analyze {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+		}
+		if phyplan {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+		}
+		if check {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN FORMAT=JSON does not support CHECK")
+		}
+	}
+	return es, nil
+}
+
+func parseExplainBool(value string) (bool, bool) {
+	value = strings.Trim(strings.TrimSpace(value), "'")
+	value = strings.Trim(value, string('"'))
+	value = strings.ToUpper(value)
+	switch value {
+	case "TRUE", "NULL":
+		return true, true
+	case "FALSE":
+		return false, true
+	default:
+		return false, false
 	}
 }
 
@@ -5416,6 +5468,10 @@ func executeStmtWithTxn(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
+	// The process survives across statements, including statements handled
+	// directly by the frontend. Stage definitions are only valid within one
+	// statement's catalog snapshot, so discard entries before planning/dispatch.
+	execCtx.proc.GetStageCache().Clear()
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, statsArr, execCtx)
 	} else {
@@ -5423,6 +5479,12 @@ func executeStmtWithTxn(ses FeSession,
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
 		execCtx.proc.Base.TxnOperator = txnOp
+
+		// Derived execution borrows the caller's workspace statement. A retry
+		// must be returned to its owner rather than rolling back only this child.
+		wasDisabled := execCtx.proc.IncrStatementDisabled()
+		execCtx.proc.SetIncrStatementDisabled(true)
+		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5522,6 +5584,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		// initExecuteStmtParam recorded its binding database before authorization.
 		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 	}
+	execCtx.effectiveTxnStatement = effectiveStmt
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
@@ -5677,6 +5740,14 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if err != nil || hasRecovered {
 		return err
 	}
+	// Frontend statements have no physical Compile to establish their workspace
+	// boundary. Capture it after prior-statement maintenance, before any child
+	// execution can reorder writes or fail. Engine statements retain their
+	// existing NewCompile/Reset owner.
+	if execCtx.effectiveTxnStatement.StmtKind().ExecLocation() == tree.EXEC_IN_FRONTEND {
+		txnOp.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
+
 	stats := statistic.StatsInfoFromContext(newCtx)
 	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -7002,7 +7073,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
+		status := ses.GetTxnHandler().GetServerStatus()
+		if ses.GetResponser().MysqlRrWr().GetU32(CAPABILITY)&CLIENT_DEPRECATE_EOF == 0 {
+			return NewResponse(EoFResponse, 0, 0, 0, status, int(COM_SET_OPTION), nil), nil
+		}
+		return NewGeneralOkResponse(COM_SET_OPTION, status), nil
 
 	default:
 		markRowCountFailed(ses, ses.GetProc())

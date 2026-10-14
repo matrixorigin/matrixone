@@ -51,7 +51,7 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 	// An ALTER generation first published between the admission probe and K
 	// must restart with G exclusive before physical DROP work or compaction.
 	if !exclusiveSnapshotGate && dag.ComponentsHaveAlterLineage(deadTIDs) {
-		if err := c.admitLifecycleRC(nil, true, false); err != nil {
+		if err := c.admitLifecycleRC(nil, true); err != nil {
 			return nil, databranchutils.BranchReclaimDag{}, err
 		}
 		return nil, databranchutils.BranchReclaimDag{}, moerr.NewTxnNeedRetryWithDefChangedNoCtx()

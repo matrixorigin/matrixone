@@ -156,8 +156,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if isSetOperation(parentType) && isSetOperationInputWrapper(node) {
+			// Keep the operand's positional schema boundary through identity wrappers.
+			childParentType = parentType
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -287,7 +292,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
-		// with the score column produced by fulltext_index_scan.  Inlining a
+		// with the score column produced by the fulltext search scan.  Inlining a
 		// projection that contains it can move the placeholder into a WINDOW
 		// (for example through a multi-CTE query) where the fulltext rewrite
 		// cannot associate it with the source scan anymore.  Keep that PROJECT

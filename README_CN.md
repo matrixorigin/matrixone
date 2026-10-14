@@ -242,6 +242,7 @@ for row in results.rows:
 | 教程 | 语言/框架 | 说明 |
 |----------|-------------------|-------------|
 | [Java CRUD 示例](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-java-crud-demo.html) | Java | Java 应用开发 |
+| [Spark JDBC 写入指南](docs/guides/spark-jdbc.md) | Python / Spark | 为 MatrixOne 配置受支持的 JDBC 写入隔离级别 |
 | [SpringBoot 和 JPA CRUD 示例](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/springboot-hibernate-crud-demo.html) | Java | SpringBoot + Hibernate/JPA |
 | [PyMySQL CRUD 示例](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-python-crud-demo.html) | Python | Python 基础数据库操作 |
 | [SQLAlchemy CRUD 示例](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/sqlalchemy-python-crud-demo.html) | Python | Python + SQLAlchemy ORM |

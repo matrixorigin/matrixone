@@ -5,7 +5,7 @@ drop table if exists nvec;
 create table nvec(a int, bf vecbf16(3), f16 vecf16(3), i8 vecint8(3));
 desc nvec;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 bf    VECBF16(3)    YES        null        
 f16    VECF16(3)    YES        null        
 i8    VECINT8(3)    YES        null        

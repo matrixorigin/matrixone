@@ -18,10 +18,10 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile';
 drop stage if exists substage01;
 create stage substage01 url = 'stage://stage01/stage/';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20055  ¦  stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦    𝄀
-20056  ¦  substage01  ¦  stage://stage01/stage/  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage01  ¦    ¦  in_use  ¦    𝄀
+substage01  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -61,10 +61,10 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile';
 drop stage if exists substage02;
 create stage substage02 url = 'stage://stage02/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20057  ¦  stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦    𝄀
-20058  ¦  substage02  ¦  stage://stage02/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage02  ¦    ¦  in_use  ¦    𝄀
+substage02  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -123,10 +123,10 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile';
 drop stage if exists substage03;
 create stage substage03 url = 'stage://stage03/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20059  ¦  stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦    𝄀
-20060  ¦  substage03  ¦  stage://stage03/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage03  ¦    ¦  in_use  ¦    𝄀
+substage03  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -195,10 +195,10 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile';
 drop stage if exists substage04;
 create stage substage04 url = 'stage://stage04/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20061  ¦  stage04  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦    𝄀
-20062  ¦  substage04  ¦  stage://stage04/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:25  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage04  ¦    ¦  in_use  ¦    𝄀
+substage04  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage04  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -250,10 +250,10 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile';
 drop stage if exists substage05;
 create stage substage05 url = 'stage://stage05/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20063  ¦  stage05  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦    𝄀
-20064  ¦  substage05  ¦  stage://stage05/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage05  ¦    ¦  in_use  ¦    𝄀
+substage05  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage05  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -291,10 +291,10 @@ drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile';
 drop stage if exists substage06;
 create stage substage06 url = 'stage://stage06/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20065  ¦  stage06  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦    𝄀
-20066  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage06  ¦    ¦  in_use  ¦    𝄀
+substage06  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage06  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -326,10 +326,10 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile';
 drop stage if exists substage07;
 create stage substage07 url = 'stage://stage07/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20067  ¦  stage07  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦    𝄀
-20068  ¦  substage07  ¦  stage://stage07/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage07  ¦    ¦  in_use  ¦    𝄀
+substage07  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage07  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
@@ -363,10 +363,10 @@ drop stage if exists stage09;
 create stage stage09 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
 drop stage if exists substage09;
 create stage substage09 url = 'stage://stage09/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20069  ¦  stage09  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  这是一个基于file system创建的stage  𝄀
-20070  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+stage09  ¦    ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
+substage09  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage09  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
@@ -390,9 +390,9 @@ t9  ¦  CREATE TABLE `t9` (
 )
 drop table t9;
 drop stage stage09;
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20070  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-07-27 03:39:26  ¦  
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
+➤ stage_name[12,-1,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  comment[12,0,0]  𝄀
+substage09  ¦    ¦  in_use  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 substage09  ¦  stage://stage09/stage  ¦  in_use  ¦  

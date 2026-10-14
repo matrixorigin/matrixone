@@ -4641,7 +4641,9 @@ func irregularIndexAffectedByUpdatedColumnNames(
 	idxDef *plan.IndexDef,
 	updateCols map[string]struct{},
 ) (bool, error) {
-	columnUpdated := func(colName string) bool {
+	visited := make(map[int32]bool)
+	var columnUpdated func(string) bool
+	columnUpdated = func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)
 		if _, ok := updateCols[colName]; ok {
 			return true
@@ -4650,7 +4652,27 @@ func irregularIndexAffectedByUpdatedColumnNames(
 			return false
 		}
 		colPos, ok := tableDef.Name2ColIndex[colName]
-		return ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) && tableDef.Cols[colPos].OnUpdate != nil
+		if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+			return false
+		}
+		col := tableDef.Cols[colPos]
+		if col.OnUpdate != nil {
+			return true
+		}
+		if col.GeneratedCol == nil || col.GeneratedCol.Expr == nil || visited[colPos] {
+			return false
+		}
+		visited[colPos] = true
+		// This is one reachability search across all index parts and INCLUDE
+		// columns. Keep visited nodes after returning so shared dependencies are
+		// expanded once, rather than once per path. A positive result terminates
+		// the whole search; revisiting a completed negative branch cannot help.
+		for _, refPos := range collectRefColPos(col.GeneratedCol.Expr) {
+			if refPos >= 0 && int(refPos) < len(tableDef.Cols) && columnUpdated(tableDef.Cols[refPos].Name) {
+				return true
+			}
+		}
+		return false
 	}
 
 	for _, part := range idxDef.Parts {
@@ -4658,14 +4680,14 @@ func irregularIndexAffectedByUpdatedColumnNames(
 			return true, nil
 		}
 	}
+	for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
+		if columnUpdated(colName) {
+			return true, nil
+		}
+	}
 
 	p, ok := indexplugin.Get(idxDef.IndexAlgo)
 	if !ok {
-		for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
-			if columnUpdated(colName) {
-				return true, nil
-			}
-		}
 		return false, nil
 	}
 	rewriteHook, ok := p.Plan().(planplugin.UpdateColumnRewriteHook)

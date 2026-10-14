@@ -378,6 +378,8 @@ type statementTransferState struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	catalogVisibilityRevision atomic.Uint64
+	catalogMutations          atomic.Int64
 	sync.Mutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
@@ -854,6 +856,8 @@ func (txn *Transaction) EndStatement() {
 }
 
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 	if !commit {
@@ -904,6 +908,8 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 }
 
 func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 
@@ -961,7 +967,7 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 		if writeOffset > uint64(len(txn.writes)) {
 			writeOffset = uint64(len(txn.writes))
 		}
-		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
+		compare := func(a, b Entry) int {
 			// expected in descending order
 
 			aIsCatalog := a.isCatalog()
@@ -985,7 +991,12 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 			}
 
 			return b.typ - a.typ
-		})
+		}
+		if !slices.IsSortedFunc(txn.writes[writeOffset:], compare) {
+			txn.beginCatalogMutation()
+			defer txn.endCatalogMutation()
+			slices.SortStableFunc(txn.writes[writeOffset:], compare)
+		}
 	}
 
 	return nil
@@ -1144,6 +1155,8 @@ func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (er
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
 	// This defer runs after the workspace mutex is released. Cache retirement

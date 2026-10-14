@@ -329,7 +329,7 @@ func TestRemoteTakeoverMustNotPromoteNoOpCheckpoint(t *testing.T) {
 				durable, attempted := types.BuildTS(100, 0), types.BuildTS(200, 0)
 				store := &takeoverCheckpointExecutor{durableWatermark: durable}
 				updater := NewCDCWatermarkUpdater(t.Name(), store, WithCustomizedScheduleJob(func(job *UpdaterJob) error { job.DoneWithErr(nil); return nil }))
-				updater.Start()
+				updater.Start(context.Background())
 				t.Cleanup(updater.Stop)
 				key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
 				oldOwner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })

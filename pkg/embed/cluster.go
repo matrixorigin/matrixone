@@ -90,7 +90,9 @@ type cluster struct {
 		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
+		testTCPOnly                 bool
 		allowConcurrentTestClusters bool
+		testAdmissionContext        context.Context
 		heartbeatTimeout            time.Duration
 		storeTimeout                time.Duration
 	}
@@ -184,7 +186,11 @@ func (c *cluster) Start() (err error) {
 			mode |= clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()
-		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
+		admissionCtx := c.options.testAdmissionContext
+		if admissionCtx == nil {
+			admissionCtx = context.Background()
+		}
+		admission, acquireErr := clusteradmission.Acquire(admissionCtx, mode)
 		if acquireErr != nil {
 			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr
@@ -531,8 +537,13 @@ func (c *cluster) createServiceOperators(from int) error {
 			})
 		}
 		if c.options.testing {
-			adjustTestingClusterStartup(s)
+			adjustTestingClusterTiming(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
+			if c.options.testTCPOnly && s.serviceType == metadata.ServiceType_CN {
+				s.Adjust(func(cfg *ServiceConfig) {
+					cfg.CN.Frontend.UnixSocketAddress = ""
+				})
+			}
 		}
 
 		if c.options.preStart != nil {

@@ -435,7 +435,7 @@ func TestPhyPlanJSON(t *testing.T) {
 		InputRows:        1000,
 		OutputRows:       950,
 		InputSize:        2048,
-		InputBlocks:      0,
+		InputBlocks:      4,
 		OutputSize:       1900,
 		ScanBytes:        0,
 		NetworkIO:        600,
@@ -619,6 +619,7 @@ func TestPhyPlanJSON(t *testing.T) {
 	if !strings.Contains(jsonStr, `"MemorySize"`) {
 		t.Fatalf("physical plan JSON lost operator memory diagnostic: %s", jsonStr)
 	}
+	require.Contains(t, jsonStr, `"InputBlocks": 4`)
 	fmt.Printf("JSON: %s\n", jsonStr)
 
 	// Convert back from JSON
@@ -628,6 +629,8 @@ func TestPhyPlanJSON(t *testing.T) {
 		return
 	}
 	fmt.Printf("PhyPlan: %+v\n", phyPlanBack)
+	require.Equal(t, int64(4), phyPlanBack.LocalScope[0].RootOperator.OpStats.InputBlocks)
+	require.Equal(t, int64(4), phyPlanBack.RemoteScope[0].RootOperator.OpStats.InputBlocks)
 
 	//----------------------------------------------------
 	jsonStr2, err := PhyPlanToJSON(&phyPlanBack)

@@ -139,7 +139,8 @@ func (op *operator) Close() error {
 	if op.state == stopped &&
 		op.reset.svc == nil &&
 		op.reset.stopper == nil &&
-		op.reset.fs == nil {
+		op.reset.fs == nil &&
+		op.reset.rt == nil {
 		return nil
 	}
 
@@ -162,6 +163,10 @@ func (op *operator) Close() error {
 	if op.reset.fs != nil {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
+	}
+	if op.reset.rt != nil {
+		runtime.CompareAndDeleteServiceBasedRuntime(op.sid, op.reset.rt)
+		op.reset.rt = nil
 	}
 	op.reset.shutdownC = nil
 	op.state = stopped
@@ -186,7 +191,8 @@ func (op *operator) needsCleanup() bool {
 func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
-		op.reset.fs != nil
+		op.reset.fs != nil ||
+		op.reset.rt != nil
 }
 
 func (op *operator) Start() error {
@@ -216,8 +222,15 @@ func (op *operator) Start() error {
 	if err := op.cfg.validateClockConfiguration(); err != nil {
 		return err
 	}
-	if err := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType); err != nil {
-		return err
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
+	}
+	if authErr != nil {
+		return authErr
 	}
 	if op.serviceType == metadata.ServiceType_CN {
 		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
@@ -359,6 +372,9 @@ func (op *operator) startCNServiceLocked(
 	}
 	if op.testing {
 		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
 	}
 	s, err := cnservice.NewService(
 		&c,

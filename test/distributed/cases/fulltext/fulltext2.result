@@ -336,7 +336,7 @@ show create table test_table;
 test_table  ¦  CREATE TABLE `test_table` (
   `col1` int NOT NULL AUTO_INCREMENT,
   `col2` float DEFAULT NULL,
-  `col3` bool DEFAULT NULL,
+  `col3` boolean DEFAULT NULL,
   `col4` date DEFAULT NULL,
   `col5` varchar(255) DEFAULT NULL,
   `col6` text DEFAULT NULL,
@@ -443,7 +443,7 @@ select * from t1;
 show create table t1;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (
-  `col1` bool DEFAULT NULL,
+  `col1` boolean DEFAULT NULL,
   `col2` int NOT NULL,
   `col3` varchar(100) DEFAULT NULL,
   `col4` date DEFAULT NULL,
@@ -454,7 +454,7 @@ t1  ¦  CREATE TABLE `t1` (
   `col9` json DEFAULT NULL,
   `col10` text DEFAULT NULL,
   `col11` json DEFAULT NULL,
-  `col12` bool DEFAULT NULL,
+  `col12` boolean DEFAULT NULL,
   PRIMARY KEY (`col2`),
  FULLTEXT `f06`(`col9`)
 )

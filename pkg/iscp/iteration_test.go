@@ -33,6 +33,10 @@ type iscpLogBatch struct {
 	jobIDs     []uint64
 	jobSpecs   []string
 	jobStatuss []string
+	// watermarks mirrors the durable mo_iscp_log.watermark column, the
+	// consumption boundary collectChangesCtxForJobs reads. An omitted entry
+	// defaults to the zero TS a freshly registered row carries.
+	watermarks []string
 }
 
 func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
@@ -64,7 +68,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 		return result, nil
 	}
 
-	jobSpecs, prevStatuses, err := GetJobSpecs(
+	jobSpecs, prevStatuses, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -111,7 +115,7 @@ func TestGetJobSpecsEscapesJobNameLiteral(t *testing.T) {
 		return result, nil
 	}
 
-	jobSpecs, _, err := GetJobSpecs(
+	jobSpecs, _, _, err := GetJobSpecs(
 		context.Background(), "", nil, nil, nil, 0, 42,
 		[]string{jobName}, []uint64{101}, types.TS{},
 		[]*JobStatus{{}}, []uint64{3},
@@ -166,7 +170,7 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		return nil
 	}
 
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -285,7 +289,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				return nil
 			}
 
-			jobSpecs, prevStatuses, err := GetJobSpecs(
+			jobSpecs, prevStatuses, _, err := GetJobSpecs(
 				context.Background(),
 				"",
 				nil,
@@ -399,6 +403,7 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 			types.T_uint64.ToType(),
 			types.T_json.ToType(),
 			types.T_json.ToType(),
+			types.T_varchar.ToType(),
 		},
 		mp,
 	)
@@ -408,8 +413,21 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 		require.NoError(t, executor.AppendFixedRows(memRes, 1, batch.jobIDs))
 		require.NoError(t, executor.AppendBytesRows(memRes, 2, encodeJSONRows(t, batch.jobSpecs)))
 		require.NoError(t, executor.AppendBytesRows(memRes, 3, encodeJSONRows(t, batch.jobStatuss)))
+		require.NoError(t, executor.AppendStringRows(memRes, 4, iscpLogWatermarks(batch)))
 	}
 	return memRes.GetResult(), mp
+}
+
+func iscpLogWatermarks(batch iscpLogBatch) []string {
+	watermarks := make([]string, len(batch.jobNames))
+	zero := types.TS{}.ToString()
+	for i := range watermarks {
+		watermarks[i] = zero
+		if i < len(batch.watermarks) && batch.watermarks[i] != "" {
+			watermarks[i] = batch.watermarks[i]
+		}
+	}
+	return watermarks
 }
 
 func mustMarshalJobSpec(t *testing.T, indexName string) string {
@@ -573,7 +591,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("update affected 0 rows for job")
 	}
 
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,

@@ -83,6 +83,29 @@ func TestPersistedFormatCatalogCompatibility(t *testing.T) {
 	}
 }
 
+func TestPersistedMediumIntCatalogType(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"CREATE TABLE mediumint_catalog (m MEDIUMINT, mu MEDIUMINT UNSIGNED, display_int INT(24))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
+	require.NoError(t, err)
+	var loaded planpb.TableDef
+	require.NoError(t, proto.Unmarshal(data, &loaded))
+	require.Len(t, loaded.Cols, 4, "the optimizer adds its hidden row identifier")
+	require.Equal(t, int32(types.T_int32), loaded.Cols[0].Typ.Id)
+	require.Equal(t, int32(24), loaded.Cols[0].Typ.Width)
+	require.Equal(t, int32(types.T_uint32), loaded.Cols[1].Typ.Id)
+	require.Equal(t, int32(24), loaded.Cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_int32), loaded.Cols[2].Typ.Id)
+	require.Equal(t, int32(32), loaded.Cols[2].Typ.Width,
+		"INT(24) display width must remain distinct from MEDIUMINT domain metadata")
+}
+
 func TestPersistedFormatRoundingAndProjection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select format(a, 0)", 1)

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -82,6 +83,64 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
+func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
+			Args: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			},
+		}},
+	}
+	// A UNION branch can widen only this outer metadata while retaining the
+	// assignment CAST's width-24 target argument.
+	expr.Typ.Width = 32
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.MediumIntAssignmentBounds)
+	version, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion110), version)
+
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	client.version = defines.MORPCVersion109
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 110")
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 110")
+
+	client.version = defines.MORPCVersion110
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+}
+
 func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
@@ -123,4 +182,69 @@ func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+}
+
+func TestDateNumericProtocolPlacementSendAndReceive(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "dayofyear", []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}})
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.DateNumericResultContracts)
+	require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features))
+	features.MediumIntAssignmentBounds = true
+	require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features), "compose with older contracts by maximum")
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	place := func(version int64, want plan2.ExecType) {
+		client.version = version
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		require.Equal(t, want, c.execType)
+	}
+	place(defines.MORPCVersion111, plan2.ExecTypeAP_ONECN)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 112")
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
+	place(defines.MORPCVersion112, plan2.ExecTypeAP_MULTICN)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	client.version = defines.MORPCVersion111
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 112", "send rechecks changed endpoint capability")
+	client.customResponse = true
+	client.response = &query.Response{}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 112", "unknown actual endpoint fails closed")
+	require.Equal(t, client.calls, client.releases)
+
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		validationErr := validateRemoteExpressionPipelineProtocol(c.proc, p)
+		_, decodeErr := decodeScope(data, c.proc, true, nil)
+		if version == defines.MORPCVersion111 {
+			require.ErrorContains(t, validationErr, "version 112")
+			require.ErrorContains(t, decodeErr, "version 112")
+		} else {
+			require.NoError(t, validationErr)
+			require.NoError(t, decodeErr)
+		}
+	}
+	// The new feature must not replace the one-argument WEEK session snapshot.
+	week := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 0)}, Args: expr.GetF().Args}}}
+	weekFeatures, err := planpb.RequiredRemoteExpressionFeatures(week)
+	require.NoError(t, err)
+	require.True(t, weekFeatures.WeekSessionDefault)
+	c.proc.Base.SessionInfo.DefaultWeekFormatSet = false
+	require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, weekFeatures), "session snapshot")
+	c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
+	require.NoError(t, validateRemoteExpressionFeatures(c.proc, weekFeatures))
 }
