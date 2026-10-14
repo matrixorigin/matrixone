@@ -26,6 +26,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
@@ -34,9 +35,16 @@ import (
 
 type embeddedAdmissionRecorder struct {
 	SiriusBackend
-	request   SiriusPrepareRequest
-	err       error
-	execution SiriusExecution
+	request      SiriusPrepareRequest
+	err          error
+	execution    SiriusExecution
+	capabilities uint64
+	capReads     int
+}
+
+func (b *embeddedAdmissionRecorder) Capabilities() uint64 {
+	b.capReads++
+	return b.capabilities
 }
 
 func (b *embeddedAdmissionRecorder) Prepare(_ context.Context, request SiriusPrepareRequest) (SiriusExecution, error) {
@@ -80,6 +88,55 @@ func TestEmbeddedSiriusAdmissionBindsWithoutStartingReaders(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(backend.request.Plan, &wire))
 	require.Equal(t, "__sirius_embedded_v1", wire.Relations[0].GetRoot().Input.GetRead().GetNamedTable().Names[0])
 	c.siriusRead = nil
+	for _, capabilities := range []uint64{11, 31} {
+		backend.capabilities, backend.capReads = capabilities, 0
+		backend.request = SiriusPrepareRequest{}
+		query.Nodes[0].TableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 8}
+		offloaded, err = c.compileEmbeddedSiriusRead(ctx, plan, runtime)
+		require.Equal(t, 1, backend.capReads, "one immutable capability snapshot per admission")
+		if capabilities == 11 {
+			require.True(t, substrait.IsNotEligible(err))
+			require.False(t, offloaded)
+			require.Empty(t, backend.request.Plan, "unsupported type must fail before native preparation or reader I/O")
+		} else {
+			require.NoError(t, err)
+			require.True(t, offloaded)
+			require.Equal(t, capabilities, backend.request.NativeCapabilities)
+			require.Equal(t, "mo-exact-decimal-v1", backend.request.NumericProfile)
+			require.NoError(t, proto.Unmarshal(backend.request.Plan, &wire))
+			require.Equal(t, int64(256), wire.Relations[0].GetRoot().Input.GetRead().BaseSchema.Struct.Types[0].GetUserDefined().TypeParameters[0].GetInteger())
+			c.siriusRead = nil
+		}
+		require.Zero(t, eng.buildBlockReadersCalls)
+	}
+	t.Run("shared input occurrences", func(t *testing.T) {
+		shared := &planpb.Query{StmtType: planpb.Query_SELECT, Headings: []string{"left", "right"}, Steps: []int32{1, 4}, Nodes: []*planpb.Node{
+			query.Nodes[0],
+			{NodeId: 1, NodeType: planpb.Node_SINK, Children: []int32{0}},
+			{NodeId: 2, NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeId: 3, NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeId: 4, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 3}},
+		}}
+		sharedPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: shared}}
+		backend.request = SiriusPrepareRequest{}
+		offloaded, err := c.compileEmbeddedSiriusRead(ctx, sharedPlan, runtime)
+		require.NoError(t, err)
+		require.True(t, offloaded)
+		require.Len(t, backend.request.Reads, 2)
+		for i, read := range backend.request.Reads {
+			require.Equal(t, uint64(i+1), read.BindingID)
+			require.NotNil(t, read.Producer)
+			require.Equal(t, "t", read.Table)
+			require.Equal(t, int32(types.T_decimal256), read.Columns[0].Type.Id)
+		}
+		require.Zero(t, eng.buildBlockReadersCalls)
+		require.Equal(t, []int32{1, 4}, shared.Steps)
+		require.Len(t, shared.Nodes, 5)
+		var sharedWire spb.Plan
+		require.NoError(t, proto.Unmarshal(backend.request.Plan, &sharedWire))
+		require.Len(t, sharedWire.Relations, 1)
+		c.siriusRead = nil
+	})
 	backend.err = errors.New("native prepare rejected")
 	offloaded, err = c.compileEmbeddedSiriusRead(ctx, plan, runtime)
 	require.ErrorIs(t, err, backend.err)

@@ -1037,13 +1037,17 @@ func TestRestartStartFailureReleasesClaimForRetry(t *testing.T) {
 		},
 	}).Handle(context.Background()))
 
-	require.Eventually(t, func() bool {
-		got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
-		return len(got) == 1 &&
-			got[0].TaskStatus == task.TaskStatus_RestartRequested &&
-			got[0].TaskRunner == "" &&
-			got[0].LastHeartbeat.IsZero() &&
-			got[0].Details.Error == "CDC restart startup failed"
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		got, err := store.QueryDaemonTask(ctx, WithTaskIDCond(EQ, dt.ID))
+		require.NoError(c, err)
+		require.Len(c, got, 1)
+		require.Equal(c, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+		require.Empty(c, got[0].TaskRunner)
+		require.True(c, got[0].LastHeartbeat.IsZero())
+		require.NotNil(c, got[0].Details)
+		require.Equal(c, "CDC restart startup failed", got[0].Details.Error)
 	}, time.Second, time.Millisecond)
 	require.True(t, restartAdmission.Load())
 }
@@ -1277,11 +1281,14 @@ func TestRunDaemonTask(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
-func (r *taskRunner) testRegisterExecutor(t *testing.T, code task.TaskCode, started *atomic.Bool) {
+func (r *taskRunner) testRegisterExecutor(t *testing.T, code task.TaskCode, started chan<- struct{}) {
 	r.RegisterExecutor(code, func(ctx context.Context, task task.Task) error {
 		ar := newMockActiveRoutine()
 		assert.NoError(t, r.Attach(context.Background(), 1, ar))
-		started.Store(true)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		for {
 			select {
 			case <-ar.cancelC:
@@ -1303,46 +1310,28 @@ func (r *taskRunner) testRegisterExecutor(t *testing.T, code task.TaskCode, star
 	})
 }
 
+func waitStarted(t *testing.T, started <-chan struct{}, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-started:
+	case <-timer.C:
+		t.Fatal("start executor timeout")
+	}
+}
+
 func expectTaskStatus(
 	t *testing.T, store TaskStorage, dt task.DaemonTask, before task.TaskStatus, after task.TaskStatus,
 ) {
 	dt.TaskStatus = before
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	timer := time.NewTimer(time.Second * 5)
-	defer timer.Stop()
-	ticker := time.NewTicker(time.Millisecond * 10)
-	defer ticker.Stop()
-FOR:
-	for {
-		select {
-		case <-timer.C:
-			panic("daemon task update timeout")
-		case <-ticker.C:
-			tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
-			assert.Equal(t, 1, len(tasks))
-			tk := tasks[0]
-			if tk.TaskStatus == after {
-				break FOR
-			}
-		}
-	}
-}
-
-func waitStarted(started *atomic.Bool, timeout time.Duration) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	ticker := time.NewTicker(time.Millisecond * 10)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-timer.C:
-			panic("start executor timeout")
-		case <-ticker.C:
-			if started.Load() {
-				return
-			}
-		}
-	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		tasks, err := store.QueryDaemonTask(context.Background(), WithTaskIDCond(EQ, dt.ID))
+		require.NoError(c, err, "query daemon task %d", dt.ID)
+		require.Len(c, tasks, 1)
+		require.Equal(c, after, tasks[0].TaskStatus, "daemon task %d", dt.ID)
+	}, 5*time.Second, 10*time.Millisecond, "daemon task did not reach %s", after)
 }
 
 func TestPauseResumeDaemonTask(t *testing.T) {
@@ -1356,9 +1345,9 @@ func TestPauseResumeDaemonTask(t *testing.T) {
 				dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 				dt.Metadata.Executor = code
 				mustAddTestDaemonTask(t, store, 1, dt)
-				var started atomic.Bool
-				r.testRegisterExecutor(t, code, &started)
-				waitStarted(&started, time.Second*5)
+				started := make(chan struct{}, 1)
+				r.testRegisterExecutor(t, code, started)
+				waitStarted(t, started, time.Second*5)
 
 				expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
 				expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
@@ -1372,9 +1361,9 @@ func TestPauseTaskHandleIdempotent(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
-		waitStarted(&started, time.Second*5)
+		started := make(chan struct{}, 1)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, started)
+		waitStarted(t, started, time.Second*5)
 
 		localDT, ok := r.getDaemonTask(1)
 		require.True(t, ok)
@@ -1649,9 +1638,9 @@ func TestCancelDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
-		waitStarted(&started, time.Second*5)
+		started := make(chan struct{}, 1)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, started)
+		waitStarted(t, started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_CancelRequested, task.TaskStatus_Canceled)
 	}, WithRunnerParallelism(1),
@@ -1949,9 +1938,9 @@ func TestRestartDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
-		waitStarted(&started, time.Second*5)
+		started := make(chan struct{}, 1)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, started)
+		waitStarted(t, started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
 	}, WithRunnerParallelism(1),
@@ -1965,9 +1954,9 @@ func TestRestartDaemonTaskWithEmptyRunner(t *testing.T) {
 		// Create a task with empty TaskRunner (simulating newly created task)
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
 		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
-		waitStarted(&started, time.Second*5)
+		started := make(chan struct{}, 1)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, started)
+		waitStarted(t, started, time.Second*5)
 
 		// Update task status to RestartRequested (TaskRunner still empty)
 		dt.TaskStatus = task.TaskStatus_RestartRequested
@@ -1990,8 +1979,7 @@ func TestRestartDaemonTaskTakesOverStaleForeignRunner(t *testing.T) {
 		dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, make(chan struct{}, 1))
 		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
 
 		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))

@@ -24,11 +24,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -67,10 +69,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -196,6 +201,189 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 
 	err = doComQuery(ses, execCtx, &UserInput{sql: query})
 	require.ErrorContains(t, err, "first statement failed")
+}
+
+func TestDoComQueryStageCatalogErrorOverridesStaleCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(nil)
+	ses.SetCmd(COM_QUERY)
+	ctx, recordStubs := mockRecordStatement(ctx)
+	defer recordStubs.Reset()
+
+	const query = "select 1"
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, query, 1)
+	require.NoError(t, err)
+	stageURL := &url.URL{Scheme: "file", Path: "/stale"}
+	catalogErr := moerr.NewBadConfigf(ctx, "stage statement_stage is disabled")
+	lookups := 0
+	catalogExec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Contains(t, sql, "stage_name = 'statement_stage'")
+		lookups++
+		return executor.Result{}, catalogErr
+	})
+	rt := runtime.ServiceRuntime(ses.GetService())
+	oldExec, hadOldExec := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+	defer func() {
+		if hadOldExec {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, oldExec)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+		}
+	}()
+
+	cw := mock_frontend.NewMockComputationWrapper(ctrl)
+	cw.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+	cw.EXPECT().Plan().Return(nil).AnyTimes()
+	cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(*ExecCtx, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+		_, err := stageutil.UrlToStageDef("stage://statement_stage/file.txt", ses.GetProc())
+		return nil, err
+	}).Times(2)
+	cw.EXPECT().Free().Times(2)
+	wrapperStubs := gostub.Stub(&GetComputationWrapper, func(
+		*ExecCtx, string, string, engine.Engine, *process.Process, *Session,
+	) ([]ComputationWrapper, error) {
+		return []ComputationWrapper{cw}, nil
+	})
+	defer wrapperStubs.Reset()
+
+	// A stale entry must not bypass the catalog, including after the previous
+	// statement failed. Use the real resolver rather than checking map contents.
+	txnOp := ses.txnHandler.txnOp
+	for range 2 {
+		// Restore the fixture's transaction for the next autocommit request.
+		ses.txnHandler.txnOp = txnOp
+		ses.txnHandler.txnCtx = ctx
+		ses.GetProc().GetStageCache().Set("statement_stage", stage.StageDef{
+			Name: "statement_stage", Url: stageURL, Status: "enabled",
+		})
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		require.ErrorIs(t, err, catalogErr)
+	}
+	require.Equal(t, 2, lookups)
+}
+
+func TestFrontendStatementBoundaryBeforeDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		outer      tree.Statement
+		effective  tree.Statement
+		binary     bool
+		derived    bool
+		failIncr   bool
+		panicIncr  bool
+		wantUpdate bool
+	}{
+		{"direct", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, false, false, true},
+		{"text_execute", &tree.Execute{}, &tree.DataBranchMerge{}, false, false, false, false, true},
+		{"binary_execute", &tree.PrepareStmt{}, &tree.DataBranchMerge{}, true, false, false, false, true},
+		{"engine", &tree.Select{}, &tree.Select{}, false, false, false, false, false},
+		{"derived", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, true, false, false, false},
+		{"increment_error", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, true, false, false},
+		{"increment_panic", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.ReplaceDerivedStmt(tc.derived)
+			ctx := statistic.ContextWithStatsInfo(t.Context(), statistic.NewStatsInfo())
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			op.EXPECT().Status().Return(txn.TxnStatus_Active)
+			var events []string
+			cause := errors.New("boundary increment failed")
+			if !tc.derived {
+				workspace.EXPECT().IncrStatementID(gomock.Any(), false).DoAndReturn(func(context.Context, bool) error {
+					events = append(events, "increment")
+					if tc.panicIncr {
+						panic(cause)
+					}
+					if tc.failIncr {
+						return cause
+					}
+					return nil
+				})
+			}
+			if tc.wantUpdate {
+				workspace.EXPECT().UpdateSnapshotWriteOffset().Do(func() { events = append(events, "boundary") })
+			}
+			cw := mock_frontend.NewMockComputationWrapper(ctrl)
+			stop := errors.New("reached dispatch")
+			if !tc.derived && !tc.failIncr && !tc.panicIncr {
+				if tc.binary {
+					cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(any, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+						events = append(events, "dispatch")
+						return nil, stop
+					})
+				} else {
+					cw.EXPECT().Plan().DoAndReturn(func() *plan0.Plan {
+						events = append(events, "dispatch")
+						panic(stop)
+					})
+				}
+			}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.GetProc(), stmt: tc.outer,
+				effectiveTxnStatement: tc.effective, input: &UserInput{isBinaryProtExecute: tc.binary}, cw: cw}
+			if tc.derived {
+				require.NoError(t, executeStmtWithIncrStmt(ses, nil, execCtx, op))
+				require.Empty(t, events)
+			} else if tc.failIncr || tc.panicIncr {
+				require.ErrorContains(t, executeStmtWithIncrStmt(ses, nil, execCtx, op), cause.Error())
+				require.Equal(t, []string{"increment"}, events)
+			} else {
+				if tc.binary {
+					require.ErrorIs(t, executeStmtWithIncrStmt(ses, nil, execCtx, op), stop)
+				} else {
+					require.PanicsWithValue(t, stop, func() { _ = executeStmtWithIncrStmt(ses, nil, execCtx, op) })
+				}
+				want := []string{"increment", "dispatch"}
+				if tc.wantUpdate {
+					want = []string{"increment", "boundary", "dispatch"}
+				}
+				require.Equal(t, want, events)
+			}
+		})
+	}
+}
+
+func TestDerivedExecutionRestoresBorrowedStatementOwnership(t *testing.T) {
+	for _, alreadyBorrowed := range []bool{false, true} {
+		for _, panics := range []bool{false, true} {
+			t.Run(fmt.Sprintf("borrowed=%v/panic=%v", alreadyBorrowed, panics), func(t *testing.T) {
+				ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				ses.ReplaceDerivedStmt(true)
+				proc := ses.GetProc()
+				proc.SetIncrStatementDisabled(alreadyBorrowed)
+				cause := moerr.NewTxnNeedRetryNoCtx()
+				cw := mock_frontend.NewMockComputationWrapper(ctrl)
+				cw.EXPECT().Plan().Return(nil).AnyTimes()
+				cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(any, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+					require.True(t, proc.IncrStatementDisabled(), "dispatch must preserve the caller's statement")
+					if panics {
+						panic(cause)
+					}
+					return nil, cause
+				})
+				execCtx := &ExecCtx{reqCtx: ctx, proc: proc, ses: ses, input: &UserInput{}, cw: cw, stmt: &tree.Select{}}
+				if panics {
+					require.PanicsWithValue(t, cause, func() { _ = executeStmtWithTxn(ses, nil, execCtx) })
+				} else {
+					require.ErrorIs(t, executeStmtWithTxn(ses, nil, execCtx), cause)
+				}
+				require.Equal(t, alreadyBorrowed, proc.IncrStatementDisabled(), "restore ownership for the next statement")
+			})
+		}
+	}
 }
 
 func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {
@@ -3850,7 +4038,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -3873,7 +4061,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 }
 
 func TestGetComputationWrapperBypassesCacheForSetExpression(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sysVars := make(map[string]interface{})
 	for name, sysVar := range gSysVarsDefs {
 		sysVars[name] = sysVar.Default
@@ -3911,7 +4099,7 @@ func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 	execCtx.input = &UserInput{sql: "select /*+ SET_VAR(query_max_workers=1) */ 1;; " +
@@ -3946,22 +4134,33 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	execCtx := newTestExecCtx(ctx, ctrl)
-	execCtx.ses = ses
-	const sql = "/*!40101 use mysql_ddl_test_db_3; */"
-	execCtx.input = &UserInput{sql: sql}
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	for _, tt := range []struct{ sql, record string }{
+		{"/*!40101 use mysql_ddl_test_db_3; */", "/*!40101 use mysql_ddl_test_db_3;*/"},
+		{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin, t.rank FROM t;*/"},
+		{"/*! SELECT t.`begin`, t.rank FROM t; */", "/*! SELECT t.`begin`, t.rank FROM t;*/"},
+		{"SELECT t./*! begin, t.rank FROM t; */", "SELECT t./*! begin, t.rank FROM t;*/"},
+	} {
+		t.Run(tt.sql, func(t *testing.T) {
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = &UserInput{sql: tt.sql}
 
-	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
-	require.NoError(t, err)
-	require.Len(t, cws, 1)
-	defer cws[0].Free()
-
-	require.Equal(t, sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
-	records, err := sqlForRecordByStatement(ctx, sql)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Contains(t, records[0], "use mysql_ddl_test_db_3")
+			cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+			require.NoError(t, err)
+			defer func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			}()
+			require.Len(t, cws, 1)
+			require.Equal(t, tt.sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
+			require.Equal(t, []string{constant.ExternSql}, execCtx.input.sqlSourceType)
+			records, err := sqlForRecordByStatement(ctx, tt.sql)
+			require.NoError(t, err)
+			require.Equal(t, []string{tt.record}, records)
+		})
+	}
 }
 
 func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
@@ -3969,7 +4168,7 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	tests := []struct {
 		name string
@@ -4024,7 +4223,6 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
@@ -4032,7 +4230,7 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(false)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
@@ -4212,7 +4410,7 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 	ses := newTestSession(t, ctrl)
 	ses.planCache = newPlanCache(1)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sql := `/*+ {"remapdb":{"src":"first_db"}} */ select * from src.t; ` +
 		`/*+ {"remapdb":{"src":"second_db"}} */ /* cloud_nonuser */ select * from src.t`
 	input := &UserInput{sql: sql}
@@ -4273,7 +4471,7 @@ func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
 			ses.planCache = newPlanCache(2)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := &UserInput{sql: testCase.cachedSQL}
 			input.genHash()
 
@@ -4368,7 +4566,7 @@ func TestGetComputationWrapperRestoresCachedPlanGenerationSnapshot(t *testing.T)
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.planCache = newPlanCache(1)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := &UserInput{sql: "select 1"}
 	input.genHash()
 	stmt := &trackedStatement{}
@@ -4567,7 +4765,7 @@ func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	stmt := &tree.Select{}
 	prepareString := tree.NewPrepareString("stmt1", "select 1")
 	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), prepareString)
@@ -4610,7 +4808,7 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 	convey.Convey("GetComputationWrapper show global variables", t, func() {
 		sql := "show global variables like 'interactive_timeout'"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -4643,7 +4841,7 @@ func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
 	convey.Convey("GetComputationWrapper internal commands", t, func() {
 		db, user := "T", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -4782,12 +4980,16 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
 		ses.respr = &MysqlResp{mysqlRrWr: proto}
 		ses.mrs = &MysqlResultSet{}
+		// This fixture has no role catalog. Model its known empty role policy
+		// while still exercising capture at the PREPARE producer boundary.
+		ses.ruleCache = make(map[string]string)
 		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: ses}
 
 		convey.So(handleFun(ses), convey.ShouldBeNil)
@@ -4964,23 +5166,32 @@ func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
 func TestHandlePrepareStmtExecutableCommentDelimiter(t *testing.T) {
 	setSessionAlloc("", NewLeakCheckAllocator())
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	const sql = "prepare fromx /*! from */ select 1"
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	execCtx := newTestExecCtx(ctx, ctrl)
-
-	runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
-		execCtx.resper = ses.respr
-		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
-		if err != nil {
-			return err
-		}
-		require.Equal(t, "select 1", prepared.Sql)
-		return nil
-	})
+	const inner = "SELECT t.begin, t.rank FROM (SELECT 7 AS `begin`, 9 AS `rank`) t"
+	for _, tc := range []struct{ sql, want string }{
+		{"prepare fromx /*! from */ select 1", "select 1"},
+		{"/*! PREPARE fromx FROM " + inner + " */", inner},
+		{"PREPARE fromx /*! FROM " + inner + " */", inner},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+			runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
+				defer ses.Close()
+				execCtx.resper = ses.respr
+				prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), tc.sql)
+				if err != nil {
+					return err
+				}
+				require.Equal(t, tc.want, prepared.Sql)
+				stored, err := ses.GetPrepareStmt(ctx, "fromx")
+				require.NoError(t, err)
+				require.Same(t, prepared, stored)
+				return nil
+			})
+		})
+	}
 }
 
 func TestHandlePrepareStmtQuotedCommentTerminator(t *testing.T) {
@@ -5058,6 +5269,48 @@ func TestExtractPrepareStmtSQL(t *testing.T) {
 			sql:  "prepare fromx /*! from */ /* inner */ select 3",
 			want: "/* inner */ select 3",
 		},
+		{
+			name: "qualified BEGIN in complete executable PREPARE",
+			sql:  "/*! PREPARE p FROM SELECT t.begin, t.rank FROM t */",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "qualified BEGIN after executable delimiter",
+			sql:  "PREPARE p /*! FROM SELECT t.begin, t.rank FROM t */",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "ordinary PREPARE control",
+			sql:  "PREPARE p FROM SELECT t.begin, t.rank FROM t",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! PREPARE p FROM SELECT t.`begin`, t.rank FROM t */",
+			want: "SELECT t.`begin`, t.rank FROM t",
+		},
+		{
+			name: "qualification across whitespace and comment",
+			sql:  "/*! PREPARE p FROM SELECT t. /* component */ begin, t.rank FROM t */",
+			want: "SELECT t. /* component */ begin, t.rank FROM t",
+		},
+		{
+			name: "wrapper closes mid-query",
+			sql:  "PREPARE p /*! FROM SELECT t.begin, */ t.rank FROM t",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name:    "ansi quoted BEGIN",
+			sql:     `/*! PREPARE p FROM SELECT t."begin", t.rank FROM t */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    `SELECT t."begin", t.rank FROM t`,
+		},
+		{
+			name:    "NO_BACKSLASH_ESCAPES quoted terminator",
+			sql:     `/*! PREPARE p FROM SELECT t.begin, 'x\*/y' FROM t */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    `SELECT t.begin, 'x\*/y' FROM t`,
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -5075,6 +5328,8 @@ func TestExtractPrepareStmtSQLRejectsInvalidInput(t *testing.T) {
 		"prepare",
 		"prepare stmt select 1",
 		"prepare stmt /*! from select 1",
+		"/*! PREPARE p FROM SELECT t.begin, 'unterminated */",
+		"/*! PREPARE p FROM SELECT begin, t.rank FROM t */",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := extractPrepareStmtSQL(context.Background(), sql, "")
@@ -5090,6 +5345,7 @@ func TestHandlePrepareStmtStoresRemapPolicy(t *testing.T) {
 	require.NoError(t, err)
 	ctrl := gomock.NewController(t)
 	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.input = &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true}}
 	execCtx.remapDb = map[string]string{"src": "prepared_db"}
 
 	runTestHandle("handlePrepareStmt stores remap", t, func(ses *Session) error {
@@ -5719,6 +5975,84 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
+func TestExecuteStmtFetchRejectsInvalidatedPreparedStatement(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(274),
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			owner:  ses,
+			bytes:  1,
+		},
+	}
+	ses.preparedCursorBytes.Store(1)
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 274)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrNeedReprepare))
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestResetInvalidatedCleansCursor(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	stmtID := uint32(276)
+	stmt := &PrepareStmt{
+		Name:                getPrepareStmtName(stmtID),
+		getFromSendLongData: map[int]struct{}{0: {}},
+		cursor: &preparedStmtCursor{
+			owner:  ses,
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			bytes:  1,
+		},
+	}
+	ses.preparedCursorBytes.Store(1)
+	stmt.invalidateRewritePolicy()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmt.Name, stmt))
+
+	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmt.Name))))
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	require.Empty(t, stmt.getFromSendLongData)
+
+	_, err := ses.GetPrepareStmt(ctx, stmt.Name)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+}
+
+func TestParseStmtExecuteRejectsInvalidatedPreparedStatement(t *testing.T) {
+	stmtID := uint32(275)
+	stmt := &PrepareStmt{Name: getPrepareStmtName(stmtID)}
+	ses := &Session{prepareStmts: map[string]*PrepareStmt{strings.ToLower(stmt.Name): stmt}}
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	_, got, err := parseStmtExecute(context.Background(), ses, data)
+	require.Error(t, err)
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+}
+
 func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
 	var status uint16
 	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {
@@ -5969,6 +6303,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 			require.GreaterOrEqual(t, estimated, uint64(len(tc.text)+32))
 		})
 	}
+
 }
 
 func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
@@ -7056,7 +7391,8 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	staleExecCtx := &ExecCtx{reqCtx: context.Background()}
-	currentExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: testutil.NewProc(t)}
+	currentExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: testutil.NewProc(t),
+		input: &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true}}}
 	ses.GetTxnCompileCtx().SetExecCtx(staleExecCtx)
 
 	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
@@ -7079,6 +7415,111 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
+}
+
+func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	oldBuild := buildPlanWithAuthorization
+	defer func() { buildPlanWithAuthorization = oldBuild }()
+	stop := moerr.NewInternalError(ctx, "stop at planning boundary")
+	for _, producer := range []string{"typed", "string", "variable"} {
+		t.Run(producer, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			ses.ruleCache = map[string]string{"owner.t": "select id from owner.t where tenant = 1"}
+			ses.rewritePolicyGeneration = 7
+			input := &UserInput{sql: "procedure body"}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input, remapDb: map[string]string{"saved": "db"}}
+			planned := false
+			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+				planned = true
+				policy := execCtx.input.rewritePolicy
+				require.True(t, policy.captured)
+				require.Equal(t, uint64(7), policy.generation)
+				require.False(t, policy.sessionEnabled)
+				selected := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select)
+				require.NotNil(t, selected.RewriteOption)
+				layers := selected.RewriteOption.Rewrites["owner.t"]
+				require.Len(t, layers, 1)
+				require.Contains(t, tree.String(layers[0].Stmt, dialect.MYSQL), "where tenant = 1")
+				return nil, stop
+			}
+			var err error
+			switch producer {
+			case "typed":
+				outer, parseErr := parsers.ParseOne(ctx, dialect.MYSQL, "prepare p from select id from owner.t", 1)
+				require.NoError(t, parseErr)
+				defer outer.Free()
+				_, err = doPrepareStmtInSession(execCtx, ses, ses, outer.(*tree.PrepareStmt), "prepare p from select id from owner.t", nil)
+			case "string":
+				_, err = doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select id from owner.t"})
+			case "variable":
+				require.NoError(t, ses.SetUserDefinedVar("sql", "select id from owner.t", ""))
+				_, err = doPrepareVarInSession(ses, ses, execCtx, &tree.PrepareVar{Name: "p", Var: "sql"})
+			}
+			require.ErrorIs(t, err, stop)
+			require.True(t, planned)
+			require.Empty(t, ses.prepareStmts)
+			require.Same(t, input, execCtx.input)
+			require.Nil(t, input.rewritePolicy)
+			require.False(t, execCtx.rewriteEnabled)
+			require.Equal(t, map[string]string{"saved": "db"}, execCtx.remapDb)
+		})
+	}
+
+	t.Run("captured request keeps frozen policy", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		ses.ruleCache = map[string]string{"owner.t": "select id from owner.t where tenant = 2"}
+		policy := &rewritePolicySnapshot{captured: true, enabled: true, generation: 3}
+		input := &UserInput{rewritePolicy: policy}
+		execCtx := &ExecCtx{reqCtx: ctx, input: input, rewriteEnabled: true,
+			sqlOfStmt: `/*+ {"rewrites":{"owner.t":"select id from owner.t where tenant = 1"}} */ prepare p from 'select id from owner.t'`}
+		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+			require.Same(t, input, execCtx.input)
+			require.Same(t, policy, execCtx.input.rewritePolicy)
+			layers := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select).RewriteOption.Rewrites["owner.t"]
+			require.Len(t, layers, 1, "do not add the current role as a second policy layer")
+			require.Contains(t, tree.String(layers[0].Stmt, dialect.MYSQL), "where tenant = 1")
+			return nil, stop
+		}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select id from owner.t"})
+		require.ErrorIs(t, err, stop)
+	})
+
+	t.Run("capture failure prevents planning and registration", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		bh := &backgroundExecTest{}
+		bh.init()
+		failure := moerr.NewInternalError(ctx, "role catalog unavailable")
+		bh.sql2err[getSqlForInheritedRoleIDsForRuleCache(0)] = failure
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
+		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement) (*plan.Plan, error) {
+			t.Fatal("planning must not run after capture fails")
+			return nil, nil
+		}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select 1"})
+		require.ErrorIs(t, err, failure)
+		require.Empty(t, ses.prepareStmts)
+		require.Nil(t, execCtx.input)
+	})
+
+	t.Run("unproven materialized input is rejected", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{reqCtx: ctx, input: &UserInput{rewritePolicyMaterialized: true}}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select 1"})
+		require.ErrorContains(t, err, "without a captured owner policy")
+		require.Empty(t, ses.prepareStmts)
+	})
+
+	t.Run("common constructor requires proof", func(t *testing.T) {
+		_, err := createPrepareStmtInSession(&ExecCtx{reqCtx: ctx}, nil, nil, "", nil, nil)
+		require.ErrorContains(t, err, "requires a captured owner policy before planning")
+	})
 }
 
 type preparedViewCompilerContext struct {
@@ -7204,6 +7645,7 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 		execCtx.resper = ses.respr
 		execCtx.rewriteEnabled = true
 		execCtx.sqlOfStmt = outerSQL
+		execCtx.input = &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true, enabled: true, sessionEnabled: true}}
 		ses.SetSql(outerSQL)
 		stmt := tree.NewPrepareString("inline_view", innerSQL)
 		defer stmt.Free()
@@ -8156,7 +8598,7 @@ func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
 	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
-	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot())
+	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot(), -1)
 	defer h.Free()
 	require.Nil(t, h.jsonBytes)
 	require.Nil(t, h.buffer)
@@ -8490,6 +8932,38 @@ func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
 	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
 	require.NoError(t, err)
 	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
+	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
+	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
+}
+
+func TestWriteExplainResultSetsStableJSONMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	query := &plan0.Query{
+		StmtType: plan0.Query_SELECT,
+		Nodes:    []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps:    []int32{0},
+	}
+	stmt := tree.NewExplainStmt(&tree.Select{}, "json")
+	stmt.Options = []tree.OptionElem{{Name: tree.FormatOption, Value: "json"}}
+
+	err := writeExplainResult(
+		ctx,
+		ses,
+		stmt,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		&explain.ExplainOptions{Format: explain.EXPLAIN_FORMAT_JSON},
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
+	require.NoError(t, err)
+	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, "EXPLAIN", mysqlColumn.Name())
 	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
 	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
 	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
@@ -9034,6 +9508,12 @@ func Test_getSqlType(t *testing.T) {
 			want []string
 		}{
 			{"select 1; /* save_result */ select 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t.begin, t.rank FROM t; /* cloud_nonuser */ SELECT 2", []string{constant.ExternSql, constant.CloudNoUserSql}},
+			{"SELECT t.`begin`, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t. /* first */ /* second */ begin, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t./*! begin */, t.rank FROM t; /* cloud_nonuser */ SELECT 2", []string{constant.ExternSql, constant.CloudNoUserSql}},
+			{"/*! SELECT t.begin, t.rank FROM t; */ /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
 			{"/*\tcloud_user\n*/ select 1; /*\nsave_result\t*/ select 2; /*\tcloud_nonuser\n*/ select 3", []string{constant.CloudUserSql, constant.CloudUserSql, constant.CloudNoUserSql}},
 			{"/* SAVE_RESULT */ select 'cloud_nonuser'; /* ordinary */ select 2", []string{constant.ExternSql, constant.ExternSql}},
 			{"/* benign */; select 1; ; select 2", []string{constant.ExternSql, constant.ExternSql}},
@@ -9087,6 +9567,25 @@ func Test_getSqlType(t *testing.T) {
 				require.Equal(t, []string{constant.InternalSql}, input.sqlSourceType)
 				input.setSqlSourceTypes(ses, []string{constant.CloudUserSql, constant.ExternSql})
 				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, input.sqlSourceType)
+			})
+		}
+	})
+	t.Run("qualified statement source markers", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql, mode string
+			want      string
+		}{
+			{"SELECT t.begin, t.rank FROM t /* save_result */", "", constant.CloudUserSql},
+			{"SELECT t.begin, t.rank FROM t /* cloud_nonuser */", "", constant.CloudNoUserSql},
+			{"SELECT t. /* first */ -- second\n begin, t.rank FROM t /* save_result */", "", constant.CloudUserSql},
+			{"SELECT t.begin, '/* save_result */' FROM t", "", constant.ExternSql},
+			{`SELECT t.begin, 'x\' FROM t /* save_result */`, "NO_BACKSLASH_ESCAPES", constant.CloudUserSql},
+			{`SELECT t."begin", t.rank FROM t /* save_result */`, "ANSI_QUOTES", constant.CloudUserSql},
+			{"SELECT t.begin, 'unterminated /* save_result */", "", constant.ExternSql},
+			{"SELECT t.😀 FROM t /* save_result */", "", constant.ExternSql},
+		} {
+			t.Run(tc.sql+tc.mode, func(t *testing.T) {
+				require.Equal(t, tc.want, statementSQLSource(tc.sql, tc.mode))
 			})
 		}
 	})
@@ -9769,6 +10268,9 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 		want []string
 	}{
 		{"/* save_result */ select 1; select from", []string{constant.CloudUserSql, constant.ExternSql}},
+		{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT FROM", []string{constant.ExternSql, constant.CloudUserSql}},
+		{"SELECT t. /* first */ begin, t.rank FROM t; /* cloud_nonuser */ SELECT FROM", []string{constant.ExternSql, constant.CloudNoUserSql}},
+		{"SELECT t.begin, 'unterminated; /* save_result */ SELECT 2", []string{constant.ExternSql}},
 		{"select 1; /* cloud_nonuser */ select '", []string{constant.ExternSql, constant.CloudNoUserSql}},
 		{"select '\\'; /* cloud_nonuser */ select 1", []string{constant.ExternSql}},
 	} {
@@ -9846,13 +10348,43 @@ func Test_getExplainOption(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_TEXT)
 
-	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_JSON)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "analyze", Value: "true"},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "phyplan", Value: "true"},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "check", Value: `["Table Scan"]`},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "check", Value: `[]`},
+	})
+	require.NotNil(t, err)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "format", Value: "text"},
+	})
 	require.NotNil(t, err)
 
 	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "dot"}})
 	require.NotNil(t, err)
 
 	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "???"}})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "traditional"}})
 	require.NotNil(t, err)
 
 	// other
@@ -10353,6 +10885,79 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 }
 
+func TestExecRequestSetOptionResponseHonorsDeprecateEOF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.txnHandler = &TxnHandler{}
+	ec := newTestExecCtx(context.Background(), ctrl)
+	proto := ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	rawConn := proto.tcpConn.RawConn().(*testConn)
+
+	tests := []struct {
+		name       string
+		capability uint32
+		option     uint16
+		header     byte
+		category   int
+	}{
+		{
+			name:       "legacy EOF terminator option on",
+			capability: DefaultCapability &^ CLIENT_DEPRECATE_EOF,
+			option:     0,
+			header:     defines.EOFHeader,
+			category:   EoFResponse,
+		},
+		{
+			name:       "legacy EOF terminator option off",
+			capability: DefaultCapability &^ CLIENT_DEPRECATE_EOF,
+			option:     1,
+			header:     defines.EOFHeader,
+			category:   EoFResponse,
+		},
+		{
+			name:       "deprecate EOF OK terminator option on",
+			capability: DefaultCapability,
+			option:     0,
+			header:     defines.OKHeader,
+			category:   OkResponse,
+		},
+		{
+			name:       "deprecate EOF OK terminator option off",
+			capability: DefaultCapability,
+			option:     1,
+			header:     defines.OKHeader,
+			category:   OkResponse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proto.SetCapability(tt.capability)
+			proto.SetSequenceID(0)
+			rawConn.data = nil
+
+			resp, err := ExecRequest(ses, ec, &Request{
+				cmd:  COM_SET_OPTION,
+				data: []byte{byte(tt.option), byte(tt.option >> 8)},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.category, resp.GetCategory())
+			if tt.option == 1 {
+				require.Zero(t, proto.GetCapability()&CLIENT_MULTI_STATEMENTS)
+			}
+			require.NoError(t, proto.SendResponse(context.Background(), resp))
+
+			packets := splitProtocolPackets(t, rawConn.data)
+			require.Len(t, packets, 1)
+			require.NotEmpty(t, packets[0])
+			require.Equal(t, tt.header, packets[0][0])
+		})
+	}
+}
+
 func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -10403,6 +11008,37 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 			require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 		})
 	}
+
+	invalidatedID := uint32(3)
+	invalidated := &PrepareStmt{
+		Name:                getPrepareStmtName(invalidatedID),
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	invalidated.invalidateRewritePolicy()
+	require.NoError(t, ses.SetPrepareStmt(ctx, invalidated.Name, invalidated))
+
+	setRowCount(ses, ses.GetProc(), 7)
+	invalidatedPayload := make([]byte, 6, 25)
+	binary.LittleEndian.PutUint32(invalidatedPayload, invalidatedID)
+	binary.LittleEndian.PutUint16(invalidatedPayload[4:], 0)
+	invalidatedPayload = append(invalidatedPayload, "discarded long data"...)
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_SEND_LONG_DATA,
+		data: invalidatedPayload,
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp, "invalidated long-data commands have no response packet")
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+	require.Empty(t, invalidated.getFromSendLongData)
+
+	executePayload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(executePayload, invalidatedID)
+	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_EXECUTE, data: executePayload})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrNeedReprepare))
 }
 
 func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
@@ -11693,12 +12329,24 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 	})
 }
 
-type statsAdmissionStopResponse struct {
-	Responser
-	err error
+func TestWriteExplainJSONMalformedLiteralHasNoResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	query := &plan0.Query{
+		StmtType: plan0.Query_SELECT,
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_PROJECT,
+			ProjectList: []*plan0.Expr{{Expr: &plan0.Expr_Vec{Vec: &plan0.LiteralVec{Data: []byte{1, 2, 3}}}}}}},
+		Steps: []int32{0},
+	}
+	stmt := tree.NewExplainStmt(&tree.Select{}, "json")
+	stmt.Options = []tree.OptionElem{{Name: tree.FormatOption, Value: "json"}}
+	err := writeExplainResult(context.Background(), ses, stmt,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		&explain.ExplainOptions{Format: explain.EXPLAIN_FORMAT_JSON}, "", nil)
+	require.Error(t, err)
+	require.Equal(t, uint64(0), ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, uint64(0), ses.GetMysqlResultSet().GetColumnCount())
 }
-
-func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
 
 func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 	for _, tc := range []struct {
@@ -11721,8 +12369,6 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			ses.SetDatabaseName("tpch")
 			ses.GetTxnCompileCtx().SetDatabase("tpch")
 			defer ses.GetTxnCompileCtx().Close()
-			stop := fmt.Errorf("stop after compile before result execution")
-			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
 			_, table, err := base.Resolve("tpch", "nation", nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
@@ -11751,8 +12397,12 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			require.True(t, cw.planGenerationReused)
 			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
 			ctx.stats.TableCnt = tc.rows
-			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
-			require.ErrorIs(t, err, stop)
+			// Validate the real admission phase before Compile. The storage mock
+			// cannot execute a pipeline, and metadata is published only during Run.
+			require.NoError(t, checkCachedStatementPlan(ses, ec))
+			compiled, err := cw.Compile(ec, ses.GetOutputCallback(ec))
+			require.NoError(t, err)
+			defer compiled.(*compile.Compile).Release()
 			if tc.rebuild {
 				require.NotSame(t, cached, cw.Plan())
 				require.False(t, cw.planGenerationReused)
@@ -11763,5 +12413,218 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 				require.True(t, ses.isCached(input.getHash()))
 			}
 		})
+	}
+}
+
+func TestRecordStatementUTF8(t *testing.T) {
+	ctx := context.Background()
+	oldPu := getPuIfPresent("")
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+	defer setPu("", oldPu)
+	provider := motrace.GetTracerProvider()
+	enabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(enabled)
+	// Keep the real producer and row serializer; only asynchronous delivery is stubbed.
+	sink := gostub.Stub(&motrace.ReportStatement, func(context.Context, *motrace.StatementInfo) error { return nil })
+	defer sink.Reset()
+	for _, tc := range []struct {
+		name, text, want string
+		params           []string
+		nullIndex        int
+		limit            int
+	}{
+		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1, 1024},
+		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1, 1024},
+		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1, 1024},
+		{"malformed comment", "SELECT 1 /* \xff */", "SELECT 1 /* ? */", nil, -1, 1024},
+		{"malformed line comment", "SELECT 1 -- \xff\n", "SELECT 1 -- ?\n", nil, -1, 1024},
+		{"malformed literal", "SELECT 'a\xffb'", "SELECT 'a?b'", nil, -1, 1024},
+		{"partial rune comment", "SELECT 1 /* \xe4\xbd */", "SELECT 1 /* ?? */", nil, -1, 1024},
+		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1, 1024},
+		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1, 1024},
+		{"long binary parameter", "select ?", "x'" + strings.Repeat("ff", 2048) + "'", []string{strings.Repeat("\xff", 2048)}, -1, 1024},
+		{"exact empty parameter", "select ?", "", []string{""}, -1, len("execute utf8_query // select ? ; ")},
+		{"one byte overflow", "select ?", "a", []string{"a"}, -1, len("execute utf8_query // select ? ; ")},
+		{"limit before parameters", strings.Repeat("x", 1100), "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"hex opening cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x")},
+		{"hex odd digit cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x'f")},
+		{"unlimited parameter", "select ?", "你😀", []string{"你😀"}, -1, -1},
+		{"zero parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 0},
+		{"negative parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, -2},
+	} {
+		sv.LengthOfQueryPrinted = int64(tc.limit)
+		for _, path := range []string{"environment", "ordinary AST", "prepared"} {
+			if tc.params != nil && path != "prepared" {
+				continue
+			}
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+				defer ses.Close()
+				env := tc.text
+				var cw ComputationWrapper
+				want := tc.want
+				if path != "environment" {
+					ctrl := gomock.NewController(t)
+					mock := mock_frontend.NewMockComputationWrapper(ctrl)
+					mock.EXPECT().GetUUID().Return(make([]byte, 16))
+					if path == "prepared" {
+						const name = "utf8_query"
+						prepared := &PrepareStmt{Name: name, Sql: tc.text}
+						if tc.params != nil {
+							proc := testutil.NewProc(t)
+							prepared.proc = proc
+							prepared.params = vector.NewVec(types.T_text.ToType())
+							defer prepared.Close()
+							for i, value := range tc.params {
+								require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == tc.nullIndex, proc.Mp()))
+							}
+						}
+						require.NoError(t, ses.SetPrepareStmt(ctx, name, prepared))
+						mock.EXPECT().GetAst().Return(&tree.Select{})
+						mock.EXPECT().BinaryExecute().Return(true, name)
+						env = "execute utf8_query"
+						preparedText := tc.text
+						if !utf8.ValidString(tc.text) {
+							preparedText = tc.want
+						}
+						expanded := env + " // " + strings.TrimSpace(preparedText) + " ; "
+						if tc.params != nil {
+							expanded += tc.want
+						}
+						cut := 0
+						for offset, r := range expanded {
+							if end := offset + utf8.RuneLen(r); end <= tc.limit {
+								cut = end
+							} else {
+								break
+							}
+						}
+						want = expanded
+						if tc.limit == 0 || tc.limit < -1 {
+							want = ""
+						}
+						if tc.limit > 0 && len(expanded) > tc.limit {
+							want = expanded[:cut] + "..."
+						}
+					} else {
+						mock.EXPECT().GetAst().Return(&tree.Select{})
+						mock.EXPECT().BinaryExecute().Return(false, "")
+					}
+					cw = mock
+				}
+				statementCtx, err := RecordStatement(ctx, ses, nil, cw, time.Now(), env, constant.ExternSql, true)
+				require.NoError(t, err)
+				stmt := ses.tStmt
+				require.NotNil(t, stmt)
+				row := motrace.SingleStatementTable.GetRow(ctx)
+				defer func() {
+					stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+					stmt.FillRow(ctx, row)
+					row.Free()
+					stmt.Free()
+					ses.SetTStmt(nil)
+				}()
+				require.Equal(t, want, ses.GetSqlOfStmt())
+				require.Equal(t, want, string(stmt.Statement))
+				require.True(t, utf8.Valid(stmt.Statement))
+				if tc.params != nil {
+					prepared, err := ses.GetPrepareStmt(ctx, "utf8_query")
+					require.NoError(t, err)
+					for i, value := range tc.params {
+						require.Equal(t, value, prepared.params.GetStringAt(i))
+						require.Equal(t, i == tc.nullIndex, prepared.params.GetNulls().Contains(uint64(i)))
+					}
+				}
+				stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+				stmt.FillRow(ctx, row)
+				for i, col := range motrace.SingleStatementTable.Columns {
+					if col.Name == "statement" {
+						require.Equal(t, want, row.ToStrings()[i])
+					}
+				}
+			})
+		}
+	}
+	for _, tc := range []struct{ name, raw, want string }{
+		{"malformed", "SELECT FROM /* \xff */", "SELECT FROM /* ? */"},
+		{"long Chinese cut", "SELECT FROM /* " + strings.Repeat("你", 400) + " */", "SELECT FROM /* " + strings.Repeat("你", (1024-len("SELECT FROM /* "))/3) + "..."},
+		{"long Chinese aligned", "SELECT FROM /*aa" + strings.Repeat("你", 400) + " */", "SELECT FROM /*aa" + strings.Repeat("你", (1024-len("SELECT FROM /*aa"))/3) + "..."},
+	} {
+		t.Run("parse error/"+tc.name, func(t *testing.T) {
+			sv.LengthOfQueryPrinted = 1024
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			defer ses.Close()
+			raw := tc.raw
+			_, parseErr := parsers.Parse(ctx, dialect.MYSQL, raw, 1)
+			require.Error(t, parseErr)
+			require.True(t, utf8.ValidString(parseErr.Error()))
+			recordErr := moerr.NewParseError(ctx, parseErr.Error())
+			ses.beginResponseAccounting()
+			statementCtx, err := RecordParseErrorStatement(ctx, ses, nil, time.Now(), []string{raw}, nil, parseErr)
+			require.NoError(t, err)
+			stmt := ses.tStmt
+			require.NotNil(t, stmt)
+			row := motrace.SingleStatementTable.GetRow(ctx)
+			defer func() {
+				ses.finishResponseAccounting(statementCtx, parseErr, true)
+				stmt.FillRow(ctx, row)
+				row.Free()
+				stmt.Free()
+				ses.SetTStmt(nil)
+			}()
+			ses.finishResponseAccounting(statementCtx, parseErr, true)
+			require.Equal(t, motrace.StatementStatusFailed, stmt.Status)
+			require.Equal(t, tc.want, ses.GetSqlOfStmt())
+			require.Equal(t, tc.want, string(stmt.Statement))
+			stmt.FillRow(ctx, row)
+			for i, col := range motrace.SingleStatementTable.Columns {
+				switch col.Name {
+				case "statement":
+					require.Equal(t, tc.want, row.ToStrings()[i])
+				case "error":
+					require.Equal(t, recordErr.Error(), row.ToStrings()[i])
+					require.True(t, utf8.ValidString(row.ToStrings()[i]))
+				case "status":
+					require.Equal(t, "Failed", row.ToStrings()[i])
+				case "err_code":
+					require.Equal(t, fmt.Sprintf("%d", moerr.ErrParseError), row.ToStrings()[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute ctas_retry")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "create table tpch.ctas_retry as select a + ? as value, a + 1 from select_test.bind_select", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compiler := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
+	compiler.SetContext(ctx)
+	params := vector.NewVec(types.T_text.ToType())
+	proc := compiler.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	originalSource := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	for _, value := range []int64{2, 7, 2} {
+		require.NoError(t, vector.SetStringAt(params, 0, fmt.Sprint(value), proc.Mp()))
+		retry := newPreparedExecutionRetry([]any{plan.ParamValue{Value: value}})
+		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry)
+		require.NoError(t, err)
+		require.Empty(t, queryParamPositions(got.GetDdl().Query))
+		cols := got.GetDdl().GetCreateTable().TableDef.Cols
+		require.Equal(t, "value", cols[0].Name)
+		require.Equal(t, "a + 1", cols[1].Name)
+		require.Equal(t, originalSource, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+		// Specialization retains each supplied value, rather than freezing the first retry.
+		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
 }

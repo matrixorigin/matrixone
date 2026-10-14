@@ -17,12 +17,14 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -111,54 +113,89 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 	if fault.Enable() {
 		defer fault.Disable()
 	}
-	const barrier = "issue29492_running"
-	const waiters = "issue29492_waiters"
-	require.NoError(t, fault.AddFaultPoint(ctx, barrier, ":::", "wait", 0, "", false))
-	defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), barrier) }()
-	require.NoError(t, fault.AddFaultPoint(ctx, waiters, ":::", "getwaiters", 0, barrier, false))
-	defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), waiters) }()
-	var connectionID uint64
-	require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
-	done := make(chan error, 1)
-	joined := false
-	defer func() {
-		if joined {
-			return
+	for _, binary := range []bool{false, true} {
+		name := "text"
+		if binary {
+			name = "binary"
 		}
-		cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
-		defer stop()
-		_, _ = dbs[0].ExecContext(cleanupCtx, fmt.Sprintf("kill query %d", connectionID))
-		_, _ = fault.RemoveFaultPoint(cleanupCtx, barrier)
-		select {
-		case <-done:
-		case <-cleanupCtx.Done():
-			t.Error("canceled query did not join")
-		}
-	}()
-	go func() {
-		_, err := runner.ExecContext(ctx, "select percentile_cont(0.5) within group (order by v + trigger_fault_point('"+barrier+"')) from "+dbName+".t")
-		done <- err
-	}()
-	require.Eventually(t, func() bool {
-		count, _, ok := fault.TriggerFault(waiters)
-		return ok && count > 0 && promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) > 0
-	}, 20*time.Second, 10*time.Millisecond, "query must enter execution with live remote senders")
-	_, err = dbs[0].ExecContext(ctx, fmt.Sprintf("kill query %d", connectionID))
-	require.NoError(t, err)
-	// The SQL fault WAIT is not context-aware; release only after server KILL.
-	_, err = fault.RemoveFaultPoint(ctx, barrier)
-	require.NoError(t, err)
-	select {
-	case err = <-done:
-		joined = true
-	case <-ctx.Done():
-		t.Fatal("KILL QUERY did not finish")
+		t.Run(name, func(t *testing.T) {
+			const barrier = "issue29492_running"
+			const waiters = "issue29492_waiters"
+			require.NoError(t, fault.AddFaultPoint(ctx, barrier, ":::", "wait", 0, "", false))
+			defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), barrier) }()
+			require.NoError(t, fault.AddFaultPoint(ctx, waiters, ":::", "getwaiters", 0, barrier, false))
+			defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), waiters) }()
+			var connectionID uint64
+			require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
+			query := "select percentile_cont(0.5) within group (order by v + coalesce(trigger_fault_point('" + barrier + "'),0)) from " + dbName + ".t"
+			var prepared *sql.Stmt
+			if binary {
+				stmt, err := runner.PrepareContext(ctx, "select percentile_cont(0.5) within group (order by v + coalesce(trigger_fault_point(?),0)) from "+dbName+".t")
+				require.NoError(t, err)
+				defer stmt.Close()
+				prepared = stmt
+			}
+			done := make(chan error, 1)
+			joined := false
+			defer func() {
+				if joined {
+					return
+				}
+				cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+				defer stop()
+				_, _ = dbs[0].ExecContext(cleanupCtx, fmt.Sprintf("kill query %d", connectionID))
+				_, _ = fault.RemoveFaultPoint(cleanupCtx, barrier)
+				select {
+				case <-done:
+				case <-cleanupCtx.Done():
+					t.Error("canceled query did not join")
+				}
+			}()
+			go func() {
+				var queryErr error
+				if binary {
+					_, queryErr = prepared.ExecContext(ctx, barrier)
+				} else {
+					_, queryErr = runner.ExecContext(ctx, query)
+				}
+				done <- queryErr
+			}()
+			require.Eventually(t, func() bool {
+				count, _, ok := fault.TriggerFault(waiters)
+				return ok && count > 0 && promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) > 0
+			}, 20*time.Second, 10*time.Millisecond, "query must enter execution with live remote senders")
+			_, err = dbs[0].ExecContext(ctx, fmt.Sprintf("kill query %d", connectionID))
+			require.NoError(t, err)
+			// The SQL fault WAIT is not context-aware; release only after server KILL.
+			_, err = fault.RemoveFaultPoint(ctx, barrier)
+			require.NoError(t, err)
+			select {
+			case err = <-done:
+				joined = true
+			case <-ctx.Done():
+				t.Fatal("KILL QUERY did not finish")
+			}
+			var sqlErr *mysql.MySQLError
+			require.True(t, errors.As(err, &sqlErr), "expected MySQL error, got %v", err)
+			require.Equal(t, uint16(moerr.ER_QUERY_INTERRUPTED), sqlErr.Number)
+			require.Equal(t, "70100", string(sqlErr.SQLState[:]))
+			require.Eventually(t, func() bool {
+				return promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) == 0 &&
+					promtestutil.ToFloat64(metricv2.PipelineStreamLifecycleGauge) == 0
+			}, 15*time.Second, 10*time.Millisecond, "all CN remote stream owners must finish")
+			// Removing the barrier makes the same query healthy. Keep the physical
+			// connection and, for binary execution, the same prepared statement.
+			if binary {
+				require.NoError(t, prepared.QueryRowContext(ctx, barrier).Scan(&cont))
+			} else {
+				require.NoError(t, runner.QueryRowContext(ctx, query).Scan(&cont))
+			}
+			require.Equal(t, 12288.5, cont)
+			var reusedID uint64
+			require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&reusedID))
+			require.Equal(t, connectionID, reusedID)
+		})
 	}
-	require.ErrorContains(t, err, "context canceled")
-	require.Eventually(t, func() bool {
-		return promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) == 0 &&
-			promtestutil.ToFloat64(metricv2.PipelineStreamLifecycleGauge) == 0
-	}, 15*time.Second, 10*time.Millisecond, "all CN remote stream owners must finish")
 	for _, db := range dbs {
 		require.NoError(t, db.QueryRowContext(ctx, percentile).Scan(&cont, &disc))
 		require.Equal(t, 12288.5, cont)

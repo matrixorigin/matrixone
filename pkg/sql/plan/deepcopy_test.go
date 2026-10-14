@@ -68,6 +68,29 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyTableDefOwnsName2ColIndex(t *testing.T) {
+	source := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "a"}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+
+	for _, withCols := range []bool{true, false} {
+		cloned := DeepCopyTableDef(source, withCols)
+		require.Equal(t, source.Name2ColIndex, cloned.Name2ColIndex)
+		cloned.Name2ColIndex["a"] = 1
+		cloned.Name2ColIndex["new"] = 2
+		require.Equal(t, map[string]int32{"a": 0}, source.Name2ColIndex)
+		if withCols {
+			require.Len(t, cloned.Cols, 1)
+		} else {
+			require.Nil(t, cloned.Cols)
+		}
+	}
+
+	withoutMap := DeepCopyTableDef(&planpb.TableDef{}, true)
+	require.Nil(t, withoutMap.Name2ColIndex)
+}
+
 func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	source := &planpb.ColDef{
 		Name:          "display_name",
@@ -82,25 +105,27 @@ func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	require.Equal(t, source, cloned)
 }
 
-func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
-	source := &planpb.VectorIndexScan{
+func TestDeepCopyIndexSearchScanOwnsNestedMetadata(t *testing.T) {
+	source := &planpb.IndexSearchScan{
 		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
 		SourceTableDef:      &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
 		Index:               &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
-		HiddenTables:        []*planpb.VectorIndexTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
-		QueryVector:         &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		HiddenTables:        []*planpb.IndexHiddenTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
+		QueryPayload:        &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
 		CandidateLimit:      MakePlan2Uint64ConstExprWithType(4),
 		IncludedColumns:     []string{"payload"},
-		InitialProbeCount:   2,
+		AlgoOptions:         []byte(`{"initial_probe_count":2}`),
+		AlgoExprs:           []*planpb.Expr{MakePlan2Uint64ConstExprWithType(3)},
+		AlgoExprNames:       []string{"first_round_limit"},
 		ScanSnapshot:        &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 9}, Tenant: &planpb.SnapshotTenant{TenantID: 7}},
 		PostFilterOverFetch: true,
 	}
 
-	cloned := DeepCopyVectorIndexScan(source)
+	cloned := DeepCopyIndexSearchScan(source)
 	require.NotSame(t, source, cloned)
 	require.Equal(t, source.SourceTable, cloned.SourceTable)
 	require.Equal(t, source.Index, cloned.Index)
-	require.Equal(t, source.QueryVector, cloned.QueryVector)
+	require.Equal(t, source.QueryPayload, cloned.QueryPayload)
 	require.Equal(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.Equal(t, source.IncludedColumns, cloned.IncludedColumns)
 	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
@@ -109,9 +134,14 @@ func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	require.NotSame(t, source.SourceTableDef, cloned.SourceTableDef)
 	require.NotSame(t, source.Index, cloned.Index)
 	require.NotSame(t, source.HiddenTables[0], cloned.HiddenTables[0])
-	require.NotSame(t, source.QueryVector, cloned.QueryVector)
+	require.NotSame(t, source.QueryPayload, cloned.QueryPayload)
 	require.NotSame(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.Equal(t, source.AlgoOptions, cloned.AlgoOptions)
+	require.Equal(t, source.AlgoExprs, cloned.AlgoExprs)
+	require.Equal(t, source.AlgoExprNames, cloned.AlgoExprNames)
+	require.NotSame(t, &source.AlgoOptions[0], &cloned.AlgoOptions[0])
+	require.NotSame(t, source.AlgoExprs[0], cloned.AlgoExprs[0])
 }
 
 func TestDeepCopyExprAuxIdSemantics(t *testing.T) {

@@ -184,7 +184,7 @@ func (m *MockRuntimeSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
 }
 
 func TestCacheServe(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	Cache = NewVectorIndexCache()
 	Cache.serve()
@@ -212,7 +212,7 @@ func TestCacheServe(t *testing.T) {
 // DROP TABLE cannot name the live key — it evicts by prefix. Every generation
 // of the dropped index must go, and no other index table may be touched.
 func TestCacheRemovePrefix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	Cache = NewVectorIndexCache()
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
@@ -263,7 +263,7 @@ func (m *emptyGenSearch) EmptyGeneration() bool { return m.empty }
 // once it appears -- the deterministic guard for the copy-alter base-less window regression. A
 // data-bearing generation is cached as usual. Covers both the Search and SearchInto paths.
 func TestCacheNotCacheEmpty(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -332,7 +332,7 @@ func (m *baseAwareSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex
 // Search would LoadOrStore-hit it and return empty (the bug), so the []int64{42} assertion has
 // teeth.
 func TestCacheNotCacheEmptyReloadsBase(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -370,7 +370,7 @@ func TestCacheNotCacheEmptyReloadsBase(t *testing.T) {
 // refreshed its TTL, which is the #29011 bug reached through the error path. Both Search and
 // SearchInto must retire it.
 func TestCacheNotCacheEmptyRetiresOnSearchError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -422,7 +422,7 @@ func TestCacheNotCacheEmptyRetiresOnSearchError(t *testing.T) {
 }
 
 func TestCacheAny(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	Cache = NewVectorIndexCache()
 	Cache.serve()
@@ -446,7 +446,7 @@ func TestCacheAny(t *testing.T) {
 }
 
 func TestCache(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldTTL := VectorIndexCacheTTL
@@ -501,7 +501,7 @@ func TestCache(t *testing.T) {
 }
 
 func TestCacheConcurrent(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldTTL := VectorIndexCacheTTL
@@ -555,7 +555,7 @@ func TestCacheConcurrent(t *testing.T) {
 }
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 2 * time.Second
@@ -611,7 +611,7 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 }
 
 func TestCacheLoadError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 5 * time.Second
@@ -641,7 +641,7 @@ func TestCacheLoadError(t *testing.T) {
 }
 
 func TestCacheSearchError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 5 * time.Second
@@ -671,7 +671,7 @@ func TestCacheSearchError(t *testing.T) {
 }
 
 func TestCacheReuseKeepsRuntimeConfigQueryScoped(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	Cache = NewVectorIndexCache()

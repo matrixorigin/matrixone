@@ -73,13 +73,18 @@ func TestJSONObjectAggNumericKeyResolution(t *testing.T) {
 }
 
 func TestMySQLNumericAggTypeCheck(t *testing.T) {
-	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
+	for _, name := range []string{"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
 		t.Run(name, func(t *testing.T) {
 			for _, input := range []struct {
 				typ  types.Type
 				want types.Type
 			}{
+				{types.T_char.ToType(), types.T_float64.ToType()},
 				{types.T_varchar.ToType(), types.T_float64.ToType()},
+				{types.T_text.ToType(), types.T_float64.ToType()},
+				{types.T_binary.ToType(), types.T_float64.ToType()},
+				{types.T_varbinary.ToType(), types.T_float64.ToType()},
+				{types.T_blob.ToType(), types.T_float64.ToType()},
 				{types.T_date.ToType(), types.New(types.T_decimal128, 38, 0)},
 			} {
 				got, err := GetFunctionByName(context.Background(), name, []types.Type{input.typ})
@@ -159,10 +164,49 @@ func TestEnumSumAvgUsesOrdinalDomain(t *testing.T) {
 		ordinal, err := GetFunctionByName(context.Background(), name, casts)
 		require.NoError(t, err)
 		require.Equal(t, ordinal.GetReturnType(), got.GetReturnType())
-		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_varchar.ToType()}} {
+		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_uuid.ToType()}} {
 			_, err := GetFunctionByName(context.Background(), name, inputs)
 			require.Error(t, err)
 		}
+	}
+}
+
+func TestSumAvgCoercionPreservesExistingDomains(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		t.Run(name, func(t *testing.T) {
+			for _, input := range []types.Type{
+				types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float64.ToType(),
+				types.New(types.T_decimal64, 18, 4), types.New(types.T_decimal128, 38, 6),
+				types.New(types.T_decimal256, 65, 30), types.T_year.ToType(),
+			} {
+				got, err := GetFunctionByName(t.Context(), name, []types.Type{input})
+				require.NoError(t, err)
+				_, shouldCast := got.ShouldDoImplicitTypeCast()
+				require.False(t, shouldCast, "input=%s", input)
+			}
+
+			got, err := GetFunctionByName(t.Context(), name, []types.Type{types.T_any.ToType()})
+			require.NoError(t, err)
+			casts, shouldCast := got.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{types.T_uint8.ToType()}, casts)
+			want := types.T_uint64.ToType()
+			if name == "avg" {
+				want = types.New(types.T_decimal128, 7, 4)
+			}
+			require.Equal(t, want, got.GetReturnType(), "bare NULL metadata must stay unchanged")
+
+			for _, inputs := range [][]types.Type{
+				nil,
+				{types.T_varchar.ToType(), types.T_varchar.ToType()},
+				{types.T_date.ToType(), types.T_date.ToType()},
+				{types.T_bool.ToType()}, {types.T_uuid.ToType()},
+				{types.T_array_float64.ToType()}, {types.T_datalink.ToType()},
+			} {
+				_, err := GetFunctionByName(t.Context(), name, inputs)
+				require.Error(t, err, "inputs=%v", inputs)
+			}
+		})
 	}
 }
 
@@ -254,10 +298,10 @@ func TestBoundBitSumAvgPartialStateRoundTrip(t *testing.T) {
 }
 
 func TestMySQLNumericAggTypeCheckPreservesTemporalScale(t *testing.T) {
-	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
+	for _, name := range []string{"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
 		t.Run(name, func(t *testing.T) {
 			for _, oid := range []types.T{types.T_time, types.T_datetime, types.T_timestamp} {
-				for scale := int32(1); scale <= 6; scale++ {
+				for scale := int32(0); scale <= 6; scale++ {
 					input := types.New(oid, 0, scale)
 					got, err := GetFunctionByName(context.Background(), name, []types.Type{input})
 					require.NoError(t, err)

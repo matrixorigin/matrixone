@@ -32,7 +32,7 @@ import (
 
 func TestProductL2ReleasesProducerAccountedJoinMap(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)

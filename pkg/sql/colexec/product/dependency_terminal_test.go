@@ -41,7 +41,7 @@ func TestProductProbeBuildOutcomes(t *testing.T) {
 		{name: "build_deadline", err: context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			proc.SetMessageBoard(message.NewMessageBoard())
 			arg := &Product{JoinMapTag: 1}
 			registry, err := mpool.NewAllocationAccountRegistry(1, 4)

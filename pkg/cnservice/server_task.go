@@ -303,13 +303,12 @@ func (s *service) stopTask() error {
 
 	s.task.Lock()
 	defer s.task.Unlock()
-	if s.task.holder == nil {
-		return nil
-	}
-
-	err := s.task.holder.Close()
+	var err error
 	if s.task.runner != nil {
-		err = errors.Join(err, s.task.runner.Stop())
+		err = s.task.runner.Stop()
+	}
+	if s.task.holder != nil {
+		err = errors.Join(err, s.task.holder.Close())
 	}
 	return err
 }
@@ -346,6 +345,7 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
 	cdcExecutor := frontend.CDCTaskExecutorFactory(
+		s.rt,
 		s.logger,
 		ieFactory,
 		s.task.runner.Attach,

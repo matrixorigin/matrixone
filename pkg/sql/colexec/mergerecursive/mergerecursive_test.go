@@ -39,7 +39,7 @@ type mergeRecTestCase struct {
 func makeTestCases(t *testing.T) []mergeRecTestCase {
 	return []mergeRecTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg:  &MergeRecursive{},
 		},
 	}
@@ -82,7 +82,7 @@ func TestMergeRecursive(t *testing.T) {
 }
 
 func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	defer arg.Release()
 
@@ -129,7 +129,7 @@ func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
 
 func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 	t.Run("initial quota", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		src := batch.New([]string{"value"})
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 256)}, nil, proc.Mp())
 		src.SetRowCount(1)
@@ -153,7 +153,7 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 	})
 
 	t.Run("last marker", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(1 << 20), nil })
 		arg := &MergeRecursive{}
 		require.NoError(t, arg.Prepare(proc))
@@ -187,7 +187,7 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 func TestMergeRecursiveFailedReuseDropsStaleCacheAndCharge(t *testing.T) {
 	limited, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(0), nil })
 	arg := &MergeRecursive{}
 	require.NoError(t, arg.Prepare(proc))

@@ -40,7 +40,7 @@ func makeCountBatch(proc *process.Process, n int64) *batch.Batch {
 }
 
 func TestFetchSrcTableRowCount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	t.Run("happy path returns count", func(t *testing.T) {
 		var capturedSQL string

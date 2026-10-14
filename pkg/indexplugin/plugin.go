@@ -63,7 +63,7 @@ type AlgoPlugin interface {
 }
 
 // SearchPlugin is an optional capability implemented by algorithms that have
-// migrated query execution from a table function to VECTOR_INDEX_SCAN.  The
+// migrated query execution from a table function to INDEX_SEARCH_SCAN.  The
 // separate interface lets algorithms migrate independently without a SQL-layer
 // name switch or no-op hooks on unrelated fulltext/GPU plugins.
 type SearchPlugin interface {

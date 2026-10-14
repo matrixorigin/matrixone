@@ -729,7 +729,7 @@ func TestByteLikeCompiledPatternUsesLinearAccountedStorage(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-compile-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-compile-limit", limited)
 	require.Error(t, newOpBuiltInRegexp().likeFn(
 		[]*vector.Vector{value, patternVector}, result, limitedProc, 1, nil))
 	require.Zero(t, limited.CurrNB())
@@ -1239,7 +1239,7 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-convolution-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-convolution-limit", limited)
 	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
 	require.Error(t, err)
 	require.Zero(t, limited.CurrNB())

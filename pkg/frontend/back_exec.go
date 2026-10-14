@@ -431,6 +431,9 @@ func doComQueryInBack(
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
+	if catalogRead, _ := execCtx.reqCtx.Value(viewSchemaCatalogReadKey{}).(bool); catalogRead {
+		proc.SetIncrStatementDisabled(true)
+	}
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
@@ -1427,6 +1430,16 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
+	case "experimental_hnsw_index":
+		// Procedure DDL runs through a frontend back session and must see
+		// the caller's feature gate rather than the executor default.
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return nil, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}

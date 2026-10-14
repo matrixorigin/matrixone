@@ -191,8 +191,7 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	}
 	source := parameters[0]
 	withRevision := func(result types.Type) types.Type {
-		result.CollationVersion = source.CollationVersion
-		return result
+		return types.MergeStringCollationMetadata(result, []types.Type{source})
 	}
 	if types.StaticStringDomain(source) == types.StringDomainBinary {
 		return withRevision(binaryStringResultType(declaredStringByteBound(source)))
@@ -288,7 +287,7 @@ func insertStringReturnType(parameters []types.Type) types.Type {
 func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
 	switch result.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		result.Charset = types.MergeStringCharset(source, result.Charset)
+		result = types.MergeStringCollationMetadata(result, source)
 	default:
 		return result
 	}
@@ -305,6 +304,10 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 			hasText = true
 			if typ.Width > maxWidth {
 				maxWidth = typ.Width
+			}
+		case types.T_uuid:
+			if width := formattedScalarStringType(typ).Width; width > maxWidth {
+				maxWidth = width
 			}
 		case types.T_text:
 			hasText = true
@@ -590,6 +593,35 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 }
 
 var supportedStringBuiltIns = []FuncNew{
+	// MySQL Performance Schema formatting functions evaluate in the DOUBLE domain.
+	{
+		functionId: FORMAT_BYTES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatBytes },
+			},
+		},
+	},
+	{
+		functionId: FORMAT_PICO_TIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatPicoTime },
+			},
+		},
+	},
 	// function `ascii`
 	{
 		functionId: ASCII,
@@ -2972,6 +3004,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array_insert`
+	{
+		functionId: JSON_ARRAY_INSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayInsert
+				},
+			},
+		},
+	},
+
 	// function `json_remove`
 	{
 		functionId: JSON_REMOVE,
@@ -3862,6 +3914,73 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `physical_serial`
+	// Internal only: index maintenance needs the persisted comparison-key
+	// representation, while generic SERIAL must preserve original values.
+	{
+		functionId: PHYSICAL_SERIAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_serial_full`
+	{
+		functionId: PHYSICAL_SERIAL_FULL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_collation_key`
+	// Internal only: materialize the one-part key used by a secondary index.
+	{
+		functionId: PHYSICAL_COLLATION_KEY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    stringDomainFixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType:    serializedTupleReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInPhysicalCollationKey
+				},
+			},
+		},
+	},
+
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
@@ -3880,7 +3999,12 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[2]
+					result := parameters[2]
+					// BINARY's -1 scale requests padding for CAST, not tuple decoding.
+					if result.Oid == types.T_binary && result.Scale == -1 {
+						result.Scale = 0
+					}
+					return result
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSerialExtract
@@ -9864,6 +9988,106 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `tanh`
+	{
+		functionId: TANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInTanh
+				},
+			},
+		},
+	},
+
+	// function `cosh`
+	{
+		functionId: COSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInCosh
+				},
+			},
+		},
+	},
+
+	// function `asinh`
+	{
+		functionId: ASINH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInASinh
+				},
+			},
+		},
+	},
+
+	// function `acosh`
+	{
+		functionId: ACOSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInACosh
+				},
+			},
+		},
+	},
+
+	// function `atanh`
+	{
+		functionId: ATANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInATanh
+				},
+			},
+		},
+	},
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{
@@ -10624,7 +10848,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DayOfYear
@@ -12168,7 +12392,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				args:            []types.T{types.T_date},
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
@@ -12179,7 +12403,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				args:            []types.T{types.T_datetime},
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -12189,7 +12413,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_date, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
@@ -12199,7 +12423,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_datetime, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -15225,6 +15449,23 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastIndexValueToIndex
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_enum.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToEnum[int64] },
+			},
+
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_varchar, types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_enum.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToEnum[uint64] },
+			},
 		},
 	},
 
@@ -15293,6 +15534,14 @@ var supportedOthersBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return CastSetIndexValueToIndex
 				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:           func() executeLogicOfOverload { return castIntegerToSet[int64] },
 			},
 		},
 	},
@@ -15787,6 +16036,19 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// function `uuid_short`
+	{
+		functionId: UUID_SHORT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			volatile:   true,
+			retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+			newOp:      func() executeLogicOfOverload { return builtInUUIDShort },
+		}},
+	},
 	// function `uuid`
 	{
 		functionId: UUID,
@@ -16276,6 +16538,9 @@ var supportedOthersBuiltIns = []FuncNew{
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
 							if isNull || !flag {
+								if errType == "odku_pk_mutation" {
+									return moerr.NewUnsupportedDML(proc.Ctx, "update primary key on duplicate")
+								}
 								if errType == "fk_no_referenced_row" {
 									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
 								}

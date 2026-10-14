@@ -31,6 +31,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	ftplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -315,7 +316,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	oldRowIdPos := len(updatePlanCtx.tableDef.Cols) - 1
 	for _, col := range updatePlanCtx.tableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !isFunctionalColumn(col) {
 			continue
 		}
 		newCols = append(newCols, col)
@@ -591,7 +592,7 @@ func appendSelfReferOnUpdateCascadeRoots(
 
 	visiblePos := 0
 	for oldPos, col := range tableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !isFunctionalColumn(col) {
 			continue
 		}
 		if pos, updated := updatePlanCtx.updateColPosMap[col.Name]; updated {
@@ -1823,6 +1824,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.tableDef = childTableDef
 					upPlanCtx.rowIdPos = childRowIdPos
 					upPlanCtx.sourceStep = newSourceStep
+					if cascadeRootTag != 0 {
+						// The pre-createQuery self-cascade source owns a fresh tag.
+						// Carry it into the recursive context so index maintenance,
+						// locks and DELETE retain the same tagged row image.
+						upPlanCtx.sourceTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
+					}
 					upPlanCtx.allDelTableIDs = allDelTableIDs
 					upPlanCtx.isFkRecursionCall = true
 					// The root self-referential DELETE already registered its direct
@@ -4534,6 +4541,17 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	partsLength := len(indexdef.Parts)
+	usePhysicalKey := false
+	for _, part := range indexdef.Parts {
+		partType, ok := typMap[catalog.ResolveAlias(part)]
+		if ok {
+			typ := types.MustTypeFromPlan(partType)
+			if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+				usePhysicalKey = true
+				break
+			}
+		}
+	}
 	if partsLength == 1 {
 		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
 		leftExpr, err = builder.makeIndexPartExpr(
@@ -4545,6 +4563,13 @@ func appendDeleteIndexTablePlan(
 		)
 		if err != nil {
 			return -1, err
+		}
+		partType := types.MustTypeFromPlan(typMap[originIndexColumnName])
+		if usePhysicalKey && types.IsUnicodeCollation(partType.Charset) && partType.Oid.IsMySQLString() {
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "physical_collation_key", []*Expr{leftExpr})
+			if err != nil {
+				return -1, err
+			}
 		}
 	} else {
 		args := make([]*Expr, partsLength)
@@ -4565,12 +4590,20 @@ func appendDeleteIndexTablePlan(
 			// use for UK
 			// 0: serial(part1, part2) <----
 			// 1: serial(pk1, pk2)
-			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			serialName := "serial"
+			if usePhysicalKey {
+				serialName = "physical_serial"
+			}
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialName, args)
 		} else {
 			// only used for regular secondary index's 0'th column
 			// 0: serial_full(part1, part2, serial(pk1, pk2)) <----
 			// 1: serial(pk1, pk2)
-			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			serialName := "serial_full"
+			if usePhysicalKey {
+				serialName = "physical_serial_full"
+			}
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialName, args)
 		}
 		if err != nil {
 			return -1, err
@@ -5681,15 +5714,19 @@ func resolveForeignKeyCatalogLayout(ctx CompilerContext) (foreignKeyCatalogLayou
 	if err != nil {
 		return foreignKeyCatalogLegacy, err
 	}
+	return foreignKeyCatalogLayoutForDef(tableDef), nil
+}
+
+func foreignKeyCatalogLayoutForDef(tableDef *plan.TableDef) foreignKeyCatalogLayout {
 	if tableDef == nil {
-		return foreignKeyCatalogLegacy, nil
+		return foreignKeyCatalogLegacy
 	}
 	for _, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		if FindColumn(tableDef.Cols, column) == nil {
-			return foreignKeyCatalogLegacy, nil
+			return foreignKeyCatalogLegacy
 		}
 	}
-	return foreignKeyCatalogExtended, nil
+	return foreignKeyCatalogExtended
 }
 
 // quoteSQLStringLiteral emits a literal that MatrixOne's MySQL scanner reads
@@ -5745,15 +5782,30 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 }
 
 func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, foreignKeyCatalogLayout, error) {
-	//exclude fk self reference
 	layout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
 		return nil, foreignKeyCatalogLegacy, err
 	}
+	ret, err := readForeignKeysReferredTo(db, table, layout, func(sql string) (executor.Result, error) { return runSql(ctx, sql) })
+	return ret, layout, err
+}
+
+// ReadForeignKeysReferredTo shares the planner's layout negotiation and decoder
+// with execution, which supplies its current definition and transaction reader.
+// extended reports whether selected-key backfill is supported by this catalog.
+func ReadForeignKeysReferredTo(tableDef *plan.TableDef, db, table string,
+	query func(string) (executor.Result, error)) (ret map[FkReferKey]map[string][]*FkReferDef, extended bool, err error) {
+	layout := foreignKeyCatalogLayoutForDef(tableDef)
+	ret, err = readForeignKeysReferredTo(db, table, layout, query)
+	return ret, layout == foreignKeyCatalogExtended, err
+}
+
+func readForeignKeysReferredTo(db, table string, layout foreignKeyCatalogLayout,
+	query func(string) (executor.Result, error)) (map[FkReferKey]map[string][]*FkReferDef, error) {
 	sql := getSqlForFkReferredToWithCatalogLayout(db, table, layout)
-	res, err := runSql(ctx, sql)
+	res, err := query(sql)
 	if err != nil {
-		return nil, layout, err
+		return nil, err
 	}
 	defer res.Close()
 	ret := make(map[FkReferKey]map[string][]*FkReferDef)
@@ -5802,7 +5854,7 @@ func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (ma
 			}
 		}
 	}
-	return ret, layout, nil
+	return ret, nil
 }
 
 func legacyForeignKeyActionOrigin(action string) string {
@@ -5915,7 +5967,8 @@ func getSqlForAddFkWithCatalogLayout(db, table string, data *FkData, layout fore
 	return sb.String()
 }
 
-func getSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
+// GetSqlForUpdateFkReferencedIndex records a key selected by the current binder.
+func GetSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
 	return fmt.Sprintf(
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = %s where db_name = %s and table_name = %s and constraint_name = %s",
 		quoteSQLStringLiteral(referencedIndexName),
@@ -6512,6 +6565,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	Else IVFFLAT index would fail
 	********/
 	isUpdate := delCtx.updateColLength > 0
+	localCascadeDelete := !isUpdate && delCtx.isFkRecursionCall && delCtx.sourceTag == 0
 
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
@@ -6555,6 +6609,14 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		preserveActionRows := delCtx.isFkRecursionCall &&
 			(delCtx.sourceTag != 0 || delCtx.preserveUpdateSourceProjection)
+		// Direct DELETE appends its positional CASCADE branches after createQuery.
+		// Only matched hidden rows need deletion; an outer join can emit unrelated
+		// index rows when the action source is empty, and planner tags cannot be
+		// remapped here. Use the local two-input JOIN ABI for the entire branch.
+		if localCascadeDelete {
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		if rebuildCompositeSetNullIndex {
 			// The replacement insert has its own action stream, so this branch only
 			// needs the positional old-row image plus the matched hidden row.
@@ -6578,8 +6640,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
-			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
-			delCtx.isPostCreateQueryFkSetNullAction,
+			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex || localCascadeDelete,
+			delCtx.isPostCreateQueryFkSetNullAction || localCascadeDelete,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -6734,7 +6796,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+		delNodeInfo.preserveProjection = !localCascadeDelete &&
+			(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)
 		if err != nil {
@@ -7142,7 +7205,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		})
 	}
 
-	ftcols := DeepCopyColDefList(tokenizeColDefs)
+	ftcols := DeepCopyColDefList(ftplan.TokenizeColDefs)
 	ftcols[0].Typ = tableDef.Cols[pkPos].Typ
 
 	tablefunc := &plan.Node{
@@ -7151,7 +7214,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  fulltext_index_tokenize_func_name,
+				Name:  ftplan.TokenizeFuncName,
 				Param: []byte(indexdef.IndexAlgoParams),
 			},
 			Cols: ftcols,

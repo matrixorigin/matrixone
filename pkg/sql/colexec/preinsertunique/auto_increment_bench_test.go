@@ -36,7 +36,7 @@ func BenchmarkInsertIgnoreAutoIncrementArbiter(b *testing.B) {
 		for _, parts := range []int{1, 32} {
 			b.Run(fmt.Sprintf("%s/batches_%d", workload, parts), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				proc := testutil.NewProcessWithMPool(b, "", mp)
+				proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 				input := batch.NewWithSize(5)
 				for i := range input.Vecs {
 					typ := types.T_bool.ToType()

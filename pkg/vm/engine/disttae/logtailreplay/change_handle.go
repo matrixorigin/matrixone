@@ -2764,7 +2764,11 @@ func (p *baseHandle) objectFileExists(ctx context.Context, obj *objectio.ObjectE
 }
 
 type ChangeHandler struct {
-	isRecoveryMode      bool // When true, Case 2.2 (insert->delete) will keep the delete for CDC restart scenarios
+	// When true, Case 2.2 (insert->delete) keeps the delete instead of dropping
+	// the pair: CDC restart from checkpoint, or a caller that opts in through
+	// engine.WithCollectChangesKeepTrailingDeletes because its state is seeded
+	// from an earlier generation than the requested range start.
+	isRecoveryMode      bool
 	preserveAllVersions bool
 	tombstoneHandle     *baseHandle
 	dataHandle          *baseHandle
@@ -3012,6 +3016,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		isRecoveryMode:           engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		pkFilter:                 engine.PKFilterFromContext(ctx),
 		maxInMemoryRows:          rangeLimit.MaxInMemoryRows,
 		maxInMemoryBytes:         rangeLimit.MaxInMemoryBytes,
@@ -3066,7 +3071,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 				changeHandle.tombstoneHandle,
 				primaryIdx,
 				skipDeletes,
-				false,
+				changeHandle.isRecoveryMode,
 				spillConfig,
 				mp,
 				chunkRows,
@@ -3106,7 +3111,7 @@ func newChangesHandlerWithCheckpointEntries(
 		primaryIdx:          primarySeqnum,
 		mp:                  mp,
 		scheduler:           tasks.NewParallelJobScheduler(LoadParallism),
-		isRecoveryMode:      isRecoveryMode,
+		isRecoveryMode:      isRecoveryMode || engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
@@ -3340,6 +3345,7 @@ func NewChangesHandler(
 		primaryIdx:          primarySeqnum,
 		mp:                  mp,
 		scheduler:           tasks.NewParallelJobScheduler(LoadParallism),
+		isRecoveryMode:      engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		pkFilter:            engine.PKFilterFromContext(ctx),
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
@@ -3515,9 +3521,11 @@ func (p *ChangeHandler) coalesceBatch(data, tombstone *batch.Batch) error {
 // This ensures that for any pk, we only keep the most recent operation,
 // whether it's an insert/update from data batch or a delete from tombstone batch.
 //
-// isRecoveryMode: When true (e.g., CDC restart from checkpoint), Case 2.2 (first insert, last delete)
-// will keep the delete to ensure downstream consistency. When false (normal operation),
-// Case 2.2 deletes all rows since the net effect is "no change".
+// isRecoveryMode: When true (CDC restart from checkpoint, or a caller that opted in
+// through engine.WithCollectChangesKeepTrailingDeletes), Case 2.2 (first insert, last
+// delete) keeps the delete to ensure downstream consistency. When false (normal
+// operation), Case 2.2 deletes all rows since the net effect is "no change" — sound
+// only while the consumer's state matches the table state at the range start.
 func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) (err error) {
 	if data == nil || tombstone == nil {
 		return
@@ -3642,9 +3650,11 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 			} else {
 				// Case 2.2: First is insert, last is delete
 				if isRecoveryMode {
-					// Recovery mode (e.g., CDC restart): Keep the last delete
-					// This ensures that if the insert was already sent to downstream
-					// before CDC restart, the delete will still be sent to maintain consistency.
+					// Recovery mode (CDC restart, or an opted-in consumer whose state was
+					// seeded from an earlier generation): keep the last delete. The insert
+					// may already have reached the consumer — before a restart, or through
+					// a cloned/copied state that predates this range — so the delete must
+					// still be delivered to keep the consumer consistent.
 					for _, ri := range rowInfos[:len(rowInfos)-1] {
 						if ri.isDelete {
 							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))

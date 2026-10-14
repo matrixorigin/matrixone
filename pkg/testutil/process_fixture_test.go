@@ -98,6 +98,8 @@ func TestProcessFixtureOwnedLifetimes(t *testing.T) {
 func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 	ensureAutoIncrService("")
 	const tag = "fixture-borrowed-pool"
+	before := fixturePoolCount(t, tag)
+	t.Cleanup(func() { require.Equal(t, before, fixturePoolCount(t, tag)) })
 	mp := mpool.MustNew(tag)
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	defaultBefore := fixturePoolCount(t, "must_new_zero_no_fixed")
@@ -122,11 +124,14 @@ func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 	block, err := mp.Alloc(1, true)
 	require.NoError(t, err)
 	mp.Free(block)
-	require.True(t, t.Run("supplied-pool-constructor", func(t *testing.T) {
-		proc := NewProcessWithMPool(t, "", mp)
-		require.Same(t, mp, proc.Mp())
-	}))
-	require.Equal(t, 1, fixturePoolCount(t, tag))
+	for _, name := range []string{"supplied-pool-first", "supplied-pool-second"} {
+		require.True(t, t.Run(name, func(t *testing.T) {
+			require.Equal(t, before+1, fixturePoolCount(t, tag))
+			proc := NewProcessWithMPool(t, "", mp)
+			require.Same(t, mp, proc.Mp())
+		}))
+		require.Equal(t, before+1, fixturePoolCount(t, tag), "child cleanup must preserve the parent-owned pool")
+	}
 	require.True(t, t.Run("explicit-nil", func(t *testing.T) {
 		tb := &fixtureProbeTB{TB: t}
 		proc := NewProcess(tb, WithMPool(nil), WithFileService(nil))
@@ -135,6 +140,31 @@ func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 		require.Zero(t, tb.dirs)
 		require.Equal(t, defaultBefore, fixturePoolCount(t, "must_new_zero_no_fixed"))
 	}))
+}
+
+func TestProcessFixtureOwnedMPool(t *testing.T) {
+	ensureAutoIncrService("")
+	const tag = "must_new_zero"
+	before := fixturePoolCount(t, tag)
+	require.True(t, t.Run("owned", func(t *testing.T) {
+		proc := NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		mp := proc.Mp()
+		require.Equal(t, before+1, fixturePoolCount(t, tag))
+
+		blocks := make([][]byte, 0, 2)
+		for _, offHeap := range []bool{false, true} {
+			block, err := mp.Alloc(1, offHeap)
+			require.NoError(t, err)
+			blocks = append(blocks, block)
+		}
+		t.Cleanup(func() {
+			for _, block := range blocks {
+				mp.Free(block)
+			}
+			require.Equal(t, before+1, fixturePoolCount(t, tag), "caller cleanup must precede owned pool deletion")
+		})
+	}))
+	require.Equal(t, before, fixturePoolCount(t, tag))
 }
 
 func TestProcessFixtureManualLifetime(t *testing.T) {

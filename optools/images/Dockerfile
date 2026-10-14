@@ -1,6 +1,13 @@
+FROM golang:1.27.1-bookworm AS go-toolchain
+
 FROM matrixorigin/golang:1.27.0-ubuntu22.04-matrixone-native-1 AS build-base
 
-ENV GOWORK=off
+# Retain the published native SDK while matching the minimum in go.mod.
+# Replace, rather than merge, GOROOT; no automatic toolchain download is needed.
+RUN rm -rf /usr/local/go
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+
+ENV GOWORK=off GOTOOLCHAIN=local
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 

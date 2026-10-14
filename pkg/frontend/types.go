@@ -354,6 +354,17 @@ type PrepareStmt struct {
 	// needsRebuild marks a stale prepared plan after execution-time retry or
 	// a session planning setting changes. EXECUTE owns the actual rebuild.
 	needsRebuild bool
+	// rewritePolicyInvalidated is monotonic for the lifetime of this prepared
+	// handle. Role-rule policy is materialized into PrepareStmt and its plan;
+	// once that policy snapshot is invalid, rebuilding the retained AST would
+	// otherwise execute the old row predicate again. A new PREPARE creates a
+	// new handle with a fresh policy snapshot.
+	rewritePolicyInvalidated atomic.Bool
+	// rewritePolicyGeneration identifies the session policy snapshot used to
+	// build this handle. It is checked while the handle is published.
+	rewritePolicyGeneration uint64
+	rewritePolicyCaptured   bool
+	rewritePolicyEnabled    bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool
@@ -417,6 +428,7 @@ type PrepareStmt struct {
 	runtimeSpecializationKey    string
 	runtimePlan                 *plan.Plan
 	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeColDefData           [][]byte
 	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
@@ -828,6 +840,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
 	diagnosticCandidates []*plan.Expr,
+	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -841,6 +854,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -856,6 +870,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
@@ -894,6 +909,19 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
+}
+
+func (prepareStmt *PrepareStmt) invalidateRewritePolicy() {
+	if prepareStmt != nil {
+		prepareStmt.rewritePolicyInvalidated.Store(true)
+	}
+}
+
+func (prepareStmt *PrepareStmt) checkRewritePolicy(ctx context.Context) error {
+	if prepareStmt != nil && prepareStmt.rewritePolicyInvalidated.Load() {
+		return moerr.NewNeedReprepare(ctx)
+	}
+	return nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -1182,6 +1210,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	cursorResultSaver StagedBinaryWriter
+	resultMetadata    *deferredResultMetadata
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -1199,6 +1228,7 @@ type ExecCtx struct {
 }
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.resultMetadata = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil
 	execCtx.implicitCommitBefore = false
@@ -1285,6 +1315,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.resultMetadata = nil
 	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
@@ -1969,6 +2000,9 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	} else {
 		ses.sesSysVars.Set(canonicalName, val)
 	}
+	if err == nil && name == "mo_sirius_campaign_evidence" {
+		ses.campaignEvidenceEnabled.Store(val.(int8) != 0)
+	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeNoAutoValueOnZero(val)
 	}
@@ -2021,6 +2055,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	// state must invalidate the cached prepared statements, otherwise a later
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.bumpRewritePolicyGeneration()
 		ses.RemoveAllPrepareStmts()
 	}
 	if err == nil {

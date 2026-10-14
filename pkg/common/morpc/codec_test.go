@@ -24,8 +24,10 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,7 +155,9 @@ func TestCodecRejectsTruncatedTraceHeader(t *testing.T) {
 
 func TestCodecCancelsContextAfterDecodeError(t *testing.T) {
 	header := &failingContextHeaderCodec{}
-	codec := newTestCodec().(*messageCodec)
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	codec := newTestCodec(withCodecDecodeParent(func() context.Context { return parent })).(*messageCodec)
 	codec.bc.headerCodecs = []HeaderCodec{&deadlineContextCodec{}, header}
 
 	data := make([]byte, 0, 9)
@@ -166,10 +170,70 @@ func TestCodecCancelsContextAfterDecodeError(t *testing.T) {
 	require.False(t, ok)
 	require.Error(t, err)
 	require.NotNil(t, header.ctx)
+	require.NoError(t, parent.Err())
 	select {
 	case <-header.ctx.Done():
 	case <-time.After(time.Second):
 		t.Fatal("decode error did not cancel the decoded context")
+	}
+}
+
+func TestCodecDecodedContextLifetime(t *testing.T) {
+	parent, closeParent := context.WithCancel(context.Background())
+	defer closeParent()
+	wireCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	span := trace.SpanContextWithIDs(trace.TraceID{1}, trace.SpanID{2})
+	wireCtx = trace.ContextWithSpanContext(wireCtx, span)
+	decode := func(root context.Context, expired bool) RPCMessage {
+		t.Helper()
+		codec := NewMessageCodec("", func() Message { return &codecBodyMessage{} }, withCodecDecodeParent(func() context.Context { return root }))
+		out := buf.NewByteBuf(128)
+		defer out.Close()
+		require.NoError(t, codec.Encode(RPCMessage{Ctx: wireCtx, Message: &codecBodyMessage{}}, out, nil))
+		if expired {
+			buf.Int64ToBytesTo(0, out.RawSlice(5, 13))
+		}
+		v, ok, err := codec.Decode(out)
+		require.NoError(t, err)
+		require.True(t, ok)
+		msg := v.(RPCMessage)
+		t.Cleanup(msg.Cancel)
+		expected := span
+		expected.Kind = trace.SpanKindRemote
+		require.Equal(t, expected, trace.SpanFromContext(msg.Ctx).SpanContext())
+		return msg
+	}
+	raw, owned, expired := decode(nil, false), decode(parent, false), decode(parent, true)
+	deadline, ok := owned.Ctx.Deadline()
+	require.True(t, ok)
+	require.Greater(t, time.Until(deadline), 30*time.Minute)
+	require.ErrorIs(t, expired.Ctx.Err(), context.DeadlineExceeded)
+	require.ErrorIs(t, context.Cause(expired.Ctx), moerr.CauseDeadlineContextCodec)
+	closeParent()
+	require.ErrorIs(t, owned.Ctx.Err(), context.Canceled)
+	require.ErrorIs(t, context.Cause(owned.Ctx), context.Canceled)
+	require.NoError(t, raw.Ctx.Err(), "raw/client decode is independent of method-server lifetime")
+	require.ErrorIs(t, context.Cause(expired.Ctx), moerr.CauseDeadlineContextCodec, "shutdown must not replace an expired deadline cause")
+}
+
+func TestMethodCodecRejectsHeaderlessFramesBeforeAcquisition(t *testing.T) {
+	for _, flag := range []byte{0, flagPing} {
+		parent, cancel := context.WithCancel(context.Background())
+		acquisitions := 0
+		factory := func() Message { acquisitions++; return &codecBodyMessage{} }
+		data := append([]byte{flag}, make([]byte, 8)...)
+		for _, decodeParent := range []context.Context{parent, nil} {
+			_, ok, err := NewMessageCodec("", factory, withCodecDecodeParent(func() context.Context { return decodeParent })).Decode(newCodecFrame(t, data))
+			require.Error(t, err)
+			require.False(t, ok)
+			require.Zero(t, acquisitions)
+		}
+		v, ok, err := NewMessageCodec("", factory).Decode(newCodecFrame(t, data))
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Nil(t, v.(RPCMessage).Ctx)
+		cancel()
 	}
 }
 

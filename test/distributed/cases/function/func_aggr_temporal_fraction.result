@@ -1,17 +1,20 @@
+DROP TABLE IF EXISTS temporal_sum_avg_ctas;
+DROP VIEW IF EXISTS temporal_sum_avg;
 DROP TABLE IF EXISTS variance_fraction;
 CREATE TABLE variance_fraction (
 id INT,
+date_value DATE,
 t TIME(6),
 d DATETIME(6),
 ts TIMESTAMP(6)
 );
 INSERT INTO variance_fraction VALUES
-(1, '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
-(1, '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
-(1, NULL, NULL, NULL),
-(2, '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
-(2, '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
-(2, NULL, NULL, NULL);
+(1, '2020-01-01', '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+(1, '2020-01-02', '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+(1, NULL, NULL, NULL, NULL),
+(2, '2020-01-01', '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+(2, '2020-01-02', '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+(2, NULL, NULL, NULL, NULL);
 SELECT id,
 VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t),
 VAR_POP(d), VAR_SAMP(d), STDDEV_POP(d), STDDEV_SAMP(d),
@@ -22,13 +25,71 @@ ORDER BY id;
 ➤ id[4,32,0]  ¦  VAR_POP(t)[3,38,12]  ¦  VAR_SAMP(t)[3,38,12]  ¦  STDDEV_POP(t)[3,38,12]  ¦  STDDEV_SAMP(t)[3,38,12]  ¦  VAR_POP(d)[3,38,12]  ¦  VAR_SAMP(d)[3,38,12]  ¦  STDDEV_POP(d)[3,38,12]  ¦  STDDEV_SAMP(d)[3,38,12]  ¦  VAR_POP(ts)[3,38,12]  ¦  VAR_SAMP(ts)[3,38,12]  ¦  STDDEV_POP(ts)[3,38,12]  ¦  STDDEV_SAMP(ts)[3,38,12]  𝄀
 1  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  𝄀
 2  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+SELECT id, SUM(date_value), AVG(date_value), SUM(t), AVG(t),
+SUM(d), AVG(d), SUM(ts), AVG(ts)
+FROM variance_fraction GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  SUM(date_value)[3,60,0]  ¦  AVG(date_value)[3,42,4]  ¦  SUM(t)[3,60,6]  ¦  AVG(t)[3,42,10]  ¦  SUM(d)[3,60,6]  ¦  AVG(d)[3,42,10]  ¦  SUM(ts)[3,60,6]  ¦  AVG(ts)[3,42,10]  𝄀
+1  ¦  40400203  ¦  20200101.5000  ¦  0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  𝄀
+2  ¦  40400203  ¦  20200101.5000  ¦  -0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000
+SELECT SUM(t), AVG(t), SUM(d), AVG(d), SUM(ts), AVG(ts)
+FROM variance_fraction WHERE t IS NULL;
+➤ SUM(t)[3,60,6]  ¦  AVG(t)[3,42,10]  ¦  SUM(d)[3,60,6]  ¦  AVG(d)[3,42,10]  ¦  SUM(ts)[3,60,6]  ¦  AVG(ts)[3,42,10]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT SUM(t), AVG(t), SUM(date_value), AVG(date_value)
+FROM variance_fraction WHERE id < 0;
+➤ SUM(t)[3,60,6]  ¦  AVG(t)[3,42,10]  ¦  SUM(date_value)[3,60,0]  ¦  AVG(date_value)[3,42,4]  𝄀
+null  ¦  null  ¦  null  ¦  null
+SELECT id, CAST(t AS DECIMAL(38,6)) AS numeric_time,
+SUM(t) OVER (PARTITION BY id ORDER BY t ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+AVG(t) OVER (PARTITION BY id ORDER BY t ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_avg
+FROM variance_fraction ORDER BY id, t;
+➤ id[4,32,0]  ¦  numeric_time[3,38,6]  ¦  running_sum[3,60,6]  ¦  running_avg[3,42,10]  𝄀
+1  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  0.100000  ¦  0.100000  ¦  0.1000000000  𝄀
+1  ¦  0.300000  ¦  0.400000  ¦  0.2000000000  𝄀
+2  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  -0.300000  ¦  -0.300000  ¦  -0.3000000000  𝄀
+2  ¦  -0.100000  ¦  -0.400000  ¦  -0.2000000000
 SET @variance_fraction_id = 1;
 PREPARE variance_fraction_stmt FROM
-'SELECT VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
+'SELECT SUM(t), AVG(t), SUM(d), AVG(d), SUM(ts), AVG(ts), VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
 EXECUTE variance_fraction_stmt USING @variance_fraction_id;
-➤ VAR_POP(t)[3,38,12]  ¦  VAR_SAMP(t)[3,38,12]  ¦  STDDEV_POP(t)[3,38,12]  ¦  STDDEV_SAMP(t)[3,38,12]  𝄀
-0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[3,38,12]  ¦  VAR_SAMP(variance_fraction.t)[3,38,12]  ¦  STDDEV_POP(variance_fraction.t)[3,38,12]  ¦  STDDEV_SAMP(variance_fraction.t)[3,38,12]  𝄀
+0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+SET @variance_fraction_id = 2;
+EXECUTE variance_fraction_stmt USING @variance_fraction_id;
+➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[3,38,12]  ¦  VAR_SAMP(variance_fraction.t)[3,38,12]  ¦  STDDEV_POP(variance_fraction.t)[3,38,12]  ¦  STDDEV_SAMP(variance_fraction.t)[3,38,12]  𝄀
+-0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
 DEALLOCATE PREPARE variance_fraction_stmt;
+CREATE VIEW temporal_sum_avg AS
+SELECT id, SUM(date_value) AS date_sum, AVG(date_value) AS date_avg,
+SUM(t) AS time_sum, AVG(t) AS time_avg, SUM(d) AS datetime_sum, AVG(d) AS datetime_avg,
+SUM(ts) AS timestamp_sum, AVG(ts) AS timestamp_avg
+FROM variance_fraction GROUP BY id;
+SELECT * FROM temporal_sum_avg ORDER BY id;
+➤ id[4,32,0]  ¦  date_sum[3,60,0]  ¦  date_avg[3,42,4]  ¦  time_sum[3,60,6]  ¦  time_avg[3,42,10]  ¦  datetime_sum[3,60,6]  ¦  datetime_avg[3,42,10]  ¦  timestamp_sum[3,60,6]  ¦  timestamp_avg[3,42,10]  𝄀
+1  ¦  40400203  ¦  20200101.5000  ¦  0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  𝄀
+2  ¦  40400203  ¦  20200101.5000  ¦  -0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000
+CREATE TABLE temporal_sum_avg_ctas AS SELECT * FROM temporal_sum_avg;
+SELECT * FROM temporal_sum_avg_ctas ORDER BY id;
+➤ id[4,32,0]  ¦  date_sum[3,60,0]  ¦  date_avg[3,42,4]  ¦  time_sum[3,60,6]  ¦  time_avg[3,42,10]  ¦  datetime_sum[3,60,6]  ¦  datetime_avg[3,42,10]  ¦  timestamp_sum[3,60,6]  ¦  timestamp_avg[3,42,10]  𝄀
+1  ¦  40400203  ¦  20200101.5000  ¦  0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  𝄀
+2  ¦  40400203  ¦  20200101.5000  ¦  -0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000
+SELECT column_name, data_type, numeric_precision, numeric_scale FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'temporal_sum_avg_ctas'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+id  ¦  int  ¦  10  ¦  0  𝄀
+date_sum  ¦  decimal  ¦  60  ¦  0  𝄀
+date_avg  ¦  decimal  ¦  42  ¦  4  𝄀
+time_sum  ¦  decimal  ¦  60  ¦  6  𝄀
+time_avg  ¦  decimal  ¦  42  ¦  10  𝄀
+datetime_sum  ¦  decimal  ¦  60  ¦  6  𝄀
+datetime_avg  ¦  decimal  ¦  42  ¦  10  𝄀
+timestamp_sum  ¦  decimal  ¦  60  ¦  6  𝄀
+timestamp_avg  ¦  decimal  ¦  42  ¦  10
+DROP TABLE temporal_sum_avg_ctas;
+DROP VIEW temporal_sum_avg;
 DROP TABLE variance_fraction;
 DROP TABLE IF EXISTS temporal_variance_precision;
 CREATE TABLE temporal_variance_precision (

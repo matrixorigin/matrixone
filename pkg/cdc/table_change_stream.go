@@ -91,6 +91,7 @@ type TableChangeStream struct {
 	recoverySnapshot     bool
 	recoveryStart        types.TS
 	ownerFence           *OwnerFence
+	tableDetector        *TableDetector
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -184,6 +185,7 @@ type tableChangeStreamOptions struct {
 	recoverySnapshot          bool
 	recoveryStart             types.TS
 	ownerFence                *OwnerFence
+	tableDetector             *TableDetector
 }
 
 const (
@@ -295,6 +297,11 @@ func WithInitialSnapshotPending(pending bool) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.initialSnapshotPending = &pending
 	}
+}
+
+// WithTableDetector binds stream accounting to its owning CN generation.
+func WithTableDetector(detector *TableDetector) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) { opts.tableDetector = detector }
 }
 
 // WithOwnerFence checks that this stream still owns the exact daemon-task
@@ -438,6 +445,7 @@ var NewTableChangeStream = func(
 		recoverySnapshot:          opts.recoverySnapshot,
 		recoveryStart:             opts.recoveryStart,
 		ownerFence:                opts.ownerFence,
+		tableDetector:             opts.tableDetector,
 		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
@@ -504,7 +512,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	)
 
 	// 2. Register with CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.AddActiveRunner(s.tableInfo)
 	}
 
@@ -814,7 +822,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 
 	// Unregister from CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.RemoveActiveRunner(s.tableInfo)
 	}
 
@@ -1435,7 +1443,7 @@ func (s *TableChangeStream) processWithTxn(
 	s.progressTracker.SetTargetWatermark(toTs)
 
 	// Update CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.UpdateActiveRunner(s.tableInfo, fromTs, toTs, true)
 		defer detector.cdcStateManager.UpdateActiveRunner(s.tableInfo, fromTs, toTs, false)
 	}

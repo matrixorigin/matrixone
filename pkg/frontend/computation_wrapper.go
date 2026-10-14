@@ -96,6 +96,7 @@ type TxnComputationWrapper struct {
 	runtimeCacheKey             string
 	runtimeCachePlan            *plan.Plan
 	runtimeCacheDiagnostics     []*plan.Expr
+	runtimeCacheColDefData      [][]byte
 	runtimeCacheRetiredCompiles []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
@@ -680,19 +681,27 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	if stm := cwft.ses.GetStmtInfo(); stm != nil {
-		waitActiveCost := time.Duration(0)
-		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-			txn := handler.GetTxn()
-			if txn != nil {
-				waitActiveCost = txn.GetWaitActiveCost()
-			}
+	return cwft.recordExecPlan(ctx, phyPlan, nil)
+}
+
+// statementWaitActiveCost copies the admission measurement before transaction
+// release. A missing measurement is distinct from a measured zero.
+func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
+	if handler := cwft.ses.GetTxnHandler(); handler != nil && handler.InActiveTxn() {
+		if txn := handler.GetTxn(); txn != nil {
+			return txn.GetWaitActiveCost()
 		}
+	}
+	return -1
+}
+
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
-			WithWaitActiveCost(waitActiveCost),
+			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...)
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -715,7 +724,7 @@ func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx conte
 	}
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		stm.DisableAgg()
-		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot))
+		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot, cwft.statementWaitActiveCost()))
 	}
 }
 
@@ -813,7 +822,8 @@ func (cwft *TxnComputationWrapper) completeCompileExecution(
 }
 
 func (cwft *TxnComputationWrapper) syncCompileExecution(runningCompile Compile) {
-	// Sync the latest plan generation after Run (it may have changed on retry).
+	// Sync the latest plan generation before publishing metadata or after Run
+	// (it may have changed on retry).
 	cwft.plan = runningCompile.GetPlan()
 	cwft.planSnapshotTS, cwft.hasPlanSnapshotTS = runningCompile.PlanSnapshotTS()
 }
@@ -1319,10 +1329,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
-	currentNativeMode := owner.sqlModeHasMatrixOneNative()
-	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
-	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
-	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	currentSQLMode := sessionSQLMode(owner)
+	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
+	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
+	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
 	currentDivPrecisionIncrement := owner.currentDivPrecisionIncrement()
 	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 	reqCtx = function.WithDivPrecisionIncrement(reqCtx, int32(currentDivPrecisionIncrement))
@@ -1728,6 +1739,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	runtimePlanApplied := false
 	var cachedRuntimeCompile *compile.Compile
+	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
 		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
@@ -1749,6 +1761,9 @@ func initExecuteStmtParamWithResolverInSession(
 				cachedRuntimeCompile = prepareStmt.runtimeCompile
 				cwft.preparedJoinDiagnosticFree = true
 				runtimePlanApplied = true
+				if binaryExecute && !hasPreparedGroupConcat {
+					runtimeColDefData = prepareStmt.runtimeColDefData
+				}
 			}
 		}
 		if !runtimePlanApplied {
@@ -1792,7 +1807,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		runtimePlanApplied = true
 	}
-	if binaryExecute && runtimePlanApplied {
+	if binaryExecute && runtimePlanApplied && runtimeColDefData == nil {
 		columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
 			prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
 			groupConcatMaxLenFloor)
@@ -1804,7 +1819,13 @@ func initExecuteStmtParamWithResolverInSession(
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}
-		execCtx.prepareColDef = colDefData
+		runtimeColDefData = colDefData
+		if cwft.runtimeCacheTarget != nil && !hasPreparedGroupConcat {
+			cwft.runtimeCacheColDefData = colDefData
+		}
+	}
+	if binaryExecute && runtimePlanApplied {
+		execCtx.prepareColDef = runtimeColDefData
 	}
 
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -1866,6 +1887,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheColDefData = nil
 }
 
 func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
@@ -1885,7 +1907,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheColDefData)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call
@@ -2849,6 +2871,13 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))

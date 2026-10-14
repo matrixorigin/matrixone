@@ -45,6 +45,23 @@ func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	requireNoFuncNames(t, ret, "in_range", "between")
 }
 
+func TestDoMergeFiltersOnCompositeKeyKeepsNativeUnicodePredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	tableDef := makeExprOptCompositeSortKeyTableDef()
+	tableDef.Cols[0].Typ = planpb.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+	}
+	filter := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
+
+	ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, filter)
+
+	require.Len(t, ret, 1)
+	require.Same(t, filter, ret[0])
+}
+
 func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)

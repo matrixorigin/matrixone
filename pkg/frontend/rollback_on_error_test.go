@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -214,4 +215,56 @@ func TestPreExecutionRollbackIsGuarded(t *testing.T) {
 	require.NotPanics(t, func() { rollbackWholeTxnOnPreExecutionError(ses, execCtx, nil) })
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
+}
+
+// Test-only factories derive their cases from the shared failure owner.
+var errCodeRollbackWholeTxn = func() map[uint16]bool {
+	ret := make(map[uint16]bool)
+	for _, code := range moerr.WholeTxnRollbackCodes() {
+		ret[code] = false
+	}
+	return ret
+}()
+
+func getRandomErrorRollbackWholeTxn() error {
+	x := rand.Intn(len(errCodeRollbackWholeTxn))
+	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
+	for k := range errCodeRollbackWholeTxn {
+		arr = append(arr, k)
+	}
+	return newErrorRollbackWholeTxn(arr[x])
+}
+
+// newErrorRollbackWholeTxn keeps the test error factory in sync with
+// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
+// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
+func newErrorRollbackWholeTxn(code uint16) error {
+	switch code {
+	case moerr.ErrRetryForCNRollingRestart:
+		return moerr.NewRetryForCNRollingRestart()
+	case moerr.ErrDeadLockDetected:
+		return moerr.NewDeadLockDetectedNoCtx()
+	case moerr.ErrLockTableBindChanged:
+		return moerr.NewLockTableBindChangedNoCtx()
+	case moerr.ErrLockTableNotFound:
+		return moerr.NewLockTableNotFoundNoCtx()
+	case moerr.ErrDeadlockCheckBusy:
+		return moerr.NewDeadlockCheckBusyNoCtx()
+	case moerr.ErrLockConflict:
+		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrRemoteLockWaitTimeout:
+		return moerr.NewRemoteLockWaitTimeoutNoCtx()
+	case moerr.ErrLockWaitTimeout:
+		return moerr.NewLockWaitTimeoutNoCtx()
+	case moerr.ErrTxnUnknown:
+		return moerr.NewTxnUnknown(context.Background(), "test")
+	case moerr.ErrBackendClosed:
+		return moerr.NewBackendClosedNoCtx()
+	case moerr.ErrNoAvailableBackend:
+		return moerr.NewNoAvailableBackendNoCtx()
+	case moerr.ErrBackendCannotConnect:
+		return moerr.NewBackendCannotConnectNoCtx("test")
+	default:
+		panic(fmt.Sprintf("unsupported error code %d", code))
+	}
 }

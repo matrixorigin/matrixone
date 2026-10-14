@@ -20,6 +20,10 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
+	stdRuntime "runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -61,20 +65,67 @@ var randomPorts = allocatedPorts{
 }
 
 func getAvailablePort() int {
-	port, err := randomPorts.allocate(probeTestPort)
+	first, limit, err := testPortRange()
+	if err != nil {
+		panic(err)
+	}
+	port, err := randomPorts.allocate(first, limit, probeTestPort)
 	if err != nil {
 		panic(err) // Preserve the existing fixture API, but fail promptly with the cause.
 	}
 	return port
 }
 
-const maxPortAllocationAttempts = 128
+const (
+	maxPortAllocationAttempts = 128
+	firstTestPort             = 21024
+	testPortLimit             = 65535
+)
 
-func (a *allocatedPorts) allocate(probe func(int) error) (int, error) {
+// Probing a port does not reserve it. Keep candidate listener ports outside
+// the automatic client-port range so outbound traffic cannot claim them in
+// the gap between the probe and service startup. Explicit binds can still
+// race that gap; they are not coordinated by the process-local used-port map.
+func testPortRange() (int, int, error) {
+	if stdRuntime.GOOS != "linux" {
+		// Conservative for the default macOS dynamic-port range (49152+).
+		// Unlike Linux, customized non-Linux ranges are not inspected here.
+		return firstTestPort, 32768, nil
+	}
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		return 0, 0, &testPortAllocationError{message: fmt.Sprintf("read automatic client-port range: %v", err), cause: err}
+	}
+	return testPortRangeOutsideEphemeral(string(data))
+}
+
+func testPortRangeOutsideEphemeral(value string) (int, int, error) {
+	fields := strings.Fields(value)
+	if len(fields) == 2 {
+		low, lowErr := strconv.Atoi(fields[0])
+		high, highErr := strconv.Atoi(fields[1])
+		if lowErr == nil && highErr == nil && low > 0 && low <= high && high <= 65535 {
+			belowLimit := max(firstTestPort, min(testPortLimit, low))
+			aboveFirst := min(testPortLimit, max(firstTestPort, high+1))
+			// Choose the larger contiguous interval; neither includes the
+			// configured inclusive ephemeral range.
+			if belowLimit-firstTestPort >= testPortLimit-aboveFirst && belowLimit > firstTestPort {
+				return firstTestPort, belowLimit, nil
+			}
+			if aboveFirst < testPortLimit {
+				return aboveFirst, testPortLimit, nil
+			}
+			return 0, 0, &testPortAllocationError{message: "automatic client-port range leaves no test listener ports"}
+		}
+	}
+	return 0, 0, &testPortAllocationError{message: fmt.Sprintf("invalid automatic client-port range %q", value)}
+}
+
+func (a *allocatedPorts) allocate(first, limit int, probe func(int) error) (int, error) {
 	a.Lock()
 	defer a.Unlock()
 	for range maxPortAllocationAttempts {
-		port := rand.Intn(65535-21024) + 21024
+		port := rand.Intn(limit-first) + first
 		if _, exists := a.ports[port]; exists {
 			continue
 		}

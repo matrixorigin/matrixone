@@ -16,11 +16,16 @@ package iscp
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +33,7 @@ type ivfflatIncludeColSpec struct {
 	name  string
 	typ   types.T
 	width int32
+	scale int32
 }
 
 func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32, includeCols ...ivfflatIncludeColSpec) *plan.TableDef {
@@ -45,7 +51,7 @@ func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, ve
 	includedColumns := make([]string, 0, len(includeCols))
 	for _, includeCol := range includeCols {
 		name2ColIndex[includeCol.name] = int32(len(cols))
-		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width}})
+		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width, Scale: includeCol.scale}})
 		includedColumns = append(includedColumns, includeCol.name)
 	}
 
@@ -412,6 +418,70 @@ func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "'news'")
 }
 
+func TestNewIvfflatSqlWriterPreservesTemporalIncludeScale(t *testing.T) {
+	for _, scale := range []int32{0, 3, 6} {
+		t.Run(fmt.Sprintf("scale%d", scale), func(t *testing.T) {
+			tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2,
+				ivfflatIncludeColSpec{name: "ts", typ: types.T_timestamp, scale: scale},
+				ivfflatIncludeColSpec{name: "dt", typ: types.T_datetime, scale: scale},
+				ivfflatIncludeColSpec{name: "tm", typ: types.T_time, scale: scale})
+			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+			require.NoError(t, err)
+			for _, write := range []func(context.Context, []any) error{writer.Insert, writer.Upsert} {
+				require.NoError(t, write(t.Context(), []any{int64(1), []float32{1, 2}, nil,
+					"2026-01-02 03:04:05.123456", "2026-01-02 03:04:05.123456", "03:04:05.123456"}))
+				require.NoError(t, write(t.Context(), []any{int64(2), []float32{2, 1}, nil, nil, nil, nil}))
+				sqlBytes, err := writer.ToSql()
+				require.NoError(t, err)
+				sql := string(sqlBytes)
+				for i, typ := range []string{"TIMESTAMP", "DATETIME", "TIME"} {
+					require.Contains(t, sql, fmt.Sprintf("CAST(column_%d as %s(%d))", i+2, typ, scale))
+				}
+				require.Contains(t, sql, fmt.Sprintf("AS TIMESTAMP(%d))", scale))
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				stmt.Free()
+			}
+		})
+	}
+}
+
+func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing.T) {
+	for _, quantization := range []string{"int8", "uint8"} {
+		for _, opType := range []string{"vector_l2_ops", "vector_l2sq_ops"} {
+			t.Run(quantization+"/"+opType, func(t *testing.T) {
+				tabledef := newTestIvfflatTableDef(
+					"pk", types.T_enum, "vec", types.T_array_float32, 3,
+					ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
+					ivfflatIncludeColSpec{name: "status", typ: types.T_enum},
+				)
+				tabledef.Cols[0].Typ.Enumvalues = "first,second"
+				tabledef.Cols[4].Typ.Enumvalues = "cold,hot"
+				for _, indexDef := range tabledef.Indexes {
+					indexDef.IndexAlgoParams = `{"included_columns":"rank,status","lists":"16","op_type":"` + opType + `","quantization":"` + quantization + `"}`
+				}
+				writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+				require.NoError(t, err)
+				for _, write := range []func(context.Context, []any) error{writer.Insert, writer.Upsert} {
+					require.NoError(t, write(t.Context(), []any{types.Enum(1), []float32{1, 2, 3}, nil, int32(7), types.Enum(2)}))
+					require.NoError(t, write(t.Context(), []any{types.Enum(2), []float32{3, 2, 1}, nil, nil, nil}))
+					sqlBytes, err := writer.ToSql()
+					require.NoError(t, err)
+					sql := string(sqlBytes)
+					require.Contains(t, sql, "SERIAL_EXTRACT(src0, 0 as ENUM('first','second')), ")
+					require.Contains(t, sql, "), src2, SERIAL_EXTRACT(src3, 0 as ENUM('cold','hot')) FROM src")
+					require.Contains(t, sql, "cast(cast(src1")
+					require.NotContains(t, sql, "src2 *")
+					require.NotContains(t, sql, "src3 *")
+					stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+					require.NoError(t, err)
+					stmt.Free()
+				}
+			})
+		}
+	}
+}
+
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	var ctx context.Context
 
@@ -436,4 +506,66 @@ func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
 	require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1000,2000,3000)", string(bytes))
+}
+
+func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, pkMembers, includeMembers string
+	}{
+		{"distinct domains", "cold,hot,warm", "warm,cold,hot"},
+		{"numeric and escaped labels", "2,1", "a'b,c\\d"},
+		{"empty and numeric labels", ",2,1", ",2,1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tabledef := newTestIvfflatTableDef("pk", types.T_enum, "vec", types.T_array_float32, 2,
+				ivfflatIncludeColSpec{name: "status", typ: types.T_enum})
+			tabledef.Cols[0].Typ.Enumvalues = tc.pkMembers
+			tabledef.Cols[3].Typ.Enumvalues = tc.includeMembers
+			// Exercise the catalog reload path, without runtime INCLUDE metadata.
+			for _, idx := range tabledef.Indexes {
+				idx.IncludedColumns = nil
+				idx.IndexAlgoParams = `{"included_columns":"status","lists":"1","op_type":"vector_l2_ops"}`
+			}
+			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+			require.NoError(t, err)
+			for _, upsert := range []bool{false, true} {
+				writer.Reset()
+				write := writer.Insert
+				if upsert {
+					write = writer.Upsert
+				}
+				require.NoError(t, write(t.Context(), []any{types.Enum(1), []float32{0, 0}, nil, types.Enum(2)}))
+				require.NoError(t, write(t.Context(), []any{types.Enum(2), []float32{1, 0}, nil, nil}))
+				require.NoError(t, write(t.Context(), []any{types.Enum(0), []float32{2, 0}, nil, types.Enum(0)}))
+				generated, err := writer.ToSql()
+				require.NoError(t, err)
+				sql := string(generated)
+				require.Contains(t, sql, "VALUES ROW(x'503d1501',CAST('[0, 0]' as VECF32(2)),x'503d1502'),ROW(x'503d1502',CAST('[1, 0]' as VECF32(2)),x'00'),ROW(x'503d14',CAST('[2, 0]' as VECF32(2)),x'503d14')")
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				stmt.Free()
+				// Inspect parsed domains from the actual generated tuple decoders.
+				for _, col := range []struct {
+					pattern, members string
+				}{
+					{`(SERIAL_EXTRACT\(src0, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
+					{`(SERIAL_EXTRACT\(src2, 0 as ENUM\(.*?\)\))`, tc.includeMembers},
+				} {
+					match := regexp.MustCompile(col.pattern).FindStringSubmatch(sql)
+					require.Len(t, match, 2)
+					parsed, err := mysql.ParseOne(t.Context(), "SELECT "+match[1], 1)
+					require.NoError(t, err)
+					decode := parsed.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SerialExtractExpr)
+					require.Equal(t, strings.Split(col.members, ","), decode.ResultType.(*tree.T).InternalType.EnumValues)
+					parsed.Free()
+				}
+			}
+			writer.Reset()
+			require.NoError(t, writer.Delete(t.Context(), []any{types.Enum(1)}))
+			require.NoError(t, writer.Delete(t.Context(), []any{types.Enum(0)}))
+			deleted, err := writer.ToSql()
+			require.NoError(t, err)
+			require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1,0)", string(deleted))
+		})
+	}
 }

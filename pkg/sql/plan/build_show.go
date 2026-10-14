@@ -699,6 +699,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
+	showColumnsCollation := "case internal_column_character_set(col.atttyp) " +
+		"WHEN 0 then 'utf8_general_ci' " +
+		"WHEN 1 then 'utf8mb4_bin' " +
+		"WHEN 3 then 'utf8mb4_general_ci' " +
+		"WHEN 4 then 'utf8_unicode_ci' " +
+		"WHEN 5 then 'utf8mb4_unicode_ci' " +
+		"else NULL end"
 
 	var sql string
 	if accountId == catalog.System_Account {
@@ -710,13 +717,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
 		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
@@ -984,7 +991,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
-		"`idx`.`column_name` as `Column_name`, " +
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
@@ -994,7 +1001,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`comment` as `Index_comment`, " +
 		"`idx`.`algo_params` as `Index_params`, " +
 		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +
-		"`idx`.`column_name` as `Expression` " +
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, mo_show_visible_bin(`tcl`.`attr_generated`, 5), `idx`.`column_name`) as `Expression` " +
 		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +
 		"on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) " +
 		"where `tcl`.`att_database` = '%s' AND " +
@@ -1025,7 +1032,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
-		"`idx`.`algo_params`, `idx`.`is_visible` " +
+		"`idx`.`algo_params`, `idx`.`is_visible`, `tcl`.`att_is_hidden`, `tcl`.`attr_has_generated`, `tcl`.`attr_generated` " +
 		// Match MySQL's index classes, then preserve catalog creation order within each class.
 		// MIN(id) supplies one stable key without defeating the GROUP BY deduplication above.
 		"ORDER BY CASE `idx`.`type` WHEN 'PRIMARY' THEN 0 WHEN 'UNIQUE' THEN 1 ELSE 2 END, " +

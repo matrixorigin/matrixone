@@ -3738,6 +3738,11 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		// Resolve the new active role's mandatory row rules before leaving the
+		// role switch. If the request was captured under an empty role, this
+		// current-policy check invalidates old handles only when the new role has
+		// rules; a failed load is treated as unknown and fails closed.
+		ses.refreshRewritePolicyAndValidatePrepared(ctx)
 		// SET ROLE validated membership in the transaction above, but a session
 		// with privilege caching disabled must not leave a grant decision behind
 		// for a later OFF -> ON transition to reuse after REVOKE.
@@ -3831,6 +3836,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		credentials = formatCredentials(cs.Credentials)
 
 		StageStatus = "in_use"
+		if cs.Status.Exist {
+			StageStatus = cs.Status.Option.String()
+		}
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
@@ -9401,7 +9409,15 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 
 	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
 	// instead of manually parsing AST table references.
-	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	compilerContext := ses.GetTxnCompileCtx()
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
+	sourcePlan, err := buildPlan(ctx, ses, compilerContext, plan2.DeepCopySelect(st.AsSource))
 	if err != nil {
 		return false, stats, err
 	}
@@ -10890,12 +10906,14 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 
 	start1 := time.Now()
 
-	// create tables for the tenant
+	// Only these binary-owned catalog declarations use internal DDL admission;
+	// do not pass the marker to the tenant's subsequent data or user statements.
+	internalDDL := context.WithValue(newTenantCtx, defines.InternalExecutorKey{}, true)
 	for _, sql := range createSqls {
 		if isSysOnlyDb(sql) {
 			continue
 		}
-		if err = bh.Exec(newTenantCtx, sql); err != nil {
+		if err = bh.Exec(internalDDL, sql); err != nil {
 			return err
 		}
 	}
@@ -11013,9 +11031,14 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	var err error
 	protocol := protocolVersionForTenantInitialization(service)
 	if protocol >= defines.MORPCVersion100 {
-		// A new CN can already speak 96 while an older CN still serves the
-		// cluster. Do not persist a View using a function that peer cannot plan.
-		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
+		// A new CN can already speak a newer protocol while an older CN still
+		// serves the cluster. Do not persist a View using a function that peer
+		// cannot plan.
+		requiredProtocol := defines.MORPCVersion100
+		if protocol >= defines.MORPCVersion109 {
+			requiredProtocol = defines.MORPCVersion109
+		}
+		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
 			return err
 		}
 	}
@@ -11037,7 +11060,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
+func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -11049,13 +11072,13 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) er
 		return err
 	}
 	if len(results) == 0 || results[0].GetRowCount() == 0 {
-		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion100)
+		return versions.CheckProtocolVersionResponse("", requiredProtocol)
 	}
 	encoded, err := results[0].GetString(ctx, 0, 0)
 	if err != nil {
 		return err
 	}
-	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion100)
+	return versions.CheckProtocolVersionResponse(encoded, requiredProtocol)
 }
 
 func protocolVersionForTenantInitialization(service string) int64 {

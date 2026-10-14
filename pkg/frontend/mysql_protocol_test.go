@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"net"
@@ -1366,7 +1367,8 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlGeometryResultSet() *MysqlResultSet {
+func makeMysqlGeometryResultSet(t *testing.T) *MysqlResultSet {
+	t.Helper()
 	var rs = &MysqlResultSet{}
 
 	name := "Geometry"
@@ -1374,11 +1376,10 @@ func makeMysqlGeometryResultSet() *MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
+	require.NoError(t, setMysqlColumnTypeInfo(context.Background(), types.T_geometry.ToType(), mysqlCol))
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -1938,7 +1939,7 @@ func TestMysqlResultSet(t *testing.T) {
 		},
 		{
 			sql: "select geometry",
-			mrs: makeMysqlGeometryResultSet(),
+			mrs: makeMysqlGeometryResultSet(t),
 		},
 		{
 			sql: "select date",
@@ -2251,7 +2252,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 							require.NoError(t, err)
 							data = strconv.AppendInt(data, value, 10)
 						}
-					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_GEOMETRY:
+					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
 						value, err := mrs.GetString(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = []byte(value)
@@ -2263,6 +2264,18 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = strconv.AppendFloat(data, value, 'g', -1, 64)
+					case defines.MYSQL_TYPE_GEOMETRY:
+						text, err := mrs.GetString(context.TODO(), rowIdx, i)
+						require.NoError(t, err)
+						golden := map[string]string{
+							"POINT(1 1)":          "000000000101000000000000000000f03f000000000000f03f",
+							"POINT(2 2)":          "00000000010100000000000000000000400000000000000040",
+							"LINESTRING(0 0,1 1)": "0000000001020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f",
+						}
+						encoded, ok := golden[text]
+						require.True(t, ok, text)
+						data, err = hex.DecodeString(encoded)
+						require.NoError(t, err)
 					case defines.MYSQL_TYPE_DATE:
 						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
@@ -2747,6 +2760,8 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
+		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
+		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -3342,6 +3357,47 @@ func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, types.T_int64, result.GetType().Oid)
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+}
+
+func TestParseExecuteDataPreparedJSONArrayInsertBinaryFloat32PreservesConcreteType(t *testing.T) {
+	const query = `select json_array_insert('[0]', '$[0]', ?)`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
+	runtimeType, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0))
+	require.True(t, ok)
+	require.Equal(t, types.T_float32, runtimeType.Oid)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
+	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_json, result.GetType().Oid)
+	require.False(t, result.IsNull(0))
+	require.Equal(t, `[0.10000000149011612, 0]`, types.DecodeJson(result.GetBytesAt(0)).String())
 }
 
 func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {

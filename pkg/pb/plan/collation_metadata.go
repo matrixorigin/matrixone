@@ -49,7 +49,21 @@ func (t *TableDef) ValidateCollation() error {
 	if err := collation.ValidateMetadata(t.DefaultCharset, t.CollationVersion); err != nil {
 		return err
 	}
-	return collation.ValidateKeyFormat(t.KeyFormat)
+	if err := collation.ValidateKeyFormat(t.KeyFormat); err != nil {
+		return err
+	}
+	for _, index := range t.Indexes {
+		if index == nil {
+			continue
+		}
+		if err := collation.ValidateKeyFormatPair(t.KeyFormat, index.KeyFormat); err != nil {
+			// Keep the existing execution-boundary contract explicit: a
+			// partially upgraded or mismatched index must be rejected as a
+			// disabled physical-key domain, before any plan is admitted.
+			return moerr.NewInvalidInputNoCtxf("disabled collation key format: %v", err)
+		}
+	}
+	return nil
 }
 
 func (t *IndexDef) ValidateCollation() error {

@@ -311,7 +311,7 @@ func installGroupTestAllocation(
 }
 
 func TestGroupAllocationBindingAndRecoveryBoundaryMatrix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)

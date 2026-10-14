@@ -2815,7 +2815,13 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 		if err != nil {
 			return nil, nil, err
 		}
-		if domainless {
+		declared := regexpDeclaredStringType(args[i])
+		if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_varbinary &&
+			!preparedRegexpMarkerOperand(args[i]) {
+			modes[i] = planfunction.StringDomainCheckBinaryCast
+		} else if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_blob {
+			modes[i] = planfunction.StringDomainCheckBinaryBlob
+		} else if domainless {
 			modes[i] = planfunction.StringDomainCheckDomainless
 		} else if _, direct := preparedParamPosition(args[i]); direct ||
 			(preparedBindingState(ctx) != nil && preparedRegexpMarkerOperand(args[i])) {
@@ -4522,6 +4528,7 @@ func preparedFixedDecimalCommonType(
 func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 	hasDecimal := false
 	hasFloat := false
+	decimalCarrier := types.T_decimal64
 	maxIntegralWidth := int32(0)
 	maxScale := int32(0)
 	for _, operand := range operands {
@@ -4536,6 +4543,9 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 			hasFloat = true
 		case typ.Oid.IsDecimal():
 			hasDecimal = true
+			if typ.Oid.TypeLen() > decimalCarrier.TypeLen() {
+				decimalCarrier = typ.Oid
+			}
 			width := typ.Width
 			if width <= 0 {
 				width = typ.Oid.ToType().Width
@@ -4563,9 +4573,12 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 		width = 1
 	}
 	switch {
-	case width <= types.T_decimal64.ToType().Width:
+	// Keep an exact source's physical carrier even when its declared domain
+	// fits a smaller one. Narrowing a native column adds an unnecessary cast
+	// and hides it from block/index filters without changing width or scale.
+	case width <= types.T_decimal64.ToType().Width && decimalCarrier == types.T_decimal64:
 		return types.New(types.T_decimal64, width, maxScale), true
-	case width <= types.T_decimal128.ToType().Width:
+	case width <= types.T_decimal128.ToType().Width && decimalCarrier != types.T_decimal256:
 		return types.New(types.T_decimal128, width, maxScale), true
 	case width <= types.T_decimal256.ToType().Width:
 		return types.New(types.T_decimal256, width, maxScale), true

@@ -257,7 +257,7 @@ func newTestPartitionBinder(t testing.TB) *PartitionBinder {
 		BindingTags: []int32{builder.GenNewBindTag()},
 	}, bindContext)
 
-	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext, "")
 	if err != nil {
 		panic(err)
 	}
