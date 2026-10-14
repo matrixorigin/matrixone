@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"math"
 
+	"github.com/gogo/protobuf/proto"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -4302,6 +4304,47 @@ func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	return nil, false
 }
 
+// correlatedSetIdentityPredicate rebinds a branch's exported correlation
+// slot without changing its comparison or outer identity. Range partitions
+// are only safe for direct existential consumers, and must have an exact
+// integer domain (float canonicalization can merge unequal representations).
+func correlatedSetIdentityPredicate(expr *plan.Expr, childTag, setTag, pos int32, allowRange bool) (*plan.Expr, bool) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) != 2 {
+		return nil, false
+	}
+	if f.Func.ObjName != "=" {
+		if !allowRange {
+			return nil, false
+		}
+		switch f.Func.ObjName {
+		case "<", "<=", ">", ">=", "<>":
+		default:
+			return nil, false
+		}
+	}
+	inner, outer := f.Args[0], f.Args[1]
+	if inner.GetCorr() != nil {
+		inner, outer = outer, inner
+	}
+	col, corr := inner.GetCol(), outer.GetCorr()
+	if col == nil || corr == nil || corr.Depth != 1 || col.RelPos != childTag || col.ColPos != pos {
+		return nil, false
+	}
+	if f.Func.ObjName != "=" && !types.T(inner.Typ.Id).IsInteger() {
+		return nil, false
+	}
+	out := DeepCopyExpr(expr)
+	out.Ndv, out.Selectivity = 0, 0
+	for _, arg := range out.GetF().Args {
+		arg.Ndv, arg.Selectivity = 0, 0
+		if arg.GetCol() != nil {
+			arg.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: setTag, ColPos: pos}}
+		}
+	}
+	return out, true
+}
+
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
@@ -4315,6 +4358,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	var err error
 
 	var subPreds []*plan.Expr
+	childPreds := make([][]*plan.Expr, len(node.Children))
 	for i, childID := range node.Children {
 		childIsSubqueryRoot := isSubqueryRoot && len(node.Children) == 1 &&
 			node.Limit == nil && node.Offset == nil &&
@@ -4325,6 +4369,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			return 0, nil, err
 		}
 
+		childPreds[i] = subPreds
 		preds = append(preds, subPreds...)
 	}
 
@@ -4372,63 +4417,58 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 
 	case plan.Node_UNION, plan.Node_UNION_ALL:
-		left := builder.qry.Nodes[node.Children[0]]
-		right := builder.qry.Nodes[node.Children[1]]
-		pos := int32(len(node.ProjectList))
-		if len(left.ProjectList) == int(pos) && len(right.ProjectList) == int(pos) {
-			break
-		}
-		// The two arms must export the same hidden identity slot as well as
-		// their user columns. Collapse their matching correlation predicates
-		// into a single predicate on the union's new output slot.
 		errPrefix := "correlated UNION"
 		if node.NodeType == plan.Node_UNION_ALL {
 			errPrefix = "correlated local CTE: UNION ALL"
 		}
-		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+		if len(node.Children) != 2 || len(node.BindingTags) != 1 {
 			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
 		}
-		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
-		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
-		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
-		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
-		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
-			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
-			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
-			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
-			len(left.BindingTags) != 1 || len(right.BindingTags) != 1 ||
-			leftKey.GetCol().RelPos != left.BindingTags[0] || rightKey.GetCol().RelPos != right.BindingTags[0] ||
-			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
-			!isSameColumnType(leftKey.Typ, rightKey.Typ) ||
-			(node.NodeType == plan.Node_UNION && types.T(leftKey.Typ.Id) == types.T_any) {
-			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
+		left, right := builder.qry.Nodes[node.Children[0]], builder.qry.Nodes[node.Children[1]]
+		pos := len(node.ProjectList)
+		if len(left.ProjectList) == pos && len(right.ProjectList) == pos {
+			break
 		}
-		if node.NodeType == plan.Node_UNION && len(node.PhysicalEqualityKeyList) != 0 && len(node.PhysicalEqualityKeyList) != int(pos) {
+		width := len(left.ProjectList) - pos
+		if width <= 0 || len(right.ProjectList) != pos+width || len(childPreds[0]) != width || len(childPreds[1]) != width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
+		}
+		// Equality identities partition scalar/membership inputs. Range
+		// identities can produce several copies of one visible set member;
+		// admit them only where those copies cannot change existence.
+		allowRange := isSubqueryRoot && node.Limit == nil && node.Offset == nil &&
+			(subqueryType == plan.SubqueryRef_EXISTS || subqueryType == plan.SubqueryRef_NOT_EXISTS)
+		rebound := make([]*plan.Expr, width)
+		for i := range width {
+			typ := left.ProjectList[pos+i].Typ
+			if !isSameColumnType(typ, right.ProjectList[pos+i].Typ) || (node.NodeType == plan.Node_UNION && types.T(typ.Id) == types.T_any) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
+			}
+			lp, lok := correlatedSetIdentityPredicate(childPreds[0][i], left.BindingTags[0], node.BindingTags[0], int32(pos+i), allowRange)
+			rp, rok := correlatedSetIdentityPredicate(childPreds[1][i], right.BindingTags[0], node.BindingTags[0], int32(pos+i), allowRange)
+			if !lok || !rok || !proto.Equal(lp, rp) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
+			}
+			rebound[i] = lp
+		}
+		if node.NodeType == plan.Node_UNION && len(node.PhysicalEqualityKeyList) != 0 && len(node.PhysicalEqualityKeyList) != pos {
 			return 0, nil, moerr.NewInternalError(builder.GetContext(), "correlated UNION equality key width mismatch")
 		}
-		node.ProjectList = append(node.ProjectList, GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
-		if node.NodeType == plan.Node_UNION {
-			// User columns retain set membership keys; the hidden correlation
-			// identity uses scalar equality, including -0 = +0. An explicit raw
-			// float key also preserves that role through prepared specialization.
-			if len(node.PhysicalEqualityKeyList) == 0 &&
-				(types.T(leftKey.Typ.Id) == types.T_float32 || types.T(leftKey.Typ.Id) == types.T_float64) {
-				for _, expr := range node.ProjectList[:pos] {
-					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(expr))
+		for i := range width {
+			typ := left.ProjectList[pos+i].Typ
+			node.ProjectList = append(node.ProjectList, GetColExpr(typ, left.BindingTags[0], int32(pos+i)))
+			if node.NodeType == plan.Node_UNION {
+				// Hidden float identities retain scalar equality through
+				// prepared specialization; visible float keys remain set keys.
+				if len(node.PhysicalEqualityKeyList) == 0 && types.T(typ.Id).IsFloat() {
+					node.PhysicalEqualityKeyList = DeepCopyExprList(node.ProjectList[:pos+i])
+				}
+				if len(node.PhysicalEqualityKeyList) != 0 {
+					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(node.ProjectList[pos+i]))
 				}
 			}
-			if len(node.PhysicalEqualityKeyList) != 0 {
-				node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(node.ProjectList[pos]))
-			}
 		}
-		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
-		pred := DeepCopyExpr(preds[0])
-		for _, arg := range pred.GetF().Args {
-			if arg.GetCol() != nil {
-				*arg = *key
-			}
-		}
-		preds = []*plan.Expr{pred}
+		preds = rebound
 
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr
