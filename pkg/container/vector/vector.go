@@ -3776,12 +3776,12 @@ func (v *Vector) NeedDup() bool {
 
 // make sure the type check is done before calling this function
 func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
+	length := v.length
 	if v.IsConst() {
 		idx = 0
+		length = 1
 	}
-	var slice []T
-	ToSliceNoTypeCheck(v, &slice)
-	return slice[idx]
+	return toSliceOfLengthNoTypeCheck[T](v, length)[idx]
 }
 
 // Note:
@@ -3804,11 +3804,12 @@ func (v *Vector) CloneBytesAt(i int) []byte {
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
+	length := v.length
 	if v.IsConst() {
 		i = 0
+		length = 1
 	}
-	var bs []types.Varlena
-	ToSliceNoTypeCheck(v, &bs)
+	bs := toSliceOfLengthNoTypeCheck[types.Varlena](v, length)
 	return bs[i].GetByteSlice(v.area)
 }
 
