@@ -73,7 +73,20 @@ type DBEntry struct {
 	nameNodes map[string]*nodeList[*TableEntry]
 	link      *common.GenericSortedDList[*TableEntry]
 
-	nodesMu sync.RWMutex
+	nodesMu    sync.RWMutex
+	nameOrder  uint64 // protected by the DB lock
+	renameUndo map[uint64]*tableRenameUndo
+}
+
+type renameNameMutation struct {
+	name     string
+	node     *nameNode[*TableEntry]
+	inserted bool
+}
+
+type tableRenameUndo struct {
+	txnID     string
+	mutations []renameNameMutation
 }
 
 func (entry *TableEntry) Less(b *TableEntry) int {
@@ -237,14 +250,45 @@ func (e *DBEntry) txnGetNodeByName(
 	tenantID uint32,
 	name string,
 	txn txnif.TxnReader) (*common.GenericDLNode[*TableEntry], error) {
-	e.RLock()
-	defer e.RUnlock()
 	fullName := genTblFullName(tenantID, name)
-	node := e.nameNodes[fullName]
-	if node == nil {
-		return nil, moerr.GetOkExpectedEOB()
+	for {
+		e.RLock()
+		node, waitTxn := e.tryGetTableNodeByNameLocked(e.nameNodes[fullName], txn, name, 0)
+		e.RUnlock()
+		if waitTxn != nil {
+			waitTxn.GetTxnState(true)
+			continue
+		}
+		if node == nil {
+			return nil, moerr.GetOkExpectedEOB()
+		}
+		return node, nil
 	}
-	return node.TxnGetNodeLocked(txn, name)
+}
+
+// Caller holds the DB lock. No callback may wait while nodesMu is held.
+// excludedID models an intermediate binding removed by a same-name rename.
+func (e *DBEntry) tryGetTableNodeByNameLocked(list *nodeList[*TableEntry], txn txnif.TxnReader, name string, excludedID uint64) (node *common.GenericDLNode[*TableEntry], waitTxn txnif.TxnReader) {
+	if list == nil {
+		return
+	}
+	list.ForEachNodes(func(binding *nameNode[*TableEntry]) bool {
+		if excludedID != 0 && binding.id == excludedID {
+			return true
+		}
+		candidate := binding.GetNode()
+		visible, dropped, visibleName, wait := candidate.GetPayload().tryVisibilityAndName(txn)
+		if wait != nil {
+			waitTxn = wait
+			return false
+		}
+		if visible && !dropped && visibleName == name {
+			node = candidate
+			return false
+		}
+		return true
+	})
+	return
 }
 
 func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
@@ -375,26 +419,85 @@ func (e *DBEntry) PrettyNameIndex() string {
 }
 
 func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.TxnReader, first bool) error {
+	return e.renameTableInTxn(old, new, tid, tenantID, txn, first, txn != nil)
+}
+
+// Replay applies MVCC commit directly, so it must not retain live undo state.
+func (e *DBEntry) replayRenameTable(old, new string, tid uint64, tenantID uint32, txn txnif.TxnReader, first bool) error {
+	return e.renameTableInTxn(old, new, tid, tenantID, txn, first, false)
+}
+
+func (e *DBEntry) renameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.TxnReader, first, record bool) error {
 	e.Lock()
 	defer e.Unlock()
+	original := e.entries[tid]
+	var undo *tableRenameUndo
+	if record {
+		if e.renameUndo == nil {
+			e.renameUndo = make(map[uint64]*tableRenameUndo)
+		}
+		undo = e.renameUndo[tid]
+		if undo == nil {
+			undo = &tableRenameUndo{txnID: txn.GetID()}
+			e.renameUndo[tid] = undo
+		} else if undo.txnID != txn.GetID() {
+			return moerr.NewInternalErrorNoCtx("rename undo belongs to another transaction")
+		}
+	}
+	oldFullName := genTblFullName(tenantID, old)
+	newFullName := genTblFullName(tenantID, new)
+	excludedID := uint64(0)
+	if !first && oldFullName == newFullName {
+		excludedID = tid
+	}
+	admissionErr := e.checkAddNameConflictLocked(new, tid, newFullName, txn, excludedID)
+	// Admission may release the DB lock to wait. Revalidate runtime ownership
+	// before using the journal or applying any name-index mutation.
+	if e.entries[tid] != original {
+		return moerr.GetOkExpectedEOB()
+	}
+	if record {
+		undo = e.renameUndo[tid]
+		if undo == nil || undo.txnID != txn.GetID() {
+			return moerr.NewInternalErrorNoCtx("rename undo ownership changed during admission")
+		}
+	}
+	remove := func(name string) {
+		if undo == nil {
+			e.removeNameIndexLocked(name, tid)
+			return
+		}
+		if list := e.nameNodes[name]; list != nil {
+			_, empty := list.deleteNode(tid, nil, func(node *nameNode[*TableEntry]) {
+				undo.mutations = append(undo.mutations, renameNameMutation{name: name, node: node})
+			})
+			if empty {
+				delete(e.nameNodes, name)
+			}
+		}
+	}
 	// if alter again and again in the same txn, previous temp name should be deleted.
 	if !first {
-		e.removeNameIndexLocked(genTblFullName(tenantID, old), tid)
+		remove(oldFullName)
 	}
 
-	newFullName := genTblFullName(tenantID, new)
-	if err := e.checkAddNameConflictLocked(new, tid, e.nameNodes[newFullName], txn); err != nil {
-		return err
+	if admissionErr != nil {
+		return admissionErr
 	}
 	// make sure every name node has up to one table id. check case alter A -> B -> A
-	e.removeNameIndexLocked(newFullName, tid)
+	remove(newFullName)
 	// add to the head of linked list
-	e.addNameIndexLocked(newFullName, tid)
+	e.nameOrder++
+	e.tableNameListLocked(newFullName).createOrderedNode(tid, e.nameOrder, func(node *nameNode[*TableEntry]) {
+		if undo != nil {
+			undo.mutations = append(undo.mutations, renameNameMutation{name: newFullName, node: node, inserted: true})
+		}
+	})
 
 	return nil
 }
 
-func (e *DBEntry) addNameIndexLocked(fullname string, tid uint64) {
+func (e *DBEntry) tableNameListLocked(fullname string) *nodeList[*TableEntry] {
 	node := e.nameNodes[fullname]
 	if node == nil {
 		nn := newNodeList(e.GetItemNodeByIDLocked,
@@ -402,10 +505,41 @@ func (e *DBEntry) addNameIndexLocked(fullname string, tid uint64) {
 			&e.nodesMu,
 			fullname)
 		e.nameNodes[fullname] = nn
-		nn.CreateNode(tid)
-	} else {
-		node.CreateNode(tid)
+		node = nn
 	}
+	return node
+}
+
+func (e *DBEntry) addNameIndexLocked(fullname string, tid uint64) {
+	e.nameOrder++
+	e.tableNameListLocked(fullname).createOrderedNode(tid, e.nameOrder, nil)
+}
+
+// Caller holds the DB lock throughout undo and the following MVCC rollback.
+func (e *DBEntry) undoRenameLocked(tid uint64, txnID string) (bool, error) {
+	undo := e.renameUndo[tid]
+	if undo == nil {
+		return false, nil
+	}
+	if undo.txnID != txnID {
+		return true, moerr.NewInternalErrorNoCtx("rename rollback transaction mismatch")
+	}
+	for len(undo.mutations) > 0 {
+		i := len(undo.mutations) - 1
+		mutation := undo.mutations[i]
+		if mutation.inserted {
+			if list := e.nameNodes[mutation.name]; list != nil {
+				if _, empty := list.deleteNode(tid, mutation.node, nil); empty {
+					delete(e.nameNodes, mutation.name)
+				}
+			}
+		} else if err := e.tableNameListLocked(mutation.name).restoreNode(mutation.node); err != nil {
+			return true, err
+		}
+		undo.mutations[i] = renameNameMutation{}
+		undo.mutations = undo.mutations[:i]
+	}
+	return true, nil
 }
 
 func (e *DBEntry) removeNameIndexLocked(fullname string, tid uint64) {
@@ -432,6 +566,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	if n, ok := e.entries[table.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
+		delete(e.renameUndo, table.ID)
 		table.RLock()
 		defer table.RUnlock()
 		prevname := ""
@@ -482,59 +617,87 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 // If the entry hasn't been dropped, return ErrDuplicate.
 func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDedup bool) (err error) {
 	fullName := table.GetFullName()
-	nn := e.nameNodes[fullName]
-	if nn == nil {
-		n := e.link.Insert(table)
-		e.entries[table.ID] = n
-
-		nn := newNodeList(e.GetItemNodeByIDLocked,
-			tableVisibilityFn[*TableEntry],
-			&e.nodesMu,
-			fullName)
-		e.nameNodes[fullName] = nn
-
-		nn.CreateNode(table.ID)
-	} else {
-		if !skipDedup {
-			name := table.GetLastestSchemaLocked(false).Name
-			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
-			if err != nil {
-				return
-			}
+	if !skipDedup {
+		name := table.GetLastestSchemaLocked(false).Name
+		if err = e.checkAddNameConflictLocked(name, table.ID, fullName, txn, 0); err != nil {
+			return
 		}
-		n := e.link.Insert(table)
-		e.entries[table.ID] = n
-		nn.CreateNode(table.ID)
 	}
+	// A foreign admission can install this explicit ID while our name check
+	// releases the DB lock. Never overwrite its entries slot after wakeup.
+	if _, exists := e.entries[table.ID]; exists {
+		return moerr.GetOkExpectedDup()
+	}
+	n := e.link.Insert(table)
+	e.entries[table.ID] = n
+	e.addNameIndexLocked(fullName, table.ID)
 	return
 }
 
-func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeList[*TableEntry], txn txnif.TxnReader) (err error) {
-	if nn == nil {
-		return nil
+// Entered and returned with DB write lock held. A wait temporarily releases
+// that lock; callers must not retain a table/list lock or mutate bindings first.
+func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, fullName string, txn txnif.TxnReader, excludedID uint64) error {
+	for {
+		waitTxn, err := e.tryAddNameConflictLocked(name, tid, e.nameNodes[fullName], txn, excludedID)
+		if waitTxn == nil {
+			return err
+		}
+		e.Unlock()
+		waitTxn.GetTxnState(true)
+		e.Lock()
 	}
-	node := nn.GetNode()
+}
+
+func (e *DBEntry) tryAddNameConflictLocked(name string, tid uint64, nn *nodeList[*TableEntry], txn txnif.TxnReader, excludedID uint64) (waitTxn txnif.TxnReader, err error) {
+	if nn == nil {
+		return
+	}
+	var node *common.GenericDLNode[*TableEntry]
+	nn.ForEachNodes(func(binding *nameNode[*TableEntry]) bool {
+		if excludedID != 0 && binding.id == excludedID {
+			return true
+		}
+		node = binding.GetNode()
+		return false
+	})
 	if node == nil {
-		return nil
+		return
 	}
 	// check ww conflict
-	tbl := nn.GetNode().GetPayload()
+	tbl := node.GetPayload()
 	// skip the same table entry
 	if tbl.ID == tid {
-		return nil
-	}
-	if err = tbl.ConflictCheck(txn); err != nil {
 		return
+	}
+	if txn != nil {
+		tbl.RLock()
+		needWait, wait := tbl.NeedWaitCommittingLocked(txn.GetStartTS())
+		if needWait {
+			waitTxn = wait
+		} else {
+			err = tbl.CheckConflictLocked(txn)
+		}
+		tbl.RUnlock()
+		if waitTxn != nil || err != nil {
+			return
+		}
 	}
 	// check name dup
 	if txn == nil {
 		// replay checkpoint
-		return nil
+		return
 	}
-	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
-		return moerr.GetOkExpectedDup()
+	// A visible historical binding can be the rename target itself after its
+	// provisional schema update. Distinct admitted owners precede it in this
+	// list; do not continue into older history and introduce new waits.
+	existEntry, wait := e.tryGetTableNodeByNameLocked(nn, txn, name, excludedID)
+	if wait != nil {
+		return wait, nil
 	}
-	return nil
+	if existEntry != nil && existEntry.GetPayload().ID != tid {
+		err = moerr.GetOkExpectedDup()
+	}
+	return
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {

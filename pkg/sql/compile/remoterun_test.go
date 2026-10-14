@@ -2064,7 +2064,7 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 
 func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 	c, destination := expressionProtocolTestCompile(t)
-	destination.version = defines.MORPCVersion112
+	destination.version = defines.MORPCVersion113
 	proc := c.proc
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -2072,7 +2072,7 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 		}
 	})
 	arg := preinsertunique.NewArgument()
@@ -2085,18 +2085,18 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 		OrderedAutoIncrement: &planpb.OrderedAutoIncrement{ValuesRows: 3},
 	}
 	scope := &Scope{Proc: proc, RootOp: arg, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	data, err := encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
-	destination.version = defines.MORPCVersion111
-	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "protocol version 112")
 	destination.version = defines.MORPCVersion112
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
+	destination.version = defines.MORPCVersion113
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 113")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
 	require.NoError(t, validateRemoteInsertIgnoreEligibilityProtocol(proc, false))
 	require.Error(t, validateRemoteInsertIgnoreEligibilityProtocol(nil, true))
 
@@ -2107,7 +2107,7 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 			SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
 		}},
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	data, err = encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
 	decoded, err := decodeScope(data, proc, true, nil)
@@ -2118,13 +2118,13 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 		decodedArg.Release()
 	})
 	require.Equal(t, arg.PreInsertCtx.OrderedForeignKeys, decodedArg.PreInsertCtx.OrderedForeignKeys)
-	destination.version = defines.MORPCVersion111
-	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "protocol version 112")
 	destination.version = defines.MORPCVersion112
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 113")
+	destination.version = defines.MORPCVersion113
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
 
 	pre := preinsert.NewArgument()
 	t.Cleanup(func() {
@@ -2135,18 +2135,18 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 	pre.TrackAutoIncrementGenerated = true
 	pre.DeferAutoIncrement = true
 	scope.RootOp = pre
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	data, err = encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
-	destination.version = defines.MORPCVersion111
-	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "protocol version 112")
 	destination.version = defines.MORPCVersion112
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
+	destination.version = defines.MORPCVersion113
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 113")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 113")
 }
 
 func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {

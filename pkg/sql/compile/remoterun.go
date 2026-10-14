@@ -2251,6 +2251,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
+		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
+	}
 	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
 		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")
 	}
@@ -2514,11 +2517,11 @@ func validateRemoteInsertIgnoreEligibilityProtocol(proc *process.Process, requir
 		return nil
 	}
 	if proc != nil {
-		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion112 {
+		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion113 {
 			return nil
 		}
 	}
-	return moerr.NewNotSupported(context.Background(), "INSERT IGNORE constraint candidate preservation requires protocol version 112")
+	return moerr.NewNotSupported(context.Background(), "INSERT IGNORE constraint candidate preservation requires protocol version 113")
 }
 
 func pipelineRequiresInsertIgnoreEligibility(p *pipeline.Pipeline) bool {
@@ -2545,7 +2548,7 @@ func validateRemoteInsertIgnoreEligibilityDestination(proc *process.Process, p *
 	}
 	if p.Node != nil {
 		supported, err := remoteWorkersSupportProtocol(proc,
-			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion112)
+			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion113)
 		if err != nil {
 			return err
 		}
@@ -2553,7 +2556,7 @@ func validateRemoteInsertIgnoreEligibilityDestination(proc *process.Process, p *
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote INSERT IGNORE constraint candidate preservation requires protocol version 112")
+	return moerr.NewNotSupportedNoCtx("remote INSERT IGNORE constraint candidate preservation requires protocol version 113")
 }
 
 func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
