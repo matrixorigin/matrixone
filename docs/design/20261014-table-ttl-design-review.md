@@ -6,8 +6,8 @@ Phase: design only, completed before the discovery implementation amendment. Rev
 
 | Exact reviewed document | Git blob | SHA256 |
 |---|---|---|
-| [20261013-table-ttl.en.md](20261013-table-ttl.en.md) | `333183eff27fbad319ce469005d3c2917ffd62fa` | `ff91ff2442ccbe8c02fda3a0377a475a88a362600b75642f59a32e96c905c6bd` |
-| [20261013-table-ttl.md](20261013-table-ttl.md) | `517f20164007b012b7b7d96474acecaf4cae46f9` | `fe21850b889fe8302ddd38884df07cec2d133539b04c047d96864fb862838a03` |
+| [20261013-table-ttl.en.md](20261013-table-ttl.en.md) | `e483ee8613d748b2f816e6c7fce3ee56efdaa0d8` | `44c4d4d7b6d169b59eace2e167af45ee7fa5b5aa3af636cb9df5b1693199e62a` |
+| [20261013-table-ttl.md](20261013-table-ttl.md) | `b8ff49e061b51f40b813de46642545c124fa280b` | `1b8cc571d15883b93df6e915995bc6520ee65ef48a69675a5bdcd7f3365735df` |
 
 Change scope / trigger: the complete table-TTL feature persists policies and deletes tenant rows through parser/planner/catalog/task/transaction boundaries; the background worker and persistent/public capability independently trigger design-first review. The original 793 changed non-generated production lines also exceed the size threshold.
 
@@ -25,3 +25,5 @@ Q2 waits: each query inherits the invocation deadline; decode checks cancellatio
 Q3 growth: page output, candidate count/credit, decode input, query count, diagnostics and cursor state all have finite caps independent of total catalog cardinality. Native engine buffering is an explicitly scoped existing control, not a hidden new TTL guarantee.
 
 Design decision: **PASS for the amended proposal in this author self-review phase**. No blocking architectural question remains for implementing the amendment. Acceptance remains contingent on the mapped deterministic tests, real catalog SQL validation, race evidence and external implementation/design re-review. Implementation approval is not asserted here.
+
+Refinement self-review: clarify transient bounded policy decoding versus retained candidate credit, and apply the same credited-length predicate to locked revalidation. These close the same memory-owner contract, retain identity/byte revalidation semantics, and add no persistent state. The current exact revisions above were re-reviewed before delivery; decision remains PASS in this author phase, with external maintainer approval still outstanding. The original design-first checkpoint is commit `3f029bdbdc`.
