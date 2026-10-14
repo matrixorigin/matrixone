@@ -831,16 +831,21 @@ func expectAggregateRows(ctx context.Context, db *sql.DB, expected [][]string) e
 }
 
 func verifyAggregateFixture(ctx context.Context, db *sql.DB) error {
-	// The five expected keys and values are derived from the independent
-	// MongoDB fixture, not from another execution of the ingestion query.
+	// The explicit [10:00, 10:03) bounds generate all three minute buckets for
+	// each of the fixture's three device/site pairs, including leading/trailing
+	// NULLs. Derive all nine keys and values independently of the query result.
 	checks := []string{
 		"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:00:00' and measurement=12",
 		"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:01:00' and measurement is null",
 		"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:02:00' and measurement=20",
 		"device_id='device-001' and site_id='site-west' and window_start='2026-07-27 10:00:00' and measurement=30",
+		"device_id='device-001' and site_id='site-west' and window_start='2026-07-27 10:01:00' and measurement is null",
+		"device_id='device-001' and site_id='site-west' and window_start='2026-07-27 10:02:00' and measurement is null",
+		"device_id='device-002' and site_id='site-east' and window_start='2026-07-27 10:00:00' and measurement is null",
 		"device_id='device-002' and site_id='site-east' and window_start='2026-07-27 10:01:00' and measurement is null",
+		"device_id='device-002' and site_id='site-east' and window_start='2026-07-27 10:02:00' and measurement is null",
 	}
-	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate", "5"); err != nil {
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate", "9"); err != nil {
 		return err
 	}
 	for _, predicate := range checks {

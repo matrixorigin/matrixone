@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -218,17 +219,54 @@ func TestMongoDBAggregateSnapshotOracle(t *testing.T) {
 	}
 }
 
+func TestMongoDBAggregateFixtureBoundedGrid(t *testing.T) {
+	// Explicit [10:00, 10:03) bounds generate three buckets for every
+	// observed device/site pair, including leading and trailing NULLs.
+	rows := [][4]string{
+		{"device-001", "site-east", "10:00:00", "=12"},
+		{"device-001", "site-east", "10:01:00", " is null"},
+		{"device-001", "site-east", "10:02:00", "=20"},
+		{"device-001", "site-west", "10:00:00", "=30"},
+		{"device-001", "site-west", "10:01:00", " is null"},
+		{"device-001", "site-west", "10:02:00", " is null"},
+		{"device-002", "site-east", "10:00:00", " is null"},
+		{"device-002", "site-east", "10:01:00", " is null"},
+		{"device-002", "site-east", "10:02:00", " is null"},
+	}
+	for _, count := range []string{"9", "5", "10"} {
+		t.Run("row count "+count, func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			mock.ExpectQuery(regexp.QuoteMeta("select count(*) from mongodb_ci.minute_aggregate") + "$").
+				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count)).RowsWillBeClosed()
+			if count == "9" {
+				for _, row := range rows {
+					query := fmt.Sprintf("select count(*) from mongodb_ci.minute_aggregate where device_id='%s' and site_id='%s' and window_start='2026-07-27 %s' and measurement%s", row[0], row[1], row[2], row[3])
+					mock.ExpectQuery(regexp.QuoteMeta(query) + "$").
+						WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1")).RowsWillBeClosed()
+				}
+			}
+			err := verifyAggregateFixture(t.Context(), db)
+			if count == "9" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, fmt.Sprintf("expected %q, got %q", "9", count))
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestMongoDBAggregateFixtureRejectsWrongKeysOrValues(t *testing.T) {
-	// First query checks total cardinality; the remaining five check every
+	// First query checks total cardinality; the remaining nine check every
 	// independent fixture key/value. A correct total must not hide a wrong key.
-	for failedQuery := 0; failedQuery < 6; failedQuery++ {
+	for failedQuery := 0; failedQuery < 10; failedQuery++ {
 		t.Run(string(rune('0'+failedQuery)), func(t *testing.T) {
 			db, mock := newMongoDBE2ESQLMock(t)
 			for i := 0; i <= failedQuery; i++ {
 				value := "1"
 				query := regexp.QuoteMeta("select count(*) from mongodb_ci.minute_aggregate")
 				if i == 0 {
-					value = "5"
+					value = "9"
 					query += "$"
 				} else {
 					query += " where "

@@ -603,7 +603,11 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 			AddRow("device-001", "site-east", "2026-07-27 10:01:00", "NULL").
 			AddRow("device-001", "site-east", "2026-07-27 10:02:00", "20").
 			AddRow("device-001", "site-west", "2026-07-27 10:00:00", "30").
-			AddRow("device-002", "site-east", "2026-07-27 10:01:00", "NULL")
+			AddRow("device-001", "site-west", "2026-07-27 10:01:00", "NULL").
+			AddRow("device-001", "site-west", "2026-07-27 10:02:00", "NULL").
+			AddRow("device-002", "site-east", "2026-07-27 10:00:00", "NULL").
+			AddRow("device-002", "site-east", "2026-07-27 10:01:00", "NULL").
+			AddRow("device-002", "site-east", "2026-07-27 10:02:00", "NULL")
 	}
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows())
 	expectMongoDBE2EScalar(mock, "3")
@@ -677,8 +681,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("update mongodb_ci.ingest_watermark").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
-	expectMongoDBE2EScalar(mock, "5")
-	for range 5 {
+	expectMongoDBE2EScalar(mock, "9")
+	for range 9 {
 		expectMongoDBE2EScalar(mock, "1")
 	}
 	mock.ExpectExec("create external table mongodb_ci.events_strict").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -695,8 +699,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectQuery("select device_id,site_id,cast\\(window_start").WillReturnRows(aggregateRows())
 	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
-	expectMongoDBE2EScalar(mock, "5")
-	for range 5 {
+	expectMongoDBE2EScalar(mock, "9")
+	for range 9 {
 		expectMongoDBE2EScalar(mock, "1")
 	}
 	mock.ExpectExec("alter mongodb connection mongodb_ci set").WillReturnResult(sqlmock.NewResult(0, 1))
