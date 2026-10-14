@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -36,6 +37,34 @@ func TestLoadAssignmentIgnorePolicy(t *testing.T) {
 			Tail: &tree.TailParameter{IgnoredLines: 1},
 		}},
 	}))
+}
+
+func TestLoadExplicitIgnoreScanMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, policy string
+		explicit     bool
+	}{
+		{"local", "", false},
+		{"local_ignore", "ignore", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			p, err := runOneStmt(mock, t, "load data local infile '/unused.csv' "+tc.policy+" into table self_ref fields terminated by ','")
+			require.NoError(t, err)
+			found := false
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_EXTERNAL_SCAN {
+					continue
+				}
+				found = true
+				var param tree.ExternParam
+				require.NoError(t, json.Unmarshal([]byte(node.TableDef.Createsql), &param))
+				require.True(t, param.Local)
+				require.Equal(t, tc.explicit, param.LoadExplicitIgnore)
+			}
+			require.True(t, found)
+		})
+	}
 }
 
 func TestApplyLoadAssignmentCasts(t *testing.T) {

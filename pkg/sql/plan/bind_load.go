@@ -75,6 +75,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	ctx := builder.compCtx
 	stmt.Param.Local = stmt.Local
+	_, stmt.Param.LoadExplicitIgnore = stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
 		return -1, nil, err
