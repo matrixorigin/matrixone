@@ -275,6 +275,28 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
 
 -- A table dependency does not make an unrelated DDL a type reprepare.
+-- ANY_VALUE preserves its direct value domain; a scalar output still exposes
+-- the parameter's TEXT declaration at the relational consumption boundary.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ANY_VALUE(?) ELSE NULL END, ''A'', ''a'') AS direct_f, FIELD(CASE WHEN ? THEN (SELECT ANY_VALUE(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS scalar_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- NULLIF owns its operand declaration even when a NULL aggregate payload has
+-- a numeric placeholder type. A numeric comparison peer stays numeric.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ANY_VALUE(NULLIF(?, ''x'')) ELSE NULL END, ''A'', ''a'') AS text_f, FIELD(CASE WHEN ? THEN ANY_VALUE(NULLIF(?, 1)) ELSE NULL END, ''A'', ''a'') AS numeric_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
@@ -307,6 +329,29 @@ DEALLOCATE PREPARE p_field_history;
 DROP DATABASE field_history_dependencies;
 
 -- Plan invalidation preserves type history; restore the session settings.
+-- Plan validity changes without a matching type dependency must retain FIELD
+-- history, including a mode switch back to the original setting.
+SET @field_old_sql_mode = @@sql_mode;
+SET @field_old_div_precision = @@div_precision_increment;
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY,NO_UNSIGNED_SUBTRACTION';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET SESSION sql_mode = '';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET SESSION div_precision_increment = @field_old_div_precision;
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+
 SET @field_old_locale = @@lc_time_names;
 SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
 SET @field_old_auto_mode = @@enable_vector_auto_mode_by_default;

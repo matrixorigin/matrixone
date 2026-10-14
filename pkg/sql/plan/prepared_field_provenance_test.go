@@ -31,6 +31,17 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 		first, want   types.T
 		textCondition bool
 	}{
+		{"direct ANY_VALUE marker", "select field(case when ? then any_value(?) else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"scalar ANY_VALUE marker", "select field(case when ? then (select any_value(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"derived ANY_VALUE marker", "select field(case when ? then x else null end,'A','a') from (select any_value(?) x limit 1) d", false, types.T_any, types.T_text, false},
+		{"ELT ANY_VALUE marker", "select field(case when ? then elt(1,any_value(?)) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"NULLIF numeric peer marker", "select field(case when ? then nullif(?,1) else null end,'A','a')", false, types.T_any, types.T_int64, false},
+		{"ANY_VALUE NULLIF numeric peer", "select field(case when ? then any_value(nullif(?,1)) else null end,'A','a')", false, types.T_any, types.T_int64, false},
+		{"NULLIF numeric peer compound", "select field(case when ? then nullif(coalesce(?,null),1) else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"ANY_VALUE NULLIF marker", "select field(case when ? then any_value(nullif(?,'x')) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"COALESCE ANY_VALUE marker", "select field(case when ? then coalesce(any_value(?),null) else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"direct ANY_VALUE compound", "select field(case when ? then any_value(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"scalar ANY_VALUE compound", "select field(case when ? then (select any_value(coalesce(?,null)) limit 1) else null end,'A','a')", false, types.T_any, types.T_any, false},
 		{"scalar MAX marker", "select field(case when ? then (select max(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"scalar MIN marker", "select field(case when ? then (select min(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"scalar MAX compound", "select field(case when ? then (select max(coalesce(?,null)) limit 1) else null end,'A','a')", false, types.T_any, types.T_any, false},

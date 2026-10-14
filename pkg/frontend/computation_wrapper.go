@@ -876,6 +876,46 @@ func preparedFieldDependenciesChanged(previous, current []*plan.ObjectRef) bool 
 	return false
 }
 
+// Plan validity and FIELD type history have different mode dependencies.
+// ONLY_FULL_GROUP_BY can reject a plan but never changes a declaration. The
+// remaining numeric settings matter only at their typed operation. Inspect the
+// seed plan (including folded literal sources) only when such a setting changes;
+// this adds no scan to the normal execute path and retains no expression graph.
+func preparedFieldNumericModeAffectsTypes(p *plan.Plan, boolSumAvg, unsignedSubtraction, divisionPrecision bool) bool {
+	if p == nil || !(boolSumAvg || unsignedSubtraction || divisionPrecision) {
+		return false
+	}
+	affected := false
+	_ = plan.VisitExpressionsInOwner(p, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			fn := expr.GetF()
+			if affected || fn == nil || fn.Func == nil {
+				return nil
+			}
+			switch fn.Func.ObjName {
+			case "-":
+				if unsignedSubtraction && len(fn.Args) == 2 {
+					left, right := types.T(fn.Args[0].Typ.Id), types.T(fn.Args[1].Typ.Id)
+					affected = left.IsInteger() && right.IsInteger() && (left.IsUnsignedInt() || right.IsUnsignedInt())
+				}
+			case "/":
+				affected = divisionPrecision && types.T(expr.Typ.Id).IsDecimal()
+			case "sum", "avg":
+				if boolSumAvg && len(fn.Args) == 1 {
+					source := fn.Args[0]
+					for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
+						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 {
+						source = source.GetF().Args[0]
+					}
+					affected = source.Typ.Id == int32(types.T_bool)
+				}
+			}
+			return nil
+		})
+	})
+	return affected
+}
+
 func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
 	return schemaChanged || modeMismatch || protocolMismatch
 }
@@ -1446,7 +1486,12 @@ func initExecuteStmtParamWithResolverInSession(
 	// not SQL type history. Reset only for changed captured dependencies or
 	// type-affecting mode/protocol changes. Rebinding may discover a different
 	// dependency (e.g. a temporary table shadow), checked before publication.
-	resetFieldTypes := schemaChanged || modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
+	typeModeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		preparedFieldNumericModeAffectsTypes(executionPlan,
+			prepareStmt.sqlModeFlagsSet && prepareStmt.BoolSumAvg != currentBoolSumAvg,
+			prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction,
+			prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement)
+	resetFieldTypes := schemaChanged || typeModeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
 	}

@@ -35,11 +35,14 @@ const (
 type preparedFieldStringDomain struct {
 	kind      preparedFieldStringKind
 	parameter bool
-	// Only a bare marker (through implicit casts) gets the materialized
-	// parameter declaration. A parameter-dependent function is not a marker.
+	// A bare marker (through implicit casts) is distinct from general
+	// parameter dependence and a transparent wrapper's declaration.
 	directParameter bool
-	history         bool
-	resolved        types.Type
+	// A transparent value wrapper is not a bare marker, but relational and
+	// function consumers still use its operand's parameter declaration.
+	parameterDeclaration bool
+	history              bool
+	resolved             types.Type
 }
 
 // This resolver runs while logical binding tags still identify their owners.
@@ -93,15 +96,24 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			// NULLIF owns its first operand's domain, but that domain must be
 			// resolved in this pass's parameter environment, not the earlier bind.
 			result = r.expr(source.value)
-			if result.kind == fieldStringMarker || result.kind == fieldStringNull && result.directParameter {
+			if result.kind == fieldStringMarker || result.kind == fieldStringNull && (result.directParameter || result.parameterDeclaration) {
 				// A NULL value does not erase NULLIF's bare operand declaration.
 				// A composite operand still owns its own (possibly NULL) domain.
 				result.kind = fieldStringText
-				if r.expr(source.peer).kind == fieldStringBinary {
+				peer := r.expr(source.peer)
+				if peer.kind == fieldStringBinary {
 					result.kind = fieldStringBinary
+				} else if peer.kind == fieldStringOther && peer.resolved.Oid != types.T_any {
+					// NULLIF's comparison also supplies a bare marker's numeric
+					// declaration. A composite first operand keeps its own domain.
+					result.kind, result.resolved = peer.kind, peer.resolved
+					if typ, ok := preparedNumericReprepareType(peer.resolved); ok {
+						result.resolved = typ
+					}
 				}
 			}
 			result.directParameter = false
+			result.parameterDeclaration = false
 			return result
 		}
 	}
@@ -138,6 +150,12 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	if col := expr.GetCol(); col != nil {
 		if source := r.binder.pendingColumnSource(col); source != nil {
 			result = r.expr(source)
+			// A pending tag in this binding is not a relational projection.
+			// Transparent value producers retain their value domain here;
+			// an outer column/subquery consumer owns materialization instead.
+			if result.parameterDeclaration {
+				return result
+			}
 		} else if r.binder.builder != nil {
 			if node, ok := r.binder.builder.tag2NodeID[col.RelPos]; ok {
 				result = r.output(node, col.RelPos, col.ColPos, result)
@@ -202,7 +220,16 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 				values = append(values, fn.Args[2])
 			}
 		}
-	case "min", "max", "any_value", "first_value", "last_value", "nth_value":
+	case "any_value":
+		if len(fn.Args) > 0 {
+			previous := r.defaultMarker
+			r.defaultMarker = fieldStringBinary
+			result = r.expr(fn.Args[0])
+			r.defaultMarker = previous
+			result.parameterDeclaration = result.directParameter || result.parameterDeclaration
+			return result
+		}
+	case "min", "max", "first_value", "last_value", "nth_value":
 		if len(fn.Args) > 0 {
 			previous := r.defaultMarker
 			r.defaultMarker = fieldStringBinary
@@ -216,6 +243,7 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	default:
 		if pos := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
 			result = r.expr(fn.Args[pos])
+			result.parameterDeclaration = false
 			result.resolved = types.Type{}
 			if result.kind != fieldStringBinary {
 				result.kind = fieldStringText
@@ -231,6 +259,9 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			for i, arg := range fn.Args {
 				domain := r.expr(arg)
 				dependent = dependent || domain.parameter
+				if domain.parameterDeclaration {
+					domain = materializedFieldStringDomain(domain)
+				}
 				inputs[i] = fieldDomainType(domain, makeTypeByPlan2Expr(arg))
 				if domain.kind == fieldStringNull && domain.parameter && !domain.directParameter {
 					// T_any is also the overload resolver's untyped-NULL input.
@@ -255,10 +286,11 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 }
 
 func materializedFieldStringDomain(domain preparedFieldStringDomain) preparedFieldStringDomain {
-	if domain.directParameter && (domain.kind == fieldStringMarker || domain.kind == fieldStringNull) {
+	if (domain.directParameter || domain.parameterDeclaration) && (domain.kind == fieldStringMarker || domain.kind == fieldStringNull) {
 		domain.kind = fieldStringText
 	}
 	domain.directParameter = false
+	domain.parameterDeclaration = false
 	return domain
 }
 
@@ -475,9 +507,11 @@ type preparedFieldReturnSource struct {
 // NULLIF is lowered to CASE, but only its first operand owns the returned
 // domain. Keep its sources for this binding only so initial resolution and
 // statement-wide reprepare use the same rule with their own parameter types.
+// The bound payload type (including NULL's aggregate placeholder type) cannot
+// decide whether provenance exists; numeric operands retain their numeric domain.
 func (b *baseBinder) rememberPreparedFieldNullIfDomain(expr *Expr, args []*Expr) {
 	state := preparedBindingState(b.GetContext())
-	if state == nil || len(args) != 3 || !types.T(expr.Typ.Id).IsMySQLString() {
+	if state == nil || len(args) != 3 {
 		return
 	}
 	source := preparedFieldReturnSource{value: args[2]}
