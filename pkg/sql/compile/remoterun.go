@@ -136,7 +136,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
@@ -262,9 +262,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteDecimalStatisticalPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
@@ -2081,12 +2078,21 @@ func orderedSetPercentileDiscUsesExtendedType(
 	}
 }
 
-// Native Group descriptors carry only the aggregate ID and its arguments;
-// the expression visitor cannot infer their changed result vector contract.
-// Validate the complete pipeline before constructing pooled operator owners.
-func validateRemoteDecimalStatisticalPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+// Native aggregate lowering removes the function expression and its result type.
+// Merge their explicit wire contracts into the same source/destination gates used
+// by expressions, including descriptors in child pipelines.
+func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return features, err
+	}
+	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	return features, nil
+}
+
+func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
-		return nil
+		return
 	}
 	for _, in := range p.InstructionList {
 		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) || in.Agg == nil {
@@ -2098,18 +2104,15 @@ func validateRemoteDecimalStatisticalPipelineProtocol(proc *process.Process, p *
 			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
 			if isDecimalStatisticalAggregate(agg) {
-				if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
-					return err
-				}
+				features.DecimalStatisticalResultContracts = true
+				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
+					wire.ResultType == nil || types.T(wire.ResultType.Id) != types.T_float64
 			}
 		}
 	}
 	for _, child := range p.Children {
-		if err := validateRemoteDecimalStatisticalPipelineProtocol(proc, child); err != nil {
-			return err
-		}
+		collectDecimalStatisticalDescriptorFeatures(child, features)
 	}
-	return nil
 }
 
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2261,7 +2264,7 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
@@ -2919,6 +2922,10 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 			Expr:       a.GetArgExpressions(),
 			Config:     a.GetExtraConfig(),
 			ConfigType: a.GetConfigType(),
+		}
+		if isDecimalStatisticalAggregate(a) {
+			typ := types.T_float64.ToType().PlanType()
+			result[i].ResultType = &typ
 		}
 	}
 	return result
