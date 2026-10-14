@@ -198,7 +198,7 @@ data branch create table conflict_branch from short_pk;
 update conflict_branch set v = 101 where hex(k) = '4142';
 update short_pk set v = 202 where hex(k) = '4142';
 data branch merge conflict_branch into short_pk;
-internal error: conflict: conflict_branch DELETE and short_pk DELETE on pk(serial_extract(serial(x'4142'),0 as BINARY(4))) with different values
+internal error: conflict: conflict_branch UPDATE and short_pk UPDATE on pk(serial_extract(serial(x'4142'),0 as BINARY(4)))
 select hex(k) as k, v from short_pk order by k;
 ➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
 4142  ¦  202  𝄀

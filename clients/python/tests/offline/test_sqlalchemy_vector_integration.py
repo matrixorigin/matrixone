@@ -324,8 +324,15 @@ class TestVectorDistanceFunctionBugFixes:
 
         assert hasattr(GoodDoc, 'doc_metadata')
 
-        # This SHOULD raise an error (reserved name)
-        with pytest.raises(InvalidRequestError, match="reserved"):
+        # SQLAlchemy 2.1 changed reserved metadata shadowing to a warning.
+        # Assert the upstream contract in each supported series.
+        import sqlalchemy
+        from sqlalchemy.exc import SAWarning
+
+        version = tuple(int(part) for part in sqlalchemy.__version__.split('.')[:2])
+        expected = (pytest.warns(SAWarning, match="metadata") if version >= (2, 1)
+                    else pytest.raises(InvalidRequestError, match="reserved"))
+        with expected:
 
             class BadDoc(Base):
                 __tablename__ = 'bad_doc'

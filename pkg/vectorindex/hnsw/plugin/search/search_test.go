@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -203,4 +204,44 @@ func TestHnswPostFilterBudgetIsPostFilterLimit(t *testing.T) {
 	for _, k := range []uint64{1, 2, 10, 100, 1000} {
 		require.Equal(t, overfetch.PostFilterLimit(k), Hooks{}.PostFilterCandidateBudget(k))
 	}
+}
+
+func TestExplainSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts hnswplan.ScanOptions
+		want []string
+	}{
+		{"zero", hnswplan.ScanOptions{}, []string{`ThreadsSearch: 0`}},
+		{"ThreadsSearch", hnswplan.ScanOptions{ThreadsSearch: 8}, []string{`ThreadsSearch: 8`}},
+		{"maximum signed", hnswplan.ScanOptions{ThreadsSearch: 9223372036854775807}, []string{"ThreadsSearch: 9223372036854775807"}},
+		{"integer boundaries", hnswplan.ScanOptions{ThreadsSearch: -9223372036854775808}, []string{`ThreadsSearch: -9223372036854775808`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := hnswplan.EncodeScanOptions(tc.opts)
+			require.NoError(t, err)
+			before := append([]byte(nil), data...)
+			spec := &plan.IndexSearchScan{AlgoOptions: data}
+			got, err := Hooks{}.ExplainSettings(spec, true)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+			compact, err := Hooks{}.ExplainSettings(spec, false)
+			require.NoError(t, err)
+			require.Nil(t, compact)
+			require.Equal(t, before, spec.AlgoOptions)
+		})
+	}
+	for _, spec := range []*plan.IndexSearchScan{nil, {}, {AlgoOptions: []byte(`{}`)}} {
+		got, err := Hooks{}.ExplainSettings(spec, true)
+		require.NoError(t, err)
+		require.Equal(t, []string{`ThreadsSearch: 0`}, got)
+	}
+	malformed := &plan.IndexSearchScan{AlgoOptions: []byte(`{`)}
+	got, err := Hooks{}.ExplainSettings(malformed, true)
+	require.Error(t, err)
+	require.Nil(t, got)
+	// Compact output must not add decoding or reject metadata it previously ignored.
+	got, err = Hooks{}.ExplainSettings(malformed, false)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }

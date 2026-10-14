@@ -37,6 +37,7 @@ import (
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1041,6 +1042,295 @@ func externalScanTolerates(node *plan.Node, colTag int32, colRefCnt map[[2]int32
 	return false
 }
 
+func isSetOperation(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return true
+	}
+	return false
+}
+
+// These untagged nodes preserve their child's logical output schema before remapping.
+func isSetOperationInputWrapper(node *plan.Node) bool {
+	if len(node.BindingTags) != 0 || len(node.Children) != 1 {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
+		return true
+	}
+	return false
+}
+
+func (builder *QueryBuilder) setOperationInput(nodeID int32) *plan.Node {
+	node := builder.qry.Nodes[nodeID]
+	for isSetOperationInputWrapper(node) {
+		node = builder.qry.Nodes[node.Children[0]]
+	}
+	return node
+}
+
+func (builder *QueryBuilder) setOperationOutputCanPrune(node *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	key := [2]int32{node.NodeId, int32(pos)}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	// A false entry also closes a cyclic lineage conservatively, without a
+	// second state table. Every owner/ordinal is expanded at most once.
+	memo[key] = false
+	if pos < 0 || pos >= len(node.ProjectList) {
+		return false
+	}
+	if isSetOperation(node.NodeType) {
+		// A nested set retains its own observable evaluations. Discarding an
+		// already-evaluated output vector here neither removes nor repeats them.
+		// Stopping at this owner also avoids rescanning a UNION chain at each level.
+		memo[key] = true
+		return true
+	}
+	expr := node.ProjectList[pos]
+	result := exprCanRemoveProject(expr) && builder.setOperationAliasesCanPrune(expr, memo)
+	memo[key] = result
+	return result
+}
+
+// sharedCTESinkOutputCanPrune proves totality inside the producer subtree.
+// Reader tags point back to SINK_SCAN, so following the global tag owner would
+// close a self-reference rather than establish the producer output contract.
+func (builder *QueryBuilder) sharedCTESinkOutputCanPrune(sink *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if sink == nil || sink.NodeType != plan.Node_SINK || sink.ExtraOptions != materialized.CTESinkOption ||
+		len(sink.BindingTags) != 1 || len(sink.Children) != 1 || pos < 0 || pos >= len(sink.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveSinkProjection[sink.NodeId]; preserve {
+		return false
+	}
+	root := sink.Children[0]
+	if root < 0 || int(root) >= len(builder.qry.Nodes) || builder.qry.Nodes[root] == nil {
+		return false
+	}
+	expr := sink.ProjectList[pos]
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != sink.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	key := [2]int32{sink.NodeId, int32(pos)}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	memo[key] = false
+	var ctx *BindContext
+	if int(sink.NodeId) < len(builder.ctxByNode) && sink.NodeId >= 0 {
+		ctx = builder.ctxByNode[sink.NodeId]
+	}
+	result := builder.cteExprIsTotal(root, expr, ctx, make(map[[2]int32]bool))
+	memo[key] = result
+	return result
+}
+
+func (builder *QueryBuilder) sharedCTEScanOutputCanPrune(scan *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if scan == nil || scan.NodeType != plan.Node_SINK_SCAN || len(scan.SourceStep) != 1 || len(scan.BindingTags) != 1 ||
+		pos < 0 || pos >= len(scan.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveScanProjection[scan.NodeId]; preserve {
+		return false
+	}
+	step := scan.SourceStep[0]
+	if step < 0 || int(step) >= len(builder.qry.Steps) {
+		return false
+	}
+	sinkID := builder.qry.Steps[step]
+	if sinkID < 0 || int(sinkID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	sink := builder.qry.Nodes[sinkID]
+	expr := scan.ProjectList[pos]
+	if expr == nil || sink == nil || len(scan.ProjectList) != len(sink.ProjectList) {
+		return false
+	}
+	if pos >= len(sink.ProjectList) || sink.ProjectList[pos] == nil {
+		return false
+	}
+	typ := sink.ProjectList[pos].Typ
+	if expr.Typ.Id != typ.Id || expr.Typ.Width != typ.Width || expr.Typ.Scale != typ.Scale || expr.Typ.Enumvalues != typ.Enumvalues || expr.Typ.Charset != typ.Charset {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != scan.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	return builder.sharedCTESinkOutputCanPrune(sink, pos, memo)
+}
+
+// A pure expression may reference a side effect behind a projection alias.
+// Follow column lineage even inside arithmetic/casts, using the existing tag owner.
+func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo map[[2]int32]bool) bool {
+	if col := expr.GetCol(); col != nil {
+		sourceID, ok := builder.tag2NodeID[col.RelPos]
+		if !ok {
+			return false
+		}
+		source := builder.qry.Nodes[sourceID]
+		switch source.NodeType {
+		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+			// Function scans retain their invocation, arguments, filters and row
+			// carrier independently of pruning an unused output column.
+			// Scan owners prune unused columns while retaining their own demands,
+			// including full records needed by external error-reporting outputs.
+			return true
+		case plan.Node_AGG, plan.Node_SAMPLE, plan.Node_TIME_WINDOW:
+			// These owners prune computed slots while retaining effects,
+			// grouping/HAVING, time boundaries and row-count/row-set safeguards.
+			return len(source.BindingTags) >= 2
+		case plan.Node_WINDOW, plan.Node_FILL:
+			// These owners retain effects, filter consumers and partition inputs.
+			return len(source.BindingTags) == 1
+		case plan.Node_PROJECT, plan.Node_MATERIAL:
+			return builder.setOperationOutputCanPrune(source, int(col.ColPos), memo)
+		case plan.Node_SINK_SCAN:
+			return builder.sharedCTEScanOutputCanPrune(source, int(col.ColPos), memo)
+		default:
+			// Other schema owners can expose self references or computed slots,
+			// not projection definitions. Preserve unresolved evaluations.
+			return isSetOperation(source.NodeType)
+		}
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if !builder.setOperationAliasesCanPrune(arg, memo) {
+				return false
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if !builder.setOperationAliasesCanPrune(item, memo) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Align already-evaluated input vectors at this edge, keeping a nested set
+// operator's complete equality tuple intact. The common identity layout adds no node.
+func (builder *QueryBuilder) alignSetOperationInput(nodeID int32, refs [][2]int32, positions []int, mapping *ColRefRemapping) (int32, error) {
+	node := builder.qry.Nodes[nodeID]
+	identity := len(node.ProjectList) == len(positions)
+	for i, pos := range positions {
+		local, ok := mapping.globalToLocal[refs[pos]]
+		if !ok || local[0] != 0 || local[1] < 0 || int(local[1]) >= len(node.ProjectList) {
+			return 0, moerr.NewInternalError(builder.GetContext(), "missing set operation input column after remap")
+		}
+		identity = identity && local[1] == int32(i)
+	}
+	if identity {
+		return nodeID, nil
+	}
+	projects := make([]*plan.Expr, len(positions))
+	for i, pos := range positions {
+		local := mapping.globalToLocal[refs[pos]]
+		projects[i] = &plan.Expr{Typ: node.ProjectList[local[1]].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: local[1]}}}
+	}
+	// This is a physical projection added after logical remapping. Its stats
+	// and cardinality are inherited; appendNode would recalculate logical stats.
+	projectID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeId: projectID, NodeType: plan.Node_PROJECT, Children: []int32{nodeID},
+		ProjectList: projects, Stats: node.Stats,
+	})
+	builder.ctxByNode = append(builder.ctxByNode, nil)
+	return projectID, nil
+}
+
+func (builder *QueryBuilder) remapSetOperation(node *plan.Node, step int32, colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int, remapping *ColRefRemapping) error {
+	left := builder.setOperationInput(node.Children[0])
+	right := builder.setOperationInput(node.Children[1])
+	width := len(node.ProjectList)
+	if len(left.BindingTags) != 1 || len(right.BindingTags) != 1 ||
+		len(left.ProjectList) != width || len(right.ProjectList) != width {
+		return moerr.NewInternalError(builder.GetContext(), "invalid set operation input schema before remap")
+	}
+	positions := make([]int, 0, width)
+	var pruneMemo map[[2]int32]bool
+	if node.NodeType == plan.Node_UNION_ALL {
+		pruneMemo = make(map[[2]int32]bool)
+	}
+	for i := range node.ProjectList {
+		if node.NodeType != plan.Node_UNION_ALL || colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] != 0 ||
+			!builder.setOperationOutputCanPrune(left, i, pruneMemo) || !builder.setOperationOutputCanPrune(right, i, pruneMemo) {
+			positions = append(positions, i)
+		}
+	}
+	if len(positions) == 0 && width > 0 {
+		positions = append(positions, chooseUnionRowCarrier(left.ProjectList, right.ProjectList, width))
+	}
+	leftRefs := make([][2]int32, width)
+	rightRefs := make([][2]int32, width)
+	for i := range leftRefs {
+		leftRefs[i] = [2]int32{left.BindingTags[0], int32(i)}
+		rightRefs[i] = [2]int32{right.BindingTags[0], int32(i)}
+	}
+	for _, pos := range positions {
+		colRefCnt[leftRefs[pos]]++
+		colRefCnt[rightRefs[pos]]++
+	}
+	// Only these edge-owned demands are released, including child-remap failures.
+	defer func() {
+		for _, pos := range positions {
+			colRefCnt[leftRefs[pos]]--
+			colRefCnt[rightRefs[pos]]--
+		}
+	}()
+	leftMapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+	if err != nil {
+		return err
+	}
+	rightMapping, err := builder.remapAllColRefs(node.Children[1], step, colRefCnt, colRefBool, sinkColRef)
+	if err != nil {
+		return err
+	}
+	node.Children[0], err = builder.alignSetOperationInput(node.Children[0], leftRefs, positions, leftMapping)
+	if err != nil {
+		return err
+	}
+	node.Children[1], err = builder.alignSetOperationInput(node.Children[1], rightRefs, positions, rightMapping)
+	if err != nil {
+		return err
+	}
+	left = builder.qry.Nodes[node.Children[0]]
+	right = builder.qry.Nodes[node.Children[1]]
+	if len(left.ProjectList) != len(positions) || len(right.ProjectList) != len(positions) {
+		return moerr.NewInternalError(builder.GetContext(), "set operation child projection width mismatch after remap")
+	}
+	alignedLeft := make(map[[2]int32][2]int32, len(positions))
+	output := node.ProjectList[:0]
+	for i, pos := range positions {
+		expr := node.ProjectList[pos]
+		alignedLeft[leftRefs[pos]] = [2]int32{0, int32(i)}
+		expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}
+		expr.Typ = setOperationOutputType(node.NodeType, left.ProjectList[i].Typ, right.ProjectList[i].Typ)
+		output = append(output, expr)
+		remapping.addColRef([2]int32{node.BindingTags[0], int32(pos)})
+	}
+	clear(node.ProjectList[len(output):])
+	node.ProjectList = output
+	info := RemapInfo{step: step, node: node, tip: "PhysicalEqualityKeyList"}
+	for i, expr := range node.PhysicalEqualityKeyList {
+		info.srcExprIdx = i
+		if err := builder.remapColRefForExpr(expr, alignedLeft, &info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	return builder.remapAllColRefsForConsumer(
 		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
@@ -1503,143 +1793,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
-		thisTag := node.BindingTags[0]
-		leftID := node.Children[0]
-		rightID := node.Children[1]
-		leftNode := builder.qry.Nodes[leftID]
-		rightNode := builder.qry.Nodes[rightID]
-		pruneOutput := node.NodeType == plan.Node_UNION_ALL
-		var neededProj []int
-		if pruneOutput {
-			neededProj = make([]int, 0, len(node.ProjectList))
-			for i, expr := range node.ProjectList {
-				globalRef := [2]int32{thisTag, int32(i)}
-				// UNION ALL only concatenates rows, so an unreferenced position
-				// can be removed from both children unless evaluating that
-				// position has an observable side effect.
-				canPrune := colRefCnt[globalRef] == 0
-				if i < len(leftNode.ProjectList) && !exprCanRemoveProject(leftNode.ProjectList[i]) {
-					canPrune = false
-				}
-				if i < len(rightNode.ProjectList) && !exprCanRemoveProject(rightNode.ProjectList[i]) {
-					canPrune = false
-				}
-				if canPrune {
-					continue
-				}
-				neededProj = append(neededProj, i)
-				increaseRefCnt(expr, 1, colRefCnt)
-				remapping.addColRef(globalRef)
-			}
-			if remapping.preserveRowCount && len(neededProj) == 0 && len(node.ProjectList) > 0 {
-				carrier := chooseUnionRowCarrier(leftNode.ProjectList, rightNode.ProjectList, len(node.ProjectList))
-				if carrier < 0 {
-					carrier = chooseRowCarrier(node.ProjectList, false)
-				}
-				if carrier >= 0 {
-					neededProj = append(neededProj, carrier)
-					increaseRefCnt(node.ProjectList[carrier], 1, colRefCnt)
-					remapping.addColRef([2]int32{thisTag, int32(carrier)})
-				}
-			}
-		} else {
-			// The other set operators use every input column to determine
-			// duplicate counts or set membership.
-			for i, expr := range node.ProjectList {
-				increaseRefCnt(expr, 1, colRefCnt)
-				remapping.addColRef([2]int32{thisTag, int32(i)})
-			}
-		}
-
-		// Set-operation expressions reference the left branch's project tags.
-		// Pin the same ordinal positions on the right branch explicitly, even
-		// when a transparent operator (for example a pushed-down FILTER) sits
-		// between the set operation and its output PROJECT. Otherwise pruning
-		// may keep the right branch's first column in place of a used second one.
-		for outputID := rightID; ; {
-			output := builder.qry.Nodes[outputID]
-			if output.NodeType == plan.Node_PROJECT {
-				projectTag := output.BindingTags[0]
-				if pruneOutput {
-					for _, i := range neededProj {
-						colRefCnt[[2]int32{projectTag, int32(i)}]++
-					}
-				} else {
-					for i := range output.ProjectList {
-						colRefCnt[[2]int32{projectTag, int32(i)}]++
-					}
-				}
-				break
-			}
-			if len(output.Children) != 1 {
-				break
-			}
-			switch output.NodeType {
-			case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
-				outputID = output.Children[0]
-			default:
-				outputID = -1
-			}
-			if outputID < 0 {
-				break
-			}
-		}
-		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
+		if err := builder.remapSetOperation(node, step, colRefCnt, colRefBool, sinkColRef, remapping); err != nil {
 			return nil, err
-		}
-
-		_, err = builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
-
-		expectedOutputCount := len(node.ProjectList)
-		if pruneOutput {
-			expectedOutputCount = len(neededProj)
-		}
-		if len(leftNode.ProjectList) != expectedOutputCount ||
-			len(rightNode.ProjectList) != expectedOutputCount {
-			return nil, moerr.NewInternalErrorf(
-				builder.GetContext(),
-				"set operation child projection width mismatch after remap: left %d, right %d, output %d",
-				len(leftNode.ProjectList), len(rightNode.ProjectList), expectedOutputCount,
-			)
-		}
-
-		remapInfo.tip = "ProjectList"
-		if pruneOutput {
-			newProjectList := node.ProjectList[:0]
-			for _, needed := range neededProj {
-				expr := node.ProjectList[needed]
-				increaseRefCnt(expr, -1, colRefCnt)
-				remapInfo.srcExprIdx = needed
-				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
-					return nil, err
-				}
-				outputIdx := len(newProjectList)
-				expr.Typ = setOperationOutputType(
-					node.NodeType,
-					leftNode.ProjectList[outputIdx].Typ,
-					rightNode.ProjectList[outputIdx].Typ,
-				)
-				newProjectList = append(newProjectList, expr)
-			}
-			clear(node.ProjectList[len(newProjectList):])
-			node.ProjectList = newProjectList
-		} else {
-			for idx, expr := range node.ProjectList {
-				increaseRefCnt(expr, -1, colRefCnt)
-				remapInfo.srcExprIdx = idx
-				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
-					return nil, err
-				}
-				expr.Typ = setOperationOutputType(
-					node.NodeType,
-					leftNode.ProjectList[idx].Typ,
-					rightNode.ProjectList[idx].Typ,
-				)
-			}
 		}
 
 	case plan.Node_JOIN:
@@ -4196,9 +4351,31 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID := builder.qry.Steps[i]
 		rootNode := builder.qry.Nodes[rootID]
 		colRefCnt := make(map[[2]int32]int)
+
 		if len(rootNode.BindingTags) > 0 {
 			resultTag := rootNode.BindingTags[0]
+			// A shared SINK reuses its producer tag. Seeding every root output
+			// pins unused producer work even after readers narrow colRefBool.
+			// Keep legacy seeding unless a real materialized column is demanded.
+			pruneSharedSink := false
+			if rootNode.NodeType == plan.Node_SINK && rootNode.ExtraOptions == materialized.CTESinkOption {
+				for j := range rootNode.ProjectList {
+					if colRefBool[[2]int32{int32(i), int32(j)}] {
+						pruneSharedSink = true
+						break
+					}
+				}
+			}
+			var sinkMemo map[[2]int32]bool
 			for j := range rootNode.ProjectList {
+				if pruneSharedSink && !colRefBool[[2]int32{int32(i), int32(j)}] {
+					if sinkMemo == nil {
+						sinkMemo = make(map[[2]int32]bool)
+					}
+					if builder.sharedCTESinkOutputCanPrune(rootNode, j, sinkMemo) {
+						continue
+					}
+				}
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
@@ -5061,7 +5238,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		node := builder.qry.Nodes[lastNodeID]
 		node.Limit = boundLimit
 		node.Offset = boundOffset
-		if unionRankOption != nil && unionRankOption.Mode != "" {
+		if unionRankOption != nil {
 			node.RankOption = unionRankOption
 		}
 	}
@@ -13876,15 +14053,29 @@ func (builder *QueryBuilder) checkPlanningCanceled() error {
 }
 
 // parseRankOption parses rank options from a map of option key-value pairs.
-// It extracts the "mode" option case-insensitively and validates it.
-// Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre", "post", "force", or "include").
+// Supported options are mode and nprobe. Unsupported keys and invalid values
+// must fail here rather than silently falling back to session defaults.
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
 	}
 
 	rankOption := &plan.RankOption{}
+	for key, value := range options {
+		switch strings.ToLower(key) {
+		case "mode":
+			// Validated below, retaining case-insensitive mode lookup.
+		case "nprobe":
+			nprobe, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			// Match the supported probe_limit session-variable domain.
+			if err != nil || nprobe < 1 || nprobe > 80000 {
+				return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and 80000, got '%s'", value)
+			}
+			rankOption.Nprobe = nprobe
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "unsupported rank option '%s'", key)
+		}
+	}
 
 	// Helper function to get value from map case-insensitively
 	getOptionValue := func(key string) (string, bool) {
@@ -13909,10 +14100,6 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', or 'include', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
-	}
-
-	if rankOption.Mode == "" {
-		return nil, nil
 	}
 
 	return rankOption, nil
