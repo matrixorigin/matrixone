@@ -106,48 +106,58 @@ func (expr *UserVarAssignmentExpressionExecutor) Eval(
 			logicalRow = previousRow
 		}
 		proc.SetUserVariableAssignmentCurrentRow(logicalRow)
-		rowBatches, err := cloneUserVariableAssignmentRowBatches(
-			batches, row, proc.Mp(), expr.allocation)
+		value, err := expr.evalAssignmentRow(proc, batches, row)
 		if err != nil {
 			return nil, err
-		}
-		childVec, err := expr.child.Eval(proc, rowBatches, nil)
-		if err != nil {
-			for _, rowBatch := range rowBatches {
-				rowBatch.Clean(proc.Mp())
-			}
-			return nil, err
-		}
-		if childVec == nil || childVec.Length() == 0 {
-			for _, rowBatch := range rowBatches {
-				rowBatch.Clean(proc.Mp())
-			}
-			return nil, moerr.NewInternalError(proc.Ctx,
-				"user-variable assignment expression returned an invalid row")
-		}
-		if err = expr.result.UnionOne(childVec, 0, proc.Mp()); err != nil {
-			for _, rowBatch := range rowBatches {
-				rowBatch.Clean(proc.Mp())
-			}
-			return nil, err
-		}
-		value := process.UserVariableAssignment{
-			Name:         expr.name,
-			Type:         childVec.GetType().PlanType(),
-			IsBin:        childVec.GetIsBinaryStringAt(0),
-			StringDomain: childVec.GetRuntimeStringDomainAt(0),
-		}
-		if childVec.IsNull(0) {
-			value.Value = nil
-		} else {
-			value.Value = vector.GetAny(childVec, 0, true)
-		}
-		for _, rowBatch := range rowBatches {
-			rowBatch.Clean(proc.Mp())
 		}
 		proc.StageUserVariableAssignment(value, logicalRow)
 	}
 	return expr.result, nil
+}
+
+func (expr *UserVarAssignmentExpressionExecutor) evalAssignmentRow(
+	proc *process.Process, batches []*batch.Batch, row int,
+) (process.UserVariableAssignment, error) {
+	rowBatches, err := cloneUserVariableAssignmentRowBatches(
+		batches, row, proc.Mp(), expr.allocation)
+	if err != nil {
+		return process.UserVariableAssignment{}, err
+	}
+	releaseRowBatches := func() {
+		for i := range rowBatches {
+			rowBatch := rowBatches[i]
+			rowBatches[i] = nil
+			if rowBatch != nil {
+				rowBatch.Clean(proc.Mp())
+			}
+		}
+	}
+	defer releaseRowBatches()
+
+	childVec, err := expr.child.Eval(proc, rowBatches, nil)
+	if err != nil {
+		return process.UserVariableAssignment{}, err
+	}
+	if childVec == nil || childVec.Length() == 0 {
+		return process.UserVariableAssignment{}, moerr.NewInternalError(proc.Ctx,
+			"user-variable assignment expression returned an invalid row")
+	}
+	if err = expr.result.UnionOne(childVec, 0, proc.Mp()); err != nil {
+		return process.UserVariableAssignment{}, err
+	}
+	value := process.UserVariableAssignment{
+		Name:         expr.name,
+		Type:         childVec.GetType().PlanType(),
+		IsBin:        childVec.GetIsBinaryStringAt(0),
+		StringDomain: childVec.GetRuntimeStringDomainAt(0),
+	}
+	if childVec.IsNull(0) {
+		value.Value = nil
+	} else {
+		value.Value = vector.GetAny(childVec, 0, true)
+	}
+	releaseRowBatches()
+	return value, nil
 }
 
 func (expr *UserVarAssignmentExpressionExecutor) currentUserVariableAssignment(

@@ -790,8 +790,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
+		if err := rejectUserVarAssignmentInView(ctx.GetContext(), stmt); err != nil {
+			return nil, err
+		}
 		return buildCreateView(stmt, ctx)
 	case *tree.AlterView:
+		if err := rejectUserVarAssignmentInView(ctx.GetContext(), stmt); err != nil {
+			return nil, err
+		}
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
 		return buildAlterTable(stmt, ctx)
