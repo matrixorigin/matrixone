@@ -2489,7 +2489,7 @@ func statementSQLSource(sql, sqlMode string) string {
 // sqlSourcesByFragment scans the whole lexical stream: a grammar fragment can
 // start inside a MySQL executable comment. Unfiltered fragments are ordered
 // trimmed slices of sql, so recovering their ends needs no second SQL parser.
-func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string, internalSource bool) ([]string, error) {
+func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []mysql.SQLFragment, internalSource bool) ([]string, error) {
 	scanSources := !internalSource && hasSQLSourceTag(sql)
 	var ends []int
 	if scanSources {
@@ -2502,13 +2502,10 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 		if internalSource {
 			sources[i] = constant.InternalSql
 		}
-		if fragment != "" {
-			offset := strings.Index(sql[cursor:], fragment)
-			if offset < 0 {
-				return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
-			}
-			cursor += offset + len(fragment)
+		if fragment.Start < cursor || !fragment.MatchesSource(sql) {
+			return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
 		}
+		cursor = fragment.End
 		if scanSources {
 			ends[i] = cursor
 		}
