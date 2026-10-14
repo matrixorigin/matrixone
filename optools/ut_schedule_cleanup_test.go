@@ -774,14 +774,15 @@ func TestIssuesRootDispatchDrainsHeartbeat(t *testing.T) {
 		t.Fatal("missing runner dispatch")
 	}
 	for _, tc := range []struct {
-		name, companion, status string
-		want                    int
+		name, companion, status, parallel, budget string
+		want                                      int
 	}{
-		{"failed-drain", "none", "125", 125},
-		{"failed-drain-light", "light", "125", 125},
-		{"failed-drain-prebuild", "prebuild", "125", 125},
-		{"ordinary-failure", "none", "7", 1},
-		{"success", "none", "0", 0},
+		{"failed-drain", "none", "125", "2", "2", 125},
+		{"failed-drain-light", "light", "125", "2", "2", 125},
+		{"failed-drain-prebuild", "prebuild", "125", "2", "2", 125},
+		{"ordinary-failure", "none", "7", "2", "2", 1},
+		{"success", "none", "0", "2", "2", 0},
+		{"serial-budget-rollback", "none", "0", "1", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The outer pipeline cannot exit until the independent reader gets
@@ -825,8 +826,8 @@ function go() {
 function list_embedded_cluster_test_packages() { :; }
 # Only expensive child work is replaced: scheduling, joining, root dispatch,
 # heartbeat and companion launch/shutdown remain the production functions.
-function run_issues_race_batches() {
- [[ "$3" == 8 ]] || return 96
+function run_race_test_batches() {
+ [[ "$3" == 8 && "$4" == "$UT_ISSUES_BATCH_PARALLEL" && "$5" == "$EXPECTED_GO_BUDGET" ]] || return 96
  read -r -t 5 timer_pid <&7 || return 90
  printf '%s\n' "$timer_pid" > "$CASE_DIR/timer.pid"
  if [[ "$COMPANION" != none ]]; then read -r -t 5 _ <&8 || return 91; fi
@@ -878,7 +879,8 @@ read -r _ <&9
 				return strings.Replace(source, anchor, anchor+"            printf '%s\\n' \"$heartbeat_sleep_pid\" >&7\n", 1)
 			}
 			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
-				"COMPANION="+tc.companion, "ISSUES_STATUS="+tc.status)
+				"COMPANION="+tc.companion, "ISSUES_STATUS="+tc.status,
+				"UT_ISSUES_BATCH_PARALLEL="+tc.parallel, "EXPECTED_GO_BUDGET="+tc.budget)
 			if tc.want == 0 {
 				if err != nil {
 					t.Fatalf("root success: %v\n%s", err, out)

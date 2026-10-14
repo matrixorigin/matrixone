@@ -118,7 +118,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1", "UT_EMBEDDED_BATCHES=1")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
 	if diagnostic != "" {
@@ -158,10 +158,13 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, want      string
+		embeddedBatches string
 		args            []string
 		accepted        bool
 		validationError string
 	}{
+		{name: "embedded-batches-opt-in", args: []string{"UT_EMBEDDED_BATCHES=4"}, want: "8 2 1 0", embeddedBatches: "4", accepted: true},
+		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 1 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 1 0", accepted: true},
 		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 1 0", accepted: true},
 		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 1 0", accepted: true},
@@ -177,15 +180,19 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 1", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.embeddedBatches == "" {
+				tc.embeddedBatches = "1"
+			}
+			tc.want += " " + tc.embeddedBatches
 			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
 			cmd := exec.CommandContext(t.Context(), "make", args...)
 			cmd.Dir = ".."
-			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\"\n")
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\"\n")
 			// Test Make's defaults, not the enclosing UT's scheduling overrides.
 			for _, value := range os.Environ() {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)
@@ -216,7 +223,7 @@ grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
 `
 			out, err = scheduleHarness(t, script,
 				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
-				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "UT_PREBUILD_EMBEDDED="+values[3], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
+				"UT_EMBEDDED_BATCHES="+values[4], "UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "UT_PREBUILD_EMBEDDED="+values[3], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
 				"EXPECT_VALIDATION_ERROR="+tc.validationError)
 			if err != nil {
 				t.Fatalf("runner config: %v\n%s", err, out)

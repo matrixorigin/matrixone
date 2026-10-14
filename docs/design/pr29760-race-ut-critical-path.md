@@ -95,6 +95,60 @@ previous execution policy.
 The following amendments retain the historical decisions and measurements;
 their serial Make default is superseded only by this bounded eight-batch mode.
 
+## Audited DML/SQL generations (2026-10-14, design v1)
+
+`gpt-6.1-sol`, reasoning `xhigh`, reviewed this design in
+`/root/ut_race_design_20261014`. Adoption of a new default requires the complete
+embedded-wave resource comparison below; isolated package results are insufficient.
+
+The target is the ordinary embedded stage's long process lifetimes and serial
+independent roots. DML has 44 roots and 200 terminal tests; SQL has 41 roots and
+270 terminal tests. Keep every topology, datum and oracle. DML's existing
+intra-root parallelism is preserved. SQL's real TestMain must execute for inventory
+and every batch, close its canonical fixture and propagate cleanup failure.
+
+Reuse the issues batching executor, partitioner, shared package deadline, process
+admission, report consumption and drain protocol. Its caller supplies batch
+count, process limit and execution CPU budget; preparation retains the caller's
+budget. Derive checkpoint stage from the current command. Unknown TestMain
+contracts remain ineligible; the exact SQL package receives an internal
+cleanup-only permission following its lifecycle audit. There is no environment
+override for this permission and no inferred parsing of a TestMain body.
+
+One `UT_EMBEDDED_BATCHES=1|4` option governs audited DML/SQL roots on the ordinary
+path. `1` restores the exact original full-scope Go command and order. `4` removes
+only those audited packages present in the scope, runs all remaining packages in
+one ordinary command, then compiles and executes each audited package in order:
+four round-robin batches, at most two processes, GOMAXPROCS=2 per process.
+Do not invoke Go with an empty ordinary scope. Explicit prebuild execution keeps
+its existing package policy. The implementation initially defaults to `1` until
+the complete-wave comparison passes.
+
+Publish a batched report/binary only after the preceding command joins; consume
+and release them before the next package. Ordinary test failure still executes
+the remaining selected packages and retains failure. Status 125 or failed drain
+stops admission and preserves owned diagnostics. Preparation may fall back to
+the current package before its first root; runtime failure never retries roots
+or reruns the complete scope. No new scheduler, background owner or resource
+fallback is introduced.
+
+The SQL experiment exposed account PITR retained by CDCNoPrimaryKeyRejected.
+LegacyPartitionColumnLimitCopy passes alone but fails immediately after CDC:
+the retained PITR enables historical lineage's intentional DROP/ADD restriction.
+Clean CDC and PITR in the existing deferred cleanup before dropping its database;
+do not alter production lineage policy, reset the fixture or reorder roots.
+Also check DML's streaming result error after iteration, preserving both EXCEPT
+directions and the zero-row oracle.
+
+Before adoption, compare the complete ten-package embedded wave, including
+compilation, with identical cache starting conditions, eight CPU cores, 8 GiB,
+and no swap. Run variants sequentially. Require identical root/subtest terminal
+maps, retained failure propagation, lower CPU and memory occupancy, and no
+increase in whole-wave memory peak or max/OOM events. Historical issues savings
+cannot be counted again after that optimization becomes the baseline. Tests
+must cover rollback, scope subsets, budgets, TestMain cleanup failure, preparation
+fallback and undrained ownership through the existing runner harness.
+
 ## PR29795 amendment: optional bounded process waves
 
 Implementation: [#29795](https://github.com/matrixorigin/matrixone/pull/29795).

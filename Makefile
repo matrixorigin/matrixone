@@ -611,6 +611,8 @@ UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 UT_ISSUES_BATCHES ?= 8
 UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
 UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
+# Audited DML/SQL batching applies only to the ordinary, non-prebuild path.
+UT_EMBEDDED_BATCHES ?= 1
 # A compiler overlapping two clusters increases the memory peak. The new
 # issues default uses the existing serial embedded command instead. Preserve
 # the prebuild policy for rollback modes and explicit embedded pool users.
@@ -626,6 +628,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_EMBEDDED_BATCHES
 export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
