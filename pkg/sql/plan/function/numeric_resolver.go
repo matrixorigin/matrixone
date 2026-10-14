@@ -347,6 +347,7 @@ func resolveNumericBinaryTypes(
 		}, true
 	}
 
+	original := []types.Type{left, right}
 	var cast bool
 	var castLeft, castRight types.Type
 	switch op {
@@ -375,11 +376,11 @@ func resolveNumericBinaryTypes(
 		return numericTypeResolution{}, false
 	}
 
-	return numericTypeResolution{
-		left:   left,
-		right:  right,
-		result: numericBinaryResultType(op, left, right),
-	}, true
+	result := numericBinaryResultType(op, left, right)
+	if op == numericOpMod {
+		result = DecimalModReturnType(original, result)
+	}
+	return numericTypeResolution{left: left, right: right, result: result}, true
 }
 
 func resolveUnknownNumericOperands(left, right types.Type, outer *types.Type) (types.Type, types.Type, bool) {
