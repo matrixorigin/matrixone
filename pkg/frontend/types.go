@@ -354,6 +354,17 @@ type PrepareStmt struct {
 	// needsRebuild marks a stale prepared plan after execution-time retry or
 	// a session planning setting changes. EXECUTE owns the actual rebuild.
 	needsRebuild bool
+	// rewritePolicyInvalidated is monotonic for the lifetime of this prepared
+	// handle. Role-rule policy is materialized into PrepareStmt and its plan;
+	// once that policy snapshot is invalid, rebuilding the retained AST would
+	// otherwise execute the old row predicate again. A new PREPARE creates a
+	// new handle with a fresh policy snapshot.
+	rewritePolicyInvalidated atomic.Bool
+	// rewritePolicyGeneration identifies the session policy snapshot used to
+	// build this handle. It is checked while the handle is published.
+	rewritePolicyGeneration uint64
+	rewritePolicyCaptured   bool
+	rewritePolicyEnabled    bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool
@@ -898,6 +909,19 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
+}
+
+func (prepareStmt *PrepareStmt) invalidateRewritePolicy() {
+	if prepareStmt != nil {
+		prepareStmt.rewritePolicyInvalidated.Store(true)
+	}
+}
+
+func (prepareStmt *PrepareStmt) checkRewritePolicy(ctx context.Context) error {
+	if prepareStmt != nil && prepareStmt.rewritePolicyInvalidated.Load() {
+		return moerr.NewNeedReprepare(ctx)
+	}
+	return nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -1876,6 +1900,13 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
 
+	oldWindowPartitionAlgorithm := ""
+	if name == "window_partition_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldWindowPartitionAlgorithm, _ = old.(string)
+		}
+	}
+
 	def, ok := gSysVarsDefs[name]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
@@ -1999,6 +2030,13 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			ses.invalidateCachedPlans(true)
 		}
 	}
+	if err == nil && name == "window_partition_algorithm" {
+		if newValue, ok := val.(string); ok && oldWindowPartitionAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForWindowPartitionAlgorithmChange()
+		}
+	}
+
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
@@ -2017,6 +2055,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	// state must invalidate the cached prepared statements, otherwise a later
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.bumpRewritePolicyGeneration()
 		ses.RemoveAllPrepareStmts()
 	}
 	if err == nil {

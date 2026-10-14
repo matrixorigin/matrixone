@@ -546,6 +546,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, err
 	}
 
+	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
+
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)

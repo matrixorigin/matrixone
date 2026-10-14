@@ -2330,6 +2330,96 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
 }
 
+func TestHashDiffConflictReportsExpandedUpdatesWithoutValueClaim(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{txnOp: txnOp}
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name")).AnyTimes()
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tblStuff.lcaRel = lcaRel
+
+	lcaResult := []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(7), "ancestor", "h0"})}
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	bh.EXPECT().GetExecResultSet().Return(lcaResult).Times(2)
+	bh.EXPECT().ClearExecResultSet().Times(2)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	targetRowID := buildHashDiffRowID(t, 1)
+	baseRowID := buildHashDiffRowID(t, 2)
+	updateTS := types.BuildTS(15, 0)
+	targetData := buildHashDiffDataBatchWithRowIDs(t, ses.proc.Mp(), []types.Rowid{targetRowID}, [][]any{
+		{int64(7), "same", "same-hidden", commitTSBytes(updateTS)},
+	})
+	targetTombstone := buildHashDiffTombstoneBatchWithRowIDs(t, ses.proc.Mp(), []types.Rowid{oldRowID}, [][]any{
+		{int64(7), commitTSBytes(types.BuildTS(12, 0))},
+	})
+	baseData := buildHashDiffDataBatchWithRowIDs(t, ses.proc.Mp(), []types.Rowid{baseRowID}, [][]any{
+		{int64(7), "same", "same-hidden", commitTSBytes(updateTS)},
+	})
+	baseTombstone := buildHashDiffTombstoneBatchWithRowIDs(t, ses.proc.Mp(), []types.Rowid{oldRowID}, [][]any{
+		{int64(7), commitTSBytes(types.BuildTS(12, 0))},
+	})
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77, 99},
+		pathFromLCAToBaseTS: []types.TS{{}, types.BuildTS(11, 0)},
+	}
+	var emitted []capturedBatch
+	err = hashDiff(
+		context.Background(), ses, bh, tblStuff, dagInfo,
+		compositeOption{conflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_FAIL}, expandUpdate: true},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			if len(rows) > 0 {
+				emitted = append(emitted, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+			}
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: targetData, tombstone: targetTombstone}}}},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: baseData, tombstone: baseTombstone}}}},
+		nil,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
+	require.ErrorContains(t, err, "target UPDATE and base UPDATE on pk(7)")
+	require.NotContains(t, err.Error(), "different values")
+	require.Empty(t, emitted)
+}
+
+func TestBatchWithKindLogicalOperation(t *testing.T) {
+	for _, tt := range []struct {
+		kind       string
+		fromUpdate bool
+		want       string
+	}{
+		{kind: diffDelete, fromUpdate: true, want: diffUpdate},
+		{kind: diffInsert, fromUpdate: true, want: diffUpdate},
+		{kind: diffDelete, want: diffDelete},
+		{kind: diffInsert, want: diffInsert},
+	} {
+		require.Equal(t, tt.want, (batchWithKind{kind: tt.kind, fromUpdate: tt.fromUpdate}).logicalOperation())
+	}
+}
+
 func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

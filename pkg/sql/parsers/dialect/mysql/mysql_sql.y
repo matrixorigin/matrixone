@@ -70,6 +70,8 @@ func sqlTaskInt64(v any) int64 {
     }
 }
 
+const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -701,7 +703,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
+%type <str> json_type_opt restore_snapshot_name restore_snapshot_from_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -1069,9 +1071,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <fillMode> fill_mode
 
 %start start_command
-
 // python udf
 %type<str> func_handler func_handler_opt
+%type <alterTableOptions> alter_add_column_list
 %%
 
 start_command:
@@ -1579,6 +1581,16 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
+|   RESTORE DATABASE ident '.' ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 |   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
     {
         var account tree.Identifier
@@ -1637,6 +1649,11 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 
 restore_db_scope:
     ident
@@ -1676,6 +1693,16 @@ restore_snapshot_name:
 |   '{' SNAPSHOT '=' STRING '}'
     {
         $$ = strings.ToLower($4)
+    }
+
+restore_snapshot_from_name:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
     }
 
 restore_to_account_name_opt:
@@ -3619,7 +3646,77 @@ explain_stmt:
     }
 
 explain_plan_stmt:
-    explain_sym explainable_stmt
+    explain_sym FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym explainable_stmt
     {
         if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
             yylex.Error(intoErr)
@@ -7271,7 +7368,8 @@ rank_opt:
             } else if strVal, ok := expr.(*tree.StrVal); ok {
                 str = strVal.String()
             } else {
-                continue
+                yylex.Error("rank options must be string literals containing key=value")
+                return 1
             }
             
             // Remove quotes if present
@@ -7281,11 +7379,13 @@ rank_opt:
             
             // Parse key=value pairs
             parts := strings.Split(str, "=")
-            if len(parts) == 2 {
-                key := strings.TrimSpace(strings.ToLower(parts[0]))
-                value := strings.TrimSpace(parts[1])
-                optionMap[key] = value
+            if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+                yylex.Error("rank options must contain a nonempty key=value pair")
+                return 1
             }
+            key := strings.TrimSpace(strings.ToLower(parts[0]))
+            value := strings.TrimSpace(parts[1])
+            optionMap[key] = value
         }
         
         $$ = &tree.RankOption{
@@ -16525,6 +16625,7 @@ non_reserved_keyword:
 |   MINVALUE
 |	PROCESSLIST
 |   PUBLICATION
+|   SUBSCRIPTION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
 |   PROPERTIES
@@ -16771,5 +16872,27 @@ nth_value_from_first_opt:
 //    PROPERTIES
 //  BSI
 //  ZONEMAP
+
+alter_option_list:
+    ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = $4
+    }
+|   alter_option_list ',' ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = append($1, $6...)
+    }
+
+alter_add_column_list:
+    column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = tree.AlterTableOptions{tree.NewAlterAddCol($1, position)}
+    }
+|   alter_add_column_list ',' column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = append($1, tree.NewAlterAddCol($3, position))
+    }
 
 %%

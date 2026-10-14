@@ -249,19 +249,55 @@ func OptionContains(options []OptionElem, option string) bool {
 }
 
 func MakeExplainStmt(stmt Statement, options []OptionElem) Statement {
-	if OptionContains(options, PhyPlanOption) {
-		explainStmt := NewExplainPhyPlan(stmt, "text")
+	format := explainOptionFormat(options)
+	if explainOptionEnabled(options, PhyPlanOption) {
+		explainStmt := NewExplainPhyPlan(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
-	} else if OptionContains(options, AnalyzeOption) {
-		explainStmt := NewExplainAnalyze(stmt, "text")
+	} else if explainOptionEnabled(options, AnalyzeOption) {
+		explainStmt := NewExplainAnalyze(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
 	} else {
-		explainStmt := NewExplainStmt(stmt, "text")
+		explainStmt := NewExplainStmt(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
 	}
+}
+
+func explainOptionFormat(options []OptionElem) string {
+	for _, elem := range options {
+		if !strings.EqualFold(elem.Name, FormatOption) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(elem.Value), "'\"")
+		if value == "" {
+			break
+		}
+		switch strings.ToUpper(value) {
+		case "TEXT":
+			return "text"
+		case "JSON":
+			return "json"
+		default:
+			return strings.ToLower(value)
+		}
+	}
+	return "text"
+}
+
+// explainOptionEnabled distinguishes an option being present from an option
+// whose value enables the execution mode. Parenthesized EXPLAIN accepts
+// ANALYZE FALSE, which must remain a regular (non-executing) EXPLAIN.
+func explainOptionEnabled(options []OptionElem, option string) bool {
+	for _, elem := range options {
+		if !strings.EqualFold(elem.Name, option) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(elem.Value), "'\"")
+		return strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+	}
+	return false
 }
 
 // --------------------------------------------------------------------------------------

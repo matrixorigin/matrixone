@@ -10738,7 +10738,8 @@ func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return overlayBinary("ST_UNION", geo.OpUnion)(ivecs, result, proc, length, selectList)
 }
 
-// StIntersection returns the polygon intersection of two areal geometries.
+// StIntersection returns the complete intersection of two areal geometries,
+// including exposed shared boundaries and isolated contact points.
 func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return overlayBinary("ST_INTERSECTION", geo.OpIntersection)(ivecs, result, proc, length, selectList)
 }
