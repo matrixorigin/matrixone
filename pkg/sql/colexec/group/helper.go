@@ -759,7 +759,7 @@ func (ctr *container) openSpillBucket(
 	bkt.diskToken = diskToken
 	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
 	if err != nil {
-		_ = bkt.free()
+		_ = ctr.freeSpillBucket(bkt)
 		return err
 	}
 	return nil
@@ -1395,13 +1395,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					return false, err
 				}
 				if err := bkt.finishWriting(); err != nil {
-					bkt.free()
+					ctr.freeSpillBucket(bkt)
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
-				bkt.free()
+				ctr.freeSpillBucket(bkt)
 			}
 			// Ownership has moved to spillBkts or ended at free(). Do not leave
 			// a second source reference behind if a later flush fails/cancels.
@@ -1423,7 +1423,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
 		spillio.DropReadCache(bkt.file)
-		if err := bkt.free(); err != nil && retErr == nil {
+		if err := ctr.freeSpillBucket(bkt); err != nil && retErr == nil {
 			retErr = err
 		}
 		ctr.freeSpillAggList()

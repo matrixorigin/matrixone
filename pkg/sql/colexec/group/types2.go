@@ -692,31 +692,45 @@ func (ctr *container) freeSpillReloadStaging() {
 	}
 }
 
-func (ctr *container) freeSpillBkts() {
-	cleanup := func(bkt *spillBucket) {
-		if err := bkt.free(); err != nil {
-			logutil.Errorf("group spill file cleanup failed: %v", err)
-			if bkt.fileFS != nil {
-				ctr.spillCleanupPending = append(ctr.spillCleanupPending, bkt)
-			}
+// freeSpillBucket ends a bucket's active ownership, including local buckets
+// that are never published in spillBkts. Failed removals retain only detached
+// file metadata and the disk reservation. Repeated error-path cleanup of the
+// original bucket cannot create a second retry owner.
+func (ctr *container) freeSpillBucket(bkt *spillBucket) error {
+	err := bkt.free()
+	if err != nil {
+		logutil.Errorf("group spill file cleanup failed: %v", err)
+	}
+	if bkt != nil && bkt.fileFS != nil {
+		pending := &spillBucket{name: bkt.name, fileFS: bkt.fileFS, diskToken: bkt.diskToken}
+		bkt.fileFS = nil
+		bkt.diskToken = nil
+		if ctr == nil {
+			spillcleanup.Enqueue(pending.free)
+		} else {
+			ctr.spillCleanupPending = append(ctr.spillCleanupPending, pending)
 		}
 	}
+	return err
+}
+
+func (ctr *container) freeSpillBkts() {
 	pending := ctr.spillCleanupPending
 	ctr.spillCleanupPending = nil
 	for _, bkt := range pending {
-		cleanup(bkt)
+		_ = ctr.freeSpillBucket(bkt)
 	}
 	// free all spill buckets.
 	if ctr.spillBkts != nil {
 		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			cleanup(bkt)
+			_ = ctr.freeSpillBucket(bkt)
 			return true
 		})
 		ctr.spillBkts.Clear()
 	}
 
 	for _, bkt := range ctr.currentSpillBkt {
-		cleanup(bkt)
+		_ = ctr.freeSpillBucket(bkt)
 	}
 	ctr.currentSpillBkt = nil
 }
@@ -785,6 +799,9 @@ func (ctr *container) free() {
 		ctr.distinctSpill = nil
 		ctr.freeSpillBkts()
 	}
+	// Prepared operators can remain cached indefinitely after Reset. Cleanup
+	// progress must not depend on their next execution or eventual Release.
+	ctr.deferSpillCleanup()
 	ctr.distinctFinalized = false
 	ctr.distinctGroupReset = false
 	ctr.distinctDrainKeysForUT = 0

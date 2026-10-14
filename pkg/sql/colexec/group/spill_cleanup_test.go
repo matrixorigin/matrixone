@@ -15,22 +15,225 @@
 package group
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 type terminalRemoveErrorFS struct {
 	fileservice.MutableFileService
-	blocked atomic.Bool
+	blocked  atomic.Bool
+	names    []string
+	onCreate func()
+}
+
+func (fs *terminalRemoveErrorFS) CreateFile(ctx context.Context, name string) (*os.File, error) {
+	file, err := fs.MutableFileService.CreateFile(ctx, name)
+	if err == nil {
+		fs.names = append(fs.names, name)
+		if fs.onCreate != nil {
+			fs.onCreate()
+		}
+	}
+	return file, err
+}
+
+func TestDistinctSortMergeErrorRetainsIntermediateRun(t *testing.T) {
+	proc := newCleanupTestProcess(t)
+	t.Cleanup(proc.Free)
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	ctr := container{mp: mpool.MustNewZero(), budget: budget}
+	controller := &distinctSpillController{ctr: &ctr, rootName: "merge-cleanup"}
+	fault := &terminalRemoveErrorFS{MutableFileService: baseFS}
+	var slots [64]*spillBucket
+	t.Cleanup(func() {
+		fault.blocked.Store(false)
+		for _, bucket := range slots {
+			_ = ctr.freeSpillBucket(bucket)
+		}
+		controller.close()
+		ctr.free()
+		for _, name := range fault.names {
+			_ = baseFS.RemoveFile(context.Background(), name)
+		}
+	})
+	newRun := func(name string, malformed bool) *spillBucket {
+		bkt := &spillBucket{name: name, cnt: 1}
+		require.NoError(t, ctr.openSpillBucket(proc, fault, bkt))
+		if malformed {
+			require.NoError(t, types.WriteInt32(bkt.writer, 0))
+		} else {
+			require.NoError(t, writeDistinctSortKey(bkt.writer, []byte("key")))
+		}
+		require.NoError(t, bkt.flushWriter())
+		return bkt
+	}
+	slots[0] = newRun("merge-slot-0", false)
+	slots[1] = newRun("merge-slot-1", true)
+	run := newRun("merge-input", false)
+	fault.onCreate = func() {
+		// First merge succeeds; the second creates an output and then fails
+		// decoding slot 1. Removal is unavailable for its intermediate/output.
+		if len(fault.names) == 5 {
+			fault.blocked.Store(true)
+		}
+	}
+	err = controller.addSortRun(proc, fault, &slots, run)
+	require.ErrorContains(t, err, "invalid distinct sort key length")
+	require.Len(t, fault.names, 5)
+	require.Len(t, ctr.spillCleanupPending, 2)
+	require.Positive(t, budget.SpillDiskUsed())
+	fault.blocked.Store(false)
+	for i, bkt := range slots {
+		require.NoError(t, ctr.freeSpillBucket(bkt))
+		slots[i] = nil
+	}
+	ctr.freeSpillBkts()
+	require.Empty(t, ctr.spillCleanupPending)
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
+	for _, name := range fault.names {
+		_, err := baseFS.OpenFile(context.Background(), name)
+		require.Error(t, err, name)
+	}
+}
+
+// Exercise the discard sites themselves: neither a local variable nor an
+// emptied wave may be the last owner of a file whose removal failed.
+func TestGroupDiscardedBucketsRetainCleanup(t *testing.T) {
+	for _, path := range []string{"reload_done", "reload_error", "wave_rollback", "sort_run_error"} {
+		t.Run(path, func(t *testing.T) {
+			proc := newCleanupTestProcess(t)
+			t.Cleanup(proc.Free)
+			baseFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			ctr := container{mp: mpool.MustNewZero(), budget: budget}
+			fault := &terminalRemoveErrorFS{MutableFileService: baseFS}
+			fault.blocked.Store(true)
+			t.Cleanup(func() {
+				fault.blocked.Store(false)
+				ctr.free()
+				// Also remove files if the ownership assertion fails pre-fix.
+				for _, name := range fault.names {
+					_ = baseFS.RemoveFile(context.Background(), name)
+				}
+			})
+			if path == "sort_run_error" {
+				controller := &distinctSpillController{ctr: &ctr, rootName: "cleanup-sort"}
+				set := arenaskl.NewSkiplist(arenaskl.NewArena(make([]byte, 4096)), bytes.Compare)
+				_, err := controller.flushSortSet(proc, fault, set)
+				require.ErrorContains(t, err, "empty distinct sort run")
+			} else {
+				bucket := &spillBucket{name: "cleanup-" + path, cnt: 1}
+				require.NoError(t, ctr.openSpillBucket(proc, fault, bucket))
+				if path == "reload_error" {
+					_, err = bucket.writer.Write([]byte{1})
+					require.NoError(t, err)
+				} else {
+					require.NoError(t, types.WriteInt64(bucket.writer, 0))
+				}
+				require.NoError(t, bucket.flushWriter())
+				if path == "wave_rollback" {
+					wave := [spillNumBuckets]*spillBucket{bucket}
+					ctr.freeDistinctWave(&wave)
+					require.Nil(t, wave[0])
+				} else {
+					ctr.spillBkts = list.New[*spillBucket]()
+					ctr.spillBkts.PushBack(bucket)
+					_, err = ctr.loadSpilledData(proc, process.NewAnalyzer(0, false, false, "cleanup"), nil)
+					if path == "reload_error" {
+						require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+					} else {
+						require.ErrorContains(t, err, "injected terminal remove error")
+					}
+					require.Zero(t, ctr.spillBkts.Len())
+				}
+				require.Positive(t, budget.SpillDiskUsed())
+			}
+			require.Len(t, ctr.spillCleanupPending, 1)
+			require.Zero(t, budget.SpillFDUsed())
+			file, err := baseFS.OpenFile(context.Background(), fault.names[0])
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+			fault.blocked.Store(false)
+			ctr.freeSpillBkts()
+			require.Empty(t, ctr.spillCleanupPending)
+			require.Zero(t, budget.SpillDiskUsed())
+			_, err = baseFS.OpenFile(context.Background(), fault.names[0])
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestGroupTeardownRetriesWhileOperatorRetained(t *testing.T) {
+	for _, owner := range []string{"group_reset", "group_free", "merge_reset", "merge_free"} {
+		t.Run(owner, func(t *testing.T) {
+			proc := newCleanupTestProcess(t)
+			t.Cleanup(proc.Free)
+			baseFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			group, merge := &Group{}, &MergeGroup{}
+			ctr := &group.ctr
+			if strings.HasPrefix(owner, "merge") {
+				ctr = &merge.ctr
+			}
+			*ctr = container{mp: mpool.MustNewZero(), budget: budget}
+			fault := &terminalRemoveErrorFS{MutableFileService: baseFS}
+			fault.blocked.Store(true)
+			t.Cleanup(func() { fault.blocked.Store(false); ctr.freeSpillBkts() })
+			bucket := &spillBucket{name: "retained-" + owner}
+			require.NoError(t, ctr.openSpillBucket(proc, fault, bucket))
+			_, err = bucket.writer.Write([]byte("retained-spill"))
+			require.NoError(t, err)
+			require.NoError(t, bucket.flushWriter())
+			// Include the controller's late cleanup, not only currentSpillBkt.
+			ctr.distinctSpill = &distinctSpillController{ctr: ctr}
+			ctr.distinctSpill.root[0] = bucket
+			switch owner {
+			case "group_reset":
+				group.Reset(proc, true, nil)
+			case "group_free":
+				group.Free(proc, true, nil)
+			case "merge_reset":
+				merge.Reset(proc, true, nil)
+			case "merge_free":
+				merge.Free(proc, true, nil)
+			}
+			require.Empty(t, ctr.spillCleanupPending)
+			require.Positive(t, budget.SpillDiskUsed())
+			require.Zero(t, budget.SpillFDUsed())
+			fault.blocked.Store(false)
+			// No Release, re-execution, or another cleanup call drives progress.
+			require.Eventually(t, func() bool { return budget.SpillDiskUsed() == 0 }, 5*time.Second, 10*time.Millisecond)
+			_, err = baseFS.OpenFile(context.Background(), bucket.name)
+			require.Error(t, err)
+			runtime.KeepAlive(group)
+			runtime.KeepAlive(merge)
+		})
+	}
 }
 
 func newCleanupTestProcess(t *testing.T) *process.Process {

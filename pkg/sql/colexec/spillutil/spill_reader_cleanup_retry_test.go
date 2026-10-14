@@ -17,16 +17,84 @@ package spillutil
 import (
 	"context"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type detachedWriterRemoveFS struct {
+	fileservice.MutableFileService
+	blocked atomic.Bool
+}
+
+func (fs *detachedWriterRemoveFS) RemoveFile(ctx context.Context, name string) error {
+	if fs.blocked.Load() {
+		return os.ErrPermission
+	}
+	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestSpillEngineDeferredWriterDoesNotRetainQuery(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	t.Cleanup(budget.Close)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fault := &detachedWriterRemoveFS{MutableFileService: baseFS}
+	fault.blocked.Store(true)
+	t.Cleanup(func() {
+		fault.blocked.Store(false)
+		require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 5*time.Second, 10*time.Millisecond)
+	})
+	// Use a real engine-created writer: its cache is an interior engine pointer.
+	engineRef, queryRef, name := func() (weak.Pointer[SpillEngine], weak.Pointer[[1024]byte], string) {
+		engine := &SpillEngine{cfg: SpillEngineConfig{Budget: generation}}
+		query := new([1024]byte)
+		engine.probeKeyEval = func(*batch.Batch) ([]*vector.Vector, error) {
+			runtime.KeepAlive(query)
+			return nil, nil
+		}
+		writers := engine.makeBucketWriters("detached-writer")
+		writer := &writers[0]
+		require.NoError(t, writeBucketPayload(proc, []byte("real-spill-data"), 1, writer, nil))
+		writer.fileFS = fault
+		require.ErrorIs(t, writer.Close(), os.ErrPermission)
+		engine.orphanWriters = append(engine.orphanWriters, *writer)
+		engine.Cleanup(proc)
+		engine.DeferCleanup()
+		require.Empty(t, engine.orphanWriters)
+		return weak.Make(engine), weak.Make(query), writer.Name
+	}()
+	require.Positive(t, generation.SpillDiskUsed())
+	// Collection is checked while removal is still blocked, independently of
+	// retry completion. This fails if the queued callback retains the engine.
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return engineRef.Value() == nil && queryRef.Value() == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	physical, err := baseFS.OpenFile(context.Background(), name)
+	require.NoError(t, err)
+	require.NoError(t, physical.Close())
+	fault.blocked.Store(false)
+	require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 5*time.Second, 10*time.Millisecond)
+	_, err = baseFS.OpenFile(context.Background(), name)
+	require.Error(t, err)
+}
 
 func TestSpillEngineDeferredCleanupOutlivesEngine(t *testing.T) {
 	for _, owner := range []string{"reader", "queue"} {
