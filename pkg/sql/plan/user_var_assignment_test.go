@@ -192,6 +192,34 @@ func TestUserVariableAssignmentRejectsReadBeforeWriteInWhere(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUserVariableAssignmentRejectsReadBeforeWriteInJoinOn(t *testing.T) {
+	for _, sql := range []string{
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on @a < 2",
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on coalesce(@a, 0) < 2",
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on if(@a < 2, true, false)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(),
+				"reading a user variable in JOIN ON before its assignment projection")
+		})
+	}
+
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(),
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on @b < 2", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+}
+
 func TestUserVariableAssignmentRejectsViewAuthoring(t *testing.T) {
 	for _, tc := range []struct {
 		name string
