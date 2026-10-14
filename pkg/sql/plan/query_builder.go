@@ -3194,6 +3194,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		}
 		if len(newProjList) == 0 && len(node.ProjectList) > 0 {
+			// A count-only reader still emits the fallback projection. Publish
+			// those reads before a shared CTE producer compacts its output.
+			sharedCTESource := int32(-1)
+			if node.NodeType == plan.Node_SINK_SCAN && len(node.SourceStep) == 1 && node.SourceStep[0] < step {
+				sourceStep := node.SourceStep[0]
+				source := builder.qry.Nodes[builder.qry.Steps[sourceStep]]
+				if source.NodeType == plan.Node_SINK && source.ExtraOptions == materialized.CTESinkOption {
+					sharedCTESource = sourceStep
+				}
+			}
 			for i, expr := range node.ProjectList {
 				globalRef := [2]int32{tag, int32(i)}
 				newProjList = append(newProjList, &plan.Expr{
@@ -3204,6 +3214,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					}},
 				})
 				remapping.addColRef(globalRef)
+				if sharedCTESource >= 0 {
+					colRefBool[[2]int32{sharedCTESource, int32(i)}] = true
+				}
 			}
 		}
 		node.ProjectList = newProjList
