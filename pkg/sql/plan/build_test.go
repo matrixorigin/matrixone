@@ -1972,7 +1972,7 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
 	require.False(t, ok)
 
-	state.addHavingAliasExprs(clause.Exprs)
+	state.addBranchAliasExprs(clause.Exprs)
 	require.Len(t, state.innerExprs, 7)
 	require.Equal(t, "flag", state.innerExprs[4].As.Origin())
 	require.Equal(t, "status", state.innerExprs[5].As.Origin())
