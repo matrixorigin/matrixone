@@ -112,7 +112,7 @@ func (builder *QueryBuilder) bindExternalScan(
 							colName, tableDef.Name)
 					}
 					colExpr := &plan.Expr{
-						Typ: tableDef.Cols[tbColIdx].Typ,
+						Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[tbColIdx].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: externalScanTag,
@@ -149,7 +149,7 @@ func (builder *QueryBuilder) bindExternalScan(
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))
 
 				insertColToExpr[col.Name] = &plan.Expr{
-					Typ: col.Typ,
+					Typ: loadTimeInputType(stmt.Param.Format, col.Typ),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: externalScanTag,
@@ -171,8 +171,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		insertColToExpr[target] = expr
 	}
 
-	// External scans expose target-typed columns. For BLOB/TEXT, equal type
-	// metadata does not prove that the runtime payload fits the target family.
+	// Textual TIME inputs retain their original value. Typed TIME and BLOB/TEXT
+	// metadata also do not prove that the value fits the target domain.
 	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
 		return -1, nil, err
 	}
@@ -260,11 +260,10 @@ func loadAssignmentIgnore(stmt *tree.Load) bool {
 	if tree.IsIgnoreStatement(stmt) {
 		return true
 	}
-	if !stmt.Local {
-		return false
-	}
+	// Assignment policy is distinct from decoder/global IGNORE. In particular,
+	// LOCAL must not relax strict parsing of unrelated input column types.
 	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
-	return !replace
+	return stmt.Local && !replace
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(
@@ -274,7 +273,8 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 ) error {
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
-		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
