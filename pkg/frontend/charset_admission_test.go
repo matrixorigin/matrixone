@@ -148,6 +148,46 @@ func TestSetNamesCollationUpdatesConnectionCollation(t *testing.T) {
 	}
 }
 
+func TestSetNamesDefaultCompatibility(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	charsetVars := []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	}
+	for _, name := range charsetVars {
+		require.NoError(t, ses.SetSessionSysVar(ctx, name, "binary"))
+		require.NoError(t, ses.SetUserDefinedVar(name, "user-before", t.Name()))
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "collation_connection", "utf8mb4_unicode_ci"))
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set names default", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), "set names default", false))
+
+	wantCharset := gSysVarsDefs["character_set_client"].Default
+	for _, name := range charsetVars {
+		got, err := ses.GetSessionSysVar(name)
+		require.NoError(t, err)
+		require.Equal(t, wantCharset, got)
+
+		userVar, err := ses.GetUserDefinedVar(name)
+		require.NoError(t, err)
+		require.Equal(t, "user-before", userVar.Value)
+	}
+	// SET NAMES DEFAULT has no COLLATE clause, so it does not overwrite the
+	// connection collation independently of the character-set reset.
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, "utf8mb4_unicode_ci", got)
+}
+
 func TestCharsetAdmissionHandshake(t *testing.T) {
 	for _, id := range []byte{8, 47, 65, 192, 224, 33, 45, 46, 63, 83, 255} {
 		capabilities := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION)
