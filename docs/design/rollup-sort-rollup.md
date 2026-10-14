@@ -192,6 +192,15 @@ The legacy grouping-set projection already performs that normalization after
 materializing explicit `GROUPING()` outputs. The fallback therefore collapses
 duplicate NULL values while retaining different projected grouping bits.
 
+Forced SORT can retain DISTINCT value aggregates. The ordinary single-aggregate
+DISTINCT rewrite must not apply to a marked ROLLUP: deduplicating the complete
+grouping key plus its argument does not deduplicate that argument across detail
+groups in a common subtotal. The marked node keeps its DISTINCT flag and uses
+the executor's separate aggregate state at each ROLLUP prefix, including the
+grand total. Comparison-key normalization still runs when the rewrite is
+skipped. Ordinary GROUP BY keeps its existing DISTINCT rewrite; COST continues
+to reject DISTINCT state whose cardinality is not bounded by its cost contract.
+
 The planner adds an internal SORT over visible equality keys only when the
 input-order property is not already proven. A uniqueness-derived subset hash
 key is not inferred for this path because it cannot replace a visible ROLLUP

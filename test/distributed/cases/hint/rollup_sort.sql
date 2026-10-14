@@ -59,6 +59,29 @@ order by a, grouping_a;
 
 truncate table t_rollup_sort;
 
+-- DISTINCT values repeated across detail groups must be deduplicated again
+-- at each ROLLUP prefix. Separate single-aggregate queries exercise the
+-- optimizer rewrite; a combined COUNT/SUM query would bypass it already.
+insert into t_rollup_sort values (1, 7, 0), (2, 7, 0), (2, 9, 0), (2, null, 0);
+
+select a, count(distinct b) as cnt, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+select a, sum(distinct b) as total, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+select a, cast(avg(distinct b) as decimal(10,2)) as avg_b, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+
+set session rollup_algorithm = 'HASH';
+select a, count(distinct b) as cnt, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+select a, sum(distinct b) as total, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+select a, cast(avg(distinct b) as decimal(10,2)) as avg_b, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+
+set session rollup_algorithm = 'SORT';
+truncate table t_rollup_sort;
+
 select a, b, count(*) as cnt, sum(amount) as total,
        grouping(a) as grouping_a, grouping(b) as grouping_b
 from t_rollup_sort
