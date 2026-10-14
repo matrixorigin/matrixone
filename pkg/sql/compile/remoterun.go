@@ -2315,6 +2315,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
 		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
 	}
+	if features.DecimalIntegerDivisionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion119) {
+		return moerr.NewNotSupportedNoCtx("decimal integer division requires MORPC protocol version 119")
+	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
 	}
