@@ -34,8 +34,9 @@ func TestInitNullMapRebindReturnsSameRules(t *testing.T) {
 		{"single", "a=nullif(a,'null')", map[string][]string{"a": {"null"}}},
 		{"multiple sentinels", "a=nullif(a,'null'),a=nullif(a,'')", map[string][]string{"a": {"null", ""}}},
 		{"multiple columns", "a=nullif(a,'null'),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
-		{"skip unsupported same column assignment", "a=nullif(a,'null'),a=upper(a),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
-		{"skip unsupported assignment", "a=nullif(a,'null'),b=upper(b),a=nullif(a,'nil')", map[string][]string{"a": {"null", "nil"}}},
+		{"skip non-nullif on same column", "a=nullif(a,'null'),a=upper(a),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
+		{"skip non-nullif on different column", "a=nullif(a,'null'),b=upper(b),a=nullif(a,'nil')", map[string][]string{"a": {"null", "nil"}}},
+		{"leading non-nullif", "a=upper(a),b=nullif(b,'nil')", map[string][]string{"b": {"nil"}}},
 	} {
 		for _, kind := range []string{"external", "load"} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {

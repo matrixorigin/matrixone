@@ -249,3 +249,14 @@ vet/lint and shell syntax pass. A nonempty local profile reproduction reaches
 only for unchanged semantic inputs. No unresolved local correction blocker.
 New-head GitHub checks and the existing Draft release-validation gaps remain
 separate requirements.
+
+Latest-main conflict resolution (2026-10-14): main `2ce4e58af6f03b943ee288ffad81012766cf830a`
+adds the upstream NULLIF assignment-skipping test correction (#30138). Its only
+overlap with head `3294ed1c59` is `pkg/sql/plan/nullif_rebind_test.go`. Keep main's
+case names and leading non-NULLIF control, plus the PR's assertion that every
+assignment expression is consumed before serialization. All 12 external/LOAD
+subcases and the real BuildPlan control pass; complete planner UT passes
+(55.284 seconds), incremental vet/configured lint reports zero issues, and
+format/diff checks pass. This R1 test-only merge leaves the native feature and
+coverage-consumer semantic inputs unchanged. No local conflict blocker remains;
+the merge commit's GitHub checks must be verified separately.
