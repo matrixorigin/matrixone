@@ -45,6 +45,9 @@ type starlarkInterpreter struct {
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
+	if v == nil {
+		return starlark.None, nil
+	}
 	// Non-nil SQL vectors are stored as typed slices but enter Starlark through
 	// their existing SQL string representation. Keep nil slices unsupported.
 	switch v := v.(type) {
@@ -387,6 +390,15 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	for i := range rows {
 		rowsi := make(starlark.Tuple, er.GetColumnCount())
 		for j := range rowsi {
+			isNull, err := er.ColumnIsNull(si.interp.ctx, uint64(i), uint64(j))
+			if err != nil {
+				ret[1] = si.failed(err)
+				return starlark.NewList(ret), nil
+			}
+			if isNull {
+				rowsi[j] = starlark.None
+				continue
+			}
 			v, err := er.GetString(si.interp.ctx, uint64(i), uint64(j))
 			if err != nil {
 				ret[1] = si.failed(err)

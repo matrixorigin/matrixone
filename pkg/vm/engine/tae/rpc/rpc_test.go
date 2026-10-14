@@ -589,3 +589,45 @@ func TestApplyDeltaloc(t *testing.T) {
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
 }
+
+// Exercise the TN commit consumer, including rollback of an earlier request.
+func TestColumnSequenceExhaustionRollsBackEarlierDDL(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+	schema := catalog.MockSchema(2, 0)
+	schema.Name = "sequence_exhausted"
+	schema.Extra.NextColSeqnum = objectio.SEQNUM_UPPER
+	_, rel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+	tableID := rel.ID()
+	databaseID := rel.GetMeta().(*catalog.TableEntry).GetDB().ID
+	const rejectedDB = "sequence_rejected_commit"
+	entries, err := makeCreateDatabaseEntries("", AccessInfo{}, rejectedDB, 919192, h.m)
+	require.NoError(t, err)
+	add := api.NewAddColumnReq(databaseID, tableID, "extra", types.NewProtoType(types.T_int32), 2)
+	encoded, err := add.Marshal()
+	require.NoError(t, err)
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"alter_table"}
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer bat.Clean(h.m)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encoded, false, h.m))
+	bat.SetRowCount(1)
+	alter, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB, schema.Name, "", bat)
+	require.NoError(t, err)
+	alter.EntryType = api.Entry_Alter
+	payload, err := (&api.PrecommitWriteCmd{EntryList: append(entries, alter)}).MarshalBinary()
+	require.NoError(t, err)
+	req := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+		CNRequest: &txnpb.CNOpRequest{OpCode: uint32(api.OpCode_OpPreCommit), Payload: payload},
+	}}}
+	_, err = h.HandleCommit(ctx, mock1PCTxn(h.db), nil, req)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooManyFields), err)
+	check, checkRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+	require.NotContains(t, check.DatabaseNames(), rejectedDB)
+	restored := checkRel.Schema(false).(*catalog.Schema)
+	require.Equal(t, schema.AllNames(), restored.AllNames())
+	require.Equal(t, uint32(objectio.SEQNUM_UPPER), restored.Extra.NextColSeqnum)
+	require.NoError(t, check.Commit(ctx))
+}
