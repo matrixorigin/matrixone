@@ -7,6 +7,8 @@ on:
       - '.github/workflows/entrypoint.yaml'
       - '.github/workflows/iceberg-connector.yml'
       - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
       - 'optools/iceberg_ci.bash'
       - 'optools/iceberg_external_runner.py'
       - 'etc/launch-minio-local/**'
@@ -32,6 +34,24 @@ permissions:
   contents: read
 
 jobs:
+  iceberg-adapter-module:
+    name: Iceberg adapter module tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            pkg/iceberg/adapter/iceberggo/go.sum
+
+      - name: Verify nested adapter module is in sync
+        working-directory: pkg/iceberg/adapter/iceberggo
+        run: go mod tidy -diff
+
   iceberg-e2e-local:
     name: Iceberg E2E Local
     # Temporarily disabled while the local Iceberg E2E suite is stabilized.

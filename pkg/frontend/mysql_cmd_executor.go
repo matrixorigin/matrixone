@@ -2839,6 +2839,13 @@ func doPrepareStmtInSession(
 	if err != nil {
 		return nil, err
 	}
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		// Background/procedure PREPARE has raw SQL but no frontend request
+		// snapshot. Reparse it under the owner's policy before planning; the
+		// caller's old AST must not be stamped with a newly captured generation.
+		return doPrepareStringWithParamTypes(owner, executionSes, execCtx,
+			&tree.PrepareString{Name: st.Name, Sql: originSql}, paramTypes)
+	}
 	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
@@ -2895,9 +2902,62 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 }
 
 func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
+	return doPrepareStringWithParamTypes(owner, executionSes, execCtx, st, nil)
+}
+
+func preparedOwnerPolicyCaptured(execCtx *ExecCtx) bool {
+	return execCtx.input != nil && execCtx.input.rewritePolicy != nil && execCtx.input.rewritePolicy.captured
+}
+
+// capturePreparedOwnerPolicy closes the producer boundary for background SQL
+// without changing the immutable snapshot of an existing frontend request.
+// Catalog I/O stays outside the session locks. The temporary context belongs
+// only to this PREPARE, not to later statements in a procedure.
+func capturePreparedOwnerPolicy(execCtx *ExecCtx, owner *Session) (bool, func(), error) {
+	if preparedOwnerPolicyCaptured(execCtx) {
+		return false, func() {}, nil
+	}
+	if execCtx.input != nil && execCtx.input.rewritePolicyMaterialized {
+		return false, nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement has materialized SQL without a captured owner policy")
+	}
+	policy, err := captureRewritePolicy(execCtx.reqCtx, owner)
+	if err != nil {
+		return false, nil, err
+	}
+	previousInput, previousEnabled, previousRemap := execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb
+	input := &UserInput{}
+	if previousInput != nil {
+		*input = *previousInput
+	}
+	input.rewritePolicy = policy
+	execCtx.input, execCtx.rewriteEnabled = input, policy.enabled
+	return true, func() {
+		execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb = previousInput, previousEnabled, previousRemap
+	}, nil
+}
+
+func doPrepareStringWithParamTypes(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString, paramTypes []byte) (*PrepareStmt, error) {
+	capturedNow, restore, err := capturePreparedOwnerPolicy(execCtx, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql ||
 		statementSQLSource(st.Sql, sessionSQLModeForParser(owner)) == constant.CloudNoUserSql
-	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, owner, st.Sql)
+	var rewritten string
+	var innerStmt tree.Statement
+	var remapDb map[string]string
+	if capturedNow {
+		// A materialized outer hint does not exist on this producer. Apply the
+		// actual owner snapshot to the raw inner SQL, including mandatory rules
+		// when the optional enable_remap_hint switch is disabled.
+		rewritten, err = execCtx.input.rewritePolicy.rewrite(execCtx.reqCtx, st.Sql, sessionSQLModeForParser(owner))
+		if err == nil {
+			rewritten, innerStmt, remapDb, err = parsePreparedStatement(execCtx, owner, rewritten)
+		}
+	} else {
+		rewritten, innerStmt, remapDb, err = prepareStringStatement(execCtx, owner, st.Sql)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2917,6 +2977,9 @@ func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *E
 		return nil, err
 	}
 	prepareStmt.IsCloudNonuser = nonuser
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 
 	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
@@ -2940,7 +3003,10 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			return sql, nil, nil, err
 		}
 	}
+	return parsePreparedStatement(execCtx, ses, rewritten)
+}
 
+func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (string, tree.Statement, map[string]string, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return rewritten, nil, nil, err
@@ -2997,6 +3063,11 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// Every executable handle must prove which policy actually participated
+	// in planning. Publication cannot repair missing provenance afterward.
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		return nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement requires a captured owner policy before planning")
+	}
 	// Nested planning may change the session's current statement. Capture the
 	// owner statement now; neighboring statements in the request are irrelevant.
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql
@@ -3119,6 +3190,12 @@ func createPrepareStmtInSession(
 		schedulingSQLMode:          schedulingSQLMode,
 	}
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
+		execCtx.input.rewritePolicy.captured {
+		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
+		prepareStmt.rewritePolicyCaptured = true
+		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
+	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3205,10 +3282,15 @@ func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *Exec
 }
 
 func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
-	prepareStmt, err := ses.GetPrepareStmt(ctx, string(st.Name))
+	// RESET is a cleanup operation. It must remain reachable for an
+	// invalidated handle so clients can discard LONG_DATA and close a retained
+	// cursor before preparing a replacement. Execution paths continue to use
+	// the checked lookup and still reject the handle.
+	prepareStmt, err := ses.getPrepareStmtAllowInvalidated(ctx, string(st.Name))
 	if err != nil {
 		return err
 	}
+	prepareStmt.closeCursor()
 	prepareStmt.resetBinaryParamState()
 	return nil
 }
@@ -4435,6 +4517,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		execCtx.input.genSqlSourceType(ses)
+		// Binary execute carries the prepared plan directly in UserInput. Check
+		// the owning handle before the plan reaches privilege checks or Compile;
+		// parsing the packet already checks this in the normal protocol path, but
+		// this guard also covers internal callers that construct UserInput.
+		if execCtx.input.isBinaryProtExecute {
+			if _, err := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); err != nil {
+				return nil, err
+			}
+		}
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
@@ -6939,12 +7030,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		// Closing an invalidated handle must remain possible. Execution paths use
+		// GetPrepareStmt, which rejects the handle before any retained state is
+		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -6973,7 +7068,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
 			// This early return never reaches doComQuery, so set the state here.
@@ -6981,6 +7076,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -7026,7 +7122,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	if preStmt.longDataErr != nil {
 		return "", preStmt, preStmt.longDataErr
@@ -7071,6 +7167,9 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
 	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
 	if err != nil {
+		if stmt != nil {
+			stmt.closeCursor()
+		}
 		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
 	}
 	if stmt.cursor == nil || stmt.cursor.result == nil {
@@ -7127,12 +7226,18 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) (e
 	pos += 4
 
 	stmtName := getPrepareStmtName(stmtID)
-	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	preStmt, err := ses.getPrepareStmtAllowInvalidated(reqCtx, stmtName)
 	if err != nil {
 		// MySQL silently discards long data for an unknown statement id.
 		return nil
 	}
 	if preStmt.longDataErr != nil {
+		return nil
+	}
+	if err = preStmt.checkRewritePolicy(reqCtx); err != nil {
+		// COM_STMT_SEND_LONG_DATA has no response packet. An invalidated
+		// handle cannot accept the upload, but the client must remain aligned
+		// for the following COM_STMT_EXECUTE, which reports ER_NEED_REPREPARE.
 		return nil
 	}
 	defer func() {
