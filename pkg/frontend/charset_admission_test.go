@@ -110,13 +110,21 @@ func TestSetNamesCollationUpdatesConnectionCollation(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
 
 	for _, tc := range []struct {
-		sql      string
-		wantName string
+		sql         string
+		wantCharset string
+		wantName    string
 	}{
-		{sql: "set names utf8 collate utf8_unicode_ci", wantName: "utf8_unicode_ci"},
-		{sql: "set names utf8mb4 collate utf8mb4_unicode_ci", wantName: "utf8mb4_unicode_ci"},
+		{sql: "set names utf8 collate utf8_unicode_ci", wantCharset: "utf8", wantName: "utf8_unicode_ci"},
+		{sql: "set names utf8mb4 collate utf8mb4_unicode_ci", wantCharset: "utf8mb4", wantName: "utf8mb4_unicode_ci"},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
+			charsetVars := []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			}
+			for _, name := range charsetVars {
+				require.NoError(t, ses.SetSessionSysVar(t.Context(), name, "binary"))
+				require.NoError(t, ses.SetUserDefinedVar(name, "user-before", t.Name()))
+			}
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -124,6 +132,15 @@ func TestSetNamesCollationUpdatesConnectionCollation(t *testing.T) {
 			execCtx.ses = ses
 			execCtx.singleStatementQuery = true
 			require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), tc.sql, false))
+			for _, name := range charsetVars {
+				got, err := ses.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantCharset, got)
+
+				userVar, err := ses.GetUserDefinedVar(name)
+				require.NoError(t, err)
+				require.Equal(t, "user-before", userVar.Value)
+			}
 			got, err := ses.GetSessionSysVar("collation_connection")
 			require.NoError(t, err)
 			require.Equal(t, tc.wantName, got)

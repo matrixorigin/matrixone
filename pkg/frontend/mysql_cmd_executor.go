@@ -1701,7 +1701,7 @@ func doSetVar(
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
 			for _, rb := range replacedBy {
-				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
+				err = setVarFunc(true, false, rb, value, sql)
 				if err != nil {
 					return err
 				}
