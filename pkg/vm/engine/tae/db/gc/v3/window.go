@@ -114,7 +114,7 @@ type GCWindow struct {
 	fs  fileservice.FileService
 
 	retainUnpublished  func(context.Context, []string) error
-	prepareUnpublished func(context.Context, string) error
+	prepareUnpublished func(context.Context, string, []string) error
 	finishUnpublished  func(context.Context, string) error
 	abandonUnpublished func(string)
 	rollbackScan       func()

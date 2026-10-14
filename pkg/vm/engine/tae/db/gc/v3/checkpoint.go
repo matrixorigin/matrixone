@@ -1442,7 +1442,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.end,
 	))
 	if publishErr := scannedWindow.Publish(ctx); publishErr != nil {
-		return filesToGC, metafile, publishErr
+		return nil, publishErr
 	}
 	softDuration = time.Since(now)
 	// Record GC filter duration
