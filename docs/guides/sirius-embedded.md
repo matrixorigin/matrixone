@@ -12,14 +12,14 @@ Pixi profile:
 
 ```sh
 git submodule update --init --recursive
-git -C third_party/sirius fetch origin upstream-dev-merge
+git -C third_party/sirius fetch origin perf/embedded-mo-scan
 cd third_party/sirius
 pixi run --frozen -e mo mo-build-embedding-sdk
 cd ../..
 pixi run --frozen --manifest-path third_party/sirius/pixi.toml -e mo \
   make -j8 MO_SIRIUS=1 MO_CL_CUDA=1 \
   SIRIUS_SDK="$PWD/third_party/sirius/build/mo/extension/sirius/embedding-sdk" \
-  SIRIUS_MERGED_REF=origin/upstream-dev-merge
+  SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan
 ```
 
 The release build verifies that the pinned Sirius revision is contained in
