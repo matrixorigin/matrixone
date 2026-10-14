@@ -15,6 +15,8 @@
 package vectorscan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
@@ -72,7 +74,8 @@ func StampSessionKnobs(spec *plan.IndexSearchScan, resolve ResolveVariable) erro
 // ApplySearchKnobs sets the internal top-k, its cap and the IVF probe cap of req from
 // spec, and the knobs spec leaves unset from the session variables through resolve
 // (nil where the scan runs without the session). A set internal top-k is the candidate
-// budget, lowered to its cap and raised to the result limit.
+// budget, lowered to its cap and raised to the result limit. An internal top-k or cap
+// above the algorithm's internal top-k limit is an error.
 func ApplySearchKnobs(req *searchplugin.Request, spec *plan.IndexSearchScan, resolve ResolveVariable) error {
 	knobs := &plan.IndexSearchScan{
 		Index:           spec.GetIndex(),
@@ -86,6 +89,9 @@ func ApplySearchKnobs(req *searchplugin.Request, spec *plan.IndexSearchScan, res
 	itopk, maxITopK := knobs.InternalTopk, knobs.MaxInternalTopk
 	if maxITopK != 0 && itopk > maxITopK {
 		itopk = maxITopK
+	}
+	if err := indexplugin.CheckInternalTopK(context.Background(), spec.GetIndex().GetIndexAlgo(), itopk, maxITopK); err != nil {
+		return err
 	}
 	req.InternalTopK, req.MaxInternalTopK, req.MaxNprobe = itopk, maxITopK, knobs.MaxNprobe
 	if itopk != 0 {

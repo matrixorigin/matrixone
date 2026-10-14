@@ -41,6 +41,10 @@ var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.IndexFilterHooks = Hooks{}
 var _ searchplugin.IterativeSearchHooks = Hooks{}
+var _ searchplugin.InternalTopKLimitHooks = Hooks{}
+
+// MaxInternalTopKLimit returns cagra.MaxInternalTopK.
+func (Hooks) MaxInternalTopKLimit() uint64 { return cagraPkg.MaxInternalTopK }
 
 // StartRound is the first round of the CAGRA widening policy (cagra.IterativeSearch).
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {

@@ -138,6 +138,19 @@ func TestCheckVectorSearchModeProbeKnobs(t *testing.T) {
 	}
 }
 
+func TestCheckVectorSearchModeInternalTopKLimit(t *testing.T) {
+	ctx := context.Background()
+	opt := func(o *planpb.RankOption) *vectorSortContext { return &vectorSortContext{rankOption: o} }
+	cagra := catalog.MoIndexCagraAlgo.ToString()
+	require.NoError(t, checkVectorSearchMode(ctx, opt(&planpb.RankOption{Itopk: 1024, MaxItopk: 1024}), cagra))
+	err := checkVectorSearchMode(ctx, opt(&planpb.RankOption{Itopk: 1025}), cagra)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.ErrorContains(t, err, "itopk 1025 exceeds the cagra limit 1024")
+	err = checkVectorSearchMode(ctx, opt(&planpb.RankOption{Mode: "iterative", MaxItopk: 2000}), cagra)
+	require.ErrorContains(t, err, "max_itopk 2000 exceeds the cagra limit 1024")
+	require.NoError(t, checkVectorSearchMode(ctx, opt(&planpb.RankOption{Itopk: 20000, MaxItopk: 20000}), catalog.MoIndexHnswAlgo.ToString()))
+}
+
 func TestSetIndexSearchScanKnobs(t *testing.T) {
 	spec := &planpb.IndexSearchScan{}
 	setIndexSearchScanKnobs(spec, &vectorSortContext{})

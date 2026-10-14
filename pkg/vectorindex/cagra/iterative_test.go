@@ -50,3 +50,18 @@ func TestIterativeSearchRounds(t *testing.T) {
 	require.Equal(t, uint64(8), p.StartRound(nil, req, searchplugin.SearchStats{IndexRows: 8}).ITopK)
 	require.Equal(t, uint64(DefaultMaxInternalTopK), iterativeCap(req, searchplugin.SearchStats{}))
 }
+
+func TestIterativeSearchCapIsCuvsLimit(t *testing.T) {
+	p := IterativeSearch{}
+	req := searchplugin.Request{ResultLimit: 20, CandidateBudget: 20}
+	stats := searchplugin.SearchStats{IndexRows: 1000000}
+	require.Equal(t, uint64(MaxInternalTopK), iterativeCap(req, stats))
+
+	// rounds that never fill LIMIT stop at MaxInternalTopK
+	r := p.StartRound(nil, req, stats)
+	for more := true; more; {
+		require.LessOrEqual(t, r.ITopK, uint64(MaxInternalTopK))
+		r, more = p.NextRound(nil, req, stats, r, 10)
+	}
+	require.Equal(t, uint64(MaxInternalTopK), r.ITopK)
+}

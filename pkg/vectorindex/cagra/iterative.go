@@ -19,9 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// MaxInternalTopK is the largest count of keys one cuVS CAGRA search returns.
+const MaxInternalTopK = 1024
+
 // DefaultMaxInternalTopK caps the requested count of a widening search when neither
 // max_itopk nor vector_max_itopk is set.
-const DefaultMaxInternalTopK = 20000
+const DefaultMaxInternalTopK = MaxInternalTopK
 
 // IterativeSearch is the CAGRA widening policy of mode=iterative. A round requests
 // ITopK keys (cuVS itopk_size is at least the request); the filter runs inside the

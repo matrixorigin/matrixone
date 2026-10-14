@@ -18,8 +18,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +114,39 @@ func TestApplySearchKnobsSessionFallback(t *testing.T) {
 	require.Equal(t, uint64(20), req.CandidateBudget)
 
 	require.Error(t, ApplySearchKnobs(&searchplugin.Request{}, spec, func(string, bool, bool) (any, error) { return "x", nil }))
+}
+
+func TestApplySearchKnobsInternalTopKLimit(t *testing.T) {
+	cagra := &plan.IndexDef{IndexAlgo: catalog.MoIndexCagraAlgo.ToString()}
+	hnsw := &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()}
+	session := map[string]any{SessionVarITopK: int64(0), SessionVarMaxITopK: int64(0)}
+	resolve := func(name string, _, _ bool) (any, error) { return session[name], nil }
+
+	req := searchplugin.Request{ResultLimit: 10}
+	require.NoError(t, ApplySearchKnobs(&req, &plan.IndexSearchScan{Index: cagra, InternalTopk: 1024, MaxInternalTopk: 1024}, resolve))
+	require.Equal(t, uint64(1024), req.CandidateBudget)
+
+	for _, spec := range []*plan.IndexSearchScan{
+		{Index: cagra, InternalTopk: 1025},
+		{Index: cagra, MaxInternalTopk: 1025},
+	} {
+		err := ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, spec, resolve)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+		require.ErrorContains(t, err, "exceeds the cagra limit 1024")
+	}
+
+	// session variables are checked too; an itopk lowered to max_itopk is accepted
+	session[SessionVarITopK] = int64(2000)
+	err := ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra}, resolve)
+	require.ErrorContains(t, err, "itopk 2000 exceeds the cagra limit 1024")
+	require.NoError(t, ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra, MaxInternalTopk: 512}, resolve))
+	session[SessionVarMaxITopK] = int64(2000)
+	session[SessionVarITopK] = int64(0)
+	err = ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: cagra}, resolve)
+	require.ErrorContains(t, err, "max_itopk 2000 exceeds the cagra limit 1024")
+
+	// hnsw has no limit
+	require.NoError(t, ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: hnsw, InternalTopk: 20000}, resolve))
 }
 
 func TestRequiredProtocolVersion(t *testing.T) {

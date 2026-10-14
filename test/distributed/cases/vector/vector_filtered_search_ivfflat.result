@@ -2,6 +2,8 @@ drop database if exists vector_filtered_search_ivfflat;
 create database vector_filtered_search_ivfflat;
 use vector_filtered_search_ivfflat;
 set experimental_ivf_index = 1;
+set @saved_probe_limit = @@probe_limit;
+set probe_limit = 5;
 create table t(id bigint primary key, category int not null, tag int, v vecf32(2));
 insert into t select result, if(result <= 500, 0, 1), if(result % 3 = 0, null, result % 10), cast(concat('[', result, ',0]') as vecf32(2)) from generate_series(1, 1000, 1) g;
 create index i using ivfflat on t(v) lists = 10 op_type 'vector_l2_ops';
@@ -268,4 +270,5 @@ Adaptive Top  𝄀
 select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
 ➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
 501,502,503,504,505,506,507,508,509,510
+set probe_limit = @saved_probe_limit;
 drop database vector_filtered_search_ivfflat;

@@ -14128,13 +14128,13 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 			continue
 		}
 		v, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		if knob.dst == &rankOption.Nprobe && (err != nil || v == 0 || v > maxRankOptionNprobe) {
+			return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and %d, got '%s'", maxRankOptionNprobe, value)
+		}
 		if err != nil || v == 0 {
 			return nil, moerr.NewInvalidInputf(ctx, "%s must be a positive integer, got '%s'", knob.name, value)
 		}
 		*knob.dst = v
-	}
-	if rankOption.Nprobe > maxRankOptionNprobe {
-		return nil, moerr.NewInvalidInputf(ctx, "nprobe must be at most %d, got %d", maxRankOptionNprobe, rankOption.Nprobe)
 	}
 	if rankOption.MaxItopk != 0 && rankOption.Itopk > rankOption.MaxItopk {
 		return nil, moerr.NewInvalidInputf(ctx, "itopk %d exceeds max_itopk %d", rankOption.Itopk, rankOption.MaxItopk)

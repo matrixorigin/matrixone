@@ -110,8 +110,9 @@ Set in `BY RANK WITH OPTION`, one `key=value` per string literal, by index famil
 | IVF: ivfflat, ivfpq | `nprobe`, `max_nprobe` | lists probed: start / cap; `max_nprobe = n_lists` probes every list |
 | IVF: ivfflat, ivfpq | `itopk`, `max_itopk` | candidates returned from the probed lists: start / cap |
 
-A knob outside the index's family is an error; values are positive integers and a cap is at
-least its start. A string literal that is not one `key=value` pair is ignored. `LIMIT` rows are
+A knob outside the index's family is an error; values are positive integers, `nprobe` at most
+80000 (the `probe_limit` range), and a cap is at least its start. An unknown key, or a string
+literal that is not one `key=value` pair, is an error. `LIMIT` rows are
 returned; the knobs only size the internal search.
 
 With `itopk` set, the candidate budget of a search is `max(itopk, LIMIT)`, lowered to
@@ -123,7 +124,7 @@ Defaults and precedence (most specific wins):
 | knob | SQL option | session variable | index parameter | built-in |
 |---|---|---|---|---|
 | `itopk` | `itopk` | `vector_itopk` | `ef_search` (hnsw), `itopk_size` (cagra) | the over-fetch of `LIMIT` |
-| `max_itopk` | `max_itopk` | `vector_max_itopk` | — | `iterative`: 20000 (hnsw, cagra) |
+| `max_itopk` | `max_itopk` | `vector_max_itopk` | — | `iterative`: 20000 (hnsw), 1024 (cagra) |
 | `nprobe` | `nprobe` | `probe_limit` | — | `probe_limit` default |
 | `max_nprobe` | `max_nprobe` | `vector_max_nprobe` | — | `iterative`: every list |
 
@@ -190,6 +191,8 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   key the mode admits) AND not-deleted. Other filters run after the search, in the join. cagra
   applies no membership set and needs no C ABI change.
 - Knob mapping: `itopk_size = max(itopk, LIMIT)`; `filtering_rate` stays auto.
+- Limit: one cuVS CAGRA search returns at most 1024 keys. `itopk` or `max_itopk` above 1024,
+  from the SQL option or the session variable, is an error; the `iterative` default cap is 1024.
 - `iterative` (`ScanOptions.Iterative`, set when `FilterJSON` holds every filter):
   `cagra.IterativeSearch` (`pkg/vectorindex/cagra/iterative.go`) restarts with `itopk × 2` up to
   `max_itopk`, bounded by the indexed rows. With another filter it searches once.
@@ -230,6 +233,10 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 - `pre`, `post` and the default mode search one round of `nprobe` lists. `post` with a filter on
   an INCLUDE column builds `ADAPTIVE_TOP [post, force]` where a non-empty `post` page wins, so an
   empty page runs the exact sort.
+- `auto`: the `post` branch probes `ceil(nprobe × sqrt(1 / selectivity))` lists, at least `nprobe`
+  and at most `n_lists`, from the scan's estimated filter selectivity. `nprobe` is the `nprobe`
+  option when set, else `probe_limit`: `'mode=auto', 'nprobe=4'` at selectivity 0.25 probes 8
+  lists. Without a selectivity estimate or the list count, the branch probes `nprobe` lists.
 - `iterative`: `ivfflat.IterativeSearch` (`pkg/vectorindex/ivfflat/iterative.go`) runs in the
   reader (`plan_reader.go`). Each further round continues the cursor with twice the previous
   round's lists (at most 4096 per round) until the reader holds the candidate budget (at most
@@ -422,6 +429,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 | 16 | ivfflat `include` returns the rows of `iterative`. | `cases/vector/vector_filtered_search_ivfflat.sql` |
 | 17 | An ivfpq search whose filter on an INCLUDE column admits no row in the probed lists returns no row instead of an error, in the default mode, `pre` and `iterative`. | `gpu_cases/vector/vector_filtered_search_gpu.sql`; `cgo/cuvs/test/ivf_pq_test.cu` `FilterEmptyInProbedListsPadsWithSentinels` |
 | 18 | `EXPLAIN` shows the filter the cagra and ivfpq search applies as SQL (`Index Filter`). | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
+| 19 | On a cagra index over more than 1024 rows where fewer than `LIMIT` rows qualify, `iterative` returns the qualifying rows; `itopk` or `max_itopk` above 1024, as an SQL option or a session variable, is an error. | `gpu_cases/vector/vector_cagra_itopk_limit.sql` |
 
 ## Decision log
 
@@ -441,7 +449,9 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
   index does.
 - Knobs by family, set in SQL options and session variables, the SQL option first. `probe_limit`
   stays `nprobe`'s session default. The over-fetch tables stay the budget when `itopk` is unset.
-- The `iterative` `max_itopk` default is 20000 (pgvector's `hnsw.max_scan_tuples` default).
+- The `iterative` `max_itopk` default is 20000 (pgvector's `hnsw.max_scan_tuples` default) on hnsw
+  and 1024 on cagra, the most keys one cuVS CAGRA search returns. cagra rejects `itopk` or
+  `max_itopk` above 1024 instead of lowering it.
 - One Go iterative search per algorithm on top of the regular search, including the GPU indexes;
   hnsw, cagra and ivfpq restart, ivfflat continues its cursor; cagra leaves `filtering_rate` on
   auto; ivfpq's end state is `n_probes = n_lists` with PQ ranking.

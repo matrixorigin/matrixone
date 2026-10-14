@@ -147,6 +147,12 @@ type ProbeKnobsHooks interface {
 	SupportsProbeKnobs() bool
 }
 
+// InternalTopKLimitHooks optionally reports the largest internal top-k one search
+// accepts; itopk and max_itopk above it are rejected.
+type InternalTopKLimitHooks interface {
+	MaxInternalTopKLimit() uint64
+}
+
 // Round is one search round of an iterative search: the internal top-k it requests and,
 // for an IVF index, the lists it probes after those of earlier rounds (0 for a graph
 // index).

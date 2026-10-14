@@ -10,6 +10,8 @@ create database vector_filtered_search_ivfflat;
 use vector_filtered_search_ivfflat;
 
 set experimental_ivf_index = 1;
+set @saved_probe_limit = @@probe_limit;
+set probe_limit = 5;
 
 -- ids 1..500 have category 0, 501..1000 category 1; tag is NULL on every 3rd row
 create table t(id bigint primary key, category int not null, tag int, v vecf32(2));
@@ -106,4 +108,5 @@ explain select id from t_inc where category = 1 order by l2_distance(v, '[0,0]')
 explain select id from t_inc where category = 1 and id > 500 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
 
+set probe_limit = @saved_probe_limit;
 drop database vector_filtered_search_ivfflat;
