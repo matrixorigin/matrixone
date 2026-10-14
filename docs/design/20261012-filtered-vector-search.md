@@ -200,8 +200,8 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   searched as no membership.
   `eval_filter_bitmap_cpu_fused` (`cgo/cuvs/filter.hpp`) tests each row's `host_ids` key in
   the same pass as the predicates, so one bitset reaches cuVS, with no allocation for the
-  membership: a cbitmap is read in place with an inline bit test, CRoaring and sorted64 with
-  their `contains`. An index without `host_ids` rejects a membership.
+  membership: each structure's `contains` (cbitmap's is inline and branch-free on the
+  value), CRoaring a roaring lookup, sorted64 a binary search. An index without `host_ids` rejects a membership.
   The search's filter mask and the delete-bitmap copy ANDed into it (rows/8 bytes of CPU
   memory each) are reserved with the CN memory admission for the duration of the search
   when together they are 1 MiB or more (`vectorindex.AdmitFilterMask`); a refusal fails the

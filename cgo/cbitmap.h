@@ -65,13 +65,25 @@ int mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
                            int use_offset, void **out);
 void mo_cbitmap_free(void *f);
 
-// Single membership test (value already decoded to uint64).
-bool mo_cbitmap_contain(void *f, uint64_t val);
+// A cbitmap: bit i of words (bit i & 63 of words[i >> 6]) is the value base + i, for
+// i < nbits. words is NULL when nbits is 0.
+typedef struct {
+  uint64_t base;
+  uint64_t nbits;
+  uint64_t *words;
+} mo_cbitmap_t;
 
-// Borrow the dense layout of f: bit i of words (bit i & 63 of words[i >> 6]) is the
-// value base + i, for i < nbits. words is NULL when nbits is 0. The view is valid
-// while f is.
-void mo_cbitmap_view(void *f, uint64_t *base, uint64_t *nbits, const uint64_t **words);
+// Single membership test (value already decoded to uint64). Inline and branch-free on
+// the value: val - base wraps for a value below base, so one compare checks the span,
+// and an out-of-span value reads word 0 under a zero mask.
+static inline bool mo_cbitmap_contain(const void *f, uint64_t val) {
+  const mo_cbitmap_t *b = (const mo_cbitmap_t *)f;
+  if (!b || !b->words) return false;
+  const uint64_t off = val - b->base;
+  const uint64_t in = off < b->nbits;
+  const uint64_t at = off & (0 - in);
+  return ((b->words[at >> 6] >> (at & 63)) & in) != 0;
+}
 
 // Test a fixed-width integer column; result[i] = 1 if present, 0 if absent/null.
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,

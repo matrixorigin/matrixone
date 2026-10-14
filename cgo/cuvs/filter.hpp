@@ -959,36 +959,16 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
 // -----------------------------------------------------------------------------
 
 namespace detail {
-// membership_probe_t tests external ids against a membership without allocating: a
-// cbitmap is read in place with an inline bit test; CRoaring and sorted64 use their
-// contains (a roaring lookup, a binary search).
+// membership_probe_t tests external ids against a membership without allocating, through
+// each structure's contains (inline for a cbitmap; a roaring lookup, a binary search).
 class membership_probe_t {
 public:
-    explicit membership_probe_t(const mo_membership_t& m) : mem_(m) {
-        if (membership_active(m) && m.kind == MO_MEMBERSHIP_CBITMAP) {
-            mo_cbitmap_view(const_cast<void*>(m.filter), &base_, &nbits_, &bits_);
-            dense_ = true;
-        }
-    }
+    explicit membership_probe_t(const mo_membership_t& m) : mem_(m) {}
 
-    bool contains(uint64_t key) const {
-        if (dense_) {
-            // key - base_ wraps for a key below base_, so one compare checks the span;
-            // an out-of-span key reads word 0 and is masked off without a branch.
-            const uint64_t off = key - base_;
-            const uint64_t in  = off < nbits_;
-            const uint64_t at  = in ? off : 0;
-            return in & (nbits_ != 0) & (bits_ != nullptr ? (bits_[at >> 6] >> (at & 63)) : 0);
-        }
-        return mo_membership_exact_contains(&mem_, key);
-    }
+    bool contains(uint64_t key) const { return mo_membership_exact_contains(&mem_, key); }
 
 private:
     mo_membership_t mem_;
-    bool            dense_ = false;
-    uint64_t        base_  = 0;
-    uint64_t        nbits_ = 0;
-    const uint64_t* bits_  = nullptr;  // the cbitmap's words
 };
 
 // member_word returns the bits of `want` (rows base_row + k) whose host_ids key is in

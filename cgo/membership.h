@@ -55,7 +55,7 @@ static inline bool mo_membership_is_exact_kind(int kind) {
 static inline bool mo_membership_exact_contains(const mo_membership_t *m, uint64_t key) {
     switch (m->kind) {
     case MO_MEMBERSHIP_CBITMAP:
-        return mo_cbitmap_contain((void *)m->filter, key);
+        return mo_cbitmap_contain(m->filter, key);
     case MO_MEMBERSHIP_CROARING:
         return mo_croaring_contains((void *)m->filter, key);
     default:
