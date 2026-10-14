@@ -368,8 +368,18 @@ func TestBuildSQLJSONPlanResolvesPrunedUpdateAssignments(t *testing.T) {
 				}},
 			},
 			{
-				NodeId:      2,
-				NodeType:    plan.Node_LOCK_OP,
+				NodeId:   2,
+				NodeType: plan.Node_LOCK_OP,
+				Children: []int32{3},
+				ProjectList: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+				},
+			},
+			{
+				NodeId:      3,
+				NodeType:    plan.Node_PROJECT,
 				ProjectList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2), sqlJSONTestInt32(3)},
 			},
 		},
@@ -384,6 +394,84 @@ func TestBuildSQLJSONPlanResolvesPrunedUpdateAssignments(t *testing.T) {
 	require.Len(t, decoded.MatrixOne.Nodes[0].Assignments, 2)
 	require.Equal(t, sqlJSONAssignment{Target: "db.t.id", Value: "1"}, decoded.MatrixOne.Nodes[0].Assignments[0])
 	require.Equal(t, sqlJSONAssignment{Target: "db.t.v", Value: "2"}, decoded.MatrixOne.Nodes[0].Assignments[1])
+}
+
+func TestBuildSQLJSONPlanResolvesUpdateExpressionInputs(t *testing.T) {
+	ref := func(rel, col int32, name string) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col, Name: name}}}
+	}
+	// Both arguments read the same right input: reuse is not a reference cycle.
+	sum, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "+", []*plan.Expr{ref(1, 0, ""), ref(1, 0, "")})
+	require.NoError(t, err)
+	query := &plan.Query{StmtType: plan.Query_UPDATE, Steps: []int32{0}, Nodes: []*plan.Node{
+		{NodeId: 1, NodeType: plan.Node_MULTI_UPDATE, Children: []int32{2}, UpdateCtxList: []*plan.UpdateCtx{{
+			TableDef:   &plan.TableDef{DbName: "db", Name: "t", Cols: []*plan.ColDef{sqlJSONTestColumn("id"), sqlJSONTestColumn("v"), sqlJSONTestColumn("w")}},
+			InsertCols: []plan.ColRef{{RelPos: 0, ColPos: 0, Name: "target.id"}, {RelPos: 0, ColPos: 1}, {RelPos: 0, ColPos: 2}},
+		}}},
+		{NodeId: 2, NodeType: plan.Node_LOCK_OP, Children: []int32{3}, ProjectList: []*plan.Expr{ref(0, 1, ""), ref(0, 0, ""), ref(0, 2, "")}},
+		{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{4, 5}, ProjectList: []*plan.Expr{sum, ref(0, 0, ""), ref(0, 1, "left.v")}},
+		{NodeId: 4, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(99)}},
+		{NodeId: 5, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(2)}},
+	}}
+	before, err := json.Marshal(query)
+	require.NoError(t, err)
+	data, err := BuildSQLJSONPlan(t.Context(), query)
+	require.NoError(t, err)
+	var decoded sqlJSONPlan
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, []sqlJSONAssignment{
+		{Target: "db.t.id", Value: "1"},
+		{Target: "db.t.v", Value: "(2 + 2)"},
+		{Target: "db.t.w", Value: "left.v"},
+	}, decoded.MatrixOne.Nodes[0].Assignments)
+	after, err := json.Marshal(query)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "rendering must not mutate execution expressions")
+	second, err := BuildSQLJSONPlan(t.Context(), query)
+	require.NoError(t, err)
+	require.Equal(t, data, second)
+}
+
+func TestResolveUpdateExpressionBoundaries(t *testing.T) {
+	ref := func(rel, col int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want string
+	}{
+		{"logical_chain", ref(42, 0), "7"},
+		{"null", &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, "(null)"},
+		{"list", &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{ref(42, 0), sqlJSONTestInt32(8)}}}}, "7, 8"},
+		{"missing_binding", ref(43, 0), ""},
+		{"negative_column", ref(42, -1), ""},
+		{"out_of_range", ref(42, 1), ""},
+		{"nil_column", &plan.Expr{Expr: &plan.Expr_Col{}}, ""},
+		{"nil_function", &plan.Expr{Expr: &plan.Expr_F{}}, ""},
+		{"nil_list", &plan.Expr{Expr: &plan.Expr_List{}}, ""},
+		{"nil_expression", nil, ""},
+		{"logical_cycle", ref(41, 0), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			producer := &plan.Node{ProjectList: []*plan.Expr{tc.expr}}
+			value := &plan.Node{ProjectList: []*plan.Expr{sqlJSONTestInt32(7)}}
+			builder := &sqlJSONPlanBuilder{ctx: t.Context(), bindings: map[int32][]*plan.Node{41: {producer}, 42: {value}}}
+			expr, ok := builder.resolveUpdateColumnExpr(nil, &plan.ColRef{RelPos: 41, ColPos: 0})
+			if tc.want == "" {
+				require.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			text, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, text)
+		})
+	}
+	// A malformed local slot must not fall back to an unrelated binding tag 0.
+	builder := &sqlJSONPlanBuilder{ctx: t.Context(), byID: map[int32]*plan.Node{2: {}}, bindings: map[int32][]*plan.Node{0: {{ProjectList: []*plan.Expr{sqlJSONTestInt32(7)}}}}}
+	_, ok := builder.resolveUpdateColumnExpr(&plan.Node{Children: []int32{2}}, &plan.ColRef{})
+	require.False(t, ok)
 }
 
 func TestBuildSQLJSONPlanUsesBoundAliasesForSelfJoin(t *testing.T) {
@@ -722,6 +810,42 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 	}
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	return decoded.MatrixOne.Nodes
+}
+
+func TestBuildSQLJSONPlanResolvesPlannerUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct{ name, value, want string }{
+		{"constant", "2", "2"},
+		{"expression", "n_regionkey + 1", "+ 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, "update nation set n_regionkey = "+tc.value+" where n_nationkey = 1")
+			values := make(map[string]string)
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					values[assignment.Target] = assignment.Value
+				}
+			}
+			var foundValue, foundKey bool
+			for target, value := range values {
+				if strings.HasSuffix(target, ".n_regionkey") {
+					foundValue = true
+					if tc.name == "expression" {
+						require.Contains(t, value, "n_regionkey")
+						require.Contains(t, value, tc.want)
+					} else {
+						require.Equal(t, tc.want, value)
+					}
+				}
+				if strings.HasSuffix(target, ".n_nationkey") {
+					foundKey = true
+					require.Equal(t, "nation.n_nationkey", value)
+				}
+			}
+			require.True(t, foundValue, "assigned column must appear in row image")
+			require.True(t, foundKey, "unchanged column must appear in row image")
+		})
+	}
 }
 
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {

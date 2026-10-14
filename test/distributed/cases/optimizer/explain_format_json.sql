@@ -189,8 +189,17 @@ drop table serial_values;
 explain (analyze false, format json) select * from t;
 
 -- Explain-only DML must not run the write pipeline.
--- @regex("(?s)matrixone.*statement_type.*UPDATE",true)
+-- #30130: assignments resolve the row image through the lock projection.
+-- @regex("(?s)statement_type.*UPDATE.*assignments.*target[^}]*issue_28301[.]t[.]id[^}]*value[^}]*t[.]id.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*99",true)
 explain format=json update t set v = 99 where id = 1;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*t[.]v[^}]*[+] 1",true)
+explain format=json update t set v = v + 1 where id = 1;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*null",true)
+explain format=json update t set v = null where id = 1;
+prepare e30130_update from 'explain format=json update t set v = 7 where id = 1';
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*7",true)
+execute e30130_update;
+deallocate prepare e30130_update;
 -- @regex("(?s)matrixone.*statement_type.*DELETE",true)
 explain format=json delete from t where id = 1;
 -- @regex("(?s)matrixone.*statement_type.*INSERT",true)

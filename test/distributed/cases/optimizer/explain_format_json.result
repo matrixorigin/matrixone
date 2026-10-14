@@ -158,6 +158,14 @@ explain (analyze false, format json) select * from t;
 EXPLAIN
 explain format=json update t set v = 99 where id = 1;
 EXPLAIN
+explain format=json update t set v = v + 1 where id = 1;
+EXPLAIN
+explain format=json update t set v = null where id = 1;
+EXPLAIN
+prepare e30130_update from 'explain format=json update t set v = 7 where id = 1';
+execute e30130_update;
+EXPLAIN
+deallocate prepare e30130_update;
 explain format=json delete from t where id = 1;
 EXPLAIN
 explain format=json insert into t values (3, 30);
