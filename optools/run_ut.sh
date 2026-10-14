@@ -2558,7 +2558,7 @@ function run_embedded_tests(){
         test_status=$?
         if (( test_status == 125 )); then return 125; fi
     fi
-    for package in "${batched_packages[@]}"; do
+    for package in ${batched_packages[@]+"${batched_packages[@]}"}; do
         # Publish ownership only after the preceding command has joined. Its
         # nonempty report selects the parent's prebuilt-helper drain protocol.
         PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
