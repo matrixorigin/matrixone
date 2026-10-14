@@ -196,7 +196,9 @@ func TestUserVariableAssignmentRejectsReadBeforeWriteInJoinOn(t *testing.T) {
 	for _, sql := range []string{
 		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on @a < 2",
 		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on coalesce(@a, 0) < 2",
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on (select @a) < 2",
 		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on if(@a < 2, true, false)",
+		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on case when @a < 2 then true else false end",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
