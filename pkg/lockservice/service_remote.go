@@ -95,9 +95,9 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_LockWriterFair:               defines.MORPCVersion99,
-	pb.Method_TryLock:                       defines.MORPCVersion112,
+	pb.Method_TryLock:                      defines.MORPCVersion112,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
-	pb.Method_ForwardTryLock:                defines.MORPCVersion112,
+	pb.Method_ForwardTryLock:               defines.MORPCVersion112,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
@@ -453,22 +453,71 @@ func (s *service) handleRemoteTryLock(
 }
 
 func validNoWaitLockOptions(options pb.LockOptions) bool {
-	return options.NoWait && options.Policy == pb.WaitPolicy_FastFail &&
-		options.Granularity == pb.Granularity_Row &&
-		(options.Mode == pb.LockMode_Shared || options.Mode == pb.LockMode_Exclusive)
+	return validNoWaitLockOptionFields(
+		options.NoWait,
+		options.Policy,
+		options.Granularity,
+		options.Mode,
+	)
+}
+
+// noWaitLockContract contains only scalar fields needed after the request
+// handler returns. The RPC server recycles pb.Request immediately after an
+// async handler hands completion to its callback, so callbacks must not retain
+// the request or any nested mutable protobuf storage.
+type noWaitLockContract struct {
+	method      pb.Method
+	granularity pb.Granularity
+	mode        pb.LockMode
+	policy      pb.WaitPolicy
+	noWait      bool
+}
+
+func snapshotNoWaitLockContract(req *pb.Request) noWaitLockContract {
+	options := req.Lock.Options
+	return noWaitLockContract{
+		method:      req.Method,
+		granularity: options.Granularity,
+		mode:        options.Mode,
+		policy:      options.Policy,
+		noWait:      options.NoWait,
+	}
+}
+
+func validNoWaitLockOptionFields(
+	noWait bool,
+	policy pb.WaitPolicy,
+	granularity pb.Granularity,
+	mode pb.LockMode,
+) bool {
+	return noWait && policy == pb.WaitPolicy_FastFail &&
+		granularity == pb.Granularity_Row &&
+		(mode == pb.LockMode_Shared || mode == pb.LockMode_Exclusive)
+}
+
+func (c noWaitLockContract) isTryLock() bool {
+	return c.method == pb.Method_TryLock || c.method == pb.Method_ForwardTryLock
+}
+
+func (c noWaitLockContract) valid() bool {
+	return c.isTryLock() && validNoWaitLockOptionFields(
+		c.noWait,
+		c.policy,
+		c.granularity,
+		c.mode,
+	)
 }
 
 func (s *service) setNoWaitConflictResponse(
-	req *pb.Request,
+	contract noWaitLockContract,
 	resp *pb.Response,
 	result pb.Result,
 	expectedBind pb.LockTable,
 ) error {
-	if (req.Method != pb.Method_TryLock && req.Method != pb.Method_ForwardTryLock) ||
+	if !contract.valid() ||
 		!supportsLockProtocolV112(s.cfg.ServiceID) ||
 		!supportsLockProtocolV28(s.cfg.ServiceID) ||
 		!supportsLockProtocolV31(s.cfg.ServiceID) ||
-		!validNoWaitLockOptions(req.Lock.Options) ||
 		resp.NewBind != nil || !result.LockedOn.Valid ||
 		result.LockedOn.Changed(expectedBind) {
 		return ErrLockTableBindChanged
@@ -593,6 +642,7 @@ func (s *service) handleRemoteLock(
 	defer txn.Unlock()
 	originalRows := req.Lock.Rows
 	originalOptions := req.Lock.Options
+	noWaitContract := snapshotNoWaitLockContract(req)
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -618,7 +668,7 @@ func (s *service) handleRemoteLock(
 			// can observe the outer admission as complete and recycle active txns.
 			defer completion.callbackDone()
 			defer finishLockOp()
-			noWaitConflict := req.Method == pb.Method_TryLock && err == ErrLockConflict
+			noWaitConflict := noWaitContract.method == pb.Method_TryLock && err == ErrLockConflict
 			if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
 				result = pb.Result{}
 				err = terminalErr
@@ -629,7 +679,7 @@ func (s *service) handleRemoteLock(
 				}
 			}
 			if noWaitConflict && err == ErrLockConflict {
-				if e := s.setNoWaitConflictResponse(req, resp, result, bind); e != nil {
+				if e := s.setNoWaitConflictResponse(noWaitContract, resp, result, bind); e != nil {
 					result = pb.Result{}
 					err = e
 				} else {
@@ -771,6 +821,7 @@ func (s *service) handleForwardLock(
 	defer txn.Unlock()
 	originalRows := req.Lock.Rows
 	originalOptions := req.Lock.Options
+	noWaitContract := snapshotNoWaitLockContract(req)
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -795,7 +846,7 @@ func (s *service) handleForwardLock(
 			// Keep the inner generation lifetime within the outer service admission.
 			defer completion.callbackDone()
 			defer finishLockOp()
-			noWaitConflict := req.Method == pb.Method_ForwardTryLock && err == ErrLockConflict
+			noWaitConflict := noWaitContract.method == pb.Method_ForwardTryLock && err == ErrLockConflict
 			if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
 				result = pb.Result{}
 				err = terminalErr
@@ -806,7 +857,7 @@ func (s *service) handleForwardLock(
 				}
 			}
 			if noWaitConflict && err == ErrLockConflict {
-				if e := s.setNoWaitConflictResponse(req, resp, result, bind); e != nil {
+				if e := s.setNoWaitConflictResponse(noWaitContract, resp, result, bind); e != nil {
 					result = pb.Result{}
 					err = e
 				} else {

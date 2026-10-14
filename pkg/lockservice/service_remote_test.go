@@ -3255,3 +3255,77 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 		},
 	)
 }
+
+func TestAsyncRemoteLockCompletionUsesPooledRequestSnapshot(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			holderTxn := []byte("request-snapshot-holder")
+			ordinaryTxn := []byte("request-snapshot-ordinary")
+			nowaitHolderTxn := []byte("request-snapshot-nowait-holder")
+			noWaitTxn := []byte("request-snapshot-nowait")
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_ = origin.unlockWithContext(cleanupCtx, ordinaryTxn, timestamp.Timestamp{})
+				_ = origin.unlockWithContext(cleanupCtx, noWaitTxn, timestamp.Timestamp{})
+				_ = owner.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{})
+				_ = owner.unlockWithContext(cleanupCtx, nowaitHolderTxn, timestamp.Timestamp{})
+			}()
+
+			const tableID = uint64(2510702)
+			ownerBind := alloc.Get(owner.serviceID, 0, tableID, tableID, pb.Sharding_None)
+			require.True(t, ownerBind.Valid)
+			require.Equal(t, owner.serviceID, ownerBind.ServiceID)
+
+			ownerRuntime := moruntime.ServiceRuntime(owner.cfg.ServiceID)
+			require.NotNil(t, ownerRuntime)
+			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, ok)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
+			row := []byte{1}
+			seedTxn := []byte("request-snapshot-seed")
+			mustAddTestLock(t, ctx, owner, tableID, seedTxn, [][]byte{{0}}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+
+			_, err := owner.Lock(ctx, tableID, [][]byte{row}, holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			ordinaryDone := make(chan error, 1)
+			go func() {
+				_, lockErr := origin.Lock(ctx, tableID, [][]byte{row}, ordinaryTxn, newTestRowExclusiveOptions())
+				ordinaryDone <- lockErr
+			}()
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row, 1))
+			// The ordinary lock completes only after the server's async handler
+			// has returned and its RPC request has gone back to the object pool.
+			require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			select {
+			case err = <-ordinaryDone:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatalf("ordinary remote lock did not finish after holder release: %v", ctx.Err())
+			}
+			require.NoError(t, origin.Unlock(ctx, ordinaryTxn, timestamp.Timestamp{}))
+
+			// A conflicting TryLock uses the same pooled RPC boundary and must
+			// retain its physical cleanup route after the callback is dispatched.
+			_, err = owner.Lock(ctx, tableID, [][]byte{row}, nowaitHolderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			noWait := newTestRowExclusiveOptions()
+			noWait.NoWait = true
+			noWait.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(ctx, tableID, [][]byte{row}, noWaitTxn, noWait)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.True(t, result.LockedOn.Valid,
+				"a settled remote no-wait conflict must preserve its cleanup route")
+			require.NoError(t, origin.Unlock(ctx, noWaitTxn, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, nowaitHolderTxn, timestamp.Timestamp{}))
+		},
+	)
+}
