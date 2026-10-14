@@ -27,6 +27,34 @@ GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B'),
 CONCAT('a' COLLATE utf8mb4_unicode_ci, 'B');
 ➤ LEAST((a) collate utf8mb4_unicode_ci, B)[12,1,0]  ¦  GREATEST((a) collate utf8mb4_unicode_ci, B)[12,1,0]  ¦  CONCAT((a) collate utf8mb4_unicode_ci, B)[12,2,0]  𝄀
 a  ¦  B  ¦  aB
+SELECT LEAST(NULL, CAST('a' AS CHAR(1))) AS least_char_null,
+GREATEST(NULL, CAST('a' AS CHAR(1))) AS greatest_char_null,
+LEAST(CAST('a' AS CHAR(1)), NULL) AS least_char_last_null,
+GREATEST(CAST('a' AS CHAR(1)), NULL) AS greatest_char_last_null;
+➤ least_char_null[1,1,0]  ¦  greatest_char_null[1,1,0]  ¦  least_char_last_null[1,1,0]  ¦  greatest_char_last_null[1,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+SELECT LEAST(NULL, 'a' COLLATE utf8mb4_unicode_ci) AS least_native_null,
+GREATEST(NULL, 'a' COLLATE utf8mb4_unicode_ci) AS greatest_native_null,
+LEAST('a' COLLATE utf8mb4_unicode_ci, NULL, 'B') AS least_middle_null,
+GREATEST('a' COLLATE utf8mb4_unicode_ci, NULL, 'B') AS greatest_middle_null;
+➤ least_native_null[12,1,0]  ¦  greatest_native_null[12,1,0]  ¦  least_middle_null[12,1,0]  ¦  greatest_middle_null[12,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+SELECT LEAST(NULL, NULL) AS least_all_null,
+GREATEST(CAST(NULL AS CHAR(1)), CAST(NULL AS CHAR(1))) AS greatest_typed_null;
+➤ least_all_null[12,65535,0]  ¦  greatest_typed_null[1,1,0]  𝄀
+null  ¦  null
+CREATE VIEW least_protocol_view AS
+SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B') AS lo,
+GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B') AS hi;
+SELECT lo, hi FROM least_protocol_view;
+➤ lo[12,1,0]  ¦  hi[12,1,0]  𝄀
+a  ¦  B
+SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) AS SIGNED) AS required_protocol
+FROM mo_catalog.mo_tables
+WHERE reldatabase = 'collation_expression_test' AND relname = 'least_protocol_view';
+➤ required_protocol[-5,64,0]  𝄀
+113
+DROP VIEW least_protocol_view;
 SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
 ➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
 1

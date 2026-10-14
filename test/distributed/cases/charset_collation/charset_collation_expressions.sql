@@ -22,6 +22,26 @@ SELECT CAST(NULL AS SIGNED) BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8
 SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B'),
        GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B'),
        CONCAT('a' COLLATE utf8mb4_unicode_ci, 'B');
+-- A NULL operand never determines the string comparison domain.
+SELECT LEAST(NULL, CAST('a' AS CHAR(1))) AS least_char_null,
+       GREATEST(NULL, CAST('a' AS CHAR(1))) AS greatest_char_null,
+       LEAST(CAST('a' AS CHAR(1)), NULL) AS least_char_last_null,
+       GREATEST(CAST('a' AS CHAR(1)), NULL) AS greatest_char_last_null;
+SELECT LEAST(NULL, 'a' COLLATE utf8mb4_unicode_ci) AS least_native_null,
+       GREATEST(NULL, 'a' COLLATE utf8mb4_unicode_ci) AS greatest_native_null,
+       LEAST('a' COLLATE utf8mb4_unicode_ci, NULL, 'B') AS least_middle_null,
+       GREATEST('a' COLLATE utf8mb4_unicode_ci, NULL, 'B') AS greatest_middle_null;
+SELECT LEAST(NULL, NULL) AS least_all_null,
+       GREATEST(CAST(NULL AS CHAR(1)), CAST(NULL AS CHAR(1))) AS greatest_typed_null;
+-- A folded view still persists its pre-fold collation ordering requirement.
+CREATE VIEW least_protocol_view AS
+       SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B') AS lo,
+              GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B') AS hi;
+SELECT lo, hi FROM least_protocol_view;
+SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) AS SIGNED) AS required_protocol
+       FROM mo_catalog.mo_tables
+       WHERE reldatabase = 'collation_expression_test' AND relname = 'least_protocol_view';
+DROP VIEW least_protocol_view;
 SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
 SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_bin;
 SELECT CASE WHEN TRUE THEN 'Á' COLLATE utf8mb4_unicode_ci

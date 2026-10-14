@@ -1343,7 +1343,7 @@ func leastGreatestCollatedFn(parameters []*vector.Vector, result vector.Function
 	if len(parameters) == 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "collation-aware LEAST/GREATEST requires an argument")
 	}
-	paramType := *parameters[0].GetType()
+	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 	default:
