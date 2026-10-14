@@ -165,6 +165,16 @@ func (c *SharedTestCluster) Run(
 	fn func(Cluster),
 ) {
 	t.Helper()
+	c.run(t, init, fn, false)
+}
+
+func (c *SharedTestCluster) run(
+	t testReporter,
+	init func() (Cluster, error),
+	fn func(Cluster),
+	activeOnly bool,
+) {
+	t.Helper()
 	c.initializeRunCondition()
 	scope := sharedRunScopeFor(t)
 
@@ -207,20 +217,27 @@ func (c *SharedTestCluster) Run(
 			return
 		}
 
+		if activeOnly && (c.cluster == nil || c.err != nil) {
+			fatalMessage = "shared cluster is not active"
+			return
+		}
+
 		c.runActive = true
 		c.runScope = scope
 		activeClaimed = true
 
 		initialized := false
 		initStarted := time.Now()
-		c.once.Do(func() {
-			initialized = true
-			c.generation++
-			c.cluster, c.err = init()
-			if c.err == nil && c.cluster == nil {
-				c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
-			}
-		})
+		if !activeOnly {
+			c.once.Do(func() {
+				initialized = true
+				c.generation++
+				c.cluster, c.err = init()
+				if c.err == nil && c.cluster == nil {
+					c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
+				}
+			})
+		}
 		if initialized {
 			status := "ready"
 			if c.err != nil {
@@ -411,6 +428,22 @@ func (c *SharedTestCluster) finishFailureCleanup(
 	c.cleanupTried = false
 	c.cleanupRegistrations = nil
 	return err
+}
+
+// active reports whether this fixture currently owns a successfully started
+// cluster. It is used by the single-CN wrapper to coexist with packages that
+// already initialized the canonical two-CN fixture.
+func (c *SharedTestCluster) active() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cluster != nil && c.err == nil && !c.closed
+}
+
+// RunActive borrows an initialized fixture through the same callback admission
+// and failure isolation as Run. It never initializes an inactive generation.
+func (c *SharedTestCluster) RunActive(t testReporter, fn func(Cluster)) {
+	t.Helper()
+	c.run(t, nil, fn, true)
 }
 
 // Close releases the shared cluster or retries cleanup retained from a failed
@@ -709,6 +742,16 @@ func RunSingleCNBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
+	// A package may contain both canonical multi-CN tests and the specialized
+	// one-CN refresh matrix. Reuse CN 0 when the canonical fixture is already
+	// active; starting a second complete cluster would violate process-wide
+	// admission and is unnecessary for a test that only uses CN 0. When the
+	// matrix is selected on its own, the one-CN fixture still keeps startup
+	// below the per-test race budget.
+	if basicClusterState.active() {
+		basicClusterState.RunActive(t, fn)
+		return
+	}
 	singleCNClusterState.Run(t, func() (Cluster, error) {
 		return startBasicCluster(1, basicClusterSetupTracer(t, 1), nil)
 	}, func(c Cluster) {

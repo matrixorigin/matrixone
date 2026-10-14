@@ -320,6 +320,8 @@ type PrepareStmt struct {
 	proc                     *process.Process
 	remapDb                  map[string]string
 	defaultDatabase          string
+	// Parser identifier rules frozen at PREPARE for AST replay.
+	lowerCaseTableNames int64
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}

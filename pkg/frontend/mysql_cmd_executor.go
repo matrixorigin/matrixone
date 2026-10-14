@@ -3093,6 +3093,7 @@ func createPrepareStmtInSession(
 		sqlModeFlagsSet:          true,
 		divPrecisionIncrementSet: true,
 		remapDb:                  maps.Clone(execCtx.remapDb),
+		lowerCaseTableNames:      parserLowerCaseTableNames(executionSes),
 		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:         owner.GetTempTableVersion(),
 		ddlVersion:               owner.getDDLVersion(),
@@ -3167,6 +3168,34 @@ func freshPreparedCloneStatement(
 ) (tree.Statement, bool, error) {
 	if prepareStmt == nil {
 		return nil, false, moerr.NewInternalError(ctx, "prepared statement is nil")
+	}
+	if _, isAlter := prepareStmt.PrepareStmt.(*tree.AlterTable); isAlter {
+		// COPY ALTER can replace its execution plan during publication retry.
+		// Each execution owns its AST; the prepared object's tree stays reusable.
+		stmts, err := mysql.ParseWithSQLMode(
+			ctx, prepareStmt.Sql, prepareStmt.lowerCaseTableNames, prepareStmt.schedulingSQLMode,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(stmts) == 1 {
+			if _, ok := stmts[0].(*tree.AlterTable); ok {
+				if err = applyRemapDb(
+					ctx,
+					stmts,
+					prepareStmt.remapDb,
+					prepareStmt.lowerCaseTableNames,
+				); err != nil {
+					stmts[0].Free()
+					return nil, false, err
+				}
+				return stmts[0], true, nil
+			}
+		}
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, false, moerr.NewInternalError(ctx, "prepared ALTER must contain exactly one ALTER TABLE statement")
 	}
 	if prepareStmt.cloneSQL == "" {
 		return prepareStmt.PrepareStmt, false, nil

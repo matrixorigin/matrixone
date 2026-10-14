@@ -83,6 +83,19 @@ func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
 }
 
+func TestStatementOptionCopyAlterPrepareIsPrivate(t *testing.T) {
+	base := StatementOption{}
+	require.Nil(t, base.CopyAlterPrepare())
+	scope := &testCopyAlterScope{}
+	prepared := base.WithCopyAlterPrepare(scope)
+	require.Same(t, scope, prepared.CopyAlterPrepare())
+	require.Nil(t, base.CopyAlterPrepare(), "the builder must not mutate the caller's option")
+}
+
+type testCopyAlterScope struct{}
+
+func (*testCopyAlterScope) AllowsCopyAlterCreate([]byte, string, string) bool { return false }
+
 // WithOptimizerHints carries a per-statement optimizer_hints string (same format as the global
 // variable). The internal SQL executor bridges it onto the execution context; the planner applies
 // it. Value semantics: With* returns a new option and never mutates the receiver.

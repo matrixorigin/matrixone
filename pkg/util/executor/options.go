@@ -233,6 +233,19 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithCopyAlterPrepare marks the child CREATE used by an ALTER COPY
+// preparation phase. The flag is private to the owning transaction and is
+// intentionally orthogonal to IgnorePublish: ordinary CREATE/DROP callers
+// must keep their existing publication behavior.
+func (opts StatementOption) WithCopyAlterPrepare(scope CopyAlterPreparation) StatementOption {
+	opts.copyAlterPrepare = scope
+	return opts
+}
+
+func (opts StatementOption) CopyAlterPrepare() CopyAlterPreparation {
+	return opts.copyAlterPrepare
+}
+
 // WithPrePipelineLockTable requests an Exclusive table-range lock before an
 // internal INSERT starts. The caller must own the newly created physical target
 // in the same transaction. This requests normal lock acquisition; it does not

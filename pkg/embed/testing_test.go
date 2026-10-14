@@ -903,3 +903,115 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	require.False(t, state.closed)
 	require.Nil(t, state.cluster)
 }
+
+type sharedAdmissionReporter struct {
+	namedPanicTestReporter
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (r *sharedAdmissionReporter) Helper() {
+	r.once.Do(func() { close(r.entered) })
+}
+
+func TestSharedTestClusterRunActiveUsesAdmission(t *testing.T) {
+	state := SharedTestCluster{}
+	fixture := &cluster{}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		state.Run(namedPanicTestReporter{name: "first"}, func() (Cluster, error) { return fixture, nil }, func(Cluster) {
+			close(entered)
+			<-release
+		})
+	}()
+	<-entered
+	borrowed := make(chan struct{})
+	secondDone := make(chan struct{})
+	secondReporter := &sharedAdmissionReporter{namedPanicTestReporter: namedPanicTestReporter{name: "second"}, entered: make(chan struct{})}
+	go func() {
+		defer close(secondDone)
+		state.RunActive(secondReporter, func(Cluster) { close(borrowed) })
+	}()
+	<-secondReporter.entered
+	select {
+	case <-borrowed:
+		t.Error("borrowed callback overlapped an admitted callback")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-firstDone
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("borrowed callback did not acquire released admission")
+	}
+	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterRunActiveFailureIsolation(t *testing.T) {
+	state := SharedTestCluster{}
+	fixture := &cluster{}
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return fixture, nil }, func(Cluster) {})
+	reporter := &syntheticFailureReporter{}
+	state.RunActive(reporter, func(Cluster) { reporter.failed = true })
+	require.True(t, state.sealed)
+	require.False(t, state.runActive)
+	require.Len(t, reporter.cleanups, 1)
+	require.Panics(t, func() { state.RunActive(panicTestReporter{}, func(Cluster) { t.Error("quarantined callback ran") }) })
+	reporter.cleanups[0]()
+	require.Nil(t, state.cluster)
+	replacement := &cluster{}
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return replacement, nil }, func(value Cluster) { require.Same(t, replacement, value) })
+	reporter.cleanups[0]()
+	require.Same(t, replacement, state.cluster)
+	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterRunActiveInactiveAndNested(t *testing.T) {
+	state := SharedTestCluster{}
+	require.Panics(t, func() { state.RunActive(panicTestReporter{}, func(Cluster) { t.Error("inactive callback ran") }) })
+	fixture := &cluster{}
+	state.Run(namedPanicTestReporter{name: "parent"}, func() (Cluster, error) { return fixture, nil }, func(Cluster) {
+		require.Panics(t, func() {
+			state.RunActive(namedPanicTestReporter{name: "parent/child"}, func(Cluster) { t.Error("nested callback ran") })
+		})
+	})
+	require.Same(t, fixture, state.cluster)
+	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterRunActiveLateFailureAndPanic(t *testing.T) {
+	for _, panicCallback := range []bool{false, true} {
+		t.Run(fmt.Sprint(panicCallback), func(t *testing.T) {
+			state := SharedTestCluster{}
+			fixture := &cluster{}
+			state.Run(panicTestReporter{}, func() (Cluster, error) { return fixture, nil }, func(Cluster) {})
+			reporter := &syntheticFailureReporter{}
+			borrow := func() {
+				state.RunActive(reporter, func(Cluster) {
+					if panicCallback {
+						panic("borrowed callback")
+					}
+				})
+			}
+			if panicCallback {
+				require.Panics(t, borrow)
+			} else {
+				borrow()
+			}
+			require.Equal(t, panicCallback, state.sealed)
+			require.False(t, state.runActive)
+			require.Len(t, reporter.cleanups, 1)
+			reporter.failed = true
+			reporter.cleanups[0]()
+			require.Nil(t, state.cluster)
+			replacement := &cluster{}
+			state.Run(panicTestReporter{}, func() (Cluster, error) { return replacement, nil }, func(Cluster) {})
+			require.Same(t, replacement, state.cluster)
+			require.NoError(t, state.CloseIfActive())
+		})
+	}
+}

@@ -39,6 +39,12 @@ type SQLExecutor interface {
 	ExecTxn(ctx context.Context, execFunc func(txn TxnExecutor) error, opts Options) error
 }
 
+// CopyAlterPreparation authorizes one internal CREATE belonging to COPY ALTER.
+// Its implementation and lifetime are owned by the outer ALTER attempt.
+type CopyAlterPreparation interface {
+	AllowsCopyAlterCreate(txnID []byte, database, table string) bool
+}
+
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
 	Use(db string)
@@ -112,7 +118,11 @@ type StatementOption struct {
 	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool
-	optimizerHints           string
+	// copyAlterPrepare marks an internal relation created as the private
+	// preparation result of ALTER TABLE ... ALGORITHM=COPY. It is set only by
+	// the owning ALTER compile, never by user SQL.
+	copyAlterPrepare CopyAlterPreparation
+	optimizerHints   string
 }
 
 // Result exec sql result

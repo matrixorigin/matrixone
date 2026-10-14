@@ -564,6 +564,18 @@ func (c *Compile) clear() {
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
+	c.copyAlterPrepare = false
+	c.copyAlterCreateScope = nil
+	c.copyAlterInternalExecutor = false
+	c.copyAlterExecutorOwner = false
+	c.copyAlterAdmissionSet = false
+	c.copyAlterAdmitted = false
+	c.copyAlterIndexBuild = false
+	c.copyAlterPublication = false
+	c.alterCopyIndexRows = nil
+	c.alterCopySplitPreparation = false
+	c.alterCopyCoordinating = false
+	c.alterCopyPublicationSnapshotAdvanced = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
@@ -851,7 +863,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry || c.proc.IncrStatementDisabled() {
+	if c.disableRetry || c.alterCopyCoordinating || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
