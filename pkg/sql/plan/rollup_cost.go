@@ -53,14 +53,12 @@ const (
 	rollupSortBoundaryCost = 0.02
 	rollupSortAggCost      = 0.12
 	// Every completed grouping prefix is flushed, freed, and recreated by the
-	// streaming executor. Charge a conservative constant per completed group
-	// for deep rollups: the former cardinality ramp undercharged intermediate
-	// NDV inputs and admitted slower SORT plans against shared HASH. A small
-	// group count still amortizes this work; selective two-level filters retain
-	// their separately calibrated baseline. Singleton prefixes also keep the
-	// baseline: no prefix closes and recreates state before EOF.
+	// streaming executor, regardless of the number of keys. Charge the same
+	// conservative lifecycle cost whenever any prefix has multiple groups.
+	// All-singleton prefixes keep the EOF-only baseline; low-NDV input can
+	// still amortize the repeated completion cost.
 	rollupSortGroupFinalizeBaseCost = 2.0
-	rollupSortGroupFinalizeDeepCost = 16.0
+	rollupSortGroupFinalizeCost     = 16.0
 	rollupSortStartupCost           = 16.0
 	rollupHashBranchStartupCost     = 100.0
 	rollupHashWorkWeight            = 0.70
@@ -351,8 +349,8 @@ func estimateSortRollupCost(
 	// times the executor performs the appendOutputRow/resetLevel lifecycle;
 	// include that work for both ordered input and input that is sorted here.
 	finalizeCost := rollupSortGroupFinalizeBaseCost
-	if levels >= 3 && maxPrefixGroups > 1 {
-		finalizeCost = rollupSortGroupFinalizeDeepCost
+	if maxPrefixGroups > 1 {
+		finalizeCost = rollupSortGroupFinalizeCost
 	}
 	sortGroupFinalizeWork := prefixGroups * finalizeCost * aggregateCost
 	sortWork += sortGroupFinalizeWork
