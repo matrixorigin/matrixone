@@ -953,6 +953,63 @@ func TestSetOffsetPreservesMaxUint64TerminalValue(t *testing.T) {
 		})
 }
 
+// #29903: only a user-visible auto_increment column may surface as LAST_INSERT_ID.
+// InsertValues returns the first generated value among non-internal columns; the
+// allocator-owned hidden fake primary key (isInternal) is still generated and the
+// column populated, but its value must never be returned.
+func TestInsertValuesExcludesInternalFakePKFromLastInsertID(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 1,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: true}}, op))
+			require.NoError(t, s.Create(ctx, 2,
+				[]AutoColumn{{ColName: "id", ColIndex: 0, Step: 1}}, op))
+			require.NoError(t, s.Create(ctx, 3,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: false}}, op))
+			require.NoError(t, s.Create(ctx, 4, []AutoColumn{
+				{ColName: "id", ColIndex: 0, Step: 1},
+				{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// internal-only (a PK-less table's hidden fake primary key): not returned
+			v := gen()
+			last, err := s.InsertValues(ctx, 1, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "hidden fake PK must not surface as LAST_INSERT_ID")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](v)[0], "fake PK column still populated")
+
+			// user-visible auto column: returned
+			v = gen()
+			last, err = s.InsertValues(ctx, 2, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last)
+
+			// a user column named like the fake PK but visible (isInternal=false): returned (P2-1)
+			v = gen()
+			last, err = s.InsertValues(ctx, 3, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last, "a visible column named __mo_fake_pk_col must still surface")
+
+			// mixed: user auto column given an explicit value, only the hidden fake PK
+			// generates -> LAST_INSERT_ID stays unchanged (P2-2)
+			idVec := explicit(100)
+			fakeVec := gen()
+			last, err = s.InsertValues(ctx, 4, 0, nil, []*vector.Vector{idVec, fakeVec}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "when only the hidden fake PK generates, nothing surfaces")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0], "fake PK still populated")
+		})
+}
+
 func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	store := &setOffsetStore{t: t}
