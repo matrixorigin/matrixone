@@ -384,6 +384,8 @@ const (
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
+// DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
+// DAYOFYEAR vectors; historical narrow serialized results remain supported.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
@@ -416,6 +418,7 @@ type RemoteExpressionFeatures struct {
 	LegacyIntervalUnits           bool
 	WeekSessionDefault            bool
 	MediumIntAssignmentBounds     bool
+	DateNumericResultContracts    bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -444,7 +447,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
-		features.MediumIntAssignmentBounds
+		features.MediumIntAssignmentBounds ||
+		features.DateNumericResultContracts
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -953,6 +957,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
 					features.TemporalResultContracts = true
+				}
+				if current.Typ.Id == planInt32TypeID &&
+					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					features.DateNumericResultContracts = true
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
