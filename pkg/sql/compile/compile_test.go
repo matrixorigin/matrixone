@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	goruntime "runtime"
+	godebug "runtime/debug"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,6 +160,50 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 	c.clear()
 	require.True(t, c.IsTpQuery())
 	require.Zero(t, c.prePipelineLockTableID, "pooled compiles must not retain a backfill lock request")
+}
+
+func TestCompileClearResetsSkipIndexTaskRegistration(t *testing.T) {
+	// The ALTER COPY private replica create opts out of index task
+	// registration on its executor Compile. Exercise the pool reset directly,
+	// independent of which object sync.Pool would choose for the next
+	// allocation: a released Compile must not hand that suppression to an
+	// unrelated frontend statement.
+	c := &Compile{
+		proc:                      testutil.NewProcess(t),
+		MessageBoard:              message.NewMessageBoard(),
+		affectRows:                new(atomic.Uint64),
+		skipIndexTaskRegistration: true,
+	}
+	c.clear()
+	require.False(t, c.skipIndexTaskRegistration,
+		"a pooled compile must not retain the private index-registration policy")
+}
+
+func TestCompilePoolHandoffClearsPrivateIndexRegistrationPolicy(t *testing.T) {
+	// Reproduce the frontend ownership boundary: the private ALTER COPY
+	// executor releases its Compile, then an ordinary frontend statement
+	// allocates the next generation from the same pool. Single-P with GC
+	// disabled makes sync.Pool's private-slot handoff return the same object,
+	// so the next owner's policy is asserted deterministically.
+	oldProcs := goruntime.GOMAXPROCS(1)
+	defer goruntime.GOMAXPROCS(oldProcs)
+	oldPercent := godebug.SetGCPercent(-1)
+	defer godebug.SetGCPercent(oldPercent)
+
+	private := NewCompile("test", "test", "create table __mo_alter_copy_replica", "", "",
+		nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+	// txnExecutor.Exec sets this for the private replica create's nested
+	// compiler (sql_executor.go), which Release returns to the pool.
+	private.skipIndexTaskRegistration = true
+	private.Release()
+
+	frontend := NewCompile("test", "test", "create table ordinary", "", "",
+		nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+	defer frontend.Release()
+	require.Same(t, private, frontend,
+		"single-P handoff must reuse the released compile; the probe lost its determinism")
+	require.False(t, frontend.skipIndexTaskRegistration,
+		"the next frontend compile must not inherit the private preparation policy")
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {

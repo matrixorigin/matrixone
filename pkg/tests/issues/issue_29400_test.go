@@ -1497,3 +1497,67 @@ func (g *issue29400NegativeProbeGate) Exec(ctx context.Context, query string, op
 	}
 	return res, err
 }
+
+func TestIssue29400OrdinaryIndexedCreateRegistersTasksAfterCopyPreparation(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		// One connection keeps every statement on the same CN, so the private
+		// preparation Compiles and the later frontend Compiles share one pool.
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		_, err = conn0.ExecContext(ctx, "set experimental_ivf_index=1")
+		require.NoError(t, err)
+
+		const database = "issue_29400_index_registration_after_copy"
+		execSQLRequire(t, ctx, db0, "create database "+database)
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+		}()
+
+		registeredUpdates := func(table string) int {
+			var count int
+			require.NoError(t, conn0.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_index_update where db_name='"+database+
+					"' and table_name='"+table+"' and index_name='idx' and action='ivfflat_reindex'").
+				Scan(&count))
+			return count
+		}
+
+		// Control: an ordinary inline indexed CREATE registers the maintenance
+		// task through the createTable path before any private preparation ran.
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".ctrl(id bigint primary key, v vecf32(2), "+
+				"index idx using ivfflat(v) lists=1 op_type 'vector_l2_ops')")
+		require.Positive(t, registeredUpdates("ctrl"),
+			"an ordinary indexed create must register its idxcron maintenance task")
+
+		// Private preparation: ALTER COPY on the indexed table runs the replica
+		// create with WithSkipIndexTaskRegistration on the nested compiler, and
+		// publication re-registers the replacement's final maintenance task.
+		execSQLRequire(t, ctx, db0, "insert into "+database+".ctrl values(1, '[1,0]')")
+		execSQLRequire(t, ctx, db0,
+			"alter table "+database+".ctrl algorithm=copy, add column extra int")
+		require.Positive(t, registeredUpdates("ctrl"),
+			"publication must re-register the cloned index's maintenance task")
+
+		// The boundary the pool regression protects: an ordinary indexed CREATE
+		// following private preparation must still register its tasks. A leaked
+		// pooled policy would silently skip CreateAllIndexUpdateTasks here.
+		for _, table := range []string{"after_copy_a", "after_copy_b", "after_copy_c"} {
+			execSQLRequire(t, ctx, db0,
+				"create table "+database+"."+table+"(id bigint primary key, v vecf32(2), "+
+					"index idx using ivfflat(v) lists=1 op_type 'vector_l2_ops')")
+			require.Positive(t, registeredUpdates(table),
+				"an ordinary indexed create must not inherit the private preparation policy")
+		}
+	})
+}
