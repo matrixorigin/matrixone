@@ -200,6 +200,24 @@ prepare e30130_update from 'explain format=json update t set v = 7 where id = 1'
 -- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*7",true)
 execute e30130_update;
 deallocate prepare e30130_update;
+-- Multi-target updates resolve materialized sources and dedup/window outputs.
+create table update_peer(id int primary key, v int);
+insert into update_peer values (1, 30);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*99.*target[^}]*issue_28301[.]update_peer[.]v[^}]*value[^}]*88",true)
+explain format=json update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value(?=[^}]*101)(?=[^}]*102)[^}]*UNION_ALL",true)
+explain format=json update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+-- EXPLAIN has not written either target; execution is an independent control.
+select id, v from t order by id;
+select v from update_peer;
+update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+select v from t where id = 1;
+select v from update_peer;
+update t set v = 10 where id = 1;
+update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+select id, v from t order by id;
+update t set v = id * 10;
+drop table update_peer;
 -- @regex("(?s)matrixone.*statement_type.*DELETE",true)
 explain format=json delete from t where id = 1;
 -- @regex("(?s)matrixone.*statement_type.*INSERT",true)

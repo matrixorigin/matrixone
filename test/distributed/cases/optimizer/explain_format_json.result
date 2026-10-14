@@ -166,6 +166,34 @@ prepare e30130_update from 'explain format=json update t set v = 7 where id = 1'
 execute e30130_update;
 EXPLAIN
 deallocate prepare e30130_update;
+create table update_peer(id int primary key, v int);
+insert into update_peer values (1, 30);
+explain format=json update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+EXPLAIN
+explain format=json update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+EXPLAIN
+select id, v from t order by id;
+id	v
+1	10
+2	20
+select v from update_peer;
+v
+30
+update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+select v from t where id = 1;
+v
+99
+select v from update_peer;
+v
+88
+update t set v = 10 where id = 1;
+update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+select id, v from t order by id;
+id	v
+1	101
+2	102
+update t set v = id * 10;
+drop table update_peer;
 explain format=json delete from t where id = 1;
 EXPLAIN
 explain format=json insert into t values (3, 30);

@@ -149,7 +149,13 @@ The following mappings are normative for schema version 1:
   projection node identified by its binding tag. Each non-row-id target column
   is emitted as an `assignments` entry, so a plan for `SET v = 2` includes a
   value of `2`; unchanged columns remain visible as their row-image
-  expressions. An unresolved required row-image reference is an SQL error.
+  expressions. Materialized source steps, aggregate outputs, and window outputs
+  are resolved in their producer's context. When a UNION or UNION ALL output
+  has multiple possible expressions, its value includes explicit lineage such
+  as `UNION_ALL[branch 1: <expression>; branch 2: <expression>]`; this describes
+  both inputs rather than claiming that either branch is the sole assignment.
+  This lineage text is only for display and does not change the execution plan.
+  An unresolved required row-image reference is an SQL error.
 - A `RECURSIVE_CTE` node records `recursive_union_mode=DISTINCT` or
   `recursive_union_mode=ALL` in `node.expressions`, directly from
   `RecursiveUnionDistinct`. Both values are explicit; a missing boolean does

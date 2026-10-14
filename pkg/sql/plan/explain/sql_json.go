@@ -919,6 +919,81 @@ func (b *sqlJSONPlanBuilder) resolveUpdateRef(node *plan.Node, ref *plan.ColRef,
 	if ref == nil || ref.ColPos < 0 {
 		return nil, false
 	}
+	if node != nil {
+		switch node.NodeType {
+		case plan.Node_SINK_SCAN:
+			// Scan projections address the output of a source step, not a child.
+			if ref.RelPos == 0 {
+				if b.query == nil || len(node.SourceStep) != 1 {
+					return nil, false
+				}
+				step := node.SourceStep[0]
+				if step < 0 || int(step) >= len(b.query.Steps) {
+					return nil, false
+				}
+				source := b.resolveRoot(b.query.Steps[step])
+				if source == nil || source.NodeType != plan.Node_SINK || int(ref.ColPos) >= len(source.ProjectList) {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(source, source.ProjectList[ref.ColPos], active)
+			}
+		case plan.Node_AGG:
+			// Aggregate output slots concatenate grouping and aggregate expressions.
+			// Positional DML aggregates can use -2 for grouping slots as well.
+			if ref.RelPos == -1 || ref.RelPos == -2 {
+				pos := int(ref.ColPos)
+				if pos < len(node.GroupBy) {
+					return b.resolveUpdateExpr(node, node.GroupBy[pos], active)
+				}
+				pos -= len(node.GroupBy)
+				if pos >= len(node.AggList) {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(node, node.AggList[pos], active)
+			}
+		case plan.Node_WINDOW:
+			if ref.RelPos == -1 {
+				if len(node.Children) != 1 {
+					return nil, false
+				}
+				child := b.resolveChild(node.Children[0])
+				if child == nil {
+					return nil, false
+				}
+				if int(ref.ColPos) != len(child.ProjectList) || len(node.WinSpecList) != 1 {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(node, node.WinSpecList[0], active)
+			}
+		case plan.Node_UNION, plan.Node_UNION_ALL:
+			if ref.RelPos == 0 {
+				if len(node.Children) != 2 {
+					return nil, false
+				}
+				branches := make([]string, len(node.Children))
+				for i, childID := range node.Children {
+					child := b.resolveChild(childID)
+					if child == nil || int(ref.ColPos) >= len(child.ProjectList) {
+						return nil, false
+					}
+					expr, ok := b.resolveUpdateExpr(child, child.ProjectList[ref.ColPos], active)
+					if !ok {
+						return nil, false
+					}
+					value, err := sqlJSONExpr(b.ctx, expr, &b.textOpts)
+					if err != nil {
+						return nil, false
+					}
+					branches[i] = "branch " + strconv.Itoa(i+1) + ": " + value
+				}
+				// A set output can come from either input. This named expression is
+				// display-only lineage, never substituted into the execution plan.
+				return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					Name: node.NodeType.String() + "[" + strings.Join(branches, "; ") + "]",
+				}}}, true
+			}
+		}
+	}
 	if node != nil && ref.RelPos >= 0 && int(ref.RelPos) < len(node.Children) {
 		child := b.resolveChild(node.Children[ref.RelPos])
 		if child == nil || int(ref.ColPos) >= len(child.ProjectList) {
@@ -973,6 +1048,35 @@ func (b *sqlJSONPlanBuilder) resolveUpdateExpr(node *plan.Node, expr *plan.Expr,
 		resolved, list := *expr, *impl.List
 		list.List = args
 		resolved.Expr = &plan.Expr_List{List: &list}
+		return &resolved, true
+	case *plan.Expr_W:
+		if impl.W == nil || impl.W.WindowFunc == nil {
+			return nil, false
+		}
+		function, ok := b.resolveUpdateExpr(node, impl.W.WindowFunc, active)
+		if !ok {
+			return nil, false
+		}
+		partition, ok := b.resolveUpdateExprList(node, impl.W.PartitionBy, active)
+		if !ok {
+			return nil, false
+		}
+		resolved, window := *expr, *impl.W
+		window.WindowFunc, window.PartitionBy = function, partition
+		window.OrderBy = make([]*plan.OrderBySpec, len(impl.W.OrderBy))
+		for i, order := range impl.W.OrderBy {
+			if order == nil {
+				return nil, false
+			}
+			value, ok := b.resolveUpdateExpr(node, order.Expr, active)
+			if !ok {
+				return nil, false
+			}
+			copyOrder := *order
+			copyOrder.Expr = value
+			window.OrderBy[i] = &copyOrder
+		}
+		resolved.Expr = &plan.Expr_W{W: &window}
 		return &resolved, true
 	}
 	return expr, true

@@ -474,6 +474,84 @@ func TestResolveUpdateExpressionBoundaries(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestResolveUpdateProducerOutputs(t *testing.T) {
+	ref := func(rel, col int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col}}}
+	}
+	for _, tc := range []struct {
+		name     string
+		kind     plan.Node_NodeType
+		rel, col int32
+		want     string
+		change   func(*plan.Node, *plan.Query)
+	}{
+		{name: "source_projection_reordering", kind: plan.Node_SINK_SCAN, want: "7"},
+		{name: "missing_source", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = nil }},
+		{name: "multiple_sources", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{0, 1} }},
+		{name: "negative_source", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{-1} }},
+		{name: "source_out_of_range", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{2} }},
+		{name: "missing_root", kind: plan.Node_SINK_SCAN, change: func(_ *plan.Node, q *plan.Query) { q.Steps[1] = 99 }},
+		{name: "wrong_source_type", kind: plan.Node_SINK_SCAN, change: func(_ *plan.Node, q *plan.Query) { q.Nodes[1].NodeType = plan.Node_PROJECT }},
+		{name: "source_slot_out_of_range", kind: plan.Node_SINK_SCAN, col: 2},
+		{name: "source_cycle", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, q *plan.Query) { q.Nodes[1].Children = []int32{n.NodeId} }},
+		{name: "group_slot", kind: plan.Node_AGG, rel: -1, want: "8"},
+		{name: "positional_group_slot", kind: plan.Node_AGG, rel: -2, want: "8"},
+		{name: "aggregate_slot", kind: plan.Node_AGG, rel: -2, col: 1, want: "any_value(7)"},
+		{name: "aggregate_out_of_range", kind: plan.Node_AGG, rel: -2, col: 2},
+		{name: "window_slot", kind: plan.Node_WINDOW, rel: -1, col: 2, want: "row_number(); Partition By: 7; Order By: 8"},
+		{name: "window_input_slot", kind: plan.Node_WINDOW, rel: -1, col: 1},
+		{name: "window_out_of_range", kind: plan.Node_WINDOW, rel: -1, col: 3},
+		{name: "missing_window", kind: plan.Node_WINDOW, rel: -1, col: 2, change: func(n *plan.Node, _ *plan.Query) { n.WinSpecList = nil }},
+		{name: "union_both_branches", kind: plan.Node_UNION_ALL, want: "UNION_ALL[branch 1: 7; branch 2: 9]"},
+		{name: "union_null_branch", kind: plan.Node_UNION, col: 1, want: "UNION[branch 1: 8; branch 2: (null)]"},
+		{name: "union_out_of_range", kind: plan.Node_UNION_ALL, col: 2},
+		{name: "missing_union_input", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = 99 }},
+		{name: "union_cycle", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = n.NodeId }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leaf := &plan.Node{NodeId: 10, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(7), sqlJSONTestInt32(8)}}
+			sink := &plan.Node{NodeId: 20, NodeType: plan.Node_SINK, Children: []int32{10}, ProjectList: []*plan.Expr{ref(0, 1), ref(0, 0)}}
+			node := &plan.Node{NodeId: 30, NodeType: tc.kind, Children: []int32{10}, ProjectList: []*plan.Expr{ref(tc.rel, tc.col)}}
+			right := &plan.Node{NodeId: 40, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(9), {Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}}
+			query := &plan.Query{Nodes: []*plan.Node{leaf, sink, node, right}, Steps: []int32{2, 1}}
+			switch tc.kind {
+			case plan.Node_SINK_SCAN:
+				node.Children, node.SourceStep = nil, []int32{1}
+				node.ProjectList = []*plan.Expr{ref(0, tc.col+1)}
+			case plan.Node_AGG:
+				node.GroupBy = []*plan.Expr{ref(0, 1)}
+				value, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "any_value", []*plan.Expr{ref(0, 0)})
+				require.NoError(t, err)
+				node.AggList = []*plan.Expr{value}
+			case plan.Node_WINDOW:
+				function, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "row_number", nil)
+				require.NoError(t, err)
+				node.WinSpecList = []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{WindowFunc: function, PartitionBy: []*plan.Expr{ref(0, 0)}, OrderBy: []*plan.OrderBySpec{{Expr: ref(0, 1)}}}}}}
+			case plan.Node_UNION, plan.Node_UNION_ALL:
+				node.Children = []int32{10, 40}
+			}
+			if tc.change != nil {
+				tc.change(node, query)
+			}
+			before, err := json.Marshal(query)
+			require.NoError(t, err)
+			builder := &sqlJSONPlanBuilder{ctx: t.Context(), query: query, byID: map[int32]*plan.Node{10: leaf, 20: sink, 30: node, 40: right}}
+			expr, ok := builder.resolveUpdateExpr(node, node.ProjectList[0], make(map[sqlJSONUpdateExprKey]bool))
+			if tc.want == "" {
+				require.False(t, ok)
+			} else {
+				require.True(t, ok)
+				value, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, value)
+			}
+			after, err := json.Marshal(query)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "producer expansion must not mutate the plan")
+		})
+	}
+}
+
 func TestBuildSQLJSONPlanUsesBoundAliasesForSelfJoin(t *testing.T) {
 	newScan := func(id int32, alias string) *plan.Node {
 		return &plan.Node{
@@ -844,6 +922,42 @@ func TestBuildSQLJSONPlanResolvesPlannerUpdateAssignments(t *testing.T) {
 			}
 			require.True(t, foundValue, "assigned column must appear in row image")
 			require.True(t, foundKey, "unchanged column must appear in row image")
+		})
+	}
+}
+
+func TestBuildSQLJSONPlanResolvesMultiTargetUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		want      map[string]string
+	}{
+		{
+			name: "different_tables",
+			sql:  "update nation n join region r on n.n_regionkey = r.r_regionkey set n.n_regionkey = 2, r.r_name = 'changed'",
+			want: map[string]string{".n_regionkey": "2", ".r_name": "'changed'", ".n_nationkey": "n.n_nationkey"},
+		},
+		{
+			name: "same_table_aliases",
+			sql:  "update nation n join nation m on n.n_nationkey = m.n_nationkey set n.n_regionkey = 2, m.n_name = 'changed'",
+			want: map[string]string{".n_regionkey": "2", ".n_name": "'changed'", ".n_nationkey": "n.n_nationkey"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, tc.sql)
+			found := make(map[string]bool)
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					for suffix, want := range tc.want {
+						if strings.HasSuffix(assignment.Target, suffix) && strings.Contains(assignment.Value, want) {
+							found[suffix] = true
+						}
+					}
+				}
+			}
+			for suffix := range tc.want {
+				require.True(t, found[suffix], "missing assigned value for %s", suffix)
+			}
 		})
 	}
 }
