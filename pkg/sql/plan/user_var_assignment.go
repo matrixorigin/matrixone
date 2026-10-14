@@ -90,8 +90,12 @@ func userVarAssignmentRoot(expr tree.Expr) *tree.UserVarAssignmentExpr {
 }
 
 func userVariableReadsBeforeAssignment(expr tree.Expr) map[string]struct{} {
+	return userVariableReadsBeforeAssignmentValue(reflect.ValueOf(expr))
+}
+
+func userVariableReadsBeforeAssignmentValue(v reflect.Value) map[string]struct{} {
 	names := make(map[string]struct{})
-	collectUserVariableReads(reflect.ValueOf(expr), make(map[assignmentVisit]struct{}), names)
+	collectUserVariableReads(v, make(map[assignmentVisit]struct{}), names)
 	return names
 }
 
@@ -254,8 +258,18 @@ func validateUserVarAssignmentScope(
 			}
 		}
 	}
-	if clause.From != nil && containsUserVarAssignmentValue(reflect.ValueOf(clause.From), make(map[assignmentVisit]struct{})) {
-		return userVarAssignmentNotSupported(ctx, "FROM/JOIN")
+	if clause.From != nil {
+		if containsUserVarAssignmentValue(reflect.ValueOf(clause.From), make(map[assignmentVisit]struct{})) {
+			return userVarAssignmentNotSupported(ctx, "FROM/JOIN")
+		}
+		if hasAssignment {
+			for name := range userVariableReadsBeforeAssignmentValue(reflect.ValueOf(clause.From)) {
+				if _, assigned := assignedUserVariables[name]; assigned {
+					return userVarAssignmentNotSupported(ctx,
+						"reading a user variable in JOIN ON before its assignment projection")
+				}
+			}
+		}
 	}
 	if clause.GroupBy != nil {
 		for _, exprs := range clause.GroupBy.GroupByExprsList {
