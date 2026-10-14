@@ -1399,9 +1399,17 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 			useLegacyGroupingSetPlan(t, optimizer)
 			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
-			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
-			require.NotNil(t, agg)
-			require.True(t, hasInactiveGroupingColumn(agg.GroupingFlag))
+			// ROLLUP's hidden COUNT(*) guard can also retain a detail aggregate.
+			// The inactive branch must still survive primary-key elimination.
+			query := logical.GetQuery()
+			foundInactive := false
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType == planpb.Node_AGG && hasInactiveGroupingColumn(node.GroupingFlag) {
+					foundInactive = true
+				}
+			}
+			require.True(t, foundInactive)
 		})
 	}
 
