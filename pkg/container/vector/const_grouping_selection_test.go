@@ -62,7 +62,9 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 				}()
 				// Existing data and marks must survive repeated appends.
 				require.NoError(t, dst.UnionOne(source, 0, mp))
-				want := []bool{true}
+				// At most five selected rows are appended in each of two rounds.
+				want := make([]bool, 1, 11)
+				want[0] = true
 				for range 2 {
 					var rows []int64
 					switch method {
