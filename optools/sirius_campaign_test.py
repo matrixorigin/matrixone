@@ -82,8 +82,8 @@ class ControllerTest(unittest.TestCase):
             native = workspace / "sirius.yaml"
             native.write_text(controller.native_configuration(workspace, 1048576))
             (workspace / "cn-2.toml").write_text(
-                '[cn.sirius]\nenabled=true\nbackend="embedded"\ninput-mode="mo"\n'
-                'max-waiting-queries=16\ncleanup-timeout="30s"\n'
+                '[cn.sirius]\nenabled=true\n'
+                'max-waiting-queries=16\ncleanup-timeout="30s"\nrequest-timeout="1h"\ngpu-streams=2\n'
                 + "native-config-path="
                 + json.dumps(str(native))
                 + "\n"
@@ -173,8 +173,8 @@ while True: signal.pause()
                 controller.native_configuration(workspace)
             )
             (workspace / "cn-2.toml").write_text(
-                '[cn.sirius]\nenabled=true\nbackend="embedded"\ninput-mode="mo"\n'
-                'max-waiting-queries=16\ncleanup-timeout="30s"\ngpu-streams = 2\n'
+                '[cn.sirius]\nenabled=true\n'
+                'max-waiting-queries=16\ncleanup-timeout="30s"\nrequest-timeout="1h"\ngpu-streams = 2\n'
                 + "native-config-path="
                 + json.dumps(str(workspace / "native.yaml"))
                 + "\n"

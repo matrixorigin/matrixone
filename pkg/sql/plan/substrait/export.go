@@ -32,14 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"github.com/substrait-io/substrait-protobuf/go/substraitpb/extensions"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 const (
-	Version        = "0.78.0"
-	TaeReadTypeURL = "type.googleapis.com/matrixone.sirius.v1.TaeRead"
-	MaxPlanBytes   = 16 << 20
+	Version      = "0.78.0"
+	MaxPlanBytes = 16 << 20
 	// Bound the materialization of optimizer-folded IN lists before allocating
 	// one Substrait expression per member.
 	maxLiteralVectorValues = 1 << 16
@@ -48,43 +45,15 @@ const (
 // Candidate is a fully validated logical plan with unresolved storage reads.
 // The read handles are installed only after snapshot admission succeeds.
 type Candidate struct {
-	query      *planpb.Query
-	reads      []Read
-	headings   []string
-	types      []planpb.Type
-	embeddedMO bool
-	profile    EmbeddedExportProfile
+	query    *planpb.Query
+	reads    []Read
+	headings []string
+	types    []planpb.Type
+	profile  EmbeddedExportProfile
 }
 
-// Read identifies one physical table scan which needs a TaeRead lease.
-type Read struct {
-	NodeID int32
-	// AccountID is bound by Admit immediately before snapshot preparation;
-	// logical export deliberately leaves it unset.
-	AccountID     uint64
-	DatabaseID    uint64
-	TableID       uint64
-	SchemaVersion uint32
-	Columns       []ColumnMapping
-	Schema        []byte // deterministic Substrait NamedStruct bytes
-}
-
-// ColumnMapping binds one exported ordinal to the physical TAE column used at
-// the planning snapshot. Names and logical types alone are not stable across a
-// drop/re-add schema evolution.
-type ColumnMapping struct {
-	ColumnID       uint64
-	SequenceNumber uint32
-}
-
-func (c *Candidate) Reads() []Read {
-	result := append([]Read(nil), c.reads...)
-	for i := range result {
-		result[i].Schema = append([]byte(nil), result[i].Schema...)
-		result[i].Columns = append([]ColumnMapping(nil), result[i].Columns...)
-	}
-	return result
-}
+// Read identifies a query-local MO table scan.
+type Read struct{ NodeID int32 }
 
 // OutputTypes returns the MatrixOne result contract corresponding to the
 // Substrait root names. Transport decoding uses it to restore MO physical
@@ -96,19 +65,13 @@ func (c *Candidate) OutputTypes() []planpb.Type {
 	return append([]planpb.Type(nil), c.types...)
 }
 
-// Export validates q without performing I/O.
-func Export(q *planpb.Query) (*Candidate, error) {
-	return exportCandidate(q, false, EmbeddedExportProfile{})
-}
-
 // ExportEmbeddedMO validates a plan whose entire scans remain owned by MO.
-// Storage ordering hints are legal only at those scan boundaries; Flight
-// cannot claim their semantics because it bypasses the MO reader.
+// Storage ordering hints are legal at the scan boundaries owned by MO.
 func ExportEmbeddedMO(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
-	return exportCandidate(q, true, profile)
+	return exportCandidate(q, profile)
 }
 
-func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportProfile) (*Candidate, error) {
+func exportCandidate(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
@@ -126,8 +89,8 @@ func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportPro
 			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
 		}
 	}
-	c := &Candidate{query: q, embeddedMO: embeddedMO, profile: profile}
-	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true, embeddedMO: embeddedMO, profile: profile}
+	c := &Candidate{query: q, profile: profile}
+	e := exporter{query: q, validateOnly: true, profile: profile}
 	for step, rootID := range q.Steps {
 		if rootID < 0 || int(rootID) >= len(q.Nodes) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid root node id %d at step %d", rootID, step)
@@ -171,53 +134,10 @@ func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportPro
 	return c, nil
 }
 
-// Build binds admitted TaeRead messages to every scan and serializes the plan.
-func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
-	if c == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
-	}
-	if err := planpb.RequireLegacyCollations(c.query); err != nil {
-		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
-	}
-	if c.embeddedMO {
-		return nil, notEligiblef(EligibilityPlanShape, "MO-reader candidate cannot be emitted as Flight")
-	}
-	e := exporter{query: c.query, readValues: readValues}
-	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
-	for step, rootID := range c.query.Steps {
-		e.stepOrdinal = int32(step)
-		relation, err := e.node(rootID)
-		if err != nil {
-			return nil, err
-		}
-		if step < len(c.query.Steps)-1 {
-			relations = append(relations, &spb.PlanRel{RelType: &spb.PlanRel_Rel{Rel: relation}})
-		} else {
-			relations = append(relations, &spb.PlanRel{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: relation, Names: append([]string(nil), c.headings...)}}})
-		}
-	}
-	p := &spb.Plan{
-		Version:          &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
-		Relations:        relations,
-		ExpectedTypeUrls: []string{TaeReadTypeURL},
-		Extensions:       e.extensions(),
-	}
-	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(p)
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: marshal plan: %v", err)
-	}
-	if len(b) > MaxPlanBytes {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: plan is %d bytes, maximum is %d", len(b), MaxPlanBytes)
-	}
-	return b, nil
-}
-
 type exporter struct {
 	profile          EmbeddedExportProfile
 	exactUsed        bool
-	embeddedMO       bool
 	query            *planpb.Query
-	readValues       map[int32][]byte
 	embeddedBindings map[int32]EmbeddedReadBinding
 	reads            []Read
 	functions        map[string]uint32
@@ -244,7 +164,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	if n == nil || n.NodeId != id {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
 	}
-	moScan := n.NodeType == planpb.Node_TABLE_SCAN && (e.embeddedMO || e.embeddedBindings != nil)
+	moScan := n.NodeType == planpb.Node_TABLE_SCAN
 	if n.NodeType != planpb.Node_SORT && !moScan && len(n.OrderBy) != 0 {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries sort semantics outside a SORT node", id)
 	}
@@ -253,7 +173,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
-		if err == nil && (e.embeddedBindings != nil || e.embeddedMO) {
+		if err == nil {
 			return rel, nil
 		}
 	case planpb.Node_FILTER:
@@ -621,76 +541,40 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if n.IndexScanInfo.ProtoSize() != 0 || n.IndexReaderParam != nil {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported index scan semantics", n.NodeId)
 	}
-	schema, err := e.namedStruct(n.TableDef)
-	if err != nil {
-		return nil, err
-	}
-	schemaBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(schema)
-	if err != nil {
-		return nil, err
-	}
-	columns, err := columnMapping(n.TableDef)
-	if err != nil {
-		return nil, err
-	}
 	if e.validateOnly {
 		if e.readSeen == nil {
 			e.readSeen = make(map[int32]bool)
 		}
 		if !e.readSeen[n.NodeId] {
 			e.readSeen[n.NodeId] = true
-			e.reads = append(e.reads, Read{
-				NodeID:        n.NodeId,
-				DatabaseID:    n.TableDef.DbId,
-				TableID:       n.TableDef.TblId,
-				SchemaVersion: n.TableDef.Version,
-				Columns:       columns,
-				Schema:        schemaBytes,
-			})
+			e.reads = append(e.reads, Read{NodeID: n.NodeId})
 		}
 	}
-	if e.embeddedBindings != nil || e.embeddedMO {
-		// Validation and emission consume the same post-scan contract. MO owns
-		// this scan's filters/projection/fetch; never validate them as a Flight
-		// expression and then silently omit them in the embedded build pass.
-		binding := EmbeddedReadBinding{BindingID: uint64(len(e.reads)), Source: EmbeddedReadMO}
-		if e.embeddedBindings != nil {
-			if e.embeddedReadSeen == nil {
-				e.embeddedReadSeen = make(map[int32]bool)
-			}
-			if e.embeddedReadSeen[n.NodeId] {
-				return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
-			}
-			e.embeddedReadSeen[n.NodeId] = true
-			var ok bool
-			binding, ok = e.embeddedBindings[n.NodeId]
-			if !ok {
-				return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
-			}
+	// Validation and emission consume the same post-scan contract. MO owns
+	// this scan's filters, projection and fetch in both passes.
+	binding := EmbeddedReadBinding{BindingID: uint64(len(e.reads)), Source: EmbeddedReadMO}
+	if e.embeddedBindings != nil {
+		if e.embeddedReadSeen == nil {
+			e.embeddedReadSeen = make(map[int32]bool)
 		}
-		_, outputSchema, embeddedErr := embeddedMORead(n, e.profile)
-		if embeddedErr != nil {
-			return nil, embeddedErr
+		if e.embeddedReadSeen[n.NodeId] {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
 		}
-		for _, typ := range outputSchema.Struct.Types {
-			e.exactUsed = e.exactUsed || typ.GetUserDefined() != nil
+		e.embeddedReadSeen[n.NodeId] = true
+		var ok bool
+		binding, ok = e.embeddedBindings[n.NodeId]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
 		}
-		return embeddedNamedRead(binding, outputSchema), nil
 	}
-	value := e.readValues[n.NodeId]
-	if !e.validateOnly && len(value) == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead", n.NodeId)
+	_, outputSchema, embeddedErr := embeddedMORead(n, e.profile)
+	if embeddedErr != nil {
+		return nil, embeddedErr
 	}
-	rel := &spb.Rel{RelType: &spb.Rel_Read{Read: &spb.ReadRel{
-		BaseSchema: schema,
-		ReadType:   &spb.ReadRel_ExtensionTable_{ExtensionTable: &spb.ReadRel_ExtensionTable{Detail: &anypb.Any{TypeUrl: TaeReadTypeURL, Value: value}}},
-	}}}
-	width := len(schema.Struct.Types)
-	rel, err = e.applyFilter(rel, n.FilterList, []int{width})
-	if err != nil {
-		return nil, err
+	for _, typ := range outputSchema.Struct.Types {
+		e.exactUsed = e.exactUsed || typ.GetUserDefined() != nil
 	}
-	return e.applyProject(rel, width, n.ProjectList, []int{width})
+	return embeddedNamedRead(binding, outputSchema), nil
 }
 
 func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
@@ -855,12 +739,10 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 		return input, nil
 	}
 	fetch := &spb.FetchRel{Input: input}
-	if e.embeddedMO {
-		// ABI-v1 preparation requires both constant modes to be explicit.
-		// Substrait's absent count means all rows and absent offset means zero.
-		fetch.CountMode = &spb.FetchRel_Count{Count: -1}
-		fetch.OffsetMode = &spb.FetchRel_Offset{Offset: 0}
-	}
+	// ABI-v1 preparation requires both constant modes to be explicit.
+	// Substrait's absent count means all rows and absent offset means zero.
+	fetch.CountMode = &spb.FetchRel_Count{Count: -1}
+	fetch.OffsetMode = &spb.FetchRel_Offset{Offset: 0}
 	if n.Limit != nil {
 		count, err := nonnegativeIntLiteral(n.Limit, 0)
 		if err != nil {
@@ -1210,7 +1092,7 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	default:
 		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
 	}
-	if e.embeddedMO && unit == "quarter" {
+	if unit == "quarter" {
 		return nil, notEligiblef(EligibilityExpression, "embedded extract field %q has no native GPU function", unit)
 	}
 	supported, err := e.hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
@@ -1224,56 +1106,43 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	if err != nil {
 		return nil, err
 	}
-	if e.embeddedMO {
-		// The generic importer lowers extract to date_part, which has no
-		// Sirius GPU expression. Ordinary components also interpret MO's zero
-		// DATE sentinel as calendar 0000-12-31 after native input conversion.
-		// Guard that exact sentinel in the typed plan, preserving NULL behavior
-		// and the complete MO domain without changing published reader bytes.
-		zeroDate, err := e.literal(&planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.ZeroDate)}}, &planpb.Type{Id: int32(types.T_date), NotNullable: true})
-		if err != nil {
-			return nil, err
-		}
-		zero, err := e.literal(&planpb.Literal{Value: &planpb.Literal_I64Val{}}, &planpb.Type{Id: int32(types.T_int64), NotNullable: true})
-		if err != nil {
-			return nil, err
-		}
-		conditionType := &planpb.Type{Id: int32(types.T_bool), NotNullable: call.Args[1].Typ.NotNullable}
-		condition := e.scalar("equal", conditionType, value, zeroDate)
-		output, err := e.substraitType(&result.Typ)
-		if err != nil {
-			return nil, err
-		}
-		// The pinned component function physically returns INT16 but advertises
-		// BIGINT. A same-type cast is removed by binding; use the proven INT32
-		// component domain before BIGINT so CASE receives equal physical types.
-		componentType := result.Typ
-		componentType.Id = int32(types.T_int32)
-		component, err := e.substraitType(&componentType)
-		if err != nil {
-			return nil, err
-		}
-		part := &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
-			Type: component, Input: e.scalar(unit, &result.Typ, value), FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
-		}}}
-		part = &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
-			Type: output, Input: part, FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
-		}}}
-		return &spb.Expression{RexType: &spb.Expression_IfThen_{IfThen: &spb.Expression_IfThen{
-			Ifs:  []*spb.Expression_IfThen_IfClause{{If: condition, Then: zero}},
-			Else: part,
-		}}}, nil
+	// The generic importer lowers extract to date_part, which has no
+	// Sirius GPU expression. Ordinary components also interpret MO's zero
+	// DATE sentinel as calendar 0000-12-31 after native input conversion.
+	// Guard that exact sentinel in the typed plan, preserving NULL behavior
+	// and the complete MO domain without changing published reader bytes.
+	zeroDate, err := e.literal(&planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.ZeroDate)}}, &planpb.Type{Id: int32(types.T_date), NotNullable: true})
+	if err != nil {
+		return nil, err
 	}
+	zero, err := e.literal(&planpb.Literal{Value: &planpb.Literal_I64Val{}}, &planpb.Type{Id: int32(types.T_int64), NotNullable: true})
+	if err != nil {
+		return nil, err
+	}
+	conditionType := &planpb.Type{Id: int32(types.T_bool), NotNullable: call.Args[1].Typ.NotNullable}
+	condition := e.scalar("equal", conditionType, value, zeroDate)
 	output, err := e.substraitType(&result.Typ)
 	if err != nil {
 		return nil, err
 	}
-	return &spb.Expression{RexType: &spb.Expression_ScalarFunction_{ScalarFunction: &spb.Expression_ScalarFunction{
-		FunctionReference: e.function("extract"),
-		Arguments: []*spb.FunctionArgument{
-			{ArgType: &spb.FunctionArgument_Enum{Enum: unit}}, valueArg(value),
-		},
-		OutputType: output,
+	// The pinned component function physically returns INT16 but advertises
+	// BIGINT. A same-type cast is removed by binding; use the proven INT32
+	// component domain before BIGINT so CASE receives equal physical types.
+	componentType := result.Typ
+	componentType.Id = int32(types.T_int32)
+	component, err := e.substraitType(&componentType)
+	if err != nil {
+		return nil, err
+	}
+	part := &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+		Type: component, Input: e.scalar(unit, &result.Typ, value), FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+	}}}
+	part = &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+		Type: output, Input: part, FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+	}}}
+	return &spb.Expression{RexType: &spb.Expression_IfThen_{IfThen: &spb.Expression_IfThen{
+		Ifs:  []*spb.Expression_IfThen_IfClause{{If: condition, Then: zero}},
+		Else: part,
 	}}}, nil
 }
 
@@ -1359,31 +1228,6 @@ func namedStructForProfile(t *planpb.TableDef, profile EmbeddedExportProfile) (*
 	return &spb.NamedStruct{Names: names, Struct: &spb.Type_Struct{Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED}}, nil
 }
 
-func columnMapping(t *planpb.TableDef) ([]ColumnMapping, error) {
-	if t == nil {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: missing table for column mapping")
-	}
-	result := make([]ColumnMapping, 0, len(t.Cols))
-	hidden := false
-	for _, column := range t.Cols {
-		if column == nil {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has a nil column", t.Name)
-		}
-		if column.Hidden {
-			hidden = true
-			continue
-		}
-		if hidden {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
-		}
-		result = append(result, ColumnMapping{ColumnID: column.ColId, SequenceNumber: column.Seqnum})
-	}
-	if len(result) == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has no exportable columns", t.Name)
-	}
-	return result, nil
-}
-
 func validateExprFields(exprs []*planpb.Expr, inputs []int) error {
 	for _, expr := range exprs {
 		if expr == nil {
@@ -1444,23 +1288,6 @@ func validateExprFields(exprs []*planpb.Expr, inputs []int) error {
 	return nil
 }
 
-// CanonicalSchema serializes the exact Substrait schema used in ReadRel and
-// lets snapshot admission detect catalog drift after logical planning.
-func CanonicalSchema(t *planpb.TableDef) ([]byte, error) {
-	if err := planpb.RequireLegacyCollations(t); err != nil {
-		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
-	}
-	schema, err := namedStruct(t)
-	if err != nil {
-		return nil, err
-	}
-	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(schema)
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: marshal schema: %v", err)
-	}
-	return b, nil
-}
-
 func substraitType(t *planpb.Type) (*spb.Type, error) {
 	if t == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("missing type")
@@ -1482,7 +1309,7 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 		return &spb.Type{Kind: &spb.Type_I64_{I64: &spb.Type_I64{Nullability: n}}}, nil
 	case types.T_uint32:
 		// Substrait has no unsigned integer primitive. Sirius/DuckDB EXTRACT
-		// returns a signed i64; the Flight decoder restores MO's uint32 result.
+		// returns a signed i64; native result conversion restores MO's uint32 result.
 		return &spb.Type{Kind: &spb.Type_I64_{I64: &spb.Type_I64{Nullability: n}}}, nil
 	case types.T_float32:
 		return &spb.Type{Kind: &spb.Type_Fp32{Fp32: &spb.Type_FP32{Nullability: n}}}, nil
@@ -1499,8 +1326,7 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 		}
 		return &spb.Type{Kind: &spb.Type_Decimal_{Decimal: &spb.Type_Decimal{Precision: t.Width, Scale: t.Scale, Nullability: n}}}, nil
 	case types.T_date:
-		// TAE decoding in Sirius subtracts MO_UNIX_EPOCH_DAYS, so both scan
-		// values and literals reach DuckDB in Substrait's Unix-day domain.
+		// Native input conversion and literals both use Substrait's Unix-day domain.
 		return &spb.Type{Kind: &spb.Type_Date_{Date: &spb.Type_Date{Nullability: n}}}, nil
 	case types.T_timestamp:
 		return nil, notEligiblef(EligibilityType, "unsupported temporal type %s", types.T(t.Id).String())

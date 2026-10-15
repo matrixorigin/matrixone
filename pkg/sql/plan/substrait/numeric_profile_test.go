@@ -115,8 +115,6 @@ func TestExactCandidateRetainsProfileThroughReadAndBuild(t *testing.T) {
 	require.Equal(t, MOExactDecimalV1URI, plan.ExtensionUrns[0].Urn)
 	user := plan.Relations[0].GetRoot().Input.GetRead().BaseSchema.Struct.Types[0].GetUserDefined()
 	require.Equal(t, int64(256), user.TypeParameters[0].GetInteger(), "precision 15 cannot narrow a 256-bit carrier")
-	_, err = candidate.Build(map[int32][]byte{0: {1}})
-	require.ErrorContains(t, err, "cannot be emitted as Flight")
 }
 
 func exactLiteralBytes(t *testing.T, expression *spb.Expression) []byte {
@@ -189,7 +187,7 @@ func TestExactEmbeddedTPCHInventory(t *testing.T) {
 			candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
 			require.NoError(t, err, "signatures: %v", numericFunctionSignatures(query))
 			bindings := make(map[int32]EmbeddedReadBinding)
-			for ordinal, read := range candidate.Reads() {
+			for ordinal, read := range candidate.testReads() {
 				bindings[read.NodeID] = EmbeddedReadBinding{BindingID: uint64(ordinal + 1), Source: EmbeddedReadMO}
 			}
 			wire, err := candidate.BuildEmbedded(bindings)
@@ -337,15 +335,12 @@ func TestEmbeddedIntegerArithmeticDeclinesUncheckedConsumer(t *testing.T) {
 			out := planpb.Type{Id: int32(ret.Oid), Width: ret.Width, Scale: ret.Scale, NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}
 			ref := &planpb.ObjectRef{ObjName: tc.mo, Obj: bound.GetEncodedOverloadID()}
 			for _, capabilities := range []uint64{11, 31} {
-				e := exporter{embeddedMO: true, profile: NewEmbeddedExportProfile(capabilities)}
+				e := exporter{profile: NewEmbeddedExportProfile(capabilities)}
 				ok, err := e.hasSemanticCapability(semanticScalar, tc.wire, ref, args, &out)
 				require.NoError(t, err)
 				require.False(t, ok, "embedded cuDF integer arithmetic does not preserve MO overflow")
 			}
-			flight := exporter{}
-			ok, err := flight.hasSemanticCapability(semanticScalar, tc.wire, ref, args, &out)
-			require.NoError(t, err)
-			require.True(t, ok, "retain the separate Flight admission contract")
+
 		})
 	}
 }
@@ -363,7 +358,7 @@ func TestExactCASEPreservesBoundNullableConditionDescriptor(t *testing.T) {
 			}
 			result := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 15, Scale: 2, NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}}
 			require.Equal(t, required, result.Typ.NotNullable)
-			e := exporter{embeddedMO: true, profile: NewEmbeddedExportProfile(31)}
+			e := exporter{profile: NewEmbeddedExportProfile(31)}
 			wire, err := e.exactScalarExpr(result, &planpb.Function{Func: &planpb.ObjectRef{ObjName: "case", Obj: bound.GetEncodedOverloadID()}, Args: args}, []int{3})
 			require.NoError(t, err)
 			annotation := wire.GetScalarFunction()

@@ -116,28 +116,6 @@ class CampaignV2Test(unittest.TestCase):
             campaign.query_uuid("00000000-0000-0000-0000-000000000000")
         self.assertEqual("a" * 32, campaign.query_uuid("a" * 32))
 
-    def test_flight_preflight_rejects_secrets_duplicates_and_unverified_tae(self):
-        proof = {
-            "matrixone_revision": "a" * 40,
-            "sirius_revision": "b" * 40,
-            "launcher_sha256": "c" * 64,
-            "configuration_sha256": "d" * 64,
-            "server_binary_sha256": "e" * 64,
-            "tn_no_gc_verified": True,
-        }
-        profile = {"id": "flight-tae", "coverage": [4], "provenance": proof}
-        campaign.build_campaign(provenance(), flight_profiles=[profile])
-        for change in (
-            lambda x: x["provenance"].update(password="must-not-enter-artifacts"),
-            lambda x: x["provenance"].update(tn_no_gc_verified=False),
-            lambda x: x.update(coverage=[4, 4]),
-        ):
-            value = copy.deepcopy(profile)
-            change(value)
-            with self.assertRaises(campaign.CampaignError):
-                campaign.build_campaign(provenance(), flight_profiles=[value])
-        with self.assertRaises(campaign.CampaignError):
-            campaign.build_campaign(provenance(), flight_profiles=[profile, profile])
 
     def test_provenance_rejects_secrets_and_changed_limits(self):
         value = provenance()
@@ -184,7 +162,7 @@ class CampaignV2Test(unittest.TestCase):
         )
         self.assertEqual((0, 2, 1, 3), campaign.ORDER_KEYS[2])
 
-    def test_historical_profile_cannot_launch_an_executor(self):
+    def test_missing_profile_cannot_launch_an_executor(self):
         manifest = campaign.build_campaign(provenance())
         for key in ("gomaxprocs", "native_host_block_bytes"):
             del manifest["provenance"]["config"][key]
@@ -201,7 +179,7 @@ class CampaignV2Test(unittest.TestCase):
             root.chmod(0o700)
             with self.assertRaises(campaign.CampaignError):
                 campaign.execute_campaign(manifest, executor, campaign.Scratch(root))
-            self.assertEqual([], calls, "historical verification cannot admit execution")
+            self.assertEqual([], calls, "missing profile cannot admit execution")
             self.assertEqual([], list(root.iterdir()))
 
     def test_archive_verification_rejects_partial_or_invalid_profiles(self):

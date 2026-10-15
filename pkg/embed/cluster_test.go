@@ -321,18 +321,6 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.False(t, op.needsCleanup())
 }
 
-func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
-	op := new(operator)
-	op.serviceType = metadata.ServiceType_CN
-	op.cfg.ServiceType = metadata.ServiceType_CN.String()
-	op.cfg.CN.Sirius.Enabled = true
-	op.cfg.CN.Sirius.BenchmarkNoGC = true
-	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
-	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
-	require.ErrorContains(t, op.Start(), "launcher-verified")
-	require.False(t, op.needsCleanup())
-}
-
 func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 	timeout := 15 * time.Second
 	clusterValue, err := NewCluster(

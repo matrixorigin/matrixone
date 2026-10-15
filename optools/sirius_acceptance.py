@@ -453,90 +453,9 @@ def validate(
         )
     if not all(check["passed"] for check in checks):
         raise campaign.CampaignError("matched numeric regression exceeds 10 percent")
-    flight_checks = []
-    for profile in timing_campaign["flight_profiles"]:
-        coverage = profile["coverage"]
-        if not coverage:
-            continue
-        for scale in (1, 10):
-
-            def medians(route):
-                return {
-                    q: statistics.median(
-                        row["wall_seconds"]
-                        for row in timing_records
-                        if row["scale_factor"] == scale
-                        and row["route"] == route
-                        and row["phase"] == "performance"
-                        and row["measured"]
-                        and row["query"] == q
-                    )
-                    for q in coverage
-                }
-
-            embedded, flight = medians("embedded-mo"), medians(profile["id"])
-            pairs = [
-                (
-                    "sum-covered-query-medians",
-                    sum(embedded.values()),
-                    sum(flight.values()),
-                )
-            ]
-
-            def suite_median(route):
-                return statistics.median(
-                    sum(
-                        row["wall_seconds"]
-                        for row in timing_records
-                        if row["scale_factor"] == scale
-                        and row["route"] == route
-                        and row["phase"] == "performance"
-                        and row["suite"] == suite
-                        and row["query"] in coverage
-                    )
-                    for suite in range(1, 6)
-                )
-
-            pairs.append(
-                (
-                    "median-covered-suite",
-                    suite_median("embedded-mo"),
-                    suite_median(profile["id"]),
-                )
-            )
-            if 9 in coverage:
-
-                def q9(route):
-                    return statistics.median(
-                        row["wall_seconds"]
-                        for row in timing_records
-                        if row["scale_factor"] == scale
-                        and row["route"] == route
-                        and row["phase"] == "q9-concurrency"
-                    )
-
-                pairs.append(("q9-stress-median", q9("embedded-mo"), q9(profile["id"])))
-            for metric, numerator, denominator in pairs:
-                ratio = numerator / denominator
-                flight_checks.append(
-                    {
-                        "id": profile["id"],
-                        "scale_factor": scale,
-                        "coverage": coverage,
-                        "metric": metric,
-                        "ratio": ratio,
-                        "limit": 1.0,
-                        "passed": ratio <= 1.0,
-                    }
-                )
-                if ratio > 1.0:
-                    raise campaign.CampaignError(
-                        "equivalent Flight comparison exceeds ratio 1.0"
-                    )
     timing_summary["local_acceptance_complete"] = True
     timing_summary["remaining_gates"] = ["required-CI", "reviewer-approval"]
     timing_summary["numeric_gates"] = checks
-    timing_summary["flight_gates"] = flight_checks
     return timing_summary
 
 

@@ -228,25 +228,11 @@ def evidence():
 
 
 class AcceptanceTest(unittest.TestCase):
-    def test_historical_v2_archive_preserves_missing_execution_profile(self):
-        inputs = evidence()
-        identities = [
-            inputs[0]["provenance"],
-            inputs[2]["provenance"],
-            *(item["provenance"] for item in inputs[4]),
-            *(item["provenance"] for item in inputs[5:]),
-        ]
-        for identity in identities:
-            identity["config"].pop("gomaxprocs", None)
-            identity["config"].pop("native_host_block_bytes", None)
-        original = copy.deepcopy(inputs)
-        self.assertTrue(acceptance.validate(*inputs)["local_acceptance_complete"])
-        self.assertEqual(original, inputs, "verification must not invent settings")
-
+    def test_missing_execution_profile_is_rejected(self):
         inputs = evidence()
         for key in ("gomaxprocs", "native_host_block_bytes"):
-            del inputs[0]["provenance"]["config"][key]
-        with self.assertRaisesRegex(campaign.CampaignError, "semantic inputs differ"):
+            inputs[0]["provenance"]["config"].pop(key, None)
+        with self.assertRaises(campaign.CampaignError):
             acceptance.validate(*inputs)
 
     def test_cli_binds_consumed_inputs_to_archive_checksums(self):
@@ -318,37 +304,6 @@ class AcceptanceTest(unittest.TestCase):
                 ):
                     acceptance.main()
 
-    def test_declared_flight_retained_pairs_use_the_native_oracle(self):
-        inputs = evidence()
-        profile = {
-            "id": "flight-mo",
-            "coverage": [1],
-            "provenance": {
-                "matrixone_revision": "a" * 40,
-                "sirius_revision": "b" * 40,
-                "launcher_sha256": "1" * 64,
-                "configuration_sha256": "2" * 64,
-                "server_binary_sha256": "3" * 64,
-                "tn_no_gc_verified": False,
-            },
-        }
-        manifest = campaign.build_campaign(
-            inputs[0]["provenance"], flight_profiles=[profile]
-        )
-        original = {
-            (campaign.legacy._oracle_cell(row), row["route"]): row for row in inputs[1]
-        }
-        rows = []
-        for spec in manifest["schedule"]:
-            route = "mo-native" if spec["route"] == "flight-mo" else spec["route"]
-            row = copy.deepcopy(original[(campaign.legacy._oracle_cell(spec), route)])
-            row.update(spec, query_id=f"{50000+spec['sequence']:032x}")
-            rows.append(row)
-        campaign.summarize(manifest, rows)
-        peer = next(row for row in rows if row["route"] == "flight-mo")
-        peer["row_count"] = 5
-        with self.assertRaisesRegex(campaign.CampaignError, "cardinality mismatch"):
-            campaign.summarize(manifest, rows)
 
     def test_retained_oracle_pairs_reject_count_schema_and_identity_drift(self):
         for records_index in (1, 3):

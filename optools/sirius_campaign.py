@@ -937,8 +937,6 @@ port = {port_base+300}
 processLimitationSize = 34359738368
 [cn.sirius]
 enabled = true
-backend = "embedded"
-input-mode = "mo"
 native-config-path = {json.dumps(str(native_config))}
 gpu-streams = {stream}
 max-waiting-queries = 16
@@ -1105,20 +1103,20 @@ def run_complete(arguments, *, provenance=None):
     campaign = v2.build_campaign(
         provenance,
         resource=arguments.resource,
-        flight_profiles=[
-            {"id": route, "coverage": [], "status": "N/A", "reason": "not-provisioned"}
-            for route in ("flight-mo", "flight-tae")
-        ],
+
     )
     sirius = tomllib.loads((workspace / "cn-2.toml").read_text())["cn"]["sirius"]
-    if any(
+    if set(sirius) != {
+        "enabled", "native-config-path", "gpu-streams", "max-waiting-queries",
+        "request-timeout", "cleanup-timeout",
+    } or any(
         sirius.get(key) != value
         for key, value in {
             "enabled": True,
-            "backend": "embedded",
-            "input-mode": "mo",
             "max-waiting-queries": 16,
             "cleanup-timeout": "30s",
+            "request-timeout": "1h",
+            "gpu-streams": 2,
         }.items()
     ) or Path(sirius["native-config-path"]).read_text() != native_configuration(
         workspace, provenance["config"]["native_host_block_bytes"]

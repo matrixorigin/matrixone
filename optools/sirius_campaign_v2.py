@@ -110,9 +110,7 @@ def validate_execution_profile(config):
         raise CampaignError("invalid campaign host block size")
 
 
-def build_campaign(
-    provenance, *, resource=False, flight_profiles=(), require_execution_profile=True
-):
+def build_campaign(provenance, *, resource=False):
     required = (
         "matrixone_revision",
         "sirius_revision",
@@ -182,11 +180,8 @@ def build_campaign(
         ),
     ):
         value = provenance[field]
-        if field == "config" and isinstance(value, dict):
-            # V2 archives predating explicit profiles retain their original
-            # shape. Partial or invalid profiles never become historical data.
-            if require_execution_profile or EXECUTION_PROFILE_FIELDS & value.keys():
-                allowed |= EXECUTION_PROFILE_FIELDS
+        if field == "config":
+            allowed |= EXECUTION_PROFILE_FIELDS
         if not isinstance(value, dict) or set(value) != allowed:
             raise CampaignError("invalid bounded provenance fields")
         if len(canonical(value)) > 4096:
@@ -200,8 +195,7 @@ def build_campaign(
     }:
         raise CampaignError("campaign session semantics differ")
     config = provenance["config"]
-    if require_execution_profile or EXECUTION_PROFILE_FIELDS & config.keys():
-        validate_execution_profile(config)
+    validate_execution_profile(config)
     expected = {
         "gpu_memory_bytes": 6 << 30,
         "native_host_memory_bytes": 16 << 30,
@@ -245,65 +239,6 @@ def build_campaign(
         legacy._is_sha256(x) for x in datasets.values()
     ):
         raise CampaignError("invalid immutable dataset identity")
-    profiles = copy.deepcopy(list(flight_profiles))
-    if len(profiles) > 2:
-        raise CampaignError("Flight profile count exceeds bound")
-    identities = set()
-    for profile in profiles:
-        if (
-            not isinstance(profile, dict)
-            or not set(profile) <= {"id", "coverage", "status", "reason", "provenance"}
-            or profile.get("id") not in ("flight-mo", "flight-tae")
-            or profile["id"] in identities
-            or not isinstance(profile.get("coverage"), list)
-            or any(
-                type(q) is not int or q not in range(1, 23) for q in profile["coverage"]
-            )
-        ):
-            raise CampaignError("invalid declared Flight coverage")
-        identities.add(profile["id"])
-        if len(set(profile["coverage"])) != len(profile["coverage"]):
-            raise CampaignError("duplicate Flight coverage")
-        if not profile["coverage"]:
-            if (
-                profile.get("status", "N/A") != "N/A"
-                or profile.get("reason", "not-provisioned")
-                not in {"not-provisioned", "unavailable", "unsupported"}
-                or "provenance" in profile
-            ):
-                raise CampaignError("invalid preflight Flight availability")
-            continue
-        proof = profile.get("provenance")
-        required = {
-            "matrixone_revision",
-            "sirius_revision",
-            "launcher_sha256",
-            "configuration_sha256",
-            "server_binary_sha256",
-            "tn_no_gc_verified",
-        }
-        if not isinstance(proof, dict) or set(proof) != required:
-            raise CampaignError("missing declared Flight provenance")
-        if (
-            any(
-                not isinstance(proof[key], str)
-                or len(proof[key]) != 40
-                or any(char not in "0123456789abcdef" for char in proof[key])
-                for key in ("matrixone_revision", "sirius_revision")
-            )
-            or any(
-                not legacy._is_sha256(proof[key])
-                for key in (
-                    "launcher_sha256",
-                    "configuration_sha256",
-                    "server_binary_sha256",
-                )
-            )
-            or type(proof["tn_no_gc_verified"]) is not bool
-            or profile["id"] == "flight-tae"
-            and not proof["tn_no_gc_verified"]
-        ):
-            raise CampaignError("invalid declared Flight provenance")
     schedule = []
 
     def append(scale, phase, stream, suite, repetition, query, route):
@@ -328,21 +263,6 @@ def build_campaign(
         offset = (scale + query + stream + suite + repetition) % 2
         for route in ROUTES[offset:] + ROUTES[:offset]:
             append(scale, phase, stream, suite, repetition, query, route)
-        for profile in profiles:
-            if query in profile["coverage"]:
-                append(
-                    scale,
-                    phase,
-                    stream,
-                    suite,
-                    repetition,
-                    query,
-                    {
-                        "id": profile["id"],
-                        "backend": "flight",
-                        "scan_mode": profile["id"].split("-")[1],
-                    },
-                )
 
     for scale in (1, 10):
         if resource:
@@ -363,7 +283,6 @@ def build_campaign(
         "resource_campaign": resource,
         "provenance": copy.deepcopy(provenance),
         "routes": list(ROUTES),
-        "flight_profiles": profiles,
         "schedule": schedule,
         "gpu_concurrency": 1,
         "fallback_allowed": False,
@@ -1071,35 +990,7 @@ def execute_campaign(campaign, executor, scratch):
                 raise CampaignError("duplicate oracle route")
             cell[spec["route"]] = output
             required_routes = [route["id"] for route in ROUTES]
-            optional = [
-                profile["id"]
-                for profile in campaign["flight_profiles"]
-                if spec["query"] in profile["coverage"]
-            ]
-            if all(route in cell for route in required_routes + optional):
-                # The native oracle remains open only through its finite peer set.
-                if optional:
-                    # Compare each optional result with the independently executed
-                    # oracle before consuming the mandatory pair. Spool contents
-                    # are fully compared, never accepted solely by a digest.
-                    for route in optional:
-                        oracle = copy.deepcopy(cell["mo-native"])
-                        source = scratch.root / oracle["result"]["spool"]
-                        name, file = scratch.create()
-                        try:
-                            with source.open("rb") as reader, file:
-                                for chunk in iter(lambda: reader.read(64 << 10), b""):
-                                    scratch.write(name, file, chunk)
-                            # The duplicate is already owned as comparator scratch.
-                            size = scratch.owned.pop(name)
-                            scratch.used -= size
-                            oracle["result"]["spool"] = name
-                            compare_results(
-                                oracle, cell[route], spec["order_keys"], scratch
-                            )
-                        finally:
-                            scratch.release(name)
-                            (scratch.root / name).unlink(missing_ok=True)
+            if all(route in cell for route in required_routes):
                 compare_results(
                     cell["mo-native"], cell["embedded-mo"], spec["order_keys"], scratch
                 )
@@ -1130,8 +1021,6 @@ def summarize(campaign, records):
     trusted = build_campaign(
         campaign["provenance"],
         resource=campaign["resource_campaign"],
-        flight_profiles=campaign["flight_profiles"],
-        require_execution_profile=False,
     )
     if campaign != trusted:
         raise CampaignError("summary rejects a partial or modified acceptance schedule")
@@ -1149,11 +1038,7 @@ def summarize(campaign, records):
         if record["route"] in cell:
             raise CampaignError("summary contains duplicate oracle route")
         cell[record["route"]] = record
-        required = {route["id"] for route in ROUTES} | {
-            profile["id"]
-            for profile in campaign["flight_profiles"]
-            if spec["query"] in profile["coverage"]
-        }
+        required = {route["id"] for route in ROUTES}
         if set(cell) == required:
             oracle = cell["mo-native"]
             for peer in cell.values():
@@ -1226,14 +1111,7 @@ def summarize(campaign, records):
             "numeric-baselines",
             "required-CI",
         ],
-        "flight_comparisons": [
-            {
-                "id": profile["id"],
-                "coverage": profile["coverage"],
-                "status": "N/A" if not profile["coverage"] else "required",
-            }
-            for profile in campaign["flight_profiles"]
-        ],
+
     }
 
 
