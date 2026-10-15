@@ -479,6 +479,57 @@ wstring_exact  ¦  CREATE TABLE `wstring_exact` (
 select * from wstring_exact;
 ➤ lg_text[-1,536870911,0]  ¦  ld_text[-1,536870911,0]  ¦  lg_varchar[-1,536870911,0]  ¦  ld_varchar[-1,536870911,0]  𝄀
 true  ¦  true  ¦  0012  ¦  0012
+create table wtemporal (id int, v time(6), d date, dt datetime(6));
+insert into wtemporal values (1,'12:34:56.123456','2024-01-02','2024-01-02 03:04:05.654321'),
+(2,'-838:59:58.123456','1000-01-01','1000-01-01 03:04:05.654321'),
+(3,null,'2024-01-03',null);
+select id, v, lag(v,0) over (order by id) as control_value,
+lag(v,0,d) over (order by id) as lg, lead(v,0,d) over (order by id) as ld from wtemporal order by id;
+➤ id[4,32,0]  ¦  v[92,17,0]  ¦  control_value[92,17,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  𝄀
+1  ¦  12:34:56.123456000  ¦  12:34:56.123456000  ¦  12:34:56.123456  ¦  12:34:56.123456  𝄀
+2  ¦  -838:59:58.123456000  ¦  -838:59:58.123456000  ¦  -838:59:58.123456  ¦  -838:59:58.123456  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select id, lag(d,0,v) over (order by id) as date_source,
+lead(d,3,v) over (order by id) as time_default,
+lag(v,3,d) over (order by id) as date_default,
+lead(v,0,dt) over (order by id) as time_datetime from wtemporal order by id;
+➤ id[4,32,0]  ¦  date_source[12,24,0]  ¦  time_default[12,24,0]  ¦  date_default[12,24,0]  ¦  time_datetime[12,26,0]  𝄀
+1  ¦  2024-01-02  ¦  12:34:56.123456  ¦  2024-01-02  ¦  12:34:56.123456  𝄀
+2  ¦  1000-01-01  ¦  -838:59:58.123456  ¦  1000-01-01  ¦  -838:59:58.123456  𝄀
+3  ¦  2024-01-03  ¦  null  ¦  2024-01-03  ¦  null
+select id, lag(dt,0,d) over (order by id) as datetime_source,
+lead(d,3,dt) over (order by id) as datetime_default from wtemporal order by id;
+➤ id[4,32,0]  ¦  datetime_source[93,26,0]  ¦  datetime_default[93,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.654321000  ¦  2024-01-02 03:04:05.654321000  𝄀
+2  ¦  1000-01-01 03:04:05.654321000  ¦  1000-01-01 03:04:05.654321000  𝄀
+3  ¦  null  ¦  null
+create table wtemporal_copy as select id, lag(v,0,d) over (order by id) as lg,
+lead(v,0,d) over (order by id) as ld, lag(dt,0,d) over (order by id) as dt from wtemporal;
+show create table wtemporal_copy;
+➤ Table[12,14,0]  ¦  Create Table[12,156,0]  𝄀
+wtemporal_copy  ¦  CREATE TABLE `wtemporal_copy` (
+  `id` int DEFAULT NULL,
+  `lg` varchar(24) DEFAULT NULL,
+  `ld` varchar(24) DEFAULT NULL,
+  `dt` datetime(6) DEFAULT NULL
+)
+select * from wtemporal_copy order by id;
+➤ id[4,32,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  ¦  dt[93,26,0]  𝄀
+1  ¦  12:34:56.123456  ¦  12:34:56.123456  ¦  2024-01-02 03:04:05.654321000  𝄀
+2  ¦  -838:59:58.123456  ¦  -838:59:58.123456  ¦  1000-01-01 03:04:05.654321000  𝄀
+3  ¦  null  ¦  null  ¦  null
+create view wtemporal_view as select id, lag(v,0,d) over (order by id) as lg,
+lead(v,0,d) over (order by id) as ld from wtemporal;
+show columns from wtemporal_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lg  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wtemporal_view order by id;
+➤ id[4,32,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  𝄀
+1  ¦  12:34:56.123456  ¦  12:34:56.123456  𝄀
+2  ¦  -838:59:58.123456  ¦  -838:59:58.123456  𝄀
+3  ¦  null  ¦  null
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';

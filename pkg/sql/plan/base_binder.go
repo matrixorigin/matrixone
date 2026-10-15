@@ -8370,6 +8370,22 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 	if valueArg.Oid == types.T_any || defaultArg.Oid == types.T_any {
 		return types.Type{}, false, nil
 	}
+	valueWidth, valueTemporal := temporalDisplayWidthForVarchar(valueArg)
+	defaultWidth, defaultTemporal := temporalDisplayWidthForVarchar(defaultArg)
+	if valueTemporal && defaultTemporal {
+		if (valueArg.Oid == types.T_time) != (defaultArg.Oid == types.T_time) {
+			// TIME 是带符号的时长，不是日期上的时刻。转换成 DATE 会丢值，
+			// 转成 DATETIME 又会引入今天；用有界字符串保留两个完整值域。
+			return types.New(types.T_varchar, max(valueWidth, defaultWidth), 0), true, nil
+		}
+		oid := valueArg.Oid
+		if oid != defaultArg.Oid {
+			// 日期类混合使用范围更宽的 DATETIME，不能收窄为 DATE/TIMESTAMP。
+			oid = types.T_datetime
+		}
+		scale := max(valueArg.Scale, defaultArg.Scale)
+		return types.New(oid, scale, scale), true, nil
+	}
 	if (valueArg.IsNumeric() && defaultArg.Oid == types.T_bool) ||
 		(valueArg.Oid == types.T_bool && defaultArg.IsNumeric()) {
 		// A Boolean contributes 0/1 to a numeric value domain. COALESCE's

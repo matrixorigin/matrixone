@@ -168,6 +168,41 @@ func TestBindLagLeadDefaultStringDomain(t *testing.T) {
 	}
 }
 
+func TestBindLagLeadDefaultTemporalDomain(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		for _, tc := range []struct {
+			name             string
+			value, def, want types.Type
+		}{
+			{"time date", types.New(types.T_time, 6, 6), types.T_date.ToType(), types.New(types.T_varchar, 24, 0)},
+			{"time datetime", types.New(types.T_time, 6, 6), types.New(types.T_datetime, 6, 6), types.New(types.T_varchar, 26, 0)},
+			{"time timestamp", types.New(types.T_time, 6, 6), types.New(types.T_timestamp, 6, 6), types.New(types.T_varchar, 26, 0)},
+			{"time precision", types.New(types.T_time, 6, 6), types.New(types.T_time, 0, 0), types.New(types.T_time, 6, 6)},
+			{"date datetime", types.T_date.ToType(), types.New(types.T_datetime, 6, 6), types.New(types.T_datetime, 6, 6)},
+			{"date timestamp", types.T_date.ToType(), types.New(types.T_timestamp, 6, 6), types.New(types.T_datetime, 6, 6)},
+			{"timestamp precision", types.New(types.T_timestamp, 6, 6), types.New(types.T_timestamp, 0, 0), types.New(types.T_timestamp, 6, 6)},
+		} {
+			for _, reverse := range []bool{false, true} {
+				t.Run(name+tc.name+map[bool]string{false: "/source", true: "/default"}[reverse], func(t *testing.T) {
+					value, def := tc.value, tc.def
+					if reverse {
+						value, def = def, value
+					}
+					expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{
+						{Typ: makePlan2Type(&value)}, makePlan2Int64ConstExprWithType(0), {Typ: makePlan2Type(&def)},
+					})
+					require.NoError(t, err)
+					for _, typ := range []planpb.Type{expr.Typ, expr.GetF().Args[0].Typ, expr.GetF().Args[2].Typ} {
+						require.Equal(t, int32(tc.want.Oid), typ.Id)
+						require.Equal(t, tc.want.Scale, typ.Scale)
+					}
+					require.Equal(t, tc.want.Width, expr.Typ.Width)
+				})
+			}
+		}
+	}
+}
+
 func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 	for _, name := range []string{"lag", "lead"} {
 		for _, tc := range []struct {
@@ -175,6 +210,9 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 			oid                    types.T
 			width, scale           int32
 		}{
+			{"time(6)", "cast('2024-01-02' as date)", types.T_varchar, 24, 0},
+			{"date", "cast('12:34:56.123456' as time(6))", types.T_varchar, 24, 0},
+			{"datetime(6)", "cast('2024-01-02' as date)", types.T_datetime, 6, 6},
 			{"mediumblob", "0", types.T_blob, 16777215, 0},
 			{"mediumblob", "cast('x' as char(1))", types.T_blob, types.MaxMediumTextLen, 0},
 			{"decimal(65,65)", "0", types.T_decimal256, 65, 65},

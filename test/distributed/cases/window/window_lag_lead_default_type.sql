@@ -261,6 +261,28 @@ create table wstring_exact as select lag(cast('true' as text),0,true) over () as
 show create table wstring_exact;
 select * from wstring_exact;
 
+-- TIME 是时长，和日期混合不能依赖今天，也不能丢失负号或小数秒。
+create table wtemporal (id int, v time(6), d date, dt datetime(6));
+insert into wtemporal values (1,'12:34:56.123456','2024-01-02','2024-01-02 03:04:05.654321'),
+       (2,'-838:59:58.123456','1000-01-01','1000-01-01 03:04:05.654321'),
+       (3,null,'2024-01-03',null);
+select id, v, lag(v,0) over (order by id) as control_value,
+       lag(v,0,d) over (order by id) as lg, lead(v,0,d) over (order by id) as ld from wtemporal order by id;
+select id, lag(d,0,v) over (order by id) as date_source,
+       lead(d,3,v) over (order by id) as time_default,
+       lag(v,3,d) over (order by id) as date_default,
+       lead(v,0,dt) over (order by id) as time_datetime from wtemporal order by id;
+select id, lag(dt,0,d) over (order by id) as datetime_source,
+       lead(d,3,dt) over (order by id) as datetime_default from wtemporal order by id;
+create table wtemporal_copy as select id, lag(v,0,d) over (order by id) as lg,
+       lead(v,0,d) over (order by id) as ld, lag(dt,0,d) over (order by id) as dt from wtemporal;
+show create table wtemporal_copy;
+select * from wtemporal_copy order by id;
+create view wtemporal_view as select id, lag(v,0,d) over (order by id) as lg,
+       lead(v,0,d) over (order by id) as ld from wtemporal;
+show columns from wtemporal_view;
+select * from wtemporal_view order by id;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';
