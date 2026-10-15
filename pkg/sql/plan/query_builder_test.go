@@ -1233,6 +1233,96 @@ func TestQueryBuilder_bindGroupByOrdinalPosition(t *testing.T) {
 	require.Equal(t, int64(1), funcExpr.F.Args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val)
 }
 
+func TestQueryBuilderBindGroupingSetLiteralAlias(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			builder, ctx := genBuilderAndCtx(t)
+			literal := tree.NewNumVal(int64(7), "7", false, tree.P_int64)
+			selectList := tree.SelectExprs{{Expr: literal, As: tree.NewCStr("x", 1)}}
+			ctx.aliasMap["x"] = &aliasItem{idx: 0, astExpr: literal}
+			ctx.aliasFrequency["x"] = 1
+			name := tree.NewUnresolvedColName("x")
+			clause := &tree.GroupByClause{GroupByExprsList: []tree.Exprs{{name}, nil}, Apart: true}
+			if active {
+				clause.GroupingSet = tree.Exprs{name}
+			}
+			_, err := builder.bindGroupBy(ctx, clause, selectList, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, ctx.groups, 1)
+			require.NotNil(t, ctx.groups[0].GetLit())
+			require.Equal(t, int64(7), ctx.groups[0].GetLit().GetI64Val())
+			require.Equal(t, []bool{active}, ctx.groupingFlag)
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"window alias", "select n_regionkey as x,sum(n_nationkey),row_number() over(order by sum(n_nationkey) desc) from nation group by x with rollup"},
+		{"window having alias", "select n_regionkey as x,sum(n_nationkey) as s,row_number() over(order by sum(n_nationkey) desc) from nation group by x with rollup having s>0"},
+		{"window mixed ordinal", "select row_number() over(order by sum(n_nationkey) desc) as rn,n_regionkey as x,n_name as y,sum(n_nationkey) from nation group by x,3 with rollup"},
+		{"window hidden order", "select n_regionkey as x,sum(n_nationkey),row_number() over() from nation group by x with rollup order by sum(n_nationkey)+1"},
+		{"window source precedence", "select n_regionkey+1 as n_regionkey,sum(n_nationkey),row_number() over() from nation group by n_regionkey with rollup"},
+		{"single alias", "select n_regionkey as x,sum(n_nationkey) from nation group by x with rollup"},
+		{"multiple aliases", "select n_regionkey as x,n_name as y,count(*) from nation group by x,y with rollup"},
+		{"rollup function", "select n_regionkey as x,count(*) from nation group by rollup(x)"},
+		{"cube", "select n_regionkey as x,count(*) from nation group by cube(x)"},
+		{"grouping sets", "select n_regionkey as x,count(*) from nation group by grouping sets ((x),())"},
+		{"expression alias", "select n_regionkey+1 as x,count(*) from nation group by x with rollup"},
+		{"parenthesized alias", "select n_regionkey as x,count(*) from nation group by (x) with rollup"},
+		{"alias inside expression", "select n_regionkey as x,count(*) from nation group by x,x+1 with rollup"},
+		{"integer alias", "select 7 as x,count(*) from nation group by x with rollup"},
+		{"null alias", "select null as x,count(*) from nation group by x with rollup"},
+		{"string alias", "select 'key' as x,count(*) from nation group by x with rollup"},
+		{"source takes precedence", "select n_regionkey+1 as n_regionkey,count(*) from nation group by n_regionkey with rollup"},
+		{"duplicate equivalent aliases", "select n_regionkey as x,n_regionkey as x,count(*) from nation group by x with rollup"},
+		{"derived table", "select * from (select n_regionkey as x,count(*) from nation group by x with rollup) d"},
+		{"repeated cte", "with r as (select n_regionkey as x,count(*) from nation group by x with rollup) select a.x,b.x from r a join r b on a.x=b.x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			if tc.name == "source takes precedence" {
+				found := false
+				for _, node := range logicPlan.GetQuery().Nodes {
+					if node.NodeType != plan.Node_AGG {
+						continue
+					}
+					for _, group := range node.GroupBy {
+						found = true
+						require.NotNil(t, group.GetCol(), "the source column wins over its expression alias")
+					}
+				}
+				require.True(t, found)
+			}
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetAliasErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"window ordinal bounds", "select n_regionkey as x,count(*),row_number() over() from nation group by x,4 with rollup", "GROUP BY position 4 is not in select list"},
+		{"window ordinal key", "select row_number() over(),n_regionkey as x,count(*) from nation group by x,1 with rollup", "cannot contain window"},
+		{"ambiguous source", "select a.n_regionkey as n_nationkey,count(*) from nation a join nation b on a.n_regionkey=b.n_regionkey group by n_nationkey with rollup", "ambiguous"},
+		{"qualified alias", "select n_regionkey as x,count(*) from nation n group by n.x with rollup", "does not exist"},
+		{"aggregate alias", "select sum(n_nationkey) as x from nation group by x with rollup", "cannot contain aggregate"},
+		{"window alias", "select row_number() over () as x from nation group by x with rollup", "does not exist"},
+		{"subquery alias", "select (select max(n_regionkey) from nation) as x from nation group by x with rollup", "subquery in GROUP BY"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
@@ -6925,27 +7015,44 @@ func TestParseRankOption(t *testing.T) {
 		require.Nil(t, rankOption)
 	})
 
-	t.Run("options without mode", func(t *testing.T) {
-		options := map[string]string{
-			"fudge_factor": "3.0",
-			"nprobe":       "10",
+	for _, mode := range []string{"", "pre"} {
+		t.Run("nprobe with mode="+mode, func(t *testing.T) {
+			options := map[string]string{"NPROBE": " 10 "}
+			if mode != "" {
+				options["mode"] = mode
+			}
+			rankOption, err := parseRankOption(options, ctx)
+			require.NoError(t, err)
+			require.Equal(t, &plan.RankOption{Mode: mode, Nprobe: 10}, rankOption)
+		})
+	}
+	for _, value := range []string{"1", "80000"} {
+		t.Run("nprobe boundary="+value, func(t *testing.T) {
+			option, err := parseRankOption(map[string]string{"nprobe": value}, ctx)
+			require.NoError(t, err)
+			require.NotNil(t, option)
+		})
+	}
+	for _, value := range []string{"", "0", "-1", "80001", "9223372036854775808", "1.5", "1e2", "not-a-number"} {
+		t.Run("invalid nprobe="+value, func(t *testing.T) {
+			_, err := parseRankOption(map[string]string{"nprobe": value}, ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+			require.Contains(t, err.Error(), "nprobe")
+		})
+	}
+	for _, key := range []string{"fudge_factor", "nproeb"} {
+		for _, mode := range []string{"", "post"} {
+			t.Run("unsupported="+key+" mode="+mode, func(t *testing.T) {
+				options := map[string]string{key: "100"}
+				if mode != "" {
+					options["mode"] = mode
+				}
+				_, err := parseRankOption(options, ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+				require.Contains(t, err.Error(), key)
+			})
 		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.Nil(t, rankOption)
-	})
-
-	t.Run("options with mode and other options", func(t *testing.T) {
-		options := map[string]string{
-			"mode":         "pre",
-			"fudge_factor": "3.0",
-			"nprobe":       "10",
-		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.NotNil(t, rankOption)
-		require.Equal(t, "pre", rankOption.Mode)
-	})
+	}
 
 	t.Run("case insensitive key matching", func(t *testing.T) {
 		options := map[string]string{

@@ -25,6 +25,8 @@ from matrixone import Client
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, select, func
 
+from .test_config import online_config
+
 # Create Base for model definitions
 Base = declarative_base()
 
@@ -45,7 +47,7 @@ class ExportTestData(Base):
 def test_client():
     """Fixture for test client"""
     client = Client()
-    client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+    client.connect(**online_config.get_connection_kwargs())
     yield client
     client.disconnect()
 

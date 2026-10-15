@@ -619,6 +619,16 @@ func TestGetFunctionByNameWithoutError(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPointAliasUsesSTPointFunction(t *testing.T) {
+	args := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+	point, err := GetFunctionByName(context.Background(), "point", args)
+	require.NoError(t, err)
+	stPoint, err := GetFunctionByName(context.Background(), "st_point", args)
+	require.NoError(t, err)
+	require.Equal(t, stPoint.GetEncodedOverloadID(), point.GetEncodedOverloadID())
+	require.Equal(t, stPoint.GetReturnType(), point.GetReturnType())
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -1908,5 +1918,26 @@ func TestIntegerComparisonDomainsAreSymmetricAndExact(t *testing.T) {
 	for _, in := range [][]types.Type{{types.T_int16.ToType(), types.T_uint8.ToType(), types.T_uint16.ToType()}, {types.T_int8.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()}} {
 		_, err := GetFunctionByName(context.Background(), "between", in)
 		require.NoError(t, err)
+	}
+}
+
+func TestCalendarNumericResultTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+		want types.T
+	}{
+		{"week", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_date.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"dayofyear", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"weekofyear", []types.Type{types.T_date.ToType()}, types.T_int64},
+	} {
+		t.Run(fmt.Sprint(tc.name, tc.args), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.want.ToType(), resolved.retType)
+		})
 	}
 }

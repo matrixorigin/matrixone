@@ -50,6 +50,9 @@ func runSQLIntegration(t *testing.T, fn func(embed.Cluster)) {
 	})
 }
 
+// The UT runner may split roots into fresh processes: this TestMain only
+// closes the canonical fixture and propagates cleanup failure. It must not
+// accumulate cross-root assertions or depend on another root having executed.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if err := embed.CloseSingleCNBaseClusterTests(); err != nil {

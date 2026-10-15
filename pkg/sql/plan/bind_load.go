@@ -72,6 +72,10 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
+	if err != nil {
+		return -1, nil, err
+	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return -1, nil, err
@@ -81,7 +85,8 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	defaultParquetLoadParallel(stmt.Param, ctx)
 
-	tableDef := DeepCopyTableDef(dmlCtx.tableDefs[0], true)
+	originTableDef := dmlCtx.tableDefs[0]
+	tableDef := DeepCopyTableDef(originTableDef, true)
 	objRef := dmlCtx.objRefs[0]
 
 	// load with columnlist will copy a new tableDef
@@ -107,7 +112,7 @@ func (builder *QueryBuilder) bindExternalScan(
 							colName, tableDef.Name)
 					}
 					colExpr := &plan.Expr{
-						Typ: tableDef.Cols[tbColIdx].Typ,
+						Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[tbColIdx].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: externalScanTag,
@@ -122,9 +127,8 @@ func (builder *QueryBuilder) bindExternalScan(
 					tbColToDataCol[colName] = int32(i)
 					newCols = append(newCols, tableDef.Cols[tbColIdx])
 				case *tree.VarExpr:
-					//NOTE:variable like '@abc' will be passed by.
-					name := realCol.Name
-					tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+					// Row-variable slots are recorded after target columns so
+					// referenced values can be exposed to the LOAD assignment projection.
 				default:
 					return -1, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 				}
@@ -133,6 +137,10 @@ func (builder *QueryBuilder) bindExternalScan(
 			tableDef.Name2ColIndex = colToIndex
 		}
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, nil,
+	)
 
 	if len(tbColToDataCol) == 0 {
 		idx := 0
@@ -141,7 +149,7 @@ func (builder *QueryBuilder) bindExternalScan(
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))
 
 				insertColToExpr[col.Name] = &plan.Expr{
-					Typ: col.Typ,
+					Typ: loadTimeInputType(stmt.Param.Format, col.Typ),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: externalScanTag,
@@ -153,9 +161,18 @@ func (builder *QueryBuilder) bindExternalScan(
 			}
 		}
 	}
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, externalScanTag,
+	)
+	if err != nil {
+		return -1, nil, err
+	}
+	for target, expr := range setExpressions {
+		insertColToExpr[target] = expr
+	}
 
-	// External scans expose target-typed columns. For BLOB/TEXT, equal type
-	// metadata does not prove that the runtime payload fits the target family.
+	// Textual TIME inputs retain their original value. Typed TIME and BLOB/TEXT
+	// metadata also do not prove that the value fits the target domain.
 	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
 		return -1, nil, err
 	}
@@ -184,6 +201,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.Tail.Assignments = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -242,11 +260,10 @@ func loadAssignmentIgnore(stmt *tree.Load) bool {
 	if tree.IsIgnoreStatement(stmt) {
 		return true
 	}
-	if !stmt.Local {
-		return false
-	}
+	// Assignment policy is distinct from decoder/global IGNORE. In particular,
+	// LOCAL must not relax strict parsing of unrelated input column types.
 	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
-	return !replace
+	return stmt.Local && !replace
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(
@@ -256,7 +273,8 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 ) error {
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
-		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
