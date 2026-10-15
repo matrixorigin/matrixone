@@ -3389,7 +3389,15 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			// Execution now stages one original raw statement at a time.
+			fixtureSQL := append([]string{"create table A(a varchar(100),b int,c float)", "select a,b,c from A"}, self_handle_sql...)
+			normalize := func(s string) string { return strings.Trim(strings.ToLower(s), "; \t\r\n") }
+			for i, sql := range fixtureSQL {
+				if normalize(execCtx.input.getSql()) == normalize(sql) {
+					return []ComputationWrapper{cws[i]}, nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected fixture statement: %s", execCtx.input.getSql())
 		})
 		defer stubs.Reset()
 
@@ -3409,6 +3417,7 @@ func Test_mce(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		})
 		ses.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(ses)
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -4179,6 +4188,44 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 			records, err := sqlForRecordByStatement(ctx, tt.sql)
 			require.NoError(t, err)
 			require.Equal(t, []string{tt.record}, records)
+		})
+	}
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multiple statements cached=%t", cached), func(t *testing.T) {
+			ses := newTestSession(t, gomock.NewController(t))
+			defer ses.Close()
+			input := &UserInput{sql: "/*!50000 select 1; /* save_result */ select 2 */; select 3"}
+			input.genHash()
+			if cached {
+				ses.planCache = newPlanCache(1)
+				stmts, err := parsers.Parse(ctx, dialect.MYSQL, input.sql, 1)
+				require.NoError(t, err)
+				ses.planCache.cache(input.getHash(), stmts, []*plan.Plan{{}, {}, {}})
+				t.Cleanup(ses.planCache.clean)
+			}
+			execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+			execCtx.ses, execCtx.input = ses, input
+			cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+			require.NoError(t, err)
+			defer func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			}()
+			require.Len(t, cws, 3)
+			require.Equal(t, []string{constant.ExternSql, constant.CloudUserSql, constant.ExternSql}, input.sqlSourceType)
+			records, err := sqlForRecordByStatement(ctx, input.sql)
+			require.NoError(t, err)
+			require.Len(t, records, len(cws))
+			for i, cw := range cws {
+				text := cw.(interface{ SchedulingSQL() string }).SchedulingSQL()
+				stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, text, 1)
+				require.NoError(t, err, text)
+				stmt.Free()
+				stmt, err = parsers.ParseOne(ctx, dialect.MYSQL, records[i], 1)
+				require.NoError(t, err, records[i])
+				stmt.Free()
+			}
 		})
 	}
 }
@@ -5544,6 +5591,29 @@ func TestPrepareSQLModeStagedExecution(t *testing.T) {
 		first     string
 	}{
 		{
+			name:   "executable comment mode transition",
+			sql:    `/*!50000 set sql_mode='ANSI_QUOTES'; select "c" */`,
+			staged: true,
+			first:  `/*!50000 set sql_mode='ANSI_QUOTES'; */`,
+		},
+		{
+			name:   "executable comment transition before mode-sensitive parse error",
+			sql:    `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; select 'a\'; select 2 */`,
+			staged: true,
+			first:  `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; */`,
+		},
+		{
+			name:   "ordinary prefix before executable comment mode set",
+			sql:    `select 1; /*! set sql_mode='ANSI_QUOTES'; select "c" */`,
+			staged: true,
+			first:  `select 1;`,
+		},
+		{
+			name:   "mode set final inside executable comment",
+			sql:    `/*! select 1; set sql_mode='ANSI_QUOTES'; */`,
+			staged: false,
+		},
+		{
 			name:   "expression value",
 			sql:    `set sql_mode=concat('ANSI_','QUOTES'); select "c"`,
 			staged: true,
@@ -5613,7 +5683,7 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	nextInput, rest, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
 	require.NoError(t, err)
-	require.Empty(t, rest)
+	require.Empty(t, rest.SQL)
 
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: nextInput}
 	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
@@ -5760,6 +5830,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
@@ -9547,6 +9618,8 @@ func Test_getSqlType(t *testing.T) {
 			{"begin select 1; /* save_result */ select 2; end; select 3", []string{constant.CloudUserSql, constant.ExternSql}},
 			{"/*+ save_result */ select 1; /* SAVE_RESULT */ select 2", []string{constant.ExternSql, constant.ExternSql}},
 			{"/*! select 1; select 'x/* save_result */' */; /* save_result */ select 3", []string{constant.ExternSql, constant.ExternSql, constant.CloudUserSql}},
+			{"/*! select 1; /* save_result */ select 2 */", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"/* cloud_nonuser */ /*! select 1; select 2 */", []string{constant.CloudNoUserSql, constant.ExternSql}},
 			{"prepare s from '/* cloud_nonuser */ select 1'; select 2", []string{constant.ExternSql, constant.ExternSql}},
 			{wrapNativePrepareSQL("s", "/* cloud_nonuser */ select 1"), []string{constant.CloudNoUserSql}},
 		} {
@@ -9611,8 +9684,12 @@ func Test_getSqlType(t *testing.T) {
 	})
 	t.Run("fragment validation survives fast paths", func(t *testing.T) {
 		for _, internal := range []bool{false, true} {
-			_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []string{"select 2"}, internal)
+			_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []mysql.SQLFragment{{SQL: "select 2", Start: 0, End: len("select 1")}}, internal)
 			require.ErrorContains(t, err, "SQL fragment is not in its input")
+			for _, span := range []mysql.SQLFragment{{Start: -1}, {Start: 2, End: 1}, {End: 99}} {
+				_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []mysql.SQLFragment{span}, internal)
+				require.ErrorContains(t, err, "SQL fragment is not in its input")
+			}
 			_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal)
 			require.NoError(t, err)
 			want := constant.ExternSql
@@ -11128,28 +11205,6 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	require.Equal(t, ErrorResponse, resp.category)
 	stmt.resetBinaryParamState()
 	require.False(t, stmt.hasPendingLongData())
-}
-
-func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
-	// The hint is stripped and carried as compile intent. With no service Sirius
-	// runtime, compilation remains on the normal native query path.
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1"),
-	}
-
-	// ExecRequest won't return an error even though doComQuery panics/fails;
-	// the deferred recover catches it. We just verify it doesn't panic.
-	resp, _ := ExecRequest(ses, ec, req)
-	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {

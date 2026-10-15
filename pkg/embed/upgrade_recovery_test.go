@@ -48,7 +48,19 @@ func newRecoveryClusterStarter(
 	startCluster func() error,
 	now func() time.Time,
 ) (start func() (context.Context, error), cleanup func()) {
-	deadline := now().Add(5 * time.Minute)
+	return newRecoveryClusterStarterWithBudget(parent, startCluster, now, 5*time.Minute)
+}
+
+// newRecoveryClusterStarterWithBudget is newRecoveryClusterStarter with an
+// explicit workload budget: recovery scenarios that wait on background
+// cadences, like storage GC, need a wider allowance than five minutes.
+func newRecoveryClusterStarterWithBudget(
+	parent context.Context,
+	startCluster func() error,
+	now func() time.Time,
+	budget time.Duration,
+) (start func() (context.Context, error), cleanup func()) {
+	deadline := now().Add(budget)
 	var current context.Context
 	var cancel context.CancelFunc
 	cleanup = func() {

@@ -218,7 +218,11 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		exec := testutils.GetSQLExecutor(cn)
 		db := testutils.GetDatabaseName(t)
-		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		defer cleanupSQLIntegration(t, cn,
+			"drop cdc all internal",
+			"drop pitr if exists cdc_pitr internal",
+			"drop database if exists "+db,
+		)
 
 		res, err := exec.Exec(ctx, "create database "+db, executor.Options{})
 		require.NoError(t, err)
@@ -280,9 +284,6 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		defer res.Close()
 		require.Equal(t, 0, testutils.ReadCount(res))
-		res, err = exec.Exec(ctx, "drop cdc all internal", executor.Options{})
-		require.NoError(t, err)
-		res.Close()
 	})
 }
 
@@ -788,10 +789,30 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			// making the assertion depend on the asynchronous SQL control-plane
 			// response. The source/target setup and all boundary assertions remain
 			// public SQL operations.
+			// The restart oracle concerns the durable watermark, not the length
+			// of the daemon lease. Capture the old claim so expiry setup cannot
+			// invalidate a replacement that has already claimed the task.
+			res, err = exec.Exec(ctx,
+				"select task_id, cast(last_run as varchar) from mo_task.sys_daemon_task where task_metadata_id = (select cast(task_id as varchar) from mo_catalog.mo_cdc_task where task_name='"+taskName+"')",
+				executor.Options{})
+			require.NoError(t, err)
+			var daemonID uint64
+			var lastRun string
+			res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				daemonID = vector.GetFixedAtNoTypeCheck[uint64](cols[0], 0)
+				lastRun = cols[1].GetStringAt(0)
+				return false
+			})
+			res.Close()
+			require.NotZero(t, daemonID)
+			require.NotEmpty(t, lastRun)
 			phase.Store(2)
 			require.NoError(t, cn.Close())
 			require.NoError(t, cn.Start())
 			exec = testutils.GetSQLExecutor(cn)
+			// Use the same expired-lease setup as the cross-CN takeover test;
+			// the real runner still must claim and admit the replacement.
+			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set last_heartbeat='2000-01-01 00:00:00' where task_id=%d and last_run='%s'", daemonID, lastRun))
 			var secondScanDone chan error
 			secondScanAttempts := 0
 			for {
@@ -1159,8 +1180,15 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// Restrict real daemon claiming to B. An expired heartbeat alone lets
 			// A reclaim the row, which cannot prove cross-CN takeover.
 			clusterView := clusterservice.GetMOCluster(cnA.ServiceID())
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
-			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
+			labelUpdater, ok := clusterView.(clusterservice.CNLabelUpdaterWithContext)
+			require.True(t, ok, "cluster must support caller-bounded CN label updates")
+			updateCNLabel := func(uuid string, kvs map[string][]string) error {
+				labelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				return labelUpdater.DebugUpdateCNLabelWithContext(labelCtx, uuid, kvs)
+			}
+			require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
 
 			// Move the live daemon claim to CN B in the real task table and make
 			// A's heartbeat stale. This is the deterministic equivalent of a newer
@@ -1293,9 +1321,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}); ok {
 				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 2)
 			}
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
-			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{}))
+			require.NoError(t, updateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, updateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
+			require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{}))
 			sqlExec = testutils.GetSQLExecutor(cnC)
 			cleanupCN = cnC
 			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))

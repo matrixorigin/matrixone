@@ -387,7 +387,12 @@ type ManifestEntry struct {
 	SnapshotID     int64
 	SequenceNumber int64
 	FileSequence   int64
-	DataFile       DataFile
+	// Set flags distinguish explicit values (including zero) from ADDED
+	// entries whose sequence numbers must be assigned by the manifest.
+	// Unmarked non-ADDED entries retain their concrete numeric values.
+	SequenceNumberSet bool
+	FileSequenceSet   bool
+	DataFile          DataFile
 }
 
 type DataFileContent int

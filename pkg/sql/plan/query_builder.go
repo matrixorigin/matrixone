@@ -3179,6 +3179,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		}
 		if len(newProjList) == 0 && len(node.ProjectList) > 0 {
+			// A count-only reader still emits the fallback projection. Publish
+			// those reads before a shared CTE producer compacts its output.
+			sharedCTESource := int32(-1)
+			if node.NodeType == plan.Node_SINK_SCAN && len(node.SourceStep) == 1 && node.SourceStep[0] < step {
+				sourceStep := node.SourceStep[0]
+				source := builder.qry.Nodes[builder.qry.Steps[sourceStep]]
+				if source.NodeType == plan.Node_SINK && source.ExtraOptions == materialized.CTESinkOption {
+					sharedCTESource = sourceStep
+				}
+			}
 			for i, expr := range node.ProjectList {
 				globalRef := [2]int32{tag, int32(i)}
 				newProjList = append(newProjList, &plan.Expr{
@@ -3189,6 +3199,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					}},
 				})
 				remapping.addColRef(globalRef)
+				if sharedCTESource >= 0 {
+					colRefBool[[2]int32{sharedCTESource, int32(i)}] = true
+				}
 			}
 		}
 		node.ProjectList = newProjList
@@ -4260,6 +4273,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// filter/message generations, execute those regions exactly once with the
 		// existing FORCE path rather than replaying either side.
 		builder.forceMultipleAdaptiveVectorRegions(rootID)
+		// Keep the current root visible to vector rules that prove ancestor consumers.
+		builder.qry.Steps[i] = rootID
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -4752,6 +4767,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
+			branchExprs := make([]*Expr, len(nodes))
+			for i, id := range nodes {
+				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+			}
+			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+				return 0, err
+			}
+			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
@@ -4763,7 +4786,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				needsCast := !argsType[idx].Eq(targetArgType)
+				needsCast := !argsType[idx].Eq(targetArgType) ||
+					(targetType.CollationCoercibilitySet && !builder.qry.Nodes[tmpID].ProjectList[columnIdx].Typ.SameCollation(targetType))
 				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
@@ -5277,6 +5301,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}, ctx)
 	} else {
 		ctx.results = ctx.projects[:resultLen]
+	}
+
+	if shareGroupingInput && !distinct {
+		// A grouping extension owns its sentinel NULLs only until this query
+		// block's output. Keep them through its HAVING and ORDER BY, then expose
+		// ordinary SQL values to outer grouping and set operations. Reuse the
+		// final projection so branch sharing and direct expansion stay intact.
+		result := builder.qry.Nodes[lastNodeID]
+		normalized, normalizeErr := normalizeGroupingSetProjects(
+			builder.GetContext(), result.ProjectList[:resultLen], subCtxList[0].projects[:resultLen], true)
+		if normalizeErr != nil {
+			return 0, normalizeErr
+		}
+		result.ProjectList = normalized
+		ctx.results = normalized
 	}
 
 	ctx.headings = ctx.headings[:resultLen]
@@ -6100,7 +6139,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				if rewrittenSelect, hasWindow := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+				if rewrittenSelect, hasWindow, rewriteErr := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+					if rewriteErr != nil {
+						return 0, rewriteErr
+					}
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
@@ -6117,12 +6159,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							// Keep branch-local duplicate elimination after
 							// grouping NULL normalization to reduce rows before
@@ -6139,7 +6181,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  selectClause.Having,
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -6801,6 +6843,8 @@ func seedPreparedNumericAggregateExprColumnTargets(
 	case *tree.ParenExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.CastExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.CollateExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.BitCastExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
@@ -7541,8 +7585,35 @@ func rewriteRollupWindowSelect(
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
 ) (*tree.Select, bool) {
-	return rewriteRollupWindowSelectWithHeadingProvenance(
+	rewritten, hasWindow, _ := rewriteRollupWindowSelectWithHeadingProvenance(
 		nil, selectClause, astOrderBy, astLimit, astRankOption)
+	return rewritten, hasWindow
+}
+
+// ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
+// to every branch so aggregate binding stays identical for shared input plans.
+// Keep fresh wrappers because a CTE declaration can be bound more than once.
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
+		return nil
+	}
+	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
+	if having != nil {
+		result.Expr = having.Expr
+	}
+	if guardEmptyInput {
+		count := &tree.FuncExpr{
+			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
+			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
+		}
+		positive := tree.NewComparisonExpr(tree.GREAT_THAN, count, tree.NewNumVal(int64(0), "0", false, tree.P_int64))
+		if result.Expr == nil {
+			result.Expr = positive
+		} else {
+			result.Expr = tree.NewAndExpr(tree.NewParentExpr(result.Expr), positive)
+		}
+	}
+	return result
 }
 
 func rewriteRollupWindowSelectWithHeadingProvenance(
@@ -7551,9 +7622,9 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
-) (*tree.Select, bool) {
+) (*tree.Select, bool, error) {
 	if selectClause == nil {
-		return nil, false
+		return nil, false, nil
 	}
 
 	hasWindow := false
@@ -7567,49 +7638,57 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		hasWindow = hasWindow || rollupWindowExprContainsWindow(selectClause.Having.Expr)
 	}
 	if !hasWindow {
-		return nil, false
+		return nil, false, nil
 	}
 	if selectClause.GroupBy == nil || selectClause.GroupBy.Apart ||
 		len(selectClause.GroupBy.GroupByExprsList) <= 1 ||
 		selectClause.Distinct ||
 		(selectClause.Having != nil && rollupWindowExprContainsWindow(selectClause.Having.Expr)) {
-		return nil, true
+		return nil, true, nil
 	}
 
 	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
 	rewriteState.addGroupingSourceNames(selectClause.GroupBy.GroupByExprsList)
 	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
-	var rewrittenHaving *tree.Where
+	groupingAliases := rollupWindowGroupingAliases(selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchAliases := groupingAliases
 	if selectClause.Having != nil {
 		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
 		// source columns (including ambiguity) before SELECT aliases. Hidden
 		// projections retain the original non-window aliases for the fallback.
-		rewriteState.addHavingAliasExprs(selectClause.Exprs)
-		nextHaving := *selectClause.Having
-		nextHaving.RollupHaving = true
-		rewrittenHaving = &nextHaving
+		branchAliases = selectClause.Exprs
 	}
+	rewriteState.addBranchAliasExprs(branchAliases)
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
 	if len(rewriteState.innerExprs)+len(rewriteState.orderExprs) == 0 {
 		_, ok = rewriteState.ensureInnerExpr(tree.NewNumVal(int64(1), "1", false, tree.P_int64))
 		if !ok {
-			return nil, true
+			return nil, true, nil
 		}
 	}
 
-	groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+	groupingSets := selectClause.GroupBy.GroupByExprsList
+	if len(groupingAliases) > 0 {
+		var err error
+		groupingSets, err = rewriteState.remapGroupingOrdinals(selectClause.Exprs, groupingSets)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
 		originalOutputExprs[i] = selectClause.Exprs[i].Expr
 	}
-	for i, list := range selectClause.GroupBy.GroupByExprsList {
+	for i, list := range groupingSets {
 		innerExprs := make(tree.SelectExprs, 0, len(rewriteState.innerExprs)+len(rewriteState.orderExprs))
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
@@ -7619,7 +7698,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			Where:   selectClause.Where,
 			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
-				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
+				GroupByExprsList:             groupingSets,
 				GroupingSet:                  list,
 				Apart:                        true,
 				GroupingSetOrderHiddenCount:  len(rewriteState.orderExprs),
@@ -7629,7 +7708,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: rewrittenHaving,
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}
@@ -7677,7 +7756,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			}
 		}
 	}
-	return rewritten, true
+	return rewritten, true, nil
 }
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
@@ -7754,7 +7833,71 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 	}
 }
 
-func (state *rollupWindowRewriteState) addHavingAliasExprs(selectExprs tree.SelectExprs) {
+// Collect candidates before FROM binding; the branch binder still owns source
+// precedence and ambiguity. Function names and subquery scopes are excluded.
+func rollupWindowGroupingAliases(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) tree.SelectExprs {
+	names := make(map[string]struct{})
+	for _, list := range groupingSets {
+		for _, group := range list {
+			walkGroupingSetOrderByExpr(group, func(expr tree.Expr) bool {
+				if _, subquery := expr.(*tree.Subquery); subquery {
+					return false
+				}
+				if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
+					names[name.ColName()] = struct{}{}
+				}
+				return true
+			})
+		}
+	}
+	var aliases tree.SelectExprs
+	for _, expr := range selectExprs {
+		if expr.As == nil || expr.As.Empty() || rollupWindowExprContainsWindow(expr.Expr) {
+			continue
+		}
+		if _, referenced := names[expr.As.Compare()]; referenced {
+			aliases = append(aliases, expr)
+		}
+	}
+	return aliases
+}
+
+// Alias copies must not make an original ordinal select a different internal
+// projection. Resolve it against the original output, then keep its identity
+// through the existing materialized projection (including numeric literals).
+func (state *rollupWindowRewriteState) remapGroupingOrdinals(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) ([]tree.Exprs, error) {
+	positions := make(map[string]int64, len(state.innerExprs))
+	for i, expr := range state.innerExprs {
+		positions[expr.As.Compare()] = int64(i + 1)
+	}
+	remapped := make([]tree.Exprs, len(groupingSets))
+	for i, list := range groupingSets {
+		remapped[i] = append(tree.Exprs(nil), list...)
+		for j, group := range list {
+			ordinal, ok := unwrapParenExpr(group).(*tree.NumVal)
+			if !ok || ordinal.Kind() != tree.Int {
+				continue
+			}
+			pos, _ := ordinal.Int64()
+			if pos < 1 || pos > int64(len(selectExprs)) {
+				return nil, moerr.NewSyntaxErrorNoCtxf("GROUP BY position %v is not in select list", pos)
+			}
+			original := selectExprs[pos-1].Expr
+			if rollupWindowExprContainsWindow(original) {
+				return nil, moerr.NewInvalidInputNoCtx("GROUP BY clause cannot contain window functions")
+			}
+			alias, found := state.lookupExprAlias(original)
+			mapped, exists := positions[alias]
+			if !found || !exists {
+				return nil, moerr.NewInternalErrorNoCtx("GROUP BY projection not found in ROLLUP window input")
+			}
+			remapped[i][j] = tree.NewNumVal(mapped, strconv.FormatInt(mapped, 10), false, tree.P_int64)
+		}
+	}
+	return remapped, nil
+}
+
+func (state *rollupWindowRewriteState) addBranchAliasExprs(selectExprs tree.SelectExprs) {
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As == nil || selectExpr.As.Empty() || rollupWindowExprContainsWindow(selectExpr.Expr) {
 			continue
@@ -8237,6 +8380,14 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.CollateExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
 	case *tree.BitCastExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -8663,6 +8814,8 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.CastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.CollateExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.BitCastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.SerialExtractExpr:
@@ -8715,40 +8868,16 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
-	// The catalog-only shortcut belongs to this SELECT, not to its siblings
-	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
-	// let a later ordinary SELECT bypass semantic binding.
-	previousSkipResolve := builder.isSkipResolveTableDef
-	builder.isSkipResolveTableDef = false
-	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
-
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
 	}
 
 	if len(clause.Exprs) == 1 {
-		switch clause.Exprs[0].Expr.(type) {
-		case tree.UnqualifiedStar:
-			if astLimit != nil && astLimit.Count != nil {
-				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx, false)
-				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
-					return
-				}
-
-				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						if c.U64Val == 0 {
-							// View metadata generation needs the complete catalog identity
-							// exposed by Resolve so it can persist reverse dependencies.
-							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
-							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
-								builder.isSkipResolveTableDef = true
-							}
-						}
-					}
-				}
+		if _, ok := clause.Exprs[0].Expr.(tree.UnqualifiedStar); ok && astLimit != nil && astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
+			if _, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+				return
 			}
 		}
 	}
@@ -9074,25 +9203,30 @@ func (builder *QueryBuilder) bindGroupBy(
 	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
 		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
 	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
+	bindGroup := func(group tree.Expr) error {
+		if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
+			col := name.ColName()
+			_, sourceColumn := ctx.bindingByCol[col]
+			alias, aliasExists := ctx.aliasMap[col]
+			if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
+				_, bindErr := groupBinder.BindProjectionExpr(alias.idx)
+				return bindErr
+			}
+		}
+		// ROLLUP prefixes and repeated CTE references share grouping AST nodes.
+		// Resolve registration and active-set marking without changing that template.
+		qualified, bindErr := ctx.qualifyColumnNames(cloneTreeExpr(group), AliasAfterColumn)
+		if bindErr != nil {
+			return bindErr
+		}
+		_, bindErr = groupBinder.BindExpr(qualified, 0, true)
+		return bindErr
+	}
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
 			for _, group := range list {
-				if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
-					col := name.ColName()
-					_, sourceColumn := ctx.bindingByCol[col]
-					alias, aliasExists := ctx.aliasMap[col]
-					if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
-						if _, err = groupBinder.BindProjectionExpr(alias.idx); err != nil {
-							return
-						}
-						continue
-					}
-				}
-				if group, err = ctx.qualifyColumnNames(group, AliasAfterColumn); err != nil {
-					return
-				}
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
@@ -9102,7 +9236,7 @@ func (builder *QueryBuilder) bindGroupBy(
 		if clause.Apart {
 			ctx.isGroupingSet = true
 			for _, group := range clause.GroupingSet {
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
@@ -9766,13 +9900,21 @@ type groupingSetOrderResolution struct {
 	bindDistinct []bool
 }
 
-func normalizeGroupingSetDistinctProjects(
+func normalizeGroupingSetProjects(
 	ctx context.Context,
 	projects []*plan.Expr,
 	originalProjects []*plan.Expr,
+	preserveOutputType bool,
 ) ([]*plan.Expr, error) {
 	normalized := make([]*plan.Expr, len(projects))
 	for i, project := range projects {
+		// Inactive grouping keys are nullable even for NOT NULL source columns.
+		// Proven non-null outputs (COUNT, constants, always-active keys) cannot
+		// carry a sentinel and need neither a copy nor a nullable result type.
+		if preserveOutputType && project.Typ.NotNullable {
+			normalized[i] = DeepCopyExpr(project)
+			continue
+		}
 		if fn := originalProjects[i].GetF(); fn != nil && fn.Func != nil &&
 			strings.EqualFold(fn.Func.ObjName, "grouping") {
 			normalized[i] = DeepCopyExpr(project)
@@ -9797,6 +9939,11 @@ func normalizeGroupingSetDistinctProjects(
 		)
 		if err != nil {
 			return nil, err
+		}
+		if preserveOutputType {
+			// Binding IF may infer new collation provenance; the completed
+			// grouping query still exports the original column value domain.
+			normalized[i].Typ = project.Typ
 		}
 		normalized[i].Typ.NotNullable = false
 	}
@@ -10719,6 +10866,10 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	commonPlanType := makePlan2Type(&commonType)
+	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
+		return plan.Type{}, err
+	}
+	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain
 	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
 	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
@@ -10743,7 +10894,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 			expr.Typ.NotNullable = false
 			continue
 		}
-		if sourceType.Eq(commonType) {
+		if sourceType.Eq(commonType) && expr.Typ.SameCollation(commonPlanType) {
 			continue
 		}
 
@@ -11196,10 +11347,11 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	for i, project := range originalProjects {
 		materializedProjects[i] = GetColExpr(project.Typ, materializedTag, int32(i))
 	}
-	normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
+	normalized, normalizeErr := normalizeGroupingSetProjects(
 		builder.GetContext(),
 		materializedProjects[:resultLen],
 		originalProjects[:resultLen],
+		false,
 	)
 	if normalizeErr != nil {
 		err = normalizeErr
@@ -12833,33 +12985,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			sqlDatabase = catalogDatabase
 		}
 
-		var subMeta *SubscriptionMeta
-		subMeta, err = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
-			var tableDef *TableDef
-			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(catalogDatabase, table)
-			if err != nil {
-				return 0, "", err
-			}
-
-			// Both frontend and internal compiler contexts must identify Views.
-			// Their persisted columns are not an output schema, even for no rows.
-			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
-				object := &plan.ObjectRef{DbName: catalogDatabase, SchemaName: catalogDatabase, ObjName: table,
-					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
-				builder.qry.CatalogDependencies = appendPrepareSchemas(
-					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:     plan.Node_TABLE_SCAN,
-					Stats:        nil,
-					ObjRef:       object,
-					TableDef:     tableDef,
-					BindingTags:  []int32{builder.genNewBindTag()},
-					ScanSnapshot: snapshot,
-				}, ctx)
-				return
-			}
-		}
+		// Preserve the existing probe; full resolution below owns error handling.
+		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
 		// TODO
 		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
@@ -12873,6 +13000,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, "", err
+		}
+		// Admit the complete catalog schema before pruning unused columns or
+		// replacing scans, after preserving the existing snapshot-scope error.
+		// The final plan fence cannot see metadata erased by those rewrites,
+		// even when the query only projects a constant.
+		if err = plan.RequireLegacyCollations(tableDef); err != nil {
 			return 0, "", err
 		}
 

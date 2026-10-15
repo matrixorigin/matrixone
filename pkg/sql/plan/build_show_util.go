@@ -149,6 +149,8 @@ func constructCreateTableSQL(
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
 	colIdToOriginName := make(map[uint64]string)
+	var columnSQL strings.Builder
+	columnSQL.WriteString(createStr)
 	for _, col := range tableDef.Cols {
 		if col.Hidden {
 			continue
@@ -239,12 +241,13 @@ func constructCreateTableSQL(
 			buf.WriteString("'")
 		}
 
-		createStr += buf.String()
+		columnSQL.Write(buf.Bytes())
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, col.Name)
 		}
 	}
+	createStr = columnSQL.String()
 
 	// If it is a composite primary key, get the component columns of the composite primary key
 	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
@@ -639,7 +642,31 @@ func constructCreateTableSQL(
 	}
 	createStr += ")"
 	if tableDef.TableType != catalog.SystemExternalRel {
-		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+		// Replayed definitions (LIKE, rebuilds and historical restore) must not
+		// inherit a different target database default. Ordinary SHOW can omit
+		// general_ci only when the current database would actually supply it.
+		charsetContext := ctx
+		if useDbName || IsSnapshotValid(snapshot) {
+			charsetContext = nil
+		} else if charsetContext != nil && displayTableCharset == uint32(types.CharsetUTF8) {
+			database := schemaName
+			if sourceSubscription != nil {
+				// The compiler owns the subscriber, not the publisher database.
+				// Omission is safe only under the subscriber's replay default.
+				database = sourceSubscription.SubName
+			}
+			if database == "" {
+				database = ctx.DefaultDatabase()
+			}
+			defaults, err := GetDatabaseDefaults(ctx, database, snapshot)
+			if err != nil {
+				return "", nil, err
+			}
+			if defaults != nil && defaults.Version != 0 && defaults.Collation != "utf8mb4_general_ci" {
+				charsetContext = nil
+			}
+		}
+		createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset)
 	}
 
 	var comment string

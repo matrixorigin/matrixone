@@ -22,6 +22,16 @@ explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by ran
 -- @regex("NProbe: 5",true)
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 select @@probe_limit;
+
+-- Regression for #30478: SET changes readback and the same query's default probe count.
+set session probe_limit = 4;
+select @@probe_limit;
+-- @regex("NProbe: 4",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+-- The query override still wins without changing the new session value.
+-- @regex("NProbe: 9",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
+select @@probe_limit;
 select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1';
 select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
 prepare rank_stmt from "select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1'";
@@ -41,4 +51,5 @@ set probe_limit = @saved_probe_limit;
 set experimental_ivf_index = @saved_ivf;
 set enable_vector_auto_mode_by_default = @saved_auto;
 set enable_vector_prefilter_by_default = @saved_pre;
+select @@probe_limit = @saved_probe_limit as probe_limit_restored;
 drop database vector_rank_options;

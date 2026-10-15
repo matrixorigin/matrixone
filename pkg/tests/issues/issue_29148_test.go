@@ -25,11 +25,13 @@ import (
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,6 +134,13 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				require.Error(t, err)
 				assertRows("execute owner_handle", []int{1, 2})
 				execSQLRequire(t, ctx, adminDB, "alter role "+roleName+" add rule \"select id from "+dbName+".t where tenant = 1\" on table "+dbName+".t")
+				if tc.migrate {
+					// The admin and migrated reader are different sessions on different CNs.
+					// Make the committed rule visible before SET ROLE clears the reader's cache.
+					commitTS := sourceCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+					require.False(t, commitTS.IsEmpty())
+					testutils.WaitLogtailApplied(t, commitTS, targetCN)
+				}
 				_, err = conn.ExecContext(ctx, "set role issue29148_missing_owner_role")
 				require.Error(t, err)
 				assertRows(innerSQL, []int{1})
@@ -280,6 +289,20 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 			require.NoError(t, execErr, statement)
 		}
 		var id, amount int
+		assertPreparedRows := func(name string, expected [][2]int) {
+			t.Helper()
+			rows, queryErr := userConn.QueryContext(ctx, "execute "+name)
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var got [][2]int
+			for rows.Next() {
+				var row [2]int
+				require.NoError(t, rows.Scan(&row[0], &row[1]))
+				got = append(got, row)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, expected, got)
+		}
 		execOnUser("set enable_remap_hint = 0")
 		execOnUser("set role " + roleName)
 		execOnUser("prepare issue29148_disabled from 'select id, amount from " + dbName + "." + tableName + " order by id'")
@@ -304,13 +327,12 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		require.Error(t, err, "a handle removed by the switch change must not execute")
 
 		// This role has no row rules, so the request starts with a genuinely
-		// disabled policy snapshot. Enabling the switch before PREPARE in the same
-		// COM_QUERY must prevent that stale handle from executing in a later one.
+		// disabled policy snapshot. Each statement in COM_QUERY captures current
+		// policy, so PREPARE after enabling the switch must publish a fresh handle.
 		execOnUser("set role " + emptyRole)
 		execOnUser("set enable_remap_hint = 0")
 		execOnUser("set enable_remap_hint = 1; prepare issue29148_disabled_snapshot from 'select id, amount from " + dbName + "." + tableName + " order by id'")
-		_, err = userConn.ExecContext(ctx, "execute issue29148_disabled_snapshot")
-		requireNeedReprepare(t, err)
+		assertPreparedRows("issue29148_disabled_snapshot", [][2]int{{1, 100}, {2, 200}})
 		execOnUser("deallocate prepare issue29148_disabled_snapshot")
 
 		// A role switch can activate mandatory rules while the captured request
@@ -411,8 +433,7 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 
 		execOnUser("set role " + emptyRole)
 		execOnUser("set role " + roleName + "; prepare issue29148_new_role_rule from 'select id, amount from " + dbName + "." + tableName + " order by id'")
-		_, err = userConn.ExecContext(ctx, "execute issue29148_new_role_rule")
-		requireNeedReprepare(t, err)
+		assertPreparedRows("issue29148_new_role_rule", [][2]int{{1, 100}})
 		execOnUser("deallocate prepare issue29148_new_role_rule")
 
 		execOnUser("set enable_remap_hint = 1")
@@ -430,8 +451,7 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 			"alter role "+roleName+" add rule \"select id, amount from "+dbName+"."+tableName+" where tenant = 2\" on table "+dbName+"."+tableName)
 		execOnUser("set role " + roleName + "; prepare issue29148_multi from 'select id, amount from " + dbName + "." + tableName + " order by id'")
 
-		_, err = userConn.ExecContext(ctx, "execute issue29148_multi")
-		requireNeedReprepare(t, err)
+		assertPreparedRows("issue29148_multi", [][2]int{{2, 200}})
 		execOnUser("deallocate prepare issue29148_multi")
 
 		// Prepare through the binary protocol while the policy is current, then

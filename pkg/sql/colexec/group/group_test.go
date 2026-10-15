@@ -1778,6 +1778,7 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(rows)
 
+			var generation *process.ExecutionResourceGeneration
 			for b.Loop() {
 				b.StopTimer()
 				input := batch.NewWithSize(5)
@@ -1795,7 +1796,8 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 					[]aggexec.AggFuncExecExpression{countStarAgg()})
 				g.GroupByHashKey = test.hashKey
 				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-				allocation := installGroupTestAllocation(b, g, proc, 1<<30)
+				allocation := installGroupTestAllocation(b, g, proc, 1<<30, generation)
+				generation = allocation.generation
 				b.StartTimer()
 
 				if err := g.Prepare(proc); err != nil {
@@ -2349,7 +2351,8 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	const groups = 8192
+	// Cross the explicit 64-group spill threshold; larger inputs repeat the same reduced-key oracle.
+	const groups = 65
 	keys := make([]int32, groups*2)
 	payloads := make([]int32, groups*2)
 	for i := range groups {
@@ -3070,7 +3073,8 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
 
-	const rows = 65536
+	// Trigger the explicit 4096-group threshold while retaining all 32 buckets.
+	const rows = 4097
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
 	g.SpillMem = 4096
 	var spillFiles []*os.File
@@ -3895,6 +3899,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				orderedPercentileAgg(aggexec.AggIdOfPercentileCont, valueCol, []byte("0.5"), false),
 				orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, valueCol, []byte("0.95"), true),
 			}
+			var generation *process.ExecutionResourceGeneration
 			var partials []*batch.Batch
 			for producer := 0; producer < producers; producer++ {
 				input := batch.NewWithSize(int(valueCol) + 1)
@@ -3922,7 +3927,8 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				partial.NeedEval = false
 				partial.SpillMem = 536870912
 				partial.AppendChild(child)
-				allocation := installGroupTestAllocation(t, partial, proc, 128<<20)
+				allocation := installGroupTestAllocation(t, partial, proc, 128<<20, generation)
+				generation = allocation.generation
 				require.NoError(t, partial.Prepare(proc))
 				for _, bat := range collectBatches(t, partial, proc) {
 					partials = append(partials, cloneBatch(t, proc, bat))
@@ -3941,7 +3947,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 			merge := newMergeGroupOp(aggs)
 			merge.SpillMem = 1
 			merge.AppendChild(child)
-			allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
+			allocation := installGroupTestAllocation(t, merge, proc, 128<<20, generation)
 			t.Cleanup(func() {
 				merge.Free(proc, false, nil)
 				child.Free(proc, false, nil)

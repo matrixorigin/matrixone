@@ -61,6 +61,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterConstraintDropIntent(t *testing.T) {
+	for _, test := range []struct {
+		clause string
+		typ    tree.AlterTableDropType
+	}{
+		{"drop check ck", tree.AlterTableDropCheck},
+		{"drop constraint ck", tree.AlterTableDropConstraint},
+		{"drop foreign key ck", tree.AlterTableDropForeignKey},
+	} {
+		t.Run(test.clause, func(t *testing.T) {
+			sql := "alter table t " + test.clause
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			alter := stmt.(*tree.AlterTable)
+			drop := alter.Options[0].(*tree.AlterOptionDrop)
+			require.Equal(t, test.typ, drop.Typ)
+			require.Equal(t, tree.Identifier("ck"), drop.Name)
+			require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -274,6 +297,43 @@ func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
 	createStmt, ok := stmt.(*tree.CreateIndex)
 	require.True(t, ok)
 	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
+}
+
+func TestCreateIndexUsingSuffix(t *testing.T) {
+	cases := []struct {
+		sql     string
+		typ     tree.IndexType
+		comment string
+	}{
+		{"create index idx on t(v) using btree", tree.INDEX_TYPE_BTREE, ""},
+		{"create index idx using hash on t(v) using btree comment 'tail'", tree.INDEX_TYPE_BTREE, "tail"},
+		{"create index idx using hash on t(v) comment 'tail' using btree", tree.INDEX_TYPE_BTREE, "tail"},
+		{"create index idx using btree on t(v)", tree.INDEX_TYPE_BTREE, ""},
+		{"create index idx on t(v)", tree.INDEX_TYPE_INVALID, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			createStmt, ok := stmt.(*tree.CreateIndex)
+			require.True(t, ok)
+			require.Equal(t, tc.typ, createStmt.IndexOption.IType)
+			require.Equal(t, tc.comment, createStmt.IndexOption.Comment)
+
+			// IndexOption formatting currently emits COMMENT values without SQL
+			// quotes, so keep the AST round-trip assertion to representable cases.
+			if tc.comment != "" {
+				return
+			}
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			roundTrippedCreate, ok := roundTripped.(*tree.CreateIndex)
+			require.True(t, ok)
+			require.Equal(t, tc.typ, roundTrippedCreate.IndexOption.IType)
+			require.Equal(t, tc.comment, roundTrippedCreate.IndexOption.Comment)
+		})
+	}
 }
 
 func TestForeignKeyNameRemainsCaseInsensitive(t *testing.T) {
@@ -1005,6 +1065,36 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 			require.Equal(t, test.first, test.sql[:end])
 		})
 	}
+	t.Run("executable comment continuation and parser reuse", func(t *testing.T) {
+		input := SQLContinuation{SQL: `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2 */; select 3`}
+		for i, want := range []string{
+			`/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; */`,
+			`/*!  select 'x\'; */`,
+			`/*!  select 2 */;`,
+			` select 3`,
+		} {
+			mode := ""
+			if i > 0 {
+				mode = "NO_BACKSLASH_ESCAPES"
+			}
+			stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, input, 1, mode)
+			require.NoError(t, err)
+			stmt.Free()
+			require.Equal(t, want, first)
+			parsed, err := ParseOneWithSQLMode(ctx, first, 1, mode)
+			require.NoError(t, err)
+			parsed.Free()
+			input = next
+		}
+		require.Empty(t, input.SQL)
+		require.False(t, input.InExecutableComment)
+		_, _, _, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: "select from", InExecutableComment: true}, 1, "")
+		require.Error(t, err)
+		stmt, end, err := parser.ParseFirstWithSQLMode(ctx, "select 4; select 5", 1, "")
+		require.NoError(t, err)
+		stmt.Free()
+		require.Equal(t, len("select 4;"), end)
+	})
 }
 
 func TestParseCompoundStatementList(t *testing.T) {
@@ -5044,7 +5134,7 @@ var (
 			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a collate = b",
+			output: "alter table t1 convert to character set a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -5220,7 +5310,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
-			output: "alter table tbl1 drop foreign key fk_name",
+			output: "alter table tbl1 drop constraint fk_name",
 		},
 		{
 			input:  "explain force execute st using @a",
@@ -6207,6 +6297,30 @@ func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
 	}
 }
 
+func TestCharCharsetCastParseFormatParse(t *testing.T) {
+	for _, sql := range []string{
+		"select cast('a' as char character set utf8mb4)",
+		"select cast('abc' as char(2) character set binary)",
+		"select convert('abc', char(3) character set utf8mb3)",
+		"select convert('abc', char character set utf8)",
+		"select cast('abc' as char(2) character set '')",
+		"select convert('abc', char(2) character set '')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			require.Contains(t, formatted, "character set")
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithSingleQuoteString()))
+		})
+	}
+}
+
 func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
 insert into silver_fiix_offline_tracker
@@ -6964,6 +7078,26 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAlterDatabaseCollationSyntax(t *testing.T) {
+	for _, sql := range []string{
+		"alter database d character set utf8mb4 collate utf8mb4_bin",
+		"alter schema d default collate = utf8mb4_bin default character set = utf8mb4",
+		"alter database collate utf8mb4_bin",
+		"alter database d character set utf8mb4",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "alter database")
+			reparsed, err := ParseOne(t.Context(), formatted, 1)
+			require.NoError(t, err)
+			reparsed.Free()
 		})
 	}
 }

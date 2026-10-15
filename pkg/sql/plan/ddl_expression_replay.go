@@ -20,6 +20,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -28,12 +29,16 @@ import (
 type persistedDDLReplayKey struct{}
 
 // persistedDDLReplay carries the already-bound expressions of an existing
-// table through SQL reconstruction. New or type-dependent expressions are
-// still bound from the reconstructed SQL in the current session.
+// table through SQL reconstruction. New declarations and physical type changes
+// still bind from SQL; character-only changes adapt affected typed nodes without
+// re-authoring unaffected computation using the current session.
 type persistedDDLReplay struct {
 	tableName string
 	columns   map[string]*replayedColumnExpressions
 	checks    map[string]*planpb.CheckDef
+	// Inverse of the visible CREATE coordinates, used by in-place MODIFY.
+	rawPositions map[int32]int32
+	err          error
 }
 
 type replayedColumnExpressions struct {
@@ -55,9 +60,10 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		return ctx
 	}
 	replay := &persistedDDLReplay{
-		tableName: strings.ToLower(target.Name),
-		columns:   make(map[string]*replayedColumnExpressions),
-		checks:    make(map[string]*planpb.CheckDef),
+		tableName:    strings.ToLower(target.Name),
+		columns:      make(map[string]*replayedColumnExpressions),
+		checks:       make(map[string]*planpb.CheckDef),
+		rawPositions: make(map[int32]int32),
 	}
 	targetByID := make(map[uint64]*planpb.ColDef, len(target.Cols))
 	targetRawPosByID := make(map[uint64]int32, len(target.Cols))
@@ -73,6 +79,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			(targetIsCluster && util.IsClusterTableAttribute(col.GetOriginCaseName())) {
 			continue
 		}
+		replay.rawPositions[visiblePos] = int32(i)
 		targetByID[col.ColId] = col
 		targetRawPosByID[col.ColId] = int32(i)
 		targetVisiblePosByID[col.ColId] = visiblePos
@@ -85,6 +92,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 	rawPositions := make(map[int32]int32, len(original.Cols))
 	visiblePositions := make(map[int32]int32, len(original.Cols))
 	compatible := make(map[int32]bool, len(original.Cols))
+	characterTypes := make(map[int32]planpb.Type)
 	for i, oldCol := range original.Cols {
 		if oldCol == nil || oldCol.Hidden || oldCol.Name == catalog.Row_ID ||
 			(originalIsCluster && util.IsClusterTableAttribute(oldCol.GetOriginCaseName())) {
@@ -115,6 +123,16 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			oldCol.Typ.Enumvalues == newCol.Typ.Enumvalues &&
 			oldCol.Typ.SameCollation(newCol.Typ) &&
 			oldCol.Typ.PadSpace == newCol.Typ.PadSpace
+		// A character-domain change invalidates only the affected operation,
+		// not its unrelated, already-bound children (for example decimal /).
+		if oldCol.Typ.Id == newCol.Typ.Id && oldCol.Typ.Width == newCol.Typ.Width &&
+			oldCol.Typ.Scale == newCol.Typ.Scale && oldCol.Typ.AutoIncr == newCol.Typ.AutoIncr &&
+			oldCol.Typ.Enumvalues == newCol.Typ.Enumvalues {
+			switch types.T(oldCol.Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text:
+				characterTypes[int32(i)] = newCol.Typ
+			}
+		}
 	}
 	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {
 		if expr == nil {
@@ -128,14 +146,65 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 			if ref := e.GetCol(); ref != nil && ref.RelPos == 0 {
 				if !compatible[ref.ColPos] {
-					return false
+					target, ok := characterTypes[ref.ColPos]
+					if !ok {
+						return false
+					}
+					e.Typ.Charset = target.Charset
+					e.Typ.CollationVersion = target.CollationVersion
+					e.Typ.PadSpace = target.PadSpace
 				}
 				ref.ColPos = positions[ref.ColPos]
 			}
 			if f := e.GetF(); f != nil {
+				changed := false
 				for _, arg := range f.Args {
+					if arg == nil {
+						continue
+					}
+					before := arg.Typ
+					var beforeList *planpb.Expr
+					if arg.GetList() != nil {
+						beforeList = DeepCopyExpr(arg)
+						// Coordinate-only remapping is not a new operand type contract.
+						remapGeneratedColExprPositions(beforeList, positions)
+					}
 					if !valid(arg) {
 						return false
+					}
+					changed = changed || !proto.Equal(&before, &arg.Typ) ||
+						(beforeList != nil && !proto.Equal(beforeList, arg))
+				}
+				if changed && f.Func != nil {
+					// Authored and assignment CAST targets are boundaries, not
+					// inferred results. Only compiler-owned character coercions
+					// follow their changed input; root assignment has its own owner.
+					cast := len(f.Args) == 2 && f.Args[1].GetT() != nil &&
+						(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_strict" ||
+							f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_ignore")
+					if cast && isPersistedCharacterCoercion(e) {
+						bound, err := refreshedPersistedCharacterCoercion(ctx, e)
+						if err != nil {
+							replay.err = err
+							return false
+						}
+						e.Expr, e.Typ = bound.Expr, bound.Typ
+					} else if !cast {
+						for i, arg := range f.Args {
+							var err error
+							f.Args[i], err = refreshedPersistedCharacterCoercion(ctx, arg)
+							if err != nil {
+								replay.err = err
+								return false
+							}
+						}
+						bound, err := BindFuncExprImplByPlanExpr(ctx, f.Func.ObjName, f.Args)
+						if err != nil {
+							replay.err = err
+							return false
+						}
+						preserveReboundFunctionMetadata(f, bound.GetF())
+						e.Expr, e.Typ = bound.Expr, bound.Typ
 					}
 				}
 			}
@@ -153,6 +222,29 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		return copy
 	}
+	// CONVERT may add a destination assignment around an otherwise unchanged
+	// typed expression. Prove that exact transformation before preserving it;
+	// physical dependency changes or newly authored SQL still take the ordinary binder.
+	copyAssignment := func(source, target *planpb.Expr, typ planpb.Type) *planpb.Expr {
+		raw := copyExpr(source, rawPositions)
+		if raw == nil {
+			return nil
+		}
+		unchanged := DeepCopyExpr(source)
+		remapGeneratedColExprPositions(unchanged, rawPositions)
+		if proto.Equal(raw, target) || proto.Equal(unchanged, target) {
+			return copyExpr(source, visiblePositions)
+		}
+		converted, err := convertedPersistedAssignment(ctx, raw, typ)
+		if err != nil || !proto.Equal(converted, target) {
+			return nil
+		}
+		visible, err := convertedPersistedAssignment(ctx, copyExpr(source, visiblePositions), typ)
+		if err != nil {
+			return nil
+		}
+		return visible
+	}
 	for _, oldCol := range original.Cols {
 		if oldCol == nil {
 			continue
@@ -166,24 +258,24 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
 		if oldCol.Default != nil && newCol.Default != nil {
-			expr := copyExpr(oldCol.Default.Expr, rawPositions)
+			expr := copyAssignment(oldCol.Default.Expr, newCol.Default.Expr, newCol.Typ)
 			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&
 				proto.Equal(&oldCol.Typ, &newCol.Typ) && proto.Equal(oldCol.Default, newCol.Default)
-			if unchangedAbsentDefault || expr != nil && proto.Equal(expr, newCol.Default.Expr) {
+			if unchangedAbsentDefault || expr != nil {
 				entry.defaultExpr = proto.Clone(newCol.Default).(*planpb.Default)
-				entry.defaultExpr.Expr = copyExpr(oldCol.Default.Expr, visiblePositions)
+				entry.defaultExpr.Expr = expr
 			}
 		}
 		if oldCol.OnUpdate != nil && oldCol.OnUpdate.Expr != nil && newCol.OnUpdate != nil {
-			if expr := copyExpr(oldCol.OnUpdate.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.OnUpdate.Expr) {
+			if expr := copyAssignment(oldCol.OnUpdate.Expr, newCol.OnUpdate.Expr, newCol.Typ); expr != nil {
 				entry.onUpdate = proto.Clone(newCol.OnUpdate).(*planpb.OnUpdate)
-				entry.onUpdate.Expr = copyExpr(oldCol.OnUpdate.Expr, visiblePositions)
+				entry.onUpdate.Expr = expr
 			}
 		}
 		if oldCol.GeneratedCol != nil && oldCol.GeneratedCol.Expr != nil && newCol.GeneratedCol != nil {
-			if expr := copyExpr(oldCol.GeneratedCol.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.GeneratedCol.Expr) {
+			if expr := copyAssignment(oldCol.GeneratedCol.Expr, newCol.GeneratedCol.Expr, newCol.Typ); expr != nil {
 				entry.generated = proto.Clone(newCol.GeneratedCol).(*planpb.GeneratedCol)
-				entry.generated.Expr = copyExpr(oldCol.GeneratedCol.Expr, visiblePositions)
+				entry.generated.Expr = expr
 			}
 		}
 		replay.columns[strings.ToLower(newCol.Name)] = entry

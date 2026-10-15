@@ -92,6 +92,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	seedRewriteRuleCacheProofForTest(ses)
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
@@ -218,6 +219,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			var files []resultFileInfo
 			//prepare session
 			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
 			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
 			defer ses.Close()
 

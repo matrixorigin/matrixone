@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,6 +28,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
 	// statement-local flag in case a QueryBuilder is reused across DML binds.
 	builder.isInsertIgnore = false
+	builder.checkLoadPrimaryKey = false
 	assignmentIgnore := loadAssignmentIgnore(stmt)
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
@@ -39,6 +41,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
 	// the same modern sink-fanout the INSERT path uses (see bindInsert).
 	tableDef := dmlCtx.tableDefs[0]
+	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, tableDef)
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
@@ -70,6 +73,9 @@ func (builder *QueryBuilder) bindExternalScan(
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
+		return -1, nil, err
+	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
@@ -198,7 +204,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.Tail.Assignments = nil
@@ -251,6 +257,20 @@ func (builder *QueryBuilder) bindExternalScan(
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	return lastNodeId, insertColToExpr, nil
+}
+
+// LOAD IGNORE/REPLACE conflict resolution is separate from ordinary LOAD's
+// primary-key validation. Keep those modes on their existing path.
+func loadChecksPrimaryKey(stmt *tree.Load, tableDef *plan.TableDef) bool {
+	if stmt == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return false
+	}
+	switch stmt.DuplicateHandling.(type) {
+	case nil, *tree.DuplicateKeyError:
+		return true
+	default:
+		return false
+	}
 }
 
 func loadAssignmentIgnore(stmt *tree.Load) bool {

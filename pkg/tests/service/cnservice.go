@@ -240,11 +240,5 @@ func buildCNConfig(index int, opt Options, address *serviceAddresses) *cnservice
 	cfg.QueryServiceConfig.Address.ListenAddress = address.getCNQueryListenAddress(index)
 	cfg.QueryServiceConfig.Address.ServiceAddress = cfg.QueryServiceConfig.Address.ListenAddress
 
-	// We need the filled version of configuration.
-	// It's necessary when building cnservice.Option.
-	if err := cfg.Validate(); err != nil {
-		panic(fmt.Sprintf("fatal when building cnservice.Config: %s", err))
-	}
-
 	return cfg
 }

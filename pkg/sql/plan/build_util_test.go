@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -249,6 +250,64 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int32(testCase.wantOID), typ.Id)
 			require.Equal(t, testCase.wantCharset, typ.Charset)
+		})
+	}
+}
+
+func TestGetTypeFromAstCharCastCharset(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		charset   string
+		id        types.T
+		width     int32
+		charsetID uint32
+	}{
+		{charset: "utf8mb4", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8mb3", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "binary", id: types.T_varbinary, width: 3, charsetID: uint32(types.CharsetBinary)},
+	} {
+		t.Run(tc.charset, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+tc.charset+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			typ, err := getTypeFromAst(ctx, cast.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.id), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+			require.Equal(t, tc.charsetID, typ.Charset)
+			if tc.charset == "utf8mb4" || tc.charset == "utf8" || tc.charset == "utf8mb3" {
+				identity, ok := collation.ResolveCharset(tc.charset)
+				require.True(t, ok)
+				require.Equal(t, collation.UTF8MB4GeneralCIIdentity, identity)
+			}
+		})
+	}
+}
+
+func TestGetTypeFromAstCharCastCharsetRejectsUnsupportedCharsets(t *testing.T) {
+	ctx := context.Background()
+	for _, charset := range []string{"", "ascii", "latin1", "unknown_charset"} {
+		t.Run(charset, func(t *testing.T) {
+			charsetSQL := charset
+			if charsetSQL == "" {
+				charsetSQL = "''"
+			}
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+charsetSQL+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			_, err = getTypeFromAst(ctx, cast.Type)
+			require.ErrorContains(t, err, "unsupported character set '"+charset+"' for CHAR cast")
 		})
 	}
 }
@@ -1169,7 +1228,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
-func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+func TestBuildGeneratedExprFunctionsAreDeterministic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	cases := []struct {
 		name             string
@@ -1180,6 +1239,9 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		generatedSQLType string
 		generatedType    plan.Type
 	}{
+		{name: "bit_count_text", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varchar(16)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_numeric", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "int", baseType: plan.Type{Id: int32(types.T_int32)}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_binary", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
 		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},

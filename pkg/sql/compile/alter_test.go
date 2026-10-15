@@ -91,6 +91,243 @@ func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
 }
 
+func TestAlterTableHasRename(t *testing.T) {
+	rename := func(oldName, newName string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: oldName, NewName: newName},
+			},
+		}
+	}
+
+	require.False(t, alterTableHasRename(nil))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{}))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t")},
+	}))
+	require.True(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t2")},
+	}))
+}
+
+func TestIsClusterTableRename(t *testing.T) {
+	rename := &plan2.AlterTable_Action{
+		Action: &plan2.AlterTable_Action_AlterName{
+			AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+		},
+	}
+
+	require.True(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t"},
+			},
+		}},
+	}))
+
+	proc := testutil.NewProcess(t)
+	err := checkRoleRuleRenameAdmission(&Compile{proc: proc}, &plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	})
+	require.ErrorContains(t, err, "renaming a cluster table")
+}
+
+func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
+	rename := &plan2.AlterTable{
+		Database: "db",
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+			},
+		}},
+	}
+	frontier := timestamp.Timestamp{PhysicalTime: 20}
+
+	t.Run("non-rename is a no-op", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{}},
+			true,
+			true,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("cluster rename is rejected before transaction access", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{IsClusterTable: true, Actions: rename.Actions}},
+			false,
+			false,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "renaming a cluster table")
+	})
+
+	t.Run("temporary rename is excluded from role-rule admission", func(t *testing.T) {
+		temporaryRename := &plan2.AlterTable{
+			TableDef: &plan2.TableDef{IsTemporary: true},
+			Actions:  rename.Actions,
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{temporaryRename}, false, false, roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, false, roleRuleRenameAdmissionHooks{
+				hasRoleRules: func(context.Context) (bool, error) { return false, nil },
+			},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+	})
+
+	t.Run("lock and barrier precede the catalog existence query", func(t *testing.T) {
+		var (
+			events   []string
+			snapshot = timestamp.Timestamp{PhysicalTime: 10}
+		)
+		hooks := roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error {
+				events = append(events, "lock")
+				// Model a rule commit that completed before the lock was acquired.
+				return nil
+			},
+			acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+				events = append(events, "barrier")
+				return frontier, nil
+			},
+			currentSnapshot: func() timestamp.Timestamp { return snapshot },
+			updateSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+				events = append(events, "update-snapshot")
+				snapshot = ts
+				return nil
+			},
+			hasRoleRules: func(_ context.Context) (bool, error) {
+				events = append(events, "query")
+				return true, nil
+			},
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(t.Context(), []*plan2.AlterTable{rename}, true, true, hooks)
+		require.ErrorContains(t, err, "role rewrite rules exist")
+		require.Equal(t, []string{"lock", "barrier", "update-snapshot", "query"}, events)
+		require.Equal(t, frontier, snapshot)
+	})
+
+	t.Run("barrier and query failures are fail-closed", func(t *testing.T) {
+		barrierErr := errors.New("barrier failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules: func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+					return timestamp.Timestamp{}, barrierErr
+				},
+				currentSnapshot: func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after barrier failure")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after barrier failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, barrierErr)
+
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return timestamp.Timestamp{}, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after empty barrier")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after empty barrier")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "empty timestamp")
+	})
+
+	t.Run("snapshot update and query failures are fail-closed", func(t *testing.T) {
+		updateErr := errors.New("snapshot update failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return updateErr },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after snapshot failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, updateErr)
+
+		queryErr := errors.New("role-rule query failed")
+		snapshot := frontier
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return snapshot },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules:       func(context.Context) (bool, error) { return false, queryErr },
+			},
+		)
+		require.ErrorIs(t, err, queryErr)
+	})
+
+	t.Run("snapshot non-advancement and cancellation are fail-closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after non-advancement")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "snapshot did not advance")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err = checkRoleRuleRenameAdmissionWithHooks(ctx, []*plan2.AlterTable{rename}, true, true, roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error { t.Fatal("lock after cancellation"); return nil },
+		})
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
 func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
 	const sql = "insert into copy select * from source"
 	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
@@ -4274,4 +4511,68 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.AlterTableCopy(c))
 	})
+}
+
+func TestUpdateNewTableColID(t *testing.T) {
+	readErr := errors.New("read replacement schema")
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "catalog IDs"},
+		{name: "catalog read failure", err: readErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(t))
+			relation.EXPECT().TableDefs(proc.Ctx).Return([]engine.TableDef{
+				&engine.CommentDef{Comment: "not a column"},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "Mixed", ID: 101}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "plain", ID: 0}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "case", ID: 103}},
+			}, test.err).Times(1)
+			columns := map[uint64]*plan2.ColDef{
+				1: {Name: "mixed", OriginName: "Mixed", ColId: 1},
+				2: {Name: "plain", ColId: 2},
+				3: {Name: "Case", ColId: 3},
+				4: {Name: "absent", ColId: 4},
+			}
+			err := updateNewTableColId(&Compile{proc: proc}, relation, columns)
+			if test.err != nil {
+				require.ErrorIs(t, err, test.err)
+				require.Equal(t, uint64(1), columns[1].ColId)
+				require.Equal(t, uint64(2), columns[2].ColId)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(101), columns[1].ColId, "match the persisted original spelling")
+				require.Zero(t, columns[2].ColId, "zero is a valid replacement ID")
+			}
+			require.Equal(t, uint64(3), columns[3].ColId, "name matching remains case sensitive")
+			require.Equal(t, uint64(4), columns[4].ColId, "unmatched columns remain unchanged")
+		})
+	}
+}
+
+func BenchmarkUpdateNewTableColID(b *testing.B) {
+	for _, width := range []int{2, 32, 4096} {
+		b.Run(fmt.Sprint(width), func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(b))
+			defs := make([]engine.TableDef, width)
+			columns := make(map[uint64]*plan2.ColDef, width)
+			for i := range width {
+				name := fmt.Sprintf("c%d", i)
+				defs[i] = &engine.AttributeDef{Attr: engine.Attribute{Name: name, ID: uint64(i + 1)}}
+				columns[uint64(i)] = &plan2.ColDef{Name: name}
+			}
+			relation.EXPECT().TableDefs(proc.Ctx).Return(defs, nil).AnyTimes()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := updateNewTableColId(&Compile{proc: proc}, relation, columns); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
