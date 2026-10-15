@@ -619,6 +619,16 @@ func TestGetFunctionByNameWithoutError(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPointAliasUsesSTPointFunction(t *testing.T) {
+	args := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+	point, err := GetFunctionByName(context.Background(), "point", args)
+	require.NoError(t, err)
+	stPoint, err := GetFunctionByName(context.Background(), "st_point", args)
+	require.NoError(t, err)
+	require.Equal(t, stPoint.GetEncodedOverloadID(), point.GetEncodedOverloadID())
+	require.Equal(t, stPoint.GetReturnType(), point.GetReturnType())
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

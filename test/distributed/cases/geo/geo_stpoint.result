@@ -1,6 +1,9 @@
 select st_astext(st_point(1, 2)) as p;
 ➤ p[12,-1,0]  𝄀
 POINT(1 2)
+select st_astext(point(1, 2)) as p;
+➤ p[12,-1,0]  𝄀
+POINT(1 2)
 select st_astext(st_point(116.3975, 39.9087)) as beijing;
 ➤ beijing[12,-1,0]  𝄀
 POINT(116.3975 39.9087)
@@ -25,6 +28,9 @@ POINT(116.39749908447266 39.90869903564453)
 select st_astext(st_point(NULL, 1)) as a, st_astext(st_point(1, NULL)) as b, st_astext(st_point32(NULL, NULL)) as c;
 ➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
 null  ¦  null  ¦  null
+select st_astext(point(NULL, 1)) as p;
+➤ p[12,-1,0]  𝄀
+null
 drop table if exists sp;
 create table sp(id int, g geometry, g32 geometry32);
 insert into sp values (1, st_point(1, 2), st_point32(1, 2));
