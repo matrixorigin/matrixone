@@ -214,8 +214,8 @@ lead(cast(1 as decimal(38,30)), 1, 999999999999) over () as ld;
 select lag(cast(1 as decimal(38,30)), 0, 999999999999) over () as source_value;
 ➤ source_value[3,42,30]  𝄀
 1.000000000000000000000000000000
-create table wblob (v mediumblob);
-insert into wblob values (unhex('610062ff'));
+create table wblob (v mediumblob, wide mediumblob, c char(1));
+insert into wblob values (unhex('610062ff'), repeat(unhex('610062ff'),16384), 'x');
 create table wblob_copy as select lag(v,0,0) over () as lg, lead(v,0,0) over () as ld from wblob;
 show create table wblob_copy;
 ➤ Table[12,10,0]  ¦  Create Table[12,92,0]  𝄀
@@ -236,6 +236,30 @@ v  ¦  mediumblob  ¦  YES  ¦    ¦  null  ¦    ¦
 select hex(v) as v from wblob_view;
 ➤ v[-1,16383,0]  𝄀
 610062FF
+select length(wide) as original_length, length(lag(wide,0) over ()) as control_length,
+length(lag(wide,0,c) over ()) as lg_length, length(lead(wide,0,c) over ()) as ld_length,
+lag(wide,0,c) over () = wide as lg_equal, lead(wide,0,c) over () = wide as ld_equal from wblob;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  65536  ¦  65536  ¦  1  ¦  1
+select length(lag(c,1,wide) over ()) as lg_default_length,
+length(lead(c,1,wide) over ()) as ld_default_length from wblob;
+➤ lg_default_length[-5,64,0]  ¦  ld_default_length[-5,64,0]  𝄀
+65536  ¦  65536
+set @wblob_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wblob_char_copy as select lag(wide,0,c) over () as lg, lead(wide,0,c) over () as ld from wblob;
+show create table wblob_char_copy;
+➤ Table[12,15,0]  ¦  Create Table[12,97,0]  𝄀
+wblob_char_copy  ¦  CREATE TABLE `wblob_char_copy` (
+  `lg` mediumblob DEFAULT NULL,
+  `ld` mediumblob DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat(unhex('610062ff'),16384) as lg_equal,
+ld = repeat(unhex('610062ff'),16384) as ld_equal from wblob_char_copy;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+set session sql_mode = @wblob_sql_mode;
 create table wdecimal_max_zero as select lag(cast(0.1 as decimal(65,65)),0,0) over () as v;
 show create table wdecimal_max_zero;
 ➤ Table[12,17,0]  ¦  Create Table[12,70,0]  𝄀
@@ -440,6 +464,21 @@ ts  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦
 select v, t, hex(b) as b, ts from wstring_view;
 ➤ v[-1,536870911,0]  ¦  t[-1,536870911,0]  ¦  b[-1,16383,0]  ¦  ts[-1,536870911,0]  𝄀
 00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+create table wstring_exact as select lag(cast('true' as text),0,true) over () as lg_text,
+lead(cast('true' as text),0,false) over () as ld_text,
+lag(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as lg_varchar,
+lead(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as ld_varchar;
+show create table wstring_exact;
+➤ Table[12,13,0]  ¦  Create Table[12,177,0]  𝄀
+wstring_exact  ¦  CREATE TABLE `wstring_exact` (
+  `lg_text` longtext DEFAULT NULL,
+  `ld_text` longtext DEFAULT NULL,
+  `lg_varchar` longtext DEFAULT NULL,
+  `ld_varchar` longtext DEFAULT NULL
+)
+select * from wstring_exact;
+➤ lg_text[-1,536870911,0]  ¦  ld_text[-1,536870911,0]  ¦  lg_varchar[-1,536870911,0]  ¦  ld_varchar[-1,536870911,0]  𝄀
+true  ¦  true  ¦  0012  ¦  0012
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';

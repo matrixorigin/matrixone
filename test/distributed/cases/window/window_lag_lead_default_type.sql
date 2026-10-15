@@ -124,8 +124,8 @@ select lag(cast(1 as decimal(38,30)), 1, 999999999999) over () as lg,
 select lag(cast(1 as decimal(38,30)), 0, 999999999999) over () as source_value;
 
 -- 二进制大对象不得变为超宽 VARCHAR，导出的列定义必须可重建。
-create table wblob (v mediumblob);
-insert into wblob values (unhex('610062ff'));
+create table wblob (v mediumblob, wide mediumblob, c char(1));
+insert into wblob values (unhex('610062ff'), repeat(unhex('610062ff'),16384), 'x');
 create table wblob_copy as select lag(v,0,0) over () as lg, lead(v,0,0) over () as ld from wblob;
 show create table wblob_copy;
 select hex(lg) as lg, hex(ld) as ld from wblob_copy;
@@ -133,6 +133,20 @@ select hex(lag(v,1,0) over ()) as lg, hex(lead(v,1,0) over ()) as ld from wblob;
 create view wblob_view as select lag(v,0,0) over () as v from wblob;
 show columns from wblob_view;
 select hex(v) as v from wblob_view;
+-- CHAR 重载不能把 MEDIUMBLOB 缩为固定长度字符；保留完整二进制内容。
+select length(wide) as original_length, length(lag(wide,0) over ()) as control_length,
+       length(lag(wide,0,c) over ()) as lg_length, length(lead(wide,0,c) over ()) as ld_length,
+       lag(wide,0,c) over () = wide as lg_equal, lead(wide,0,c) over () = wide as ld_equal from wblob;
+select length(lag(c,1,wide) over ()) as lg_default_length,
+       length(lead(c,1,wide) over ()) as ld_default_length from wblob;
+set @wblob_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wblob_char_copy as select lag(wide,0,c) over () as lg, lead(wide,0,c) over () as ld from wblob;
+show create table wblob_char_copy;
+select length(lg) as lg_length, length(ld) as ld_length,
+       lg = repeat(unhex('610062ff'),16384) as lg_equal,
+       ld = repeat(unhex('610062ff'),16384) as ld_equal from wblob_char_copy;
+set session sql_mode = @wblob_sql_mode;
 
 -- 默认零无需新增整数位；无默认值与同型默认值是持久化类型的控制查询。
 create table wdecimal_max_zero as select lag(cast(0.1 as decimal(65,65)),0,0) over () as v;
@@ -240,6 +254,12 @@ create view wstring_view as select lag(v,0,bitval) over () as v, lead(t,0,flag) 
        lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
 show columns from wstring_view;
 select v, t, hex(b) as b, ts from wstring_view;
+create table wstring_exact as select lag(cast('true' as text),0,true) over () as lg_text,
+       lead(cast('true' as text),0,false) over () as ld_text,
+       lag(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as lg_varchar,
+       lead(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as ld_varchar;
+show create table wstring_exact;
+select * from wstring_exact;
 
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;

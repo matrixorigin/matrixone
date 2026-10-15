@@ -51,6 +51,8 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"mediumtext json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
 				{"json mediumtext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, types.T_text, types.MaxLongTextLen, 0},
 
+				{"mediumblob char", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char), Width: 1}}, types.T_blob, types.MaxMediumTextLen, 0},
+				{"char mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char), Width: 1}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, types.T_blob, types.MaxMediumTextLen, 0},
 				{"mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 16777215, 0},
 				{"unbounded blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob)}}, makePlan2Int64ConstExprWithType(0), types.T_blob, types.MaxLongTextLen, 0},
 				{"blob default", makePlan2Int64ConstExprWithType(0), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, 16777215, 0},
@@ -174,6 +176,7 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 			width, scale           int32
 		}{
 			{"mediumblob", "0", types.T_blob, 16777215, 0},
+			{"mediumblob", "cast('x' as char(1))", types.T_blob, types.MaxMediumTextLen, 0},
 			{"decimal(65,65)", "0", types.T_decimal256, 65, 65},
 			{"mediumtext", "cast('{}' as json)", types.T_text, types.MaxLongTextLen, 0},
 			{"varchar(100)", "cast('x' as tinytext)", types.T_text, 0, 0},

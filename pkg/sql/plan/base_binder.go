@@ -8147,6 +8147,11 @@ func bindFuncExprImplByPlanExpr(
 				return nil, typeErr
 			}
 			if ok {
+				// CHAR 重载的固定容量不能代表另一分支的完整字符串域。
+				// 先规范为可扩容的 VARCHAR，再统一推导容量和 LOB 家族。
+				if commonType.Oid == types.T_char {
+					commonType.Oid = types.T_varchar
+				}
 				// COALESCE's mixed string/numeric overload starts with a generic
 				// VARCHAR capacity. Refine known display bounds, but never shrink
 				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
@@ -8157,7 +8162,8 @@ func bindFuncExprImplByPlanExpr(
 					unbounded := commonType.Width == 0
 					for _, idx := range []int{0, 2} {
 						if argsType[idx].Oid == types.T_blob {
-							commonType.Oid = types.T_blob
+							// 提升家族时也要保留 BLOB 的二进制类型身份。
+							commonType = types.New(types.T_blob, commonType.Width, 0)
 						} else if argsType[idx].Oid == types.T_text && commonType.Oid != types.T_blob {
 							commonType.Oid = types.T_text
 						}
