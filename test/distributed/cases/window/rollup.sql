@@ -969,6 +969,7 @@ from grouping_set_decimal_sum_order
 group by rollup(a, b, c)
 order by g, a, b, c;
 set optimizer_hints = '';
+-- Empty-input ROLLUP returns zero rows, unlike explicit empty grouping sets.
 select a, b, c, sum(v) as s, grouping(a, b, c) as g
 from grouping_set_decimal_sum_order
 where false
