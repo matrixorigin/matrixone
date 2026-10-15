@@ -375,6 +375,9 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 }
 
 func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	// This scenario owns its cluster independently of earlier shared-fixture tests.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
@@ -735,6 +738,9 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 }
 
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
+	// This lock-only test must own its namespace: other cluster processes may
+	// legitimately acquire a released range before this test reacquires it.
+	t.Setenv("TMPDIR", t.TempDir())
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -1531,6 +1537,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root := t.TempDir()
 	var parsed cnservice.Config

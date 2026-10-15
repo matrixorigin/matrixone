@@ -66,8 +66,8 @@ DROP TABLE temporal_sum_avg_ctas;
 DROP VIEW temporal_sum_avg;
 DROP TABLE variance_fraction;
 
-# Large temporal variance must decimalize the stable float result without
-# exposing binary ULP digits at user-visible DECIMAL precision.
+# Statistical results are DOUBLE. An explicit DECIMAL cast follows the
+# ordinary DOUBLE cast contract, independently of the aggregate input scale.
 DROP TABLE IF EXISTS temporal_variance_precision;
 CREATE TABLE temporal_variance_precision (
     id INT PRIMARY KEY,
@@ -78,6 +78,10 @@ INSERT INTO temporal_variance_precision VALUES
     (1, '2024-01-01 01:02:03', '2024-01-01 01:02:03'),
     (2, '2024-01-02 02:03:04', '2024-01-02 02:03:04'),
     (3, '2024-01-03 03:04:05', '2024-01-03 03:04:05');
+-- @metacmp(true)
+SELECT VAR_POP(d) AS datetime_var_pop, VAR_POP(ts) AS timestamp_var_pop
+FROM temporal_variance_precision;
+SELECT CAST(CAST(680202686800.6666 AS DOUBLE) AS DECIMAL(24,6)) AS double_cast_control;
 SELECT CAST(VAR_POP(d) AS DECIMAL(24,6)) AS datetime_var_pop,
        CAST(VAR_POP(ts) AS DECIMAL(24,6)) AS timestamp_var_pop
 FROM temporal_variance_precision;
