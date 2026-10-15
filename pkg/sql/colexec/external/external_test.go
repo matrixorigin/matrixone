@@ -2771,9 +2771,12 @@ func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
 			cases := []testCase{
 				{value: "1.9", want: "2"}, {value: "2.4", want: "2"}, {value: "2.5", want: "3"},
 				{value: "1e2", want: "100"}, {value: "2.5e0", want: "3"}, {value: ".5", want: "1"},
+				{value: "1000e-3", want: "1"}, {value: "42949672960e-10", want: "4"},
+				{value: "1000000000000000000000e-21", want: "1"},
 				{value: "1.", want: "1"}, {value: "+1.9", want: "2"}, {value: " 1.9 ", want: "2"},
 				{value: "7", want: "7", quoted: true}, {value: "1.9", quoted: true, wantErr: true},
 				{value: "1e2", quoted: true, wantErr: true}, {value: "NaN", wantErr: true},
+				{value: "1000000000000000000000e-21", quoted: true, wantErr: true},
 				{value: "+Inf", wantErr: true}, {value: "-Inf", wantErr: true}, {value: "1e+", wantErr: true},
 				{value: "1 2", wantErr: true}, {value: "1+2", wantErr: true}, {value: "1.9tail", wantErr: true},
 				{value: "0x1p2", wantErr: true}, {value: "1_0.5", wantErr: true},
@@ -2782,11 +2785,13 @@ func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
 			}
 			if typ.Oid.IsUnsignedInt() {
 				cases = append(cases, testCase{value: "-0.1", wantErr: true},
+					testCase{value: "-1000000000000000000000e-21", wantErr: true},
 					testCase{value: "-1.9", wantErr: true},
 					testCase{value: "-0.0", want: "0"},
 					testCase{value: "-0e2", want: "0"})
 			} else {
 				cases = append(cases, testCase{value: "-1.9", want: "-2"},
+					testCase{value: "-1000000000000000000000e-21", want: "-1"},
 					testCase{value: "-2.5", want: "-3"},
 					testCase{value: "-0.49", want: "0"})
 			}
@@ -2817,11 +2822,14 @@ func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
 				}
 			}
 			cases = append(cases, testCase{value: max, want: max},
+				testCase{value: max + "0", wantErr: true},
+				testCase{value: max + "0e-1", want: max},
 				testCase{value: max + ".0", want: max},
 				testCase{value: max + ".4", want: max},
 				testCase{value: max + ".5", wantErr: true})
 			if min != "" {
 				cases = append(cases, testCase{value: min + ".4", want: min},
+					testCase{value: min + "0e-1", want: min},
 					testCase{value: min + ".5", wantErr: true})
 			}
 			if typ.Oid == types.T_int64 || typ.Oid == types.T_uint64 {
@@ -2880,10 +2888,13 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 		externType        int32
 		enumValues, value string
 		want              uint64
+		wantErr           bool
 	}{
-		{"load csv", tree.CSV, int32(plan.ExternType_LOAD), "", "1.9", 1},
-		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 1},
-		{"external set", tree.CSV, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1},
+		{"load csv", tree.CSV, int32(plan.ExternType_LOAD), "", "1.9", 1, false},
+		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 1, false},
+		{"external set", tree.CSV, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1, false},
+		{"load csv overflow mantissa", tree.CSV, int32(plan.ExternType_LOAD), "", "1000000000000000000000e-21", 0, true},
+		{"external jsonline overflow mantissa", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1000000000000000000000e-21", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
@@ -2893,6 +2904,11 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 				Cols:   []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: tc.enumValues}}},
 				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tc.format}, ExParam: tree.ExParam{ExternType: tc.externType}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
 			err := getColData(bat, []csvparser.Field{{Val: tc.value}}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "i"}, proc)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Zero(t, bat.Vecs[0].Length())
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, []uint64{tc.want}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
 		})

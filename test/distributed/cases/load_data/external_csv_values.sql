@@ -1,4 +1,5 @@
 -- External CSV preserves decimal assignment values and whitespace field records.
+-- Oversized mantissas must be scaled and rounded before destination range checks.
 -- Numeric text uses exact assignment rounding; approximate SQL FLOAT ties have
 -- separate semantics. The whitespace fixture includes a genuine blank line,
 -- quoted empty/space, NULL, and a final space without a line terminator.
