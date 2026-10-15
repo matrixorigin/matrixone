@@ -76,14 +76,21 @@ func TestIdleRemoteRoutePublicationAfterMemberAddition(t *testing.T) {
 				require.Equal(t, owner.serviceID, source.tableGroups.get(options.Group, table).getBind().ServiceID)
 			})
 		}
-		// The same confirmation is required by the two replacement publishers.
+		// Legacy publication confirms the owner. An accepted TN replacement
+		// can instead finish old-generation cleanup and leave its route cold;
+		// the subsequent cold publication still confirms the joined owner.
 		for index := range 2 {
 			bind := pb.LockTable{Table: uint64(93010 + index), ServiceID: owner.serviceID, Version: 1, Valid: true}
 			if index == 0 {
 				source.handleBindChanged(bind)
 			} else {
 				state := source.allocatorStateSnapshot()
-				require.NoError(t, source.handleBindChangedFromAllocator(ctx, "test-member-add", bind, bind, state, state))
+				old := bind
+				old.ServiceID = source.serviceID
+				require.NoError(t, source.handleBindChangedFromAllocator(ctx, "test-member-add", old, bind, state, state))
+				require.Nil(t, source.tableGroups.get(0, bind.Table))
+				_, err := source.publishLockTableBindFromAllocator(ctx, "test-cold-member-add", 0, bind.Table, bind, state, state)
+				require.NoError(t, err)
 			}
 			current := source.tableGroups.get(0, bind.Table)
 			require.NotNil(t, current)

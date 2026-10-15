@@ -2338,7 +2338,12 @@ func (s *service) handleBindChangedFromAllocator(
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) error {
-	confirmed, ownerErr := s.prepareRemoteRoutePublication(ctx, newBind)
+	var retired lockTable
+	defer func() {
+		if retired != nil {
+			retired.close(closeReasonBindChanged)
+		}
+	}()
 	if !s.beginLockTablePublication() {
 		return ErrLockTableBindChanged
 	}
@@ -2362,22 +2367,28 @@ func (s *service) handleBindChangedFromAllocator(
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
-	if ownerErr != nil {
-		return ownerErr
-	}
-	if !s.canPublishRemoteRouteLocked(newBind, confirmed) {
+	if !oldBind.Changed(newBind) {
 		return ErrLockTableBindChanged
 	}
-	defer s.remoteRoutePublished(confirmed)
+
+	// Accepted TN evidence that the old generation changed completes its
+	// cleanup independently of replacement-owner discovery. Unlock interprets
+	// a non-nil result as a reason to retry the old owner, so an unpublishable
+	// replacement must not turn this authoritative change back into a retry.
+	publish := s.canPublishRemoteRouteLocked(newBind, nil)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil {
 		currentBind := current.getBind()
-		if !currentBind.Changed(newBind) {
-			return nil
+		if !currentBind.Changed(newBind) || currentBind.Changed(oldBind) {
+			// A concurrent publisher owns this route. Retire only the exact
+			// old generation; never fence or overwrite the replacement.
+			publish = false
 		}
-		if currentBind.Changed(oldBind) {
-			return ErrLockTableBindChanged
-		}
+	}
+	if !publish {
+		s.fenceByExactBind(oldBind)
+		retired = s.tableGroups.detachExactBind(oldBind)
+		return nil
 	}
 
 	new := s.createLockTableByBind(newBind)
