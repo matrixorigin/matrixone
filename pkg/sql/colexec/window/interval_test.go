@@ -81,10 +81,15 @@ func TestNullIntervalRangeBoundaries(t *testing.T) {
 			defer vec.Free(proc.Mp())
 			for _, isNull := range []bool{false, true} {
 				vec.CleanOnlyData()
-				if typ == types.T_date {
+				switch typ {
+				case types.T_date:
 					require.NoError(t, vector.AppendFixed(vec, types.Date(0), isNull, proc.Mp()))
-				} else {
-					require.NoError(t, vector.AppendFixed(vec, int64(0), isNull, proc.Mp()))
+				case types.T_time:
+					require.NoError(t, vector.AppendFixed(vec, types.Time(0), isNull, proc.Mp()))
+				case types.T_datetime:
+					require.NoError(t, vector.AppendFixed(vec, types.Datetime(0), isNull, proc.Mp()))
+				case types.T_timestamp:
+					require.NoError(t, vector.AppendFixed(vec, types.Timestamp(0), isNull, proc.Mp()))
 				}
 				for _, desc := range []bool{false, true} {
 					for _, startNull := range []bool{false, true} {
