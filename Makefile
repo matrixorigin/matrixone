@@ -610,13 +610,14 @@ UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # One/four issues batches retain the serial rollback.
 UT_ISSUES_BATCHES ?= 8
 UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
-UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),2,1)
 # Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
 UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping two clusters increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
-# the prebuild policy for rollback modes and explicit embedded pool users.
-UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2:1,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL):$(UT_EMBEDDED_PACKAGE_PARALLEL)),0,1)
+# the prebuild policy for rollback modes; overlapping compilation remains an
+# explicit opt-in for the two-cluster issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
