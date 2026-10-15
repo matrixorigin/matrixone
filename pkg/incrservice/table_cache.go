@@ -159,9 +159,19 @@ func (c *tableCache) insertAutoValues(
 		vec := vecs[col.ColIndex]
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
-		} else if lastInsert == 0 {
+		} else if lastInsert == 0 && !col.isInternal {
 			// A statement may carry more than one auto-increment cache. Keep
 			// the first generated value for the statement-level protocol result.
+			//
+			// Only a user-visible column's value may become LAST_INSERT_ID. The
+			// allocator-owned hidden fake primary key MO appends to a table with
+			// no user primary key -- the hidden fulltext/vector index tables among
+			// them -- also generates here, but its value must never surface as the
+			// statement result (#29903). isInternal is authoritative hidden-fake-PK
+			// ownership from the table definition, not a SQL-visible column name,
+			// so a user column that happens to be named __mo_fake_pk_col still
+			// publishes, and a mixed table that generates only the hidden key (its
+			// user auto column was given an explicit value) publishes nothing.
 			lastInsert = v
 		}
 	}

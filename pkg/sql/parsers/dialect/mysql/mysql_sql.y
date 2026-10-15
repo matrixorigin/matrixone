@@ -4420,16 +4420,16 @@ alter_role_stmt:
     {
         var roleName = $3.Compare()
         var ruleSQL = $6
-        var dbName = $9.Compare()
-        var tblName = $11.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($9.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($11.Origin()).Compare()
         var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
 |   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var dbName = $8.Compare()
-        var tblName = $10.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($8.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($10.Origin()).Compare()
         $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 
@@ -16054,9 +16054,9 @@ timestamp_option_opt:
         }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length_option_opt:
@@ -16065,17 +16065,17 @@ length_option_opt:
     }
 |    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = int32(value)
+        $$ = value
     }
 
 length:
    '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        $$ = tree.GetDisplayWith(int32(value))
+        $$ = tree.GetDisplayWith(value)
     }
 
 float_length_opt:
@@ -16088,22 +16088,22 @@ float_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -16117,22 +16117,22 @@ decimal_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        value, ok := signedIntegral(yylex, $2)
+        value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(value)),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
-        width, ok := signedIntegral(yylex, $2)
+        width, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
-        scale, ok := signedIntegral(yylex, $4)
+        scale, ok := typeLengthIntegral(yylex, $4)
         if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32(width)),
-            Scale: int32(scale),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 

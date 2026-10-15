@@ -1042,6 +1042,36 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 			require.Equal(t, test.first, test.sql[:end])
 		})
 	}
+	t.Run("executable comment continuation and parser reuse", func(t *testing.T) {
+		input := SQLContinuation{SQL: `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2 */; select 3`}
+		for i, want := range []string{
+			`/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; */`,
+			`/*!  select 'x\'; */`,
+			`/*!  select 2 */;`,
+			` select 3`,
+		} {
+			mode := ""
+			if i > 0 {
+				mode = "NO_BACKSLASH_ESCAPES"
+			}
+			stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, input, 1, mode)
+			require.NoError(t, err)
+			stmt.Free()
+			require.Equal(t, want, first)
+			parsed, err := ParseOneWithSQLMode(ctx, first, 1, mode)
+			require.NoError(t, err)
+			parsed.Free()
+			input = next
+		}
+		require.Empty(t, input.SQL)
+		require.False(t, input.InExecutableComment)
+		_, _, _, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: "select from", InExecutableComment: true}, 1, "")
+		require.Error(t, err)
+		stmt, end, err := parser.ParseFirstWithSQLMode(ctx, "select 4; select 5", 1, "")
+		require.NoError(t, err)
+		stmt.Free()
+		require.Equal(t, len("select 4;"), end)
+	})
 }
 
 func TestParseCompoundStatementList(t *testing.T) {
