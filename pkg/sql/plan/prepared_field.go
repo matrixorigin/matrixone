@@ -57,8 +57,10 @@ type preparedFieldStringResolver struct {
 	memo                 map[*Expr]preparedFieldStringDomain
 	outputs              map[[3]int32]bool
 	unresolvedParameters bool
-	parameterTypes       map[int32]types.Type
-	defaultMarker        preparedFieldStringKind
+	// String consumers preview declarations without acquiring FIELD history.
+	readOnly       bool
+	parameterTypes map[int32]types.Type
+	defaultMarker  preparedFieldStringKind
 }
 
 func newPreparedFieldStringResolver(b *baseBinder) *preparedFieldStringResolver {
@@ -326,14 +328,6 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	default:
 		if pos := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
 			domain := fieldStringArgumentDeclaration(r.expr(fn.Args[pos]))
-			// Unlike value selectors, byte-transforming functions own the TEXT
-			// representation they actually consumed. Do not relabel transformed
-			// bytes using a real binary declaration hidden behind a private cast.
-			if !r.unresolvedParameters && r.parameterTypes == nil && !domain.inferredBinary && domain.kind == fieldStringBinary &&
-				fieldStringStaticDomain(fn.Args[pos]).kind == fieldStringText && result.kind == fieldStringText {
-				result.parameter, result.history = domain.parameter, domain.history
-				return result
-			}
 			result = domain
 			result.parameterDeclaration = false
 			result.resolved = types.Type{}
@@ -504,6 +498,7 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 	}
 	if isPreparedSetOperationNode(node.NodeType) {
 		domains := make([]preparedFieldStringDomain, 0, len(node.Children))
+		textPeer := false
 		for _, child := range node.Children {
 			// UNION consumes materialized branch declarations before merging
 			// them, just as scalar and column references consume projections.
@@ -511,9 +506,16 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 			if domain.kind == fieldStringOther {
 				return fallback
 			}
+			textPeer = textPeer || domain.kind == fieldStringText
 			domains = append(domains, domain)
 		}
-		return r.commonDomains(domains)
+		result := r.commonDomains(domains)
+		if textPeer && result.inferredBinary {
+			// A contextual BLOB is not a binary declaration competing with a
+			// text branch. Keep the CASE fact unchanged; the set owns this type.
+			result.kind, result.inferredBinary = fieldStringText, false
+		}
+		return result
 	}
 	values := node.ProjectList
 	switch node.NodeType {

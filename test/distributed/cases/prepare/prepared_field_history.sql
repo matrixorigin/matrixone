@@ -401,9 +401,35 @@ SELECT FIELD(CAST(x AS CHAR),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELEC
 SELECT FIELD(CAST(x AS BINARY(1)),'A','a') FROM (SELECT 'a' x UNION ALL SELECT '') d WHERE x<>'';
 SELECT FIELD(CONCAT_WS('',ELT(1,x)),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
 SELECT FIELD(CONCAT_WS('',ELT(1,CAST(x AS CHAR))),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
--- Byte transforms retain the TEXT representation they actually consumed.
+-- String transformations bind genuine binary inputs before transforming bytes.
 SELECT FIELD(LOWER(x),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
 SELECT FIELD(CONCAT_WS('',LOWER(x)),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+-- A wrapper must not discard a genuine binary declaration from value aggregation.
+SELECT FIELD(REVERSE(COALESCE(_binary 'a','')),'A','a'), HEX(REVERSE(COALESCE(_binary 'a','')));
+SELECT FIELD(LOWER(COALESCE(_binary 'A','')),'A','a'), HEX(LOWER(COALESCE(_binary 'A','')));
+SELECT FIELD(UPPER(COALESCE(_binary 'a','')),'A','a'), HEX(UPPER(COALESCE(_binary 'a','')));
+SELECT FIELD(SUBSTRING(COALESCE(_binary 'a',''),1,1),'A','a'), HEX(SUBSTRING(COALESCE(_binary 'a',''),1,1));
+SELECT FIELD(REPEAT(COALESCE(_binary 'a',''),1),'A','a'), HEX(REPEAT(COALESCE(_binary 'a',''),1));
+SELECT FIELD(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')),'A','a'), HEX(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')));
+SELECT FIELD(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)),'A','a'), HEX(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)));
+SELECT FIELD(LOWER(x),'A','a'), HEX(LOWER(x)) FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+-- Direct FIELD observes set declarations without a CONCAT_WS masking boundary.
+PREPARE p_field_history FROM 'SELECT FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_text_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT NULL) d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_null_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT _binary '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_binary_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(x,''A'',''a'') FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>''''';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);

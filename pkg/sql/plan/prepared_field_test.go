@@ -104,8 +104,16 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 		{"select field(cast(x as binary(1)),'A','a') from (select 'a' x union all select '') d where x<>''", true},
 		{"select field(concat_ws('',elt(1,x)),'A','a') from (select _binary 'a' x union all select '') d where x<>''", true},
 		{"select field(concat_ws('',elt(1,cast(x as char))),'A','a') from (select _binary 'a' x union all select '') d where x<>''", false},
-		{"select field(lower(x),'A','a') from (select _binary 'A' x union all select '') d where x<>''", false},
-		{"select field(concat_ws('',lower(x)),'A','a') from (select _binary 'A' x union all select '') d where x<>''", false},
+		{"select field(lower(x),'A','a') from (select _binary 'A' x union all select '') d where x<>''", true},
+		{"select field(concat_ws('',lower(x)),'A','a') from (select _binary 'A' x union all select '') d where x<>''", true},
+		{"select field(reverse(coalesce(_binary 'a','')),'A','a')", true},
+		{"select field(lower(coalesce(_binary 'A','')),'A','a')", true},
+		{"select field(upper(coalesce(_binary 'a','')),'A','a')", true},
+		{"select field(reverse(cast(coalesce(_binary 'a','') as char)),'A','a')", false},
+		{"select field(reverse(reverse(coalesce(_binary 'a',''))),'A','a')", true},
+		{"select field(substring(coalesce(_binary 'a',''),1,1),'A','a')", true},
+		{"select field(repeat(coalesce(_binary 'a',''),1),'A','a')", true},
+		{"select field(trim(both ' ' from coalesce(_binary ' a ','')),'A','a')", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
@@ -119,6 +127,35 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 			require.Equal(t, tc.binary, got, field.String())
 		})
 	}
+}
+
+func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
+	ctx := context.Background()
+	source, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{
+		makePlan2StringConstExprWithType("a", true), makePlan2StringConstExprWithType(""),
+	})
+	require.NoError(t, err)
+	binder := &baseBinder{sysCtx: ctx}
+	alreadyBinary, err := binder.bindStringSourceDeclaration("reverse", []*Expr{source})
+	require.NoError(t, err)
+	require.Same(t, source, alreadyBinary[0])
+	target := types.T_text.ToType()
+	source, err = appendSetOperationCastBeforeExpr(ctx, source, makePlan2Type(&target))
+	require.NoError(t, err)
+	args := []*Expr{source}
+	converted, err := binder.bindStringSourceDeclaration("reverse", args)
+	require.NoError(t, err)
+	require.Same(t, source, args[0], "do not mutate the caller's arguments")
+	require.NotSame(t, source, converted[0])
+	require.Equal(t, types.T_blob, makeTypeByPlan2Expr(converted[0]).Oid)
+	again, err := binder.bindStringSourceDeclaration("reverse", converted)
+	require.NoError(t, err)
+	require.Same(t, converted[0], again[0], "do not add repeated representation casts")
+	explicit, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+	require.NoError(t, err)
+	text, err := binder.bindStringSourceDeclaration("reverse", []*Expr{explicit})
+	require.NoError(t, err)
+	require.Same(t, explicit, text[0], "SQL-authored text declarations remain authoritative")
 }
 
 func TestPreparedFieldSetConversionSource(t *testing.T) {
