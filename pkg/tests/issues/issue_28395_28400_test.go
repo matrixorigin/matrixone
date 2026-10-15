@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,15 +60,17 @@ func TestIssue28395And28400StringIntegerConversions(t *testing.T) {
 		exec(t, fmt.Sprintf("use `%s`", dbName))
 
 		t.Run("space integer and decimal counts", func(t *testing.T) {
-			var got8000, got8001, got10000, got65535 int64
+			var got8000, got8001, got10000, got65535, got65536, got100000 int64
 			err := conn.QueryRowContext(ctx,
-				"select length(space(8000)), length(space(8001)), length(space(10000)), length(space(65535))",
-			).Scan(&got8000, &got8001, &got10000, &got65535)
+				"select length(space(8000)), length(space(8001)), length(space(10000)), length(space(65535)), length(space(65536)), length(space(100000))",
+			).Scan(&got8000, &got8001, &got10000, &got65535, &got65536, &got100000)
 			require.NoError(t, err)
 			require.Equal(t, int64(8000), got8000)
 			require.Equal(t, int64(8001), got8001)
 			require.Equal(t, int64(10000), got10000)
 			require.Equal(t, int64(65535), got65535)
+			require.Equal(t, int64(65536), got65536)
+			require.Equal(t, int64(100000), got100000)
 
 			var got14, got15, got19, gotNegative int64
 			err = conn.QueryRowContext(ctx,
@@ -80,8 +83,73 @@ func TestIssue28395And28400StringIntegerConversions(t *testing.T) {
 			require.Zero(t, gotNegative)
 		})
 
+		t.Run("space large output metadata and materialization", func(t *testing.T) {
+			func() {
+				rows, err := conn.QueryContext(ctx, "select space(100000)")
+				require.NoError(t, err)
+				defer rows.Close()
+				columns, err := rows.ColumnTypes()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				require.Equal(t, "LONGTEXT", columns[0].DatabaseTypeName())
+				require.True(t, rows.Next())
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				require.Len(t, value, 100000)
+				require.Empty(t, strings.Trim(value, " "))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}()
+			exec(t, "create table space_large_result as select space(100000) as s")
+			defer exec(t, "drop table space_large_result")
+			var length, rounded int64
+			err := conn.QueryRowContext(ctx, "select length(s), length(space(cast(65535.5 as decimal(8,1)))) from space_large_result").Scan(&length, &rounded)
+			require.NoError(t, err)
+			require.Equal(t, int64(100000), length)
+			require.Equal(t, int64(65536), rounded)
+		})
+
+		for _, protocol := range []string{"sql", "binary"} {
+			t.Run("space prepared reuse "+protocol, func(t *testing.T) {
+				var stmt *sql.Stmt
+				if protocol == "sql" {
+					exec(t, "prepare space_length_stmt from 'select length(space(?))'")
+					defer exec(t, "deallocate prepare space_length_stmt")
+				} else {
+					var err error
+					stmt, err = conn.PrepareContext(ctx, "select length(space(?))")
+					require.NoError(t, err)
+					defer stmt.Close()
+				}
+				for _, value := range []any{int64(65535), int64(65536), int64(100000), int64(-1), nil, int64(67108865), int64(3)} {
+					var got sql.NullInt64
+					var err error
+					if protocol == "sql" {
+						if value == nil {
+							exec(t, "set @space_count = null")
+						} else {
+							exec(t, fmt.Sprintf("set @space_count = %d", value.(int64)))
+						}
+						err = conn.QueryRowContext(ctx, "execute space_length_stmt using @space_count").Scan(&got)
+					} else {
+						err = stmt.QueryRowContext(ctx, value).Scan(&got)
+					}
+					if value == int64(67108865) {
+						require.ErrorContains(t, err, "the space count is greater than max allowed value 67108864")
+						continue
+					}
+					require.NoError(t, err)
+					if value == nil {
+						require.False(t, got.Valid)
+					} else {
+						require.Equal(t, sql.NullInt64{Int64: max(value.(int64), 0), Valid: true}, got)
+					}
+				}
+			})
+		}
+
 		exec(t, "create table issue28400_space_inputs (id int primary key, n bigint)")
-		exec(t, "insert into issue28400_space_inputs values (1, -1), (2, 0), (3, 1), (4, 8001), (5, 10000), (6, null)")
+		exec(t, "insert into issue28400_space_inputs values (1, -1), (2, 0), (3, 1), (4, 8001), (5, 10000), (6, null), (7, 65536), (8, 100000)")
 		rows, err := conn.QueryContext(ctx,
 			"select id, length(space(n)) from issue28400_space_inputs order by id",
 		)
@@ -97,6 +165,8 @@ func TestIssue28395And28400StringIntegerConversions(t *testing.T) {
 			{id: 4, length: sql.NullInt64{Int64: 8001, Valid: true}},
 			{id: 5, length: sql.NullInt64{Int64: 10000, Valid: true}},
 			{id: 6, length: sql.NullInt64{}},
+			{id: 7, length: sql.NullInt64{Int64: 65536, Valid: true}},
+			{id: 8, length: sql.NullInt64{Int64: 100000, Valid: true}},
 		}
 		for _, want := range spaceWant {
 			require.True(t, rows.Next())

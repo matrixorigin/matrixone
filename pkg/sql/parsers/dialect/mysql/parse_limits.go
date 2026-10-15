@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
@@ -74,4 +75,18 @@ func signedIntegral(lexer yyLexer, value any) (int64, bool) {
 		return 0, false
 	}
 	return result, true
+}
+
+// Type parameters are nonnegative INTEGRAL tokens stored in int32 AST fields.
+// Check before narrowing so oversized widths and scales cannot become defaults.
+func typeLengthIntegral(lexer yyLexer, value any) (int32, bool) {
+	result, ok := signedIntegral(lexer, value)
+	if !ok {
+		return 0, false
+	}
+	if result > math.MaxInt32 {
+		lexer.Error("value is out of range int32")
+		return 0, false
+	}
+	return int32(result), true
 }

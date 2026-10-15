@@ -138,6 +138,19 @@ select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
 name    type    column_name
 idx7    MULTIPLE    name
 idx7    MULTIPLE    __mo_alias_id
+create index idx8 on t1(age) using BTREE;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL        BTREE                YES    id
+t1    1    idx7    1    name    A    0    NULL    NULL    YES    btree                YES    name
+t1    1    idx8    1    age    A    0    NULL    NULL    YES    btree                YES    age
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx7` USING btree (`name`),\n  KEY `idx8` USING btree (`age`)\n)
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx8";
+name    type    column_name
+idx8    MULTIPLE    age
+idx8    MULTIPLE    __mo_alias_id
 drop table if exists parmas;
 CREATE TABLE params (`key` VARCHAR(250) NOT NULL,run_uuid VARCHAR(32) NOT NULL,CONSTRAINT param_pk PRIMARY KEY (`key`, run_uuid));
 CREATE INDEX index_params_run_uuid ON params (run_uuid);
