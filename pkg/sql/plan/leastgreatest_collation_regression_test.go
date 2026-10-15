@@ -113,7 +113,7 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 				Args: []*Expr{{Typ: Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
 			}}}
 			statisticalExpr := &Expr{Typ: Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &ObjectRef{Obj: function.EncodeOverloadID(180, 0)}, // VAR_POP
+				Func: &ObjectRef{Obj: function.EncodeOverloadID(function.VAR_POP, 0)},
 				Args: []*Expr{{Typ: Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}}},
 			}}}
 			owner := &planpb.TableDef{Cols: []*planpb.ColDef{

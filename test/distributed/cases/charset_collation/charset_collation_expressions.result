@@ -53,7 +53,7 @@ SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) A
 FROM mo_catalog.mo_tables
 WHERE reldatabase = 'collation_expression_test' AND relname = 'least_protocol_view';
 ➤ required_protocol[-5,64,0]  𝄀
-113
+114
 DROP VIEW least_protocol_view;
 SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
 ➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
