@@ -367,7 +367,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	// Historical rows cannot be matched against current object grants. A
 	// subscription is admitted by subscriber-local broad authorization and keeps
 	// the publication allowlist below instead of using publisher role/object IDs.
-	if stmt.AtTsExpr == nil && sub == nil {
+	// Trusted internal discovery also runs during bootstrap, before the role and
+	// privilege catalogs exist. It already bypasses frontend authorization.
+	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) {
 		protocol := int64(defines.MORPCMinVersion)
 		if requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
 			protocol = defines.MORPCVersion41

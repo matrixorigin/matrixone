@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/assert"
@@ -304,6 +306,68 @@ func TestCoverage_buildShowTables(t *testing.T) {
 		"show full tables from tpch where Table_type = 'VIEW'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+// Bootstrap discovers catalog tables before the privilege catalogs exist.
+type showTablesBootstrapContext struct {
+	CompilerContext
+	privilegeLookups int
+}
+
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
+		c.privilegeLookups++
+		return nil, nil, nil
+	}
+	return c.CompilerContext.Resolve(database, table, snapshot)
+}
+
+func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
+	for _, sql := range []string{
+		"show tables from mo_catalog",
+		"show full tables from mo_catalog",
+		"show tables from mo_catalog like 'mo_%'",
+		"show full tables from mo_catalog where Table_type = 'BASE TABLE'",
+	} {
+		for _, mode := range []string{"internal", "unmarked", "explicit false"} {
+			t.Run(mode+"/"+sql, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				if mode != "unmarked" {
+					mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), defines.InternalExecutorKey{}, mode == "internal"))
+				}
+				ctx := &showTablesBootstrapContext{CompilerContext: mock.CurrentContext()}
+				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				if mode == "internal" {
+					require.NoError(t, err)
+					require.NotNil(t, built.GetQuery())
+					require.Zero(t, ctx.privilegeLookups)
+				} else {
+					// Missing catalogs must not turn ordinary user queries into
+					// unfiltered internal discovery, including for account 0.
+					require.Error(t, err)
+					require.Positive(t, ctx.privilegeLookups)
+				}
+			})
+		}
+	}
+}
+
+func TestShowTablesUserVisibilityPlan(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	for _, node := range built.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+			return
+		}
+	}
+	t.Fatal("ordinary SHOW TABLES must apply privilege visibility")
 }
 
 func TestCoverage_buildShowColumns(t *testing.T) {
