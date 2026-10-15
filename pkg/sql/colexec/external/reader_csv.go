@@ -450,7 +450,7 @@ func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
 func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
-	if !typ.IsArrayRelate() || !ok || group.Obj {
+	if !(typ.IsArrayRelate() || typ.IsBlockScaledArray()) || !ok || group.Obj {
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder
