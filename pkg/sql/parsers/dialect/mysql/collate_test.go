@@ -24,6 +24,8 @@ func TestExpressionCollationRoundTrip(t *testing.T) {
 		"select 'a' collate utf8mb4_bin",
 		"select (concat('a','b')) collate utf8mb4_bin = 'ab'",
 		"select ? collate utf8mb4_bin",
+		"select cast('a' as char(1) character set utf8mb4) collate utf8mb4_bin",
+		"select convert('a' collate utf8mb4_bin, char character set binary)",
 		"select ('a' collate utf8mb4_general_ci) collate utf8mb4_bin",
 	} {
 		t.Run(sql, func(t *testing.T) {
