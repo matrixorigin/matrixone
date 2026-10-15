@@ -1173,6 +1173,12 @@ func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
 	return bj.querySimpleExist(path, false)
 }
 
+// QuerySimpleNoWrap returns a simple-path value without treating a non-array
+// value as a one-element array. JSON_KEYS requires this seek behavior.
+func (bj ByteJson) QuerySimpleNoWrap(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExistWithWrapping(path, false, false)
+}
+
 // QuerySimpleContainPath returns the value at a simple path using JSON_CONTAINS
 // scalar-[0] autowrap semantics for scalar array-index access.
 func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {

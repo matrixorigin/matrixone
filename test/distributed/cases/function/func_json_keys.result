@@ -28,8 +28,26 @@ null
 select json_keys('{"a": 1}', '$.b');
 json_keys({"a": 1}, $.b)
 null
+select json_keys('{"a": 1}', '$.*');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"a": 1}', '$[*]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"a": {"x": 1}}', '$**.x');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('[{"a": 1}, {"b": 2}]', '$[0 to 1]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('[{},{}]', '$[1 to 0]');
+invalid argument json_keys, bad value invalid path expression
+select json_keys('[{},{}]', '$[0 to 0]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"*": {"x": 1}}', '$."*"');
+json_keys({"*": {"x": 1}}, $."*")
+["x"]
 select json_keys(null);
 json_keys(null)
+null
+select json_keys(null, '$.*');
+json_keys(null, $.*)
 null
 select json_keys('{"a":1}', null);
 json_keys({"a":1}, null)
@@ -68,3 +86,13 @@ select json_keys(json_object('a', json_object('x', 1), 'b', 2), '$.a');
 json_keys(json_object(a, json_object(x, 1), b, 2), $.a)
 ["x"]
 drop table t2;
+select json_keys('[{},{}]', concat('$[0', char(9), 'to', char(10), '1]'));
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('not json', NULL);
+invalid argument json_keys, bad value invalid JSON document
+select json_keys('{"a":1}', '$[0]') as no_object_wrap;
+no_object_wrap
+null
+select json_keys('{"a":1}', '$[last]') as no_object_wrap;
+no_object_wrap
+null

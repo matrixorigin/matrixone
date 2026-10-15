@@ -1050,6 +1050,8 @@ kill -KILL $$
 // Scope policy and report ownership use the existing command/consume boundary;
 // the executor's real pool/deadline/drain behavior is covered separately.
 func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
+	const embed = "github.com/matrixorigin/matrixone/pkg/embed"
+	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
 	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
 	const sql = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
 	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
@@ -1059,6 +1061,11 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 		status                                                              int
 	}{
 		{name: "rollback", scope: "example/a\n" + dml + "\n" + sql, mode: "1", want: "ordinary:example/a " + dml + " " + sql + "\n"},
+		{name: "embed-rollback", scope: embed + "\nexample/a", mode: "1", want: "ordinary:" + embed + " example/a\n"},
+		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:2:2:independent\nconsume\n"},
+		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:2:2:independent\nconsume\n"},
+		{name: "isolated-rollback", scope: isolated + "\nexample/a", mode: "1", want: "ordinary:" + isolated + " example/a\n"},
+		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:2:2:independent\nconsume\n" + batches},
 		{name: "both", scope: "example/a\n" + dml + "\nexample/b\n" + sql, mode: "4", want: "ordinary:example/a example/b\n" + batches},
 		{name: "only-audited", scope: dml + "\n" + sql, mode: "4", want: batches},
 		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
