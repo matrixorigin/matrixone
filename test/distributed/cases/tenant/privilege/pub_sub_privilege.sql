@@ -9,7 +9,8 @@ use pub_db_priv_test;
 create table t1(a int, b varchar(50));
 insert into t1 values(1, 'hello'),(2, 'world'),(3, 'test');
 create table hidden_publisher_table(a int);
-create publication pub_priv_test database pub_db_priv_test table t1 account all;
+create view private_view as select a from t1;
+create publication pub_priv_test database pub_db_priv_test table t1, private_view account all;
 create cluster table mo_catalog.metadata_show_cluster(a int);
 
 -- create tenant
@@ -23,6 +24,7 @@ show tables from mo_catalog like 'metadata_show_cluster';
 -- A local same-name table in another tenant is never made visible by the publisher.
 create database pub_db_priv_test;
 create table pub_db_priv_test.t1(a int);
+create view pub_db_priv_test.private_view as select 1 as a;
 
 -- admin can query subscription db
 select * from sub_db.t1 order by a;
@@ -48,6 +50,7 @@ show create table sub_db.t1;
 -- @session:id=1&user=acc_priv_test:root&password=111
 grant show databases on account * to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
+grant select on table pub_db_priv_test.private_view to sub_reader_role;
 -- @session
 
 -- sub_reader user: query subscription db with granted privilege
@@ -59,6 +62,28 @@ show tables;
 show full tables from sub_db;
 show columns from sub_db.t1;
 show create table sub_db.t1;
+-- Table privileges expose columns, but never authorize a view definition.
+show columns from sub_db.private_view;
+show create table sub_db.private_view;
+show create view sub_db.private_view;
+show create table pub_db_priv_test.private_view;
+show create table private_view;
+prepare subscription_view_denied from 'show create table private_view';
+-- @session
+
+-- Prepare with the original database gate, then revoke it before EXECUTE.
+-- @session:id=1&user=acc_priv_test:root&password=111
+grant show tables on database sub_db to sub_reader_role;
+-- @session
+-- @session:id=2&user=acc_priv_test:sub_reader:sub_reader_role&password=111
+prepare subscription_view_definition from 'show create table private_view';
+-- @session
+-- @session:id=1&user=acc_priv_test:root&password=111
+revoke show tables on database sub_db from sub_reader_role;
+-- @session
+-- @session:id=2&user=acc_priv_test:sub_reader:sub_reader_role&password=111
+execute subscription_view_definition;
+deallocate prepare subscription_view_definition;
 show tables from sub_db like 'hidden%';
 show columns from sub_db.hidden_publisher_table;
 show columns from pub_db_priv_test.t1;

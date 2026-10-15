@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -76,6 +77,11 @@ func showMetadataVisibilitySQL(stmt tree.Statement, currentDatabase string, prot
 	return local, subscription
 }
 
+func showSubscriptionBaseTableSQL(database, table string) string {
+	return fmt.Sprintf("SHOW FULL TABLES FROM %s WHERE %s = %s AND Table_type != 'VIEW'",
+		sqlquote.Ident(database), sqlquote.Ident("Tables_in_"+database), escapeSQLString(table))
+}
+
 func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.Statement) (allowed bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
 	localSQL, subscriptionSQL := showMetadataVisibilitySQL(stmt, ses.GetDatabaseName(), currentProtocolVersion(ses.GetProc()))
@@ -88,19 +94,31 @@ func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.State
 		return false, stats, err
 	}
 	defer func() { err = finishTxn(ctx, bh, err) }()
-	for _, sql := range []string{localSQL, subscriptionSQL} {
+	hasRows := func(sql string) (bool, error) {
 		bh.ClearExecResultSet()
-		if err = bh.Exec(ctx, sql); err != nil {
-			return false, stats, err
+		if execErr := bh.Exec(ctx, sql); execErr != nil {
+			return false, execErr
 		}
-		var results []ExecResult
-		results, err = getResultSet(ctx, bh)
-		if err != nil {
-			return false, stats, err
-		}
-		if execResultArrayHasData(results) {
-			return true, stats, nil
-		}
+		results, resultErr := getResultSet(ctx, bh)
+		return execResultArrayHasData(results), resultErr
 	}
-	return false, stats, nil
+	allowed, err = hasRows(localSQL)
+	if err != nil || allowed {
+		return allowed, stats, err
+	}
+	allowed, err = hasRows(subscriptionSQL)
+	if err != nil || !allowed {
+		return allowed, stats, err
+	}
+	database, table, baseTableOnly, _ := showMetadataTarget(stmt)
+	if baseTableOnly {
+		if database == "" {
+			database = ses.GetDatabaseName()
+		}
+		// A subscriber-local broad grant cannot authorize publisher view
+		// definitions. Reuse subscription resolution and the publication
+		// allowlist in SHOW TABLES, in this already initialized background txn.
+		allowed, err = hasRows(showSubscriptionBaseTableSQL(database, table))
+	}
+	return allowed, stats, err
 }

@@ -4,7 +4,8 @@ use pub_db_priv_test;
 create table t1(a int, b varchar(50));
 insert into t1 values(1, 'hello'),(2, 'world'),(3, 'test');
 create table hidden_publisher_table(a int);
-create publication pub_priv_test database pub_db_priv_test table t1 account all;
+create view private_view as select a from t1;
+create publication pub_priv_test database pub_db_priv_test table t1, private_view account all;
 create cluster table mo_catalog.metadata_show_cluster(a int);
 create account acc_priv_test admin_name 'root' identified by '111';
 create database sub_db from sys publication pub_priv_test;
@@ -16,6 +17,7 @@ show tables from mo_catalog like 'metadata_show_cluster';
 metadata_show_cluster
 create database pub_db_priv_test;
 create table pub_db_priv_test.t1(a int);
+create view pub_db_priv_test.private_view as select 1 as a;
 select * from sub_db.t1 order by a;
 ➤ a[4,32,0]  ¦  b[12,50,0]  𝄀
 1  ¦  hello  𝄀
@@ -38,6 +40,7 @@ show create table sub_db.t1;
 internal error: do not have privilege to execute the statement
 grant show databases on account * to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
+grant select on table pub_db_priv_test.private_view to sub_reader_role;
 select * from sub_db.t1 order by a;
 ➤ a[4,32,0]  ¦  b[12,50,0]  𝄀
 1  ¦  hello  𝄀
@@ -65,6 +68,25 @@ t1  ¦  CREATE TABLE `t1` (
   `a` int DEFAULT NULL,
   `b` varchar(50) DEFAULT NULL
 )
+show columns from sub_db.private_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table sub_db.private_view;
+internal error: do not have privilege to execute the statement
+show create view sub_db.private_view;
+internal error: do not have privilege to execute the statement
+show create table pub_db_priv_test.private_view;
+internal error: do not have privilege to execute the statement
+show create table private_view;
+internal error: do not have privilege to execute the statement
+prepare subscription_view_denied from 'show create table private_view';
+internal error: do not have privilege to execute the statement
+grant show tables on database sub_db to sub_reader_role;
+prepare subscription_view_definition from 'show create table private_view';
+revoke show tables on database sub_db from sub_reader_role;
+execute subscription_view_definition;
+internal error: do not have privilege to execute the statement
+deallocate prepare subscription_view_definition;
 show tables from sub_db like 'hidden%';
 ➤ Tables_in_sub_db[12,5000,0]
 show columns from sub_db.hidden_publisher_table;
@@ -74,10 +96,12 @@ internal error: do not have privilege to execute the statement
 select table_schema, table_name from information_schema.tables
 where table_schema = 'sub_db' order by table_name;
 ➤ table_schema[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sub_db  ¦  private_view  𝄀
 sub_db  ¦  t1
 select table_schema, table_name, column_name, ordinal_position from information_schema.columns
 where table_schema = 'sub_db' order by table_name, ordinal_position;
 ➤ table_schema[12,256,0]  ¦  table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  ordinal_position[4,32,0]  𝄀
+sub_db  ¦  private_view  ¦  a  ¦  1  𝄀
 sub_db  ¦  t1  ¦  a  ¦  1  𝄀
 sub_db  ¦  t1  ¦  b  ¦  2
 drop user sub_reader;
