@@ -292,8 +292,9 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 			nil,
 		},
 		{
-			[]string{"localhost:32001", "of-course-no-such-address42033.io:32001"},
-			[]string{"127.0.0.1:32001", "of-course-no-such-address42033.io:32001"},
+			// The empty DNS label forces lookup failure even with wildcard DNS.
+			[]string{"localhost:32001", "of-course-no-such-address42033..invalid:32001"},
+			[]string{"127.0.0.1:32001", "of-course-no-such-address42033..invalid:32001"},
 			nil,
 		},
 	}
