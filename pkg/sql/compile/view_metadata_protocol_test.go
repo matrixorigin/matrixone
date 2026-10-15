@@ -127,17 +127,17 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.Equal(t, mode == "mixed", features.DecimalDivisionSemantics)
 					require.Equal(t, mode == "calendar", features.DateNumericResultContracts)
 					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
-					require.Equal(t, defines.MORPCVersion114, remoteExpressionProtocolVersion(features))
+					require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion114, persistedVersion)
+					require.Equal(t, defines.MORPCVersion115, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion114 {
+						if version == defines.MORPCVersion115 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
 						} else if version == 0 && mode == "mixed" {
@@ -147,7 +147,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 114)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 115)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
