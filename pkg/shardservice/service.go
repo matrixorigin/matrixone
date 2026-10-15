@@ -1059,12 +1059,6 @@ func (c *readCache) addShards(
 	}
 }
 
-func (c *readCache) delete(
-	tableID uint64,
-) {
-	delete(c.shards, tableID)
-}
-
 func getTNAddress(
 	cluster clusterservice.MOCluster,
 ) string {
