@@ -2750,3 +2750,151 @@ func TestGetColDataEmptyDomains(t *testing.T) {
 		}
 	}
 }
+
+func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, typ := range []types.Type{
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.New(types.T_int32, 24, 0), types.New(types.T_uint32, 24, 0),
+	} {
+		name := typ.String()
+		if typ.IsMediumInt() {
+			name += "_mediumint"
+		}
+		t.Run(name, func(t *testing.T) {
+			type testCase struct {
+				value, want     string
+				quoted, wantErr bool
+			}
+			cases := []testCase{
+				{value: "1.9", want: "2"}, {value: "2.4", want: "2"}, {value: "2.5", want: "3"},
+				{value: "1e2", want: "100"}, {value: "2.5e0", want: "3"}, {value: ".5", want: "1"},
+				{value: "1.", want: "1"}, {value: "+1.9", want: "2"}, {value: " 1.9 ", want: "2"},
+				{value: "7", want: "7", quoted: true}, {value: "1.9", quoted: true, wantErr: true},
+				{value: "1e2", quoted: true, wantErr: true}, {value: "NaN", wantErr: true},
+				{value: "+Inf", wantErr: true}, {value: "-Inf", wantErr: true}, {value: "1e+", wantErr: true},
+				{value: "1 2", wantErr: true}, {value: "1+2", wantErr: true}, {value: "1.9tail", wantErr: true},
+				{value: "0x1p2", wantErr: true}, {value: "1_0.5", wantErr: true},
+				{value: "1e999999999999999999", wantErr: true}, {value: "1e-999999999999999999", want: "0"},
+				{value: "0.10000000000000000000000000000000000000000e1", want: "1"},
+			}
+			if typ.Oid.IsUnsignedInt() {
+				cases = append(cases, testCase{value: "-0.1", wantErr: true},
+					testCase{value: "-1.9", wantErr: true},
+					testCase{value: "-0.0", want: "0"},
+					testCase{value: "-0e2", want: "0"})
+			} else {
+				cases = append(cases, testCase{value: "-1.9", want: "-2"},
+					testCase{value: "-2.5", want: "-3"},
+					testCase{value: "-0.49", want: "0"})
+			}
+			var min, max string
+			switch typ.Oid {
+			case types.T_int8:
+				min, max = "-128", "127"
+			case types.T_int16:
+				min, max = "-32768", "32767"
+			case types.T_int32:
+				min, max = "-2147483648", "2147483647"
+			case types.T_int64:
+				min, max = "-9223372036854775808", "9223372036854775807"
+			case types.T_uint8:
+				max = "255"
+			case types.T_uint16:
+				max = "65535"
+			case types.T_uint32:
+				max = "4294967295"
+			case types.T_uint64:
+				max = "18446744073709551615"
+			}
+			if typ.IsMediumInt() {
+				if typ.Oid.IsUnsignedInt() {
+					max = "16777215"
+				} else {
+					min, max = "-8388608", "8388607"
+				}
+			}
+			cases = append(cases, testCase{value: max, want: max},
+				testCase{value: max + ".0", want: max},
+				testCase{value: max + ".4", want: max},
+				testCase{value: max + ".5", wantErr: true})
+			if min != "" {
+				cases = append(cases, testCase{value: min + ".4", want: min},
+					testCase{value: min + ".5", wantErr: true})
+			}
+			if typ.Oid == types.T_int64 || typ.Oid == types.T_uint64 {
+				cases = append(cases,
+					testCase{value: "9007199254740993.0", want: "9007199254740993"})
+			}
+			for _, tc := range cases {
+				t.Run(fmt.Sprintf("%s_quoted_%t", tc.value, tc.quoted), func(t *testing.T) {
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(typ)
+					defer bat.Clean(proc.Mp())
+					param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(),
+						Cols: []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width}}},
+						Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV},
+							ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+					err := getColData(bat, []csvparser.Field{{Val: tc.value, HasStringQuote: tc.quoted}}, 0, param, proc.Mp(),
+						plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0}, proc)
+					if tc.wantErr {
+						require.Error(t, err)
+						require.Zero(t, bat.Vecs[0].Length())
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, 1, bat.Vecs[0].Length())
+					var got string
+					switch typ.Oid {
+					case types.T_int8:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int8](bat.Vecs[0], 0))
+					case types.T_int16:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int16](bat.Vecs[0], 0))
+					case types.T_int32:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[0], 0))
+					case types.T_int64:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
+					case types.T_uint8:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint8](bat.Vecs[0], 0))
+					case types.T_uint16:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint16](bat.Vecs[0], 0))
+					case types.T_uint32:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint32](bat.Vecs[0], 0))
+					case types.T_uint64:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+					}
+					require.Equal(t, tc.want, got)
+				})
+			}
+		})
+	}
+}
+
+func TestGetColDataIntegerRoundingScope(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name, format      string
+		externType        int32
+		enumValues, value string
+		want              uint64
+	}{
+		{"load csv", tree.CSV, int32(plan.ExternType_LOAD), "", "1.9", 1},
+		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 1},
+		{"external set", tree.CSV, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			defer bat.Clean(proc.Mp())
+			param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(), StrictSqlMode: true,
+				Cols:   []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: tc.enumValues}}},
+				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tc.format}, ExParam: tree.ExParam{ExternType: tc.externType}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+			err := getColData(bat, []csvparser.Field{{Val: tc.value}}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "i"}, proc)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{tc.want}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+		})
+	}
+}

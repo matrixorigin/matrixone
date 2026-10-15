@@ -203,6 +203,17 @@ func TestCSVErrorModeTolerates(t *testing.T) {
 	})
 	require.Equal(t, "/tmp/rows.dat", string(bat.Vecs[colPath].GetBytesAt(1)),
 		"__mo_filepath is set on a failed row too")
+	t.Run("rounded overflow rolls back partial row", func(t *testing.T) {
+		param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
+		// Materialize the string column first so a numeric failure must roll it back.
+		param.Attrs[0], param.Attrs[1] = param.Attrs[1], param.Attrs[0]
+		require.NoError(t, readAllText(t, param, proc, bat, "1,alpha\n2147483647.5,beta\n2.5,gamma\n"))
+		requireRows(t, bat, []wantRow{
+			{a: 1, s: "alpha", line: 1},
+			{line: 2, message: "is not int32 type", text: "2147483647.5,beta"},
+			{a: 3, s: "gamma", line: 3},
+		})
+	})
 }
 
 // TestCSVWithoutErrorColumnsStillFails: with the error columns pruned the scan
