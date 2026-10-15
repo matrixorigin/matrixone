@@ -770,6 +770,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
+		if err := rejectUserVarAssignmentInPersistedDDL(ctx.GetContext(), stmt, "persisted table expressions"); err != nil {
+			return nil, err
+		}
 		return buildCreateTable(ctx, stmt, nil, isPrepareStmt)
 	case *tree.CreatePitr:
 		return buildCreatePitr(stmt, ctx)
@@ -802,6 +805,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		}
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
+		if err := rejectUserVarAssignmentInPersistedDDL(ctx.GetContext(), stmt, "persisted table expressions"); err != nil {
+			return nil, err
+		}
 		return buildAlterTable(stmt, ctx)
 	case *tree.RenameTable:
 		return buildRenameTable(stmt, ctx)

@@ -4,7 +4,7 @@ Owner issue: #29909. Implementation PR: #29966. This document is the
 versioned design record for the `@name := expr` expression implemented by the
 frontend and execution engine.
 
-Version: v1.1 (2026-10-14)
+Version: v1.2 (2026-10-15)
 
 Status: Accepted for implementation
 
@@ -40,6 +40,11 @@ CREATE VIEW, CREATE OR REPLACE VIEW, and ALTER VIEW reject an assignment in
 their defining SELECT before view inference or catalog mutation. This keeps an
 existing usable view intact when a rejected replacement is attempted and avoids
 persisting a definition that ordinary non-root view expansion must reject.
+
+The same boundary applies to persisted table expressions. CREATE TABLE and
+ALTER TABLE reject an assignment anywhere in a DEFAULT, CHECK, generated-column,
+or other catalog-owned expression before table binding or catalog mutation.
+Assignments are not evaluated later by DML as an implicit session side effect.
 
 ## SQL and binding contract
 
@@ -78,6 +83,11 @@ The assignment write set is the complete expression subtree: every nested or
 conditional assignment target is checked against every earlier user-variable
 read, with names canonicalized case-insensitively.
 
+HAVING is also a pre-projection consumer. If it reads a variable in the
+assignment write set, the statement is rejected before binding; otherwise its
+filter would observe a previous physical batch and change the returned rows.
+Reads of unrelated user variables remain allowed.
+
 ## Logical-row and batch semantics
 
 The logical row, not the physical vector batch, is the semantic unit.
@@ -101,6 +111,11 @@ The logical row, not the physical vector batch, is the semantic unit.
   the branch for that row, but it does not mark the skipped assignment as a
   write. Consequently skipped branches do not publish a new user variable,
   while later projections still see a complete row history.
+
+Conditional-expression snapshot traversal is enabled only for expression trees
+that actually contain an assignment node. Ordinary IF/CASE/COALESCE evaluation
+does not allocate assignment bookkeeping or walk the executor tree, preserving
+the baseline fast path for queries that do not use this feature.
 
 The observable result of a nested self-reference is therefore stable across
 batch sizes. For example, with `@b = 0`, `SELECT @a := @b := @b + 1 FROM t`
@@ -206,6 +221,7 @@ The public contract is covered at the following layers:
 | plan serialization | generated `pkg/pb/plan/plan.pb.go` from `proto/plan.proto` |
 | DML scope admission and no-side-effect rejection | `pkg/sql/plan/user_var_assignment_test.go` (`TestUserVariableAssignmentRejectsDMLBeforeBinding`) |
 | read-before-assignment and view-authoring rejection | `pkg/sql/plan/user_var_assignment_test.go` and `pkg/tests/sqlintegration/user_var_assignment_test.go` |
+| persisted DEFAULT/CHECK/generated-expression rejection and HAVING dependency fence | `pkg/sql/plan/user_var_assignment_test.go` |
 | RHS panic clone cleanup | `pkg/sql/colexec/user_var_assignment_test.go` (`TestUserVariableAssignmentExecutorReleasesClonesOnChildPanic`) |
 
 The regression set includes empty input, multiple physical batches, nested
@@ -222,3 +238,5 @@ a new versioned design decision before code changes are approved.
   behavior.
 * **v1.1, 2026-10-14** — closes the read-before-assignment, view-authoring,
   and RHS-panic cleanup boundaries found in review.
+* **v1.2, 2026-10-15** — closes persisted table-expression and HAVING
+  admission gaps, and gates conditional bookkeeping on actual assignment use.
