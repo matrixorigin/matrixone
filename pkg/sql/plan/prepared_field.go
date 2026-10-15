@@ -289,7 +289,18 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		// Use the registered return-type contract for other functions rather
 		// than a FIELD-specific function whitelist or this execution's payload
 		// type. Unresolved markers have their declaration, not their wire type.
-		if r.unresolvedParameters || r.parameterTypes != nil {
+		resolveReturn := r.unresolvedParameters || r.parameterTypes != nil
+		if !resolveReturn {
+			// A restored CASE/relational declaration carries the same inferred
+			// origin as a declaration resolved from this pass's parameters.
+			for _, arg := range fn.Args {
+				if fieldStringArgumentDeclaration(r.expr(arg)).inferredBinary {
+					resolveReturn = true
+					break
+				}
+			}
+		}
+		if resolveReturn {
 			inputs := make([]types.Type, len(fn.Args))
 			var declaredInputs []types.Type
 			dependent := false
