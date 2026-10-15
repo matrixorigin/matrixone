@@ -186,4 +186,35 @@ select * from inline_primary order by id;
 select column_name from information_schema.key_column_usage
     where table_schema=database() and table_name='inline_primary' and constraint_name='PRIMARY';
 
+-- A future primary replacement must not hide an existing ambiguous PRIMARY.
+create table primary_order_source(id int primary key,v int,constraint `PRIMARY` check(v>0));
+insert into primary_order_source values (1,1);
+alter table primary_order_source drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1;
+select * from primary_order_source order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='primary_order_source' and constraint_type='CHECK';
+insert into primary_order_source values (2,-1);
+alter table primary_order_source drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w);
+-- An explicit primary drop makes the following generic CHECK drop unambiguous.
+alter table primary_order_source drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1;
+insert into primary_order_source values (2,-1,2);
+select * from primary_order_source order by id;
+select column_name from information_schema.key_column_usage
+    where table_schema=database() and table_name='primary_order_source' and constraint_name='PRIMARY';
+
+-- Preserve an earlier inline primary even when a later inline primary replaces it.
+create table primary_order_inline(id int,v int,constraint `PRIMARY` check(v>0));
+insert into primary_order_inline values (1,1);
+alter table primary_order_inline add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1;
+select * from primary_order_inline order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='primary_order_inline' and constraint_type='CHECK';
+insert into primary_order_inline values (2,-1);
+alter table primary_order_inline add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w);
+alter table primary_order_inline add column x int primary key default 1,drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1;
+insert into primary_order_inline values (2,-1,2,2);
+select * from primary_order_inline order by id;
+select column_name from information_schema.key_column_usage
+    where table_schema=database() and table_name='primary_order_inline' and constraint_name='PRIMARY';
+
 drop database alter_check_constraints;

@@ -271,6 +271,18 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 		{"modify unique", "id int primary key,v int,w int,constraint w check(v>0)", "modify column w int unique,drop constraint w", "", false, true},
 		{"change unique", "id int primary key,v int,x int,constraint w check(v>0)", "change column x w int unique,drop constraint w", "", false, true},
 		{"inline primary", "id int,v int,constraint `PRIMARY` check(v>0)", "add column w int primary key,drop constraint `PRIMARY`", "", false, true},
+		{"source primary cannot be hidden by later inline replacement", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1", "", false, true},
+		{"earlier inline primary cannot be hidden by later replacement", "id int,v int,constraint `PRIMARY` check(v>0)", "add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1", "", false, true},
+		{"table replacement preserves source primary ambiguity", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w)", "", false, true},
+		{"table replacement preserves earlier inline primary ambiguity", "id int,v int,constraint `PRIMARY` check(v>0)", "add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w)", "", false, true},
+		{"explicit primary drop precedes generic check drop", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1", "", true, false},
+		{"explicit check drop precedes primary replacement", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "drop check `PRIMARY`,drop primary key,add column w int primary key default 1", "", true, false},
+		{"earlier inline primary can be explicitly dropped", "id int,v int,constraint `PRIMARY` check(v>0)", "add column x int primary key default 1,drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1", "", true, false},
+		{"earlier inline primary ambiguity survives partial composite drop", "id int,v int,constraint `PRIMARY` check(v>0)", "add primary key(id,v),drop column id,drop constraint `PRIMARY`", "", false, true},
+		{"earlier table primary removed by dropping all columns", "id int,v int,constraint `PRIMARY` check(v>0)", "add primary key(id),drop column id,drop constraint `PRIMARY`", "", false, false},
+		{"renamed primary column removal clears ambiguity", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "rename column id to x,drop column x,drop constraint `PRIMARY`", "", false, false},
+		{"changed primary column removal clears ambiguity", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "change column id x int,drop column x,drop constraint `PRIMARY`", "", false, false},
+		{"later column removal cannot hide current primary", "id int primary key,v int,constraint `PRIMARY` check(v>0)", "drop constraint `PRIMARY`,drop column id", "", false, true},
 		{"modify primary", "id int,v int,w int,constraint `PRIMARY` check(v>0)", "modify column w int primary key,drop constraint `PRIMARY`", "", false, true},
 		{"change primary", "id int,v int,x int,constraint `PRIMARY` check(v>0)", "change column x w int primary key,drop constraint `PRIMARY`", "", false, true},
 		{"inline unique suffix", "id int primary key,v int,key w(v),constraint w_2 check(id>0)", "add column w int unique,drop constraint w_2", "", false, true},
@@ -323,6 +335,12 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 		p, err := runOneStmt(mock, t, "alter table check_t drop column id,drop constraint `PRIMARY`")
 		require.NoError(t, err)
 		require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Checks)
+	})
+	t.Run("declared primary with no column list still conflicts", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,constraint `PRIMARY` check(v>0))")
+		mock.ctxt.tables["check_t"].Pkey.Names = nil
+		_, err := runOneStmt(mock, t, "alter table check_t drop constraint `PRIMARY`")
+		require.ErrorContains(t, err, "ambiguous constraint name")
 	})
 	t.Run("partially dropped primary still conflicts with check", func(t *testing.T) {
 		mock := newCheckAlterOptimizer(t, "create table check_t(id int,v int,w int,primary key(id,v),constraint `PRIMARY` check(w>0))")

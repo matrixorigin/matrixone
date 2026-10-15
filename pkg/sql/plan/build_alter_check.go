@@ -74,7 +74,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	}
 	copyNames := namingAlgorithm == planpb.AlterTable_COPY
 	inlineIndexes := make(map[tree.AlterTableOption][]*IndexDef)
-	inlinePrimary := make(map[tree.AlterTableOption]*PrimaryKeyDef)
+	inlinePrimary := make(map[tree.AlterTableOption]string)
 	if copyNames {
 		// COPY builds inline column constraints immediately and table-level
 		// indexes after column changes. Retain inline producers separately so
@@ -123,11 +123,6 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 						if err := handleDropColumnWithIndex(ctx.GetContext(), original, current); err != nil {
 							return nil, err
 						}
-						if current.Pkey != nil {
-							if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), original, current); err != nil {
-								return nil, err
-							}
-						}
 					}
 					delete(columnOrigins, name)
 				}
@@ -139,8 +134,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 			for _, attr := range column.Attributes {
 				switch attr.(type) {
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
-					current.Pkey = &PrimaryKeyDef{Names: []string{origin}, PkeyColName: origin}
-					inlinePrimary[option] = current.Pkey
+					inlinePrimary[option] = column.Name.ColName()
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					definition := newAlterColumnUniqueIndex(current, column)
 					index := &IndexDef{IndexName: definition.Name, Unique: true, Parts: []string{origin}}
@@ -186,24 +180,44 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	}
 	pendingIndexNames := make(map[string]bool)
 	pendingUniqueNames := make(map[string]bool)
-	primary := current.Pkey != nil && !catalog.IsFakePkName(current.Pkey.PkeyColName)
-	for _, key := range inlinePrimary {
-		if current.Pkey == key {
-			primary = false
+	// Primary keys are applied immediately by COPY. Track their columns in
+	// clause order; a later producer must not hide an earlier primary key.
+	primaryColumns := make(map[string]bool)
+	if source.Pkey != nil && !catalog.IsFakePkName(source.Pkey.PkeyColName) {
+		for _, name := range source.Pkey.Names {
+			primaryColumns[name] = true
+		}
+		if len(primaryColumns) == 0 {
+			primaryColumns[source.Pkey.PkeyColName] = true
+		}
+	}
+	renamePrimaryColumn := func(oldName, newName string) {
+		if primaryColumns[oldName] {
+			delete(primaryColumns, oldName)
+			primaryColumns[newName] = true
+		}
+	}
+	applyInlineConstraints := func(option tree.AlterTableOption) {
+		for _, index := range inlineIndexes[option] {
+			if slices.Contains(current.Indexes, index) {
+				unique[indexNameKey(index.IndexName)] = true
+			}
+		}
+		if name := inlinePrimary[option]; name != "" {
+			clear(primaryColumns)
+			primaryColumns[name] = true
 		}
 	}
 	resolved := slices.Clone(options)
 	for i, option := range options {
 		switch opt := option.(type) {
-		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause, *tree.AlterTableChangeColumnClause:
-			for _, index := range inlineIndexes[option] {
-				if slices.Contains(current.Indexes, index) {
-					unique[indexNameKey(index.IndexName)] = true
-				}
-			}
-			if key := inlinePrimary[option]; key != nil && current.Pkey == key {
-				primary = true
-			}
+		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause:
+			applyInlineConstraints(option)
+		case *tree.AlterTableChangeColumnClause:
+			renamePrimaryColumn(opt.OldColumnName.ColName(), opt.NewColumn.Name.ColName())
+			applyInlineConstraints(option)
+		case *tree.AlterTableRenameColumnClause:
+			renamePrimaryColumn(opt.OldColumnName.ColName(), opt.NewColumnName.ColName())
 		case *tree.AlterOptionAdd:
 			switch def := opt.Def.(type) {
 			case *tree.CheckIndex:
@@ -271,7 +285,10 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				add.Def = &copy
 				resolved[i] = &add
 			case *tree.PrimaryKeyIndex:
-				primary = true
+				clear(primaryColumns)
+				for _, part := range def.KeyParts {
+					primaryColumns[part.ColName.ColName()] = true
+				}
 			}
 		case *tree.AlterOptionDrop:
 			name := string(opt.Name)
@@ -285,7 +302,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 					{checks[name], tree.AlterTableDropCheck},
 					{fkeys[name], tree.AlterTableDropForeignKey},
 					{unique[indexNameKey(name)], tree.AlterTableDropIndex},
-					{primary && indexNameKey(name) == indexNameKey("PRIMARY"), tree.AlterTableDropPrimaryKey},
+					{len(primaryColumns) > 0 && indexNameKey(name) == indexNameKey("PRIMARY"), tree.AlterTableDropPrimaryKey},
 				} {
 					if candidate.present {
 						matches++
@@ -314,7 +331,9 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 					delete(indexNames, key)
 				}
 			case tree.AlterTableDropPrimaryKey:
-				primary = false
+				clear(primaryColumns)
+			case tree.AlterTableDropColumn:
+				delete(primaryColumns, name)
 			}
 		}
 	}

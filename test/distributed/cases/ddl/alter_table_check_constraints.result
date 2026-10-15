@@ -279,4 +279,54 @@ select column_name from information_schema.key_column_usage
 where table_schema=database() and table_name='inline_primary' and constraint_name='PRIMARY';
 column_name
 w
+create table primary_order_source(id int primary key,v int,constraint `PRIMARY` check(v>0));
+insert into primary_order_source values (1,1);
+alter table primary_order_source drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1;
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+select * from primary_order_source order by id;
+id    v
+1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='primary_order_source' and constraint_type='CHECK';
+count(*)
+1
+insert into primary_order_source values (2,-1);
+constraint violation: Check constraint 'primary' is violated
+alter table primary_order_source drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w);
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+alter table primary_order_source drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1;
+insert into primary_order_source values (2,-1,2);
+select * from primary_order_source order by id;
+id    v    w
+1    1    1
+2    -1    2
+select column_name from information_schema.key_column_usage
+where table_schema=database() and table_name='primary_order_source' and constraint_name='PRIMARY';
+column_name
+w
+create table primary_order_inline(id int,v int,constraint `PRIMARY` check(v>0));
+insert into primary_order_inline values (1,1);
+alter table primary_order_inline add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int primary key default 1;
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+select * from primary_order_inline order by id;
+id    v
+1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='primary_order_inline' and constraint_type='CHECK';
+count(*)
+1
+insert into primary_order_inline values (2,-1);
+constraint violation: Check constraint 'primary' is violated
+alter table primary_order_inline add column x int primary key default 1,drop constraint `PRIMARY`,drop primary key,add column w int default 1,add primary key(w);
+invalid input: ambiguous constraint name 'primary'; use constraint-specific DROP syntax
+alter table primary_order_inline add column x int primary key default 1,drop primary key,drop constraint `PRIMARY`,add column w int primary key default 1;
+insert into primary_order_inline values (2,-1,2,2);
+select * from primary_order_inline order by id;
+id    v    x    w
+1    1    1    1
+2    -1    2    2
+select column_name from information_schema.key_column_usage
+where table_schema=database() and table_name='primary_order_inline' and constraint_name='PRIMARY';
+column_name
+w
 drop database alter_check_constraints;
