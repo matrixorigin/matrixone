@@ -73,7 +73,7 @@ func checkMaterializedViewTransaction(ctx context.Context, ses *Session) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() {
 		return moerr.NewInvalidInput(ctx, "materialized view DDL/refresh cannot execute in an active user transaction")
 	}
-	return plan2.RequirePersistedProtocolVersionForAuthoring(ctx, ses.GetTxnCompileCtx().GetProcess(), defines.MORPCVersion113)
+	return plan2.RequirePersistedProtocolVersionForAuthoring(ctx, ses.GetTxnCompileCtx().GetProcess(), defines.MORPCVersion114)
 }
 func handleRefreshMaterializedView(ctx context.Context, ses *Session, stmt *tree.RefreshMaterializedView) error {
 	if err := checkMaterializedViewTransaction(ctx, ses); err != nil {
@@ -375,13 +375,19 @@ func retireAccountMaterializedViews(ctx context.Context, bh BackgroundExec, acco
 	if err != nil {
 		return err
 	}
-	if len(objects) != 1 {
+	if len(objects) > 1 {
 		return moerr.NewInternalError(ctx, "invalid materialized view retirement result")
 	}
-	if objects[0].GetRowCount() > 128 {
+	// Background SELECTs without rows may produce no result set at all.
+	// Such accounts still need the metadata and queued-task cleanup below.
+	var rows uint64
+	if len(objects) == 1 {
+		rows = objects[0].GetRowCount()
+	}
+	if rows > 128 {
 		return moerr.NewInternalError(ctx, "materialized view account limit exceeded during retirement")
 	}
-	for i := uint64(0); i < objects[0].GetRowCount(); i++ {
+	for i := uint64(0); i < rows; i++ {
 		id, err := objects[0].GetUint64(ctx, i, 0)
 		if err != nil {
 			return err

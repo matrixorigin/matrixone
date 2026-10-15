@@ -2,24 +2,24 @@ drop table if exists issue_29313_t;
 create table issue_29313_t (g int, e enum('20','3','z'), s set('x','y','z'));
 insert into issue_29313_t values (1,'20','x'),(1,'3','y'),(1,'z','x,y'),(1,null,null),(2,'3','z');
 select sum(e), avg(e), sum(s), avg(s) from issue_29313_t;
-➤ sum(e)[-5,64,0]  ¦  avg(e)[3,9,4]  ¦  sum(s)[3,38,0]  ¦  avg(s)[3,24,4]  𝄀
-8  ¦  2.0000  ¦  10  ¦  2.5000
+➤ sum(e)[8,53,31]  ¦  avg(e)[8,53,31]  ¦  sum(s)[8,53,31]  ¦  avg(s)[8,53,31]  𝄀
+8.0  ¦  2.0  ¦  10.0  ¦  2.5
 prepare issue_29313_all from 'select sum(e), avg(e), sum(s), avg(s) from issue_29313_t';
 execute issue_29313_all;
-➤ sum(e)[-5,64,0]  ¦  avg(e)[3,9,4]  ¦  sum(s)[3,38,0]  ¦  avg(s)[3,24,4]  𝄀
-8  ¦  2.0000  ¦  10  ¦  2.5000
+➤ sum(e)[8,53,31]  ¦  avg(e)[8,53,31]  ¦  sum(s)[8,53,31]  ¦  avg(s)[8,53,31]  𝄀
+8.0  ¦  2.0  ¦  10.0  ¦  2.5
 prepare issue_29313_group from 'select sum(e), avg(e), sum(s), avg(s) from issue_29313_t where g=?';
 set @issue_29313_g = 1;
 execute issue_29313_group using @issue_29313_g;
-➤ sum(e)[-5,64,0]  ¦  avg(e)[3,9,4]  ¦  sum(s)[3,38,0]  ¦  avg(s)[3,24,4]  𝄀
-6  ¦  2.0000  ¦  6  ¦  2.0000
+➤ sum(issue_29313_t.e)[8,53,31]  ¦  avg(issue_29313_t.e)[8,53,31]  ¦  sum(issue_29313_t.s)[8,53,31]  ¦  avg(issue_29313_t.s)[8,53,31]  𝄀
+6.0  ¦  2.0  ¦  6.0  ¦  2.0
 prepare issue_29313_distinct from 'select sum(distinct e), avg(distinct s) from issue_29313_t';
 execute issue_29313_distinct;
-➤ sum(distinct e)[-5,64,0]  ¦  avg(distinct s)[3,24,4]  𝄀
-6  ¦  2.5000
+➤ sum(distinct e)[8,53,31]  ¦  avg(distinct s)[8,53,31]  𝄀
+6.0  ¦  2.5
 execute issue_29313_all;
-➤ sum(e)[-5,64,0]  ¦  avg(e)[3,9,4]  ¦  sum(s)[3,38,0]  ¦  avg(s)[3,24,4]  𝄀
-8  ¦  2.0000  ¦  10  ¦  2.5000
+➤ sum(e)[8,53,31]  ¦  avg(e)[8,53,31]  ¦  sum(s)[8,53,31]  ¦  avg(s)[8,53,31]  𝄀
+8.0  ¦  2.0  ¦  10.0  ¦  2.5
 deallocate prepare issue_29313_distinct;
 deallocate prepare issue_29313_group;
 deallocate prepare issue_29313_all;

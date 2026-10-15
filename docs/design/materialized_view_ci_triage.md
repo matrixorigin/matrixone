@@ -363,3 +363,67 @@ normally. Completed-task GC is an explicit terminal scheduler oracle. Full scope
 accessor-only native evidence reuse and release/re-review limits are recorded in
 materialized_view_self_review.md and materialized_view_review_lifecycle_results.json.
 New-head CI remains independently required; no local coverage percentage is claimed.
+
+
+### 2026-10-15: empty account retirement and protocol collision
+
+Exact failed head: `e55a8a6baa9eac0e45e60f38b10ea5aad1660803`, ALL CI run
+`38582531165`. Ordinary UT job `115915980970`, coverage UT job
+`115916066201`, Proxy BVT job `115920997966`, and pessimistic BVT job
+`115920997947` failed. SCA and shared build passed. Coverage aggregation failed
+its producer prerequisite; it did not evaluate the changed-line threshold.
+
+The first BVT failures are ordinary `DROP ACCOUNT` statements reporting
+`invalid materialized view retirement result`: Proxy at
+`ddl/alter_publish_subscribe_table.sql:78`, pessimistic at
+`analyze/analyze_tenant_domain.sql:45`. Ordinary UT diagnostics show the same
+error in tenant-catalog, account-lifecycle, restore and published-view cleanup.
+Coverage diagnostics show it in CDC and branch-account cleanup as well. Later
+BVT account-exists, metadata mismatch and unavailable-connection results are
+retained as failures; this patch does not claim every downstream result has been
+independently reproduced or that the old run passed.
+
+Invariant: an installed MV catalog with zero definitions is a valid account
+retirement state. The background SELECT can return either no result set or one
+zero-row result set. Both must reach queued-task and metadata cleanup in the
+caller-owned transaction. The helper previously rejected the first form.
+The fix normalizes only the row count; multiple result sets, the 128-object
+bound, exact native-table capabilities, SQL errors and rollback behavior retain
+their checks. Existing readiness/failure-injection tests now exercise both empty
+forms. No retries, ignored failures or coverage-policy changes are introduced.
+
+Merge main `f49bc6fa53` and preserve its DECIMAL statistical-result protocol
+113. Move MV authoring, reading, catalog-upgrade admission and typed tests to
+114, including rejecting the immediately preceding protocol/floor 113. Regenerate
+the MySQL parser from the merged grammar rather than accepting a textual merge
+of generated parse tables.
+
+Change map: retirement helper/test is R2 (public account deletion, same transaction
+and cleanup owner); protocol consumers/tests are R3 compatibility (only MV
+admission moves; main's DECIMAL gate stays 113); parser output is generated from
+the merged grammar; this record is R0. This is a focused regression/conflict fix,
+not a new feature-design revision. The existing RFC revision 3 approval remains
+pending and is not self-approved by this change.
+
+Local validation of the merged source (Go 1.27.1, linux/amd64, repository CGo
+wrapper, `matrixone_test`, `-short`, `-count=1`):
+
+- Full frontend package: PASS, 26.501 s.
+- Full compile package: PASS, 9.396 s.
+- Materialized-view focused tests in frontend, compile, plan, and v4_0_15:
+  PASS in all four packages, including 113/114 admission boundaries.
+- Full MySQL dialect parser package after regeneration: PASS, 0.170 s.
+- Existing real-client `TestIssue26114CrossAccountBranchQuotaAndOwnership`:
+  PASS, 9.009 s, including the previously failing account cleanup.
+- `go vet` on frontend, compile, plan, v4_0_15, defines and MySQL parser: PASS.
+
+Evidence logs are retained under `/workspace/mv-ci/empty-retirement-*`.
+These local checks do not establish the new GitHub CI result. The full BVT and
+changed-line coverage result must come from the new exact-head workflow.
+
+Configured golangci-lint 2.14.0 over the same six-package closure, reporting only
+findings since verified upstream main: PASS, `0 issues`. Final regression-scope
+self-review found no additional code blockers: both empty representations reach
+the existing cleanup; catalog migration, query errors, native-table capability,
+transaction rollback and object bounds remain enforced. Existing RFC approval
+and the new remote CI run remain separate pending delivery gates.

@@ -112,41 +112,49 @@ func TestMaterializedViewDefinerAccountStatus(t *testing.T) {
 }
 
 func TestMaterializedViewAccountRetirement(t *testing.T) {
-	for _, count := range []int64{0, 3, 4} {
-		for _, fail := range []int{-1, 0, 2, 5} {
-			t.Run(fmt.Sprintf("catalog=%d/failure=%d", count, fail), func(t *testing.T) {
-				bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
-				ctx := t.Context()
-				bh.EXPECT().ClearExecResultSet()
-				bh.EXPECT().Exec(ctx, mv.CatalogReadinessSQL).Return(nil)
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{count}})})
-				statements := accountMaterializedViewRetirementSQL(7)
-				injected := errors.New("retirement failed")
-				if count == 4 && (fail < 0 || fail > 2) {
-					bh.EXPECT().ClearExecResultSet()
-					bh.EXPECT().Exec(ctx, "select mv_id,database_name,name from mo_catalog.mo_materialized_views where account_id=7 order by mv_id limit 129").Return(nil)
-					bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(nil)})
-				}
-				if count == 4 {
-					for i, q := range statements {
-						require.Contains(t, q, "7")
-						if i == fail {
-							bh.EXPECT().Exec(ctx, q).Return(injected)
-							break
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no-result-set=%t", empty), func(t *testing.T) {
+			for _, count := range []int64{0, 3, 4} {
+				for _, fail := range []int{-1, 0, 2, 5} {
+					t.Run(fmt.Sprintf("catalog=%d/failure=%d", count, fail), func(t *testing.T) {
+						bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+						ctx := t.Context()
+						bh.EXPECT().ClearExecResultSet()
+						bh.EXPECT().Exec(ctx, mv.CatalogReadinessSQL).Return(nil)
+						bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{count}})})
+						statements := accountMaterializedViewRetirementSQL(7)
+						injected := errors.New("retirement failed")
+						if count == 4 && (fail < 0 || fail > 2) {
+							bh.EXPECT().ClearExecResultSet()
+							bh.EXPECT().Exec(ctx, "select mv_id,database_name,name from mo_catalog.mo_materialized_views where account_id=7 order by mv_id limit 129").Return(nil)
+							var results []interface{}
+							if !empty {
+								results = []interface{}{newMrsForCheckTenant(nil)}
+							}
+							bh.EXPECT().GetExecResultSet().Return(results)
 						}
-						bh.EXPECT().Exec(ctx, q).Return(nil)
-					}
+						if count == 4 {
+							for i, q := range statements {
+								require.Contains(t, q, "7")
+								if i == fail {
+									bh.EXPECT().Exec(ctx, q).Return(injected)
+									break
+								}
+								bh.EXPECT().Exec(ctx, q).Return(nil)
+							}
+						}
+						err := retireAccountMaterializedViews(ctx, bh, 7)
+						if count == 3 {
+							require.ErrorContains(t, err, "incomplete")
+						} else if count == 4 && fail >= 0 {
+							require.ErrorIs(t, err, injected)
+						} else {
+							require.NoError(t, err)
+						}
+					})
 				}
-				err := retireAccountMaterializedViews(ctx, bh, 7)
-				if count == 3 {
-					require.ErrorContains(t, err, "incomplete")
-				} else if count == 4 && fail >= 0 {
-					require.ErrorIs(t, err, injected)
-				} else {
-					require.NoError(t, err)
-				}
-			})
-		}
+			}
+		})
 	}
 }
 
