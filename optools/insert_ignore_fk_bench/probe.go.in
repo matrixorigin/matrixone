@@ -1,0 +1,166 @@
+// 仅用于独立性能产物；由 instrument.py 安装，禁止提交到产品包。
+package perfcounter
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"runtime/metrics"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/process"
+)
+
+var claudeFK struct {
+	sync.Mutex
+	active     bool
+	generation uint64
+	tables     map[string]bool
+	ids        map[uint64]bool
+	stats      map[string]uint64
+	io         *CounterSet
+	ioStart    int64
+}
+
+func CLAUDEAttachBlockCounters(c *CounterSet) { claudeFK.io = c }
+
+func CLAUDEObserveReader(table string, rows, bytes, blockRows uint64) {
+	claudeFK.Lock()
+	defer claudeFK.Unlock()
+	if !claudeFK.active || !claudeFK.tables[table] {
+		return
+	}
+	claudeFK.stats["reader_calls"]++
+	claudeFK.stats["reader_returned_rows"] += rows
+	claudeFK.stats["reader_materialized_bytes"] += bytes
+	claudeFK.stats["selected_persisted_block_rows"] += blockRows
+}
+
+func CLAUDEObserveAllocate(table uint64, requested int) {
+	claudeFK.Lock()
+	defer claudeFK.Unlock()
+	if !claudeFK.active || !claudeFK.ids[table] {
+		return
+	}
+	claudeFK.stats["allocator_store_calls"]++
+	claudeFK.stats["allocator_requested_values"] += uint64(requested)
+}
+
+func claudeFKSample(generation uint64) {
+	samples := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+	metrics.Read(samples)
+	heap := samples[0].Value.Uint64()
+	var rss uint64
+	if p, err := process.NewProcess(int32(os.Getpid())); err == nil {
+		if m, err := p.MemoryInfo(); err == nil {
+			rss = m.RSS
+		}
+	}
+	claudeFK.Lock()
+	defer claudeFK.Unlock()
+	if !claudeFK.active || claudeFK.generation != generation {
+		return
+	}
+	if heap > claudeFK.stats["sampled_peak_heap_objects_bytes"] {
+		claudeFK.stats["sampled_peak_heap_objects_bytes"] = heap
+	}
+	if rss > claudeFK.stats["sampled_peak_rss_bytes"] {
+		claudeFK.stats["sampled_peak_rss_bytes"] = rss
+	}
+	claudeFK.stats["memory_samples"]++
+}
+
+func init() {
+	http.HandleFunc("/debug/claude-fkbench/start", func(w http.ResponseWriter, r *http.Request) {
+		// 本端点只在 disposable profile 产物中存在，不部署到生产。上限四个表。
+		tables := strings.Split(r.URL.Query().Get("tables"), ",")
+		ids := strings.Split(r.URL.Query().Get("ids"), ",")
+		if len(tables) > 4 || len(ids) > 4 {
+			http.Error(w, "too many targets", 400)
+			return
+		}
+		ts := make(map[string]bool)
+		for _, t := range tables {
+			if !strings.HasPrefix(t, "fkbench_") || len(t) > 64 {
+				http.Error(w, "invalid table", 400)
+				return
+			}
+			ts[t] = true
+		}
+		is := make(map[uint64]bool)
+		for _, id := range ids {
+			n, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				http.Error(w, "invalid id", 400)
+				return
+			}
+			is[n] = true
+		}
+		claudeFK.Lock()
+		if claudeFK.active {
+			claudeFK.Unlock()
+			http.Error(w, "window active", 409)
+			return
+		}
+		claudeFK.generation++
+		gen := claudeFK.generation
+		claudeFK.active = true
+		claudeFK.tables = ts
+		claudeFK.ids = is
+		claudeFK.stats = map[string]uint64{
+			"reader_calls": 0, "reader_returned_rows": 0, "reader_materialized_bytes": 0,
+			"selected_persisted_block_rows": 0, "allocator_store_calls": 0, "allocator_requested_values": 0,
+		}
+		if claudeFK.io != nil {
+			claudeFK.ioStart = claudeFK.io.FileService.ReadSize.Load()
+		}
+		claudeFK.Unlock()
+		claudeFKSample(gen)
+		go func() {
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			deadline := time.NewTimer(30 * time.Second)
+			defer deadline.Stop()
+			for {
+				select {
+				case <-deadline.C:
+					claudeFK.Lock()
+					if claudeFK.generation == gen {
+						claudeFK.active = false
+					}
+					claudeFK.Unlock()
+					return
+				case <-ticker.C:
+					claudeFK.Lock()
+					active := claudeFK.active && claudeFK.generation == gen
+					claudeFK.Unlock()
+					if !active {
+						return
+					}
+					claudeFKSample(gen)
+				}
+			}
+		}()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	http.HandleFunc("/debug/claude-fkbench/stop", func(w http.ResponseWriter, r *http.Request) {
+		claudeFK.Lock()
+		gen := claudeFK.generation
+		claudeFK.Unlock()
+		claudeFKSample(gen)
+		claudeFK.Lock()
+		defer claudeFK.Unlock()
+		claudeFK.active = false
+		if claudeFK.io != nil {
+			delta := claudeFK.io.FileService.ReadSize.Load() - claudeFK.ioStart
+			if delta >= 0 {
+				claudeFK.stats["process_fileservice_read_bytes"] = uint64(delta)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(claudeFK.stats)
+	})
+}

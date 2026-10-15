@@ -206,24 +206,9 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
-		// The in-plan child checks and self-reference DetectSqls depend on the
-		// session's foreign_key_checks value. Keep prepared INSERT plans sensitive
-		// even while checks are disabled, so a later EXECUTE rebuilds the plan
-		// after either an OFF->ON or ON->OFF transition.
-		query.HasForeignKeyAction = true
-
-		enabled, err := IsForeignKeyChecksEnabled(ctx)
-		if err != nil {
+	if len(tblInfo.tableDefs) == 1 {
+		if err := appendInsertSelfReferenceChecks(ctx, query, tblInfo.objRef[0], tblInfo.tableDefs[0]); err != nil {
 			return nil, err
-		}
-		if enabled {
-			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
-				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
-			if err != nil {
-				return nil, err
-			}
-			query.DetectSqls = sqls
 		}
 	}
 
@@ -377,11 +362,50 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 		return nil, err
 	}
 
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 {
+		if err := appendInsertSelfReferenceChecks(ctx, query, tblInfo.objRef[0], tblInfo.tableDefs[0]); err != nil {
+			return nil, err
+		}
+	}
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
 		},
 	}, err
+}
+
+func appendInsertSelfReferenceChecks(ctx CompilerContext, query *plan.Query, ref *plan.ObjectRef, table *plan.TableDef) error {
+	if len(table.Fkeys) == 0 {
+		return nil
+	}
+	// Both INSERT and LOAD plans must be rebuilt when FK checks change.
+	query.HasForeignKeyAction = true
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil || !enabled {
+		return err
+	}
+	for _, node := range query.Nodes {
+		preCtx := node.GetPreInsertUkCtx()
+		foreignKeys := preCtx.GetOrderedForeignKeys()
+		if spec := preCtx.GetOrderedAutoIncrement(); spec != nil {
+			foreignKeys = spec.ForeignKeys
+		}
+		for _, fk := range foreignKeys {
+			if len(fk.SelfParentColumns) > 0 {
+				return nil // The ordered arbiter checks every self FK row by row.
+			}
+		}
+	}
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), ref.SchemaName, table.Name, table.Cols, table.Fkeys)
+	if err != nil {
+		return err
+	}
+	query.DetectSqls = append(query.DetectSqls, sqls...)
+	return nil
 }
 
 func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {

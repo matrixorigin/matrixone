@@ -35,10 +35,11 @@ func TestInternalLoadStatementProfile(t *testing.T) {
 		stmt *tree.Load
 		want bool
 	}{
-		{&tree.Load{Local: true}, false},
+		{&tree.Load{Local: true}, true},
 		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyReplace{}}, false},
 		{&tree.Load{DuplicateHandling: &tree.DuplicateKeyIgnore{}}, true},
-		{&tree.Load{Local: true}, false},
+		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyIgnore{}}, true},
+		{&tree.Load{Local: true}, true},
 		{&tree.Load{}, false},
 	} {
 		initInternalStatementProfile(proc, tc.stmt)
@@ -46,8 +47,11 @@ func TestInternalLoadStatementProfile(t *testing.T) {
 		require.Equal(t, tc.stmt.GetStatementType(), stmtType)
 		require.Equal(t, tree.QueryTypeDML, queryType)
 		require.Equal(t, tc.want, ignore)
-		param := &tree.ExternParam{ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Local: tc.stmt.Local}}
-		require.Equal(t, !tc.want, effectiveExternalStrictMode(proc, param, true), "implicit LOCAL assignment policy must not relax the decoder")
+		_, explicit := tc.stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
+		param := &tree.ExternParam{ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD), Local: tc.stmt.Local, LoadExplicitIgnore: explicit,
+		}}
+		require.Equal(t, !explicit, effectiveExternalStrictMode(proc, param, true), "implicit LOCAL row IGNORE must not relax the decoder")
 		require.False(t, effectiveExternalStrictMode(proc, param, false))
 	}
 }

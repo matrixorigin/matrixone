@@ -180,6 +180,11 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		TargetRowIdCol:               ctx.TargetRowIdCol,
 		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
 		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
+		DeferAutoIncrement:           ctx.DeferAutoIncrement,
+	}
+	if ctx.CheckEligibility != nil {
+		copied := *ctx.CheckEligibility
+		newCtx.CheckEligibility = &copied
 	}
 
 	return newCtx
@@ -218,6 +223,16 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		KeyNames:                     slices.Clone(ctx.KeyNames),
 		KeyTypes:                     keyTypes,
 		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
+	}
+	if ctx.OrderedAutoIncrement != nil {
+		newCtx.OrderedAutoIncrement = proto.Clone(ctx.OrderedAutoIncrement).(*plan.OrderedAutoIncrement)
+	}
+	for _, fk := range ctx.OrderedForeignKeys {
+		newCtx.OrderedForeignKeys = append(newCtx.OrderedForeignKeys, proto.Clone(fk).(*plan.OrderedForeignKey))
+	}
+	if ctx.RowEligibility != nil {
+		copied := *ctx.RowEligibility
+		newCtx.RowEligibility = &copied
 	}
 
 	return newCtx

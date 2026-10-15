@@ -45,6 +45,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// particular, a non-empty ODKU list still selects UPDATE while its input and
 	// assignment conversions use the IGNORE policy.
 	builder.isInsertIgnore = stmt.IsIgnore()
+	builder.insertValuesRows = 0
+	if stmt.Rows != nil {
+		if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok {
+			builder.insertValuesRows = uint64(len(values.Rows))
+		}
+	}
 	// Keep the planner-owned assignment stream structurally independent from the
 	// AST so later plan rewrites cannot resize the statement's mutable slice.
 	astUpdateExprs := slices.Clone(stmt.GetOnDuplicateUpdate())
@@ -155,7 +161,7 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if builder.qry.LoadTag || builder.isRestore {
+	if (builder.qry.LoadTag && !builder.isInsertIgnore) || builder.isRestore {
 		return true
 	}
 
@@ -2055,17 +2061,21 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 // only when every FK is satisfied. A NULL foreign-key value satisfies the constraint
 // (MATCH SIMPLE) and is kept; a self-referencing FK (ForeignTbl == 0) is left to the
 // post-execution DetectSql. The new-row column layout (and colName2Idx positions) is
-// preserved under the returned binding tag.
+// preserved under the returned binding tag. With candidate provenance enabled,
+// eligibility is materialized instead of dropping rows; the ordered arbiter
+// performs rejection after retaining their generated candidates.
 func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
 	lastNodeID int32,
 	selectTag int32,
 	colName2Idx map[string]int32,
+	eligibility *int32,
 ) (int32, int32, error) {
-	projLen := len(builder.qry.Nodes[lastNodeID].ProjectList)
+	inputProjection := builder.qry.Nodes[lastNodeID].ProjectList
+	projLen := len(inputProjection)
 	childTyps := make([]plan.Type, projLen)
-	for i, e := range builder.qry.Nodes[lastNodeID].ProjectList {
+	for i, e := range inputProjection {
 		childTyps[i] = e.Typ
 	}
 
@@ -2085,6 +2095,11 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 		FilterList: oks,
 	}, bindCtx)
 
+	if eligibility != nil {
+		newTag, err := builder.retainInsertIgnoreCandidates(bindCtx, lastNodeID, selectTag, inputProjection, eligibility)
+		return lastNodeID, newTag, err
+	}
+
 	newTag := builder.genNewBindTag()
 	newProjList := make([]*plan.Expr, projLen)
 	for i := 0; i < projLen; i++ {
@@ -2102,8 +2117,8 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 // insertIgnoreAutoIncrementReorderable is deliberately narrow. The ordered
 // candidate policy is only needed for a pure INSERT IGNORE with a real
 // single-column AUTO_INCREMENT primary key combined with another unique
-// constraint. ODKU has a different action/affected-row contract and must keep
-// its established pre-insert shape. Composite/fake keys, generated hidden
+// constraint or a row-rejecting CHECK/FK. ODKU has a different action/affected-row
+// contract and must keep its established pre-insert shape. Composite/fake keys, generated hidden
 // keys, and tables whose unique checks are bypassed do not have enough
 // provenance here to justify changing their established path.
 func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
@@ -2117,9 +2132,9 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 		return 0, false
 	}
 	// The arbiter assigns the final generated primary-key value after the
-	// ordinary row filters have run. Do not enable it while a later value change
-	// could invalidate a dependent CHECK/FK or generated-column expression.
-	// Unrelated constraints do not disable the optimized path.
+	// allocation-independent CHECK filters have run. Candidate-dependent FKs
+	// are checked by the arbiter; generated expressions depending on the ID
+	// still require the established path.
 	if len(tableDef.Pkey.Names) != 1 {
 		return 0, false
 	}
@@ -2147,7 +2162,7 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 			break
 		}
 	}
-	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
+	if (!hasOtherUnique && len(tableDef.Checks) == 0 && len(tableDef.Fkeys) == 0) || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
 	materializedWidth := 0
@@ -2187,17 +2202,16 @@ func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int
 		}
 	}
 
-	// Secondary unique keys are materialized from the pre-arbitration row. If
-	// one of their parts depends on the generated primary key, changing that
-	// key after this join would leave the uniqueness decision and the emitted
-	// index key out of sync. Unknown index metadata is also unsafe to optimize.
+	// A direct primary-key part makes a secondary unique constraint redundant
+	// with the final PK check. Derived expressions can collide independently
+	// and must not use provisional keys. Unknown metadata also fails closed.
 	for _, idx := range tableDef.Indexes {
 		if idx == nil || !idx.Unique {
 			continue
 		}
 		for _, part := range idx.Parts {
 			partPos, ok := tableColumnPosition(tableDef, catalog.ResolveAlias(part))
-			if !ok || dependent[partPos] {
+			if !ok || (dependent[partPos] && partPos != autoColPos) {
 				return true
 			}
 		}
@@ -2219,7 +2233,7 @@ func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int
 		}
 		for _, childColID := range fk.Cols {
 			for colPos, col := range tableDef.Cols {
-				if col != nil && col.ColId == childColID && dependent[colPos] {
+				if col != nil && col.ColId == childColID && dependent[colPos] && colPos != int(autoColPos) {
 					return true
 				}
 			}
@@ -2237,6 +2251,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	selectNode *plan.Node,
 	colName2Idx map[string]int32,
 	autoIncrementGeneratedColumn int32,
+	rowEligibilityColumn int32,
 	skipUniqueIdx []bool,
 	appendedUniqueProjs map[string]*plan.Expr,
 	idxObjRefs []*plan.ObjectRef,
@@ -2254,6 +2269,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}
 	outputWidth := baseWidth
 	if autoIncrementReorder {
+		outputWidth--
+	}
+	if rowEligibilityColumn >= 0 {
 		outputWidth--
 	}
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
@@ -2378,9 +2396,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		conflictExprs = append(conflictExprs, markExpr)
 	}
 
-	if len(keyExprs) < 2 {
+	if len(keyExprs) == 0 || (len(keyExprs) < 2 && !autoIncrementReorder && !hasSelfReferencingForeignKeys(tableDef)) {
 		return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
-			"INSERT IGNORE multi-key dedup requires at least two unique constraints")
+			"INSERT IGNORE arbitration requires a primary key or multiple unique constraints")
 	}
 	projectTag := builder.genNewBindTag()
 	projectList := make([]*plan.Expr, 0, baseWidth+2*len(keyExprs))
@@ -2393,7 +2411,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		outputRemapping = make(map[[2]int32][2]int32, outputWidth)
 	}
 	for i, expr := range selectNode.ProjectList {
-		if autoIncrementReorder && int32(i) == markerSelectPos {
+		if (autoIncrementReorder && int32(i) == markerSelectPos) || int32(i) == rowEligibilityColumn {
 			continue
 		}
 		if autoIncrementReorder {
@@ -2407,6 +2425,14 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		projectList = append(projectList, &plan.Expr{
 			Typ:  selectNode.ProjectList[markerSelectPos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: markerSelectPos}},
+		})
+	}
+	eligibilityInputPos := int32(-1)
+	if rowEligibilityColumn >= 0 {
+		eligibilityInputPos = int32(len(projectList))
+		projectList = append(projectList, &plan.Expr{
+			Typ:  selectNode.ProjectList[rowEligibilityColumn].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: rowEligibilityColumn}},
 		})
 	}
 	keyColumns := make([]int32, len(keyExprs))
@@ -2447,6 +2473,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			KeyTypeCounts:          keyTypeCounts,
 		},
 	}
+	if eligibilityInputPos >= 0 {
+		arbiterNode.PreInsertUkCtx.RowEligibility = &plan.ColRef{ColPos: eligibilityInputPos}
+	}
 	if autoIncrementReorder {
 		// These expressions are consumed after arbitration. Their binding tag is
 		// updated by the caller; their positions must follow the same permutation
@@ -2470,13 +2499,39 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
 				"missing INSERT IGNORE auto-increment primary-key projection")
 		}
+		arbiterNode.PreInsertUkCtx.OrderedAutoIncrement = &plan.OrderedAutoIncrement{
+			Ref:         DeepCopyObjectRef(objRef),
+			TableDef:    DeepCopyTableDef(tableDef, true),
+			ColumnIndex: tableDef.Name2ColIndex[pkName], ValuesRows: builder.insertValuesRows,
+		}
+		foreignKeys, err := builder.orderedAutoIncrementForeignKeys(bindCtx, tableDef, objRef, colName2Idx, true)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		arbiterNode.PreInsertUkCtx.OrderedAutoIncrement.ForeignKeys = foreignKeys
 		arbiterNode.PreInsertUkCtx.AutoIncrementReorder = true
 		arbiterNode.PreInsertUkCtx.AutoIncrementColumn = autoColumn
 		arbiterNode.PreInsertUkCtx.AutoIncrementGeneratedColumn = int32(outputWidth)
 		arbiterNode.PreInsertUkCtx.AutoIncrementKeyIndex = 0
 		arbiterNode.PreInsertUkCtx.AutoIncrementOutputColumn = autoColumn
+	} else {
+		foreignKeys, err := builder.orderedAutoIncrementForeignKeys(bindCtx, tableDef, objRef, colName2Idx, false)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		arbiterNode.PreInsertUkCtx.OrderedForeignKeys = foreignKeys
 	}
 	lastNodeID = builder.appendNode(arbiterNode, bindCtx)
+	if autoIncrementReorder {
+		// The input PK is still NULL for generated rows. Lock the final row image
+		// before it reaches MULTI_UPDATE; explicit rows also kept their early lock.
+		pos := arbiterNode.PreInsertUkCtx.AutoIncrementOutputColumn
+		lastNodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_LOCK_OP, Children: []int32{lastNodeID},
+			TableDef: tableDef, BindingTags: []int32{builder.genNewBindTag()},
+			LockTargets: []*plan.LockTarget{{TableId: tableDef.TblId, ObjRef: objRef,
+				PrimaryColIdxInBat: pos, PrimaryColRelPos: outputTag, PrimaryColTyp: outputProject[pos].Typ}},
+		}, bindCtx)
+	}
 	return lastNodeID, outputTag, arbiterNode, nil
 }
 
@@ -2894,8 +2949,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// INSERT IGNORE applies CHECK constraints as a FILTER. Materialize unique-key
 	// lock columns before that filter so its pass-through projection preserves the
 	// physical vectors consumed by LockOp.
+	rowEligibilityColumn := int32(-1)
 	lockKeysMaterializedBeforeChecks := false
-	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 {
+	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 && autoIncrementGeneratedColumn < 0 {
 		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
 		if err != nil {
 			return 0, err
@@ -2928,17 +2984,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	} else if onDupAction == plan.Node_IGNORE {
-		lastNodeID, err = appendCheckConstraintPlan(
-			builder,
-			bindCtx,
-			tableDef,
-			lastNodeID,
-			selectTag,
-			colName2Idx,
-			true,
-		)
-		if err != nil {
-			return 0, err
+		// The safe reordered path already evaluated CHECK before PRE_INSERT.
+		// Do not evaluate it again over either the final rows or volatile input.
+		if autoIncrementGeneratedColumn < 0 {
+			lastNodeID, err = appendCheckConstraintPlan(
+				builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, true)
+			if err != nil {
+				return 0, err
+			}
 		}
 		selectNode = builder.qry.Nodes[lastNodeID]
 
@@ -2947,7 +3000,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			return 0, err
 		}
 		if fkEnabled {
-			if lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(bindCtx, tableDef, lastNodeID, selectTag, colName2Idx); err != nil {
+			var eligibility *int32
+			if autoIncrementGeneratedColumn >= 0 {
+				eligibility = &rowEligibilityColumn
+			}
+			fkTable := tableDef
+			if autoIncrementGeneratedColumn >= 0 {
+				fkTable = independentAutoIncrementForeignKeys(tableDef)
+			}
+			if lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(bindCtx, fkTable, lastNodeID, selectTag, colName2Idx, eligibility); err != nil {
 				return 0, err
 			}
 			selectNode = builder.qry.Nodes[lastNodeID]
@@ -3339,13 +3400,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			uniqueConstraintCount++
 		}
 	}
+	selfForeignKeyChecks := false
+	if onDupAction == plan.Node_IGNORE && hasSelfReferencingForeignKeys(tableDef) {
+		selfForeignKeyChecks, err = IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	useInsertIgnoreMultiDedup := onDupAction == plan.Node_IGNORE &&
-		uniqueConstraintCount > 1 && !builder.canSkipDedup(tableDef)
+		(uniqueConstraintCount > 1 || autoIncrementGeneratedColumn >= 0 || selfForeignKeyChecks) && !builder.canSkipDedup(tableDef)
 	if useInsertIgnoreMultiDedup {
 		oldSelectTag := selectTag
 		lastNodeID, selectTag, selectNode, err = builder.appendInsertIgnoreMultiDedup(
 			bindCtx, tableDef, objRef, lastNodeID, selectTag, selectNode, colName2Idx,
-			autoIncrementGeneratedColumn,
+			autoIncrementGeneratedColumn, rowEligibilityColumn,
 			skipUniqueIdx, appendedUniqueProjs, idxObjRefs, idxTableDefs)
 		if err != nil {
 			return 0, err
@@ -5408,6 +5476,25 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
+	var checkEligibility *plan.ColRef
+	if trackAutoIncrementGenerated && len(tableDef.Checks) > 0 {
+		inputProjection := builder.qry.Nodes[lastNodeID].ProjectList
+		lastNodeID, err = appendCheckConstraintPlan(
+			builder, tmpCtx, tableDef, lastNodeID, materializedTag, colName2Idx, true)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
+		eligibilityPos := int32(-1)
+		checkTag, err := builder.retainInsertIgnoreCandidates(
+			tmpCtx, lastNodeID, materializedTag, inputProjection, &eligibilityPos)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
+		for _, expr := range projList2 {
+			replaceColRefTag(expr, materializedTag, checkTag)
+		}
+		checkEligibility = &plan.ColRef{ColPos: eligibilityPos}
+	}
 	if trackAutoIncrementGenerated {
 		projList2 = append(projList2, &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
@@ -5430,6 +5517,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				ClusterByExpr:                clusterByExpr,
 				TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
 				AutoIncrementGeneratedColumn: markerPhysicalPos,
+				CheckEligibility:             checkEligibility,
+				DeferAutoIncrement:           trackAutoIncrementGenerated,
 			},
 			BindingTags: []int32{preInsertTag},
 		}, tmpCtx)

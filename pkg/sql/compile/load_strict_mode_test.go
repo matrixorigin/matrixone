@@ -39,6 +39,18 @@ func TestEffectiveExternalStrictModeForLoadDataIgnore(t *testing.T) {
 
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Load", tree.QueryTypeDML, false)
 	require.True(t, effectiveExternalStrictMode(proc, loadParam, true))
+
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Load", tree.QueryTypeDML, true)
+	localParam := &tree.ExternParam{ExParam: tree.ExParam{
+		ExternType: int32(plan.ExternType_LOAD), Local: true,
+	}}
+	require.True(t, effectiveExternalStrictMode(proc, localParam, true),
+		"LOCAL row rejection must not disable strict input parsing without explicit IGNORE")
+	require.False(t, effectiveExternalStrictMode(proc, localParam, false))
+	localParam.LoadExplicitIgnore = true
+	require.False(t, effectiveExternalStrictMode(proc, localParam, true))
+	require.True(t, effectiveExternalStrictMode(nil, localParam, true))
+	require.True(t, effectiveExternalStrictMode(proc, nil, true))
 }
 
 func TestStrictSqlModeTraditional(t *testing.T) {
