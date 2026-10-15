@@ -542,9 +542,10 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	ctr.probeBucketActive = false
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
-		if !ctr.spillEngine.CleanupPending() {
-			ctr.spillEngine = nil
-		}
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
+		ctr.spillEngine = nil
 	}
 }
 

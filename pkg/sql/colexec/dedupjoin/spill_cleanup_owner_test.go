@@ -18,12 +18,15 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -38,6 +41,85 @@ type spillCleanupErrorChild struct {
 
 func (child *spillCleanupErrorChild) Call(*process.Process) (vm.CallResult, error) {
 	return vm.NewCallResult(), child.err
+}
+
+func TestDedupJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
+	for _, boundary := range []string{"reset", "free"} {
+		for _, removeError := range []bool{false, true} {
+			name := boundary + "/control"
+			if removeError {
+				name = boundary + "/remove-error"
+			}
+			t.Run(name, func(t *testing.T) {
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+				t.Cleanup(proc.Free)
+				ctx, cancel := context.WithCancel(context.Background())
+				proc.BuildPipelineContext(ctx)
+				t.Cleanup(cancel)
+				budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+				t.Cleanup(budget.Close)
+				generation, err := budget.OpenGeneration(1)
+				require.NoError(t, err)
+				t.Cleanup(generation.Close)
+				fd, err := os.CreateTemp(t.TempDir(), "cached-dedupjoin-*")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = fd.Close() })
+				path := fd.Name()
+				require.NoError(t, fd.Close())
+				disk, err := generation.ReserveSpillDisk(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { disk.Release() })
+				var blocked atomic.Bool
+				blocked.Store(removeError)
+				var removes, releases atomic.Int32
+				file := message.NewReopenableSpillFile(
+					func(context.Context) (*os.File, error) { return os.Open(path) },
+					func() error {
+						removes.Add(1)
+						if blocked.Load() {
+							return errors.New("injected cached operator remove failure")
+						}
+						return os.Remove(path)
+					}, 1, 1, func() { disk.Release(); releases.Add(1) },
+				)
+				op := &DedupJoin{}
+				t.Cleanup(func() {
+					blocked.Store(false)
+					op.Free(proc, false, nil)
+					require.NoError(t, file.Close())
+				})
+				engine, err := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{Budget: generation}, installTestAllocation(t), mpool.AllocationOwnerHashBuild)
+				require.NoError(t, err)
+				engine.InitFromSpilledFiles([]*message.SpillFile{file})
+				op.ctr.spillEngine = engine
+				cancel()
+				if boundary == "reset" {
+					op.Reset(proc, true, context.Canceled)
+				} else {
+					op.Free(proc, true, context.Canceled)
+				}
+				generation.Close()
+				if removeError {
+					require.FileExists(t, path)
+					require.EqualValues(t, 1, generation.SpillDiskUsed())
+					require.Zero(t, releases.Load())
+				}
+				// Keep the cached operator idle: no Prepare, Free or Release
+				// may supply progress after the filesystem recovers.
+				blocked.Store(false)
+				require.Eventually(t, func() bool { return releases.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+				require.NoFileExists(t, path)
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Nil(t, op.ctr.spillEngine)
+				require.False(t, engine.CleanupPending())
+				calls := removes.Load()
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.Equal(t, calls, removes.Load(), "detached cleanup must not run twice")
+				require.EqualValues(t, 1, releases.Load())
+			})
+		}
+	}
 }
 
 func TestDedupJoinSpillFailureKeepsCleanupOwner(t *testing.T) {
@@ -89,26 +171,27 @@ func TestDedupJoinSpillFailureKeepsCleanupOwner(t *testing.T) {
 				disk, err := generation.ReserveSpillDisk(1)
 				require.NoError(t, err)
 				defer disk.Release()
-				blocked := removeError
-				removeCalls, releases := 0, 0
+				var blocked atomic.Bool
+				blocked.Store(removeError)
+				var removeCalls, releases atomic.Int32
 				file := message.NewReopenableSpillFile(
 					func(context.Context) (*os.File, error) { return os.Open(path) },
 					func() error {
-						removeCalls++
-						if blocked {
+						removeCalls.Add(1)
+						if blocked.Load() {
 							// Constructor/account rejection retries through JoinMap.Free.
 							// Scatter failure keeps ownership on the operator until recovery.
 							if phase != "scatter" {
-								blocked = false
+								blocked.Store(false)
 							}
 							return errors.New("injected remove failure")
 						}
 						return os.Remove(path)
 					},
-					1, 1, func() { releases++; disk.Release() },
+					1, 1, func() { disk.Release(); releases.Add(1) },
 				)
 				defer func() {
-					blocked = false
+					blocked.Store(false)
 					op.Free(proc, true, upstreamErr)
 					require.NoError(t, file.Close())
 				}()
@@ -146,26 +229,27 @@ func TestDedupJoinSpillFailureKeepsCleanupOwner(t *testing.T) {
 					require.True(t, engine.CleanupPending())
 					require.FileExists(t, path)
 					require.EqualValues(t, 1, generation.SpillDiskUsed())
-					require.Zero(t, releases)
-					op.Reset(proc, true, err)
-					require.Same(t, engine, op.ctr.spillEngine)
-					op.Free(proc, true, err)
-					require.Same(t, engine, op.ctr.spillEngine)
+					require.Zero(t, releases.Load())
+					// Before Reset the error path still owns the engine; Prepare
+					// must not overwrite its pending files.
 					require.ErrorContains(t, op.Prepare(proc), "previous join spill cleanup is pending")
 					require.Same(t, engine, op.ctr.spillEngine)
-					blocked = false
-					// Prepare must finish the old generation before initializing a new one.
+					op.Reset(proc, true, err)
+					require.Nil(t, op.ctr.spillEngine)
+					op.Free(proc, true, err)
+					blocked.Store(false)
+					require.Eventually(t, func() bool { return releases.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
 					require.NoError(t, op.Prepare(proc))
 				}
 				require.Nil(t, op.ctr.spillEngine)
 				require.NoFileExists(t, path)
 				require.Zero(t, generation.SpillDiskUsed())
-				require.Equal(t, 1, releases)
-				calls := removeCalls
+				require.EqualValues(t, 1, releases.Load())
+				calls := removeCalls.Load()
 				op.Reset(proc, false, nil)
 				op.Free(proc, false, nil)
-				require.Equal(t, calls, removeCalls, "successful cleanup must not remove twice")
-				require.Equal(t, 1, releases)
+				require.Equal(t, calls, removeCalls.Load(), "successful cleanup must not remove twice")
+				require.EqualValues(t, 1, releases.Load())
 			})
 		}
 	}

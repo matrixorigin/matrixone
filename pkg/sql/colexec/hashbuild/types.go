@@ -736,19 +736,7 @@ func NewArgument() *HashBuild {
 
 func (hashBuild *HashBuild) Release() {
 	if hashBuild != nil {
-		if bundle := hashBuild.ctr.spillBundle; bundle != nil {
-			hashBuild.ctr.spillBundle = nil
-			bundle.release()
-			if bundle.cleanupPending() {
-				spillcleanup.Enqueue(func() error {
-					bundle.release()
-					if bundle.cleanupPending() {
-						return moerr.NewInternalErrorNoCtx("hash build spill cleanup pending")
-					}
-					return nil
-				})
-			}
-		}
+		hashBuild.cleanupSpillFiles()
 		reuse.Free[HashBuild](hashBuild, nil)
 	}
 }
@@ -782,7 +770,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
-		hashBuild.cleanupSpillFiles(proc)
+		hashBuild.cleanupSpillFiles()
 	}
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
@@ -816,7 +804,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		hashBuild.publishBuildError(proc, err)
 	}
-	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.cleanupSpillFiles()
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
@@ -890,13 +878,21 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 	return true
 }
 
-func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
+func (hashBuild *HashBuild) cleanupSpillFiles() {
 	// Release physical descriptors before their FD tokens, then remove durable
-	// names and return disk ownership.
-	if hashBuild.ctr.spillBundle != nil {
-		hashBuild.ctr.spillBundle.release()
-		if !hashBuild.ctr.spillBundle.cleanupPending() {
-			hashBuild.ctr.spillBundle = nil
+	// names and return disk ownership. Reset may leave a prepared operator
+	// cached indefinitely: detach failed removals at this boundary, not Release.
+	if bundle := hashBuild.ctr.spillBundle; bundle != nil {
+		hashBuild.ctr.spillBundle = nil
+		bundle.release()
+		if bundle.cleanupPending() {
+			spillcleanup.Enqueue(func() error {
+				bundle.release()
+				if bundle.cleanupPending() {
+					return moerr.NewInternalErrorNoCtx("hash build spill cleanup pending")
+				}
+				return nil
+			})
 		}
 	}
 }

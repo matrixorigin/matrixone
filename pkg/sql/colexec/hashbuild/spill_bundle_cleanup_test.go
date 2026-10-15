@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +40,84 @@ func (fs *terminalBundleRemoveFS) RemoveFile(ctx context.Context, name string) e
 		return errors.New("injected terminal bundle remove failure")
 	}
 	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestHashBuildTeardownRetriesWhileOperatorRetained(t *testing.T) {
+	for _, boundary := range []string{"reset", "free"} {
+		for _, removeError := range []bool{false, true} {
+			name := boundary + "/control"
+			if removeError {
+				name = boundary + "/remove-error"
+			}
+			t.Run(name, func(t *testing.T) {
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+				t.Cleanup(proc.Free)
+				proc.SetMessageBoard(message.NewMessageBoard())
+				ctx, cancel := context.WithCancel(context.Background())
+				proc.BuildPipelineContext(ctx)
+				t.Cleanup(cancel)
+				budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+				t.Cleanup(budget.Close)
+				generation, err := budget.OpenGeneration(1)
+				require.NoError(t, err)
+				t.Cleanup(generation.Close)
+				baseFS, err := proc.GetSpillFileService()
+				require.NoError(t, err)
+				path := "cached_hashbuild_" + uuid.NewString()
+				fd, err := baseFS.CreateFile(context.Background(), path)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = fd.Close() })
+				disk, err := generation.ReserveSpillDisk(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { disk.Release() })
+				fdToken, err := generation.ReserveSpillFD(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { fdToken.Release() })
+				fault := &terminalBundleRemoveFS{MutableFileService: baseFS}
+				fault.blocked.Store(removeError)
+				bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
+					0: {fs: fault, name: path, created: true, diskToken: disk, file: fd, fdToken: fdToken},
+				}}
+				op := &HashBuild{ctr: container{spillBundle: bundle}, JoinMapTag: 91904}
+				t.Cleanup(func() {
+					fault.blocked.Store(false)
+					op.Free(proc, false, nil)
+					bundle.release()
+				})
+				cancel()
+				if boundary == "reset" {
+					op.Reset(proc, true, context.Canceled)
+				} else {
+					op.Free(proc, true, context.Canceled)
+				}
+				generation.Close()
+				_, statErr := fd.Stat()
+				require.Error(t, statErr)
+				require.Zero(t, generation.SpillFDUsed())
+				if removeError {
+					require.EqualValues(t, 1, generation.SpillDiskUsed())
+					physical, err := baseFS.OpenFile(context.Background(), path)
+					require.NoError(t, err)
+					require.NoError(t, physical.Close())
+				}
+				// Recovery must make progress while the prepared operator stays
+				// cached, without another Prepare, Free or Release call.
+				fault.blocked.Store(false)
+				require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 3*time.Second, 10*time.Millisecond)
+				require.False(t, bundle.cleanupPending())
+				require.Nil(t, op.ctr.spillBundle)
+				physical, err := baseFS.OpenFile(context.Background(), path)
+				if physical != nil {
+					_ = physical.Close()
+				}
+				require.Error(t, err)
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Zero(t, generation.SpillFDUsed())
+			})
+		}
+	}
 }
 
 func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
@@ -62,7 +141,7 @@ func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	op.ctr.spillBundle = &spillFileBundle{entries: map[int]*spillFileEntry{
 		0: {fs: fault, name: name, created: true, diskToken: token},
 	}}
-	op.cleanupSpillFiles(proc) // the Free path
+	op.ctr.spillBundle.release() // Error cleanup before Reset/Free; Release is a fallback.
 	require.True(t, op.ctr.spillBundle.cleanupPending())
 	op.Release()
 	generation.Close() // reservations must remain releasable after query teardown
@@ -157,7 +236,7 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			}}
 			defer func() { fault.blocked = false; bundle.release() }()
 			op := &HashBuild{ctr: container{spillBundle: bundle}}
-			op.cleanupSpillFiles(proc)
+			bundle.release() // Preserve the pre-Reset Prepare retry contract.
 			_, statErr := fd.Stat()
 			require.Error(t, statErr, "terminal cleanup closes the descriptor even if removal fails")
 			require.Zero(t, generation.SpillFDUsed())
@@ -172,6 +251,8 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 				require.ErrorContains(t, op.Prepare(proc), "previous hash build spill cleanup is pending")
 				require.Same(t, bundle, op.ctr.spillBundle)
 				fault.blocked = false
+				require.ErrorIs(t, op.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+			} else {
 				require.ErrorIs(t, op.Prepare(proc), mpool.ErrAllocationAccountInvalid)
 			}
 			require.Nil(t, op.ctr.spillBundle)

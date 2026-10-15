@@ -32,7 +32,85 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHashJoinFreeReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
+func TestHashJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
+	for _, boundary := range []string{"reset", "free"} {
+		for _, removeError := range []bool{false, true} {
+			name := boundary + "/control"
+			if removeError {
+				name = boundary + "/remove-error"
+			}
+			t.Run(name, func(t *testing.T) {
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+				t.Cleanup(proc.Free)
+				ctx, cancel := context.WithCancel(context.Background())
+				proc.BuildPipelineContext(ctx)
+				t.Cleanup(cancel)
+				budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+				t.Cleanup(budget.Close)
+				generation, err := budget.OpenGeneration(1)
+				require.NoError(t, err)
+				t.Cleanup(generation.Close)
+				fd, err := os.CreateTemp(t.TempDir(), "cached-hashjoin-*")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = fd.Close() })
+				path := fd.Name()
+				require.NoError(t, fd.Close())
+				disk, err := generation.ReserveSpillDisk(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { disk.Release() })
+				var blocked atomic.Bool
+				blocked.Store(removeError)
+				var removes, releases atomic.Int32
+				file := message.NewReopenableSpillFile(
+					func(context.Context) (*os.File, error) { return os.Open(path) },
+					func() error {
+						removes.Add(1)
+						if blocked.Load() {
+							return errors.New("injected cached operator remove failure")
+						}
+						return os.Remove(path)
+					}, 1, 1, func() { disk.Release(); releases.Add(1) },
+				)
+				op := &HashJoin{}
+				t.Cleanup(func() {
+					blocked.Store(false)
+					op.Free(proc, false, nil)
+					require.NoError(t, file.Close())
+				})
+				engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{Budget: generation})
+				engine.InitFromSpilledFiles([]*message.SpillFile{file})
+				op.ctr.spillEngine = engine
+				cancel()
+				if boundary == "reset" {
+					op.Reset(proc, true, context.Canceled)
+				} else {
+					op.Free(proc, true, context.Canceled)
+				}
+				generation.Close()
+				if removeError {
+					require.FileExists(t, path)
+					require.EqualValues(t, 1, generation.SpillDiskUsed())
+					require.Zero(t, releases.Load())
+				}
+				// Keep the cached operator idle: no Prepare, Free or Release
+				// may supply progress after the filesystem recovers.
+				blocked.Store(false)
+				require.Eventually(t, func() bool { return releases.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+				require.NoFileExists(t, path)
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Nil(t, op.ctr.spillEngine)
+				require.False(t, engine.CleanupPending())
+				calls := removes.Load()
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.Equal(t, calls, removes.Load(), "detached cleanup must not run twice")
+				require.EqualValues(t, 1, releases.Load())
+			})
+		}
+	}
+}
+
+func TestHashJoinReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	fd, err := os.CreateTemp(t.TempDir(), "terminal-hashjoin-*")
@@ -55,7 +133,7 @@ func TestHashJoinFreeReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	engine.InitFromSpilledFiles([]*message.SpillFile{file})
 	join := NewArgument()
 	join.ctr.spillEngine = engine
-	join.Free(proc, true, errors.New("terminal query error"))
+	engine.Cleanup(proc) // Release remains a fallback for pre-Reset error cleanup.
 	require.True(t, engine.CleanupPending())
 	join.Release()
 	require.False(t, engine.CleanupPending())
@@ -155,6 +233,7 @@ func TestHashJoinResetRetriesSpillCleanupOnFree(t *testing.T) {
 			join := &HashJoin{ctr: container{spillEngine: engine}}
 			join.ctr.cleanBucketBatches(proc) // Reset path
 			join.ctr.cleanBucketBatches(proc) // Free path
+			require.Eventually(t, func() bool { return releases.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
 			require.NoFileExists(t, name)
 			require.Nil(t, join.ctr.spillEngine)
 			require.Equal(t, int32(1), releases.Load())
@@ -189,7 +268,7 @@ func TestHashJoinPrepareDoesNotOverwritePendingSpillCleanup(t *testing.T) {
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
 	engine.InitFromSpilledFiles([]*message.SpillFile{file})
 	join := &HashJoin{ctr: container{spillEngine: engine}}
-	join.ctr.cleanBucketBatches(proc)
+	engine.Cleanup(proc) // Error-path cleanup before the terminal Reset boundary.
 	require.True(t, engine.CleanupPending())
 	require.ErrorContains(t, join.Prepare(proc), "previous join spill cleanup is pending")
 	require.Same(t, engine, join.ctr.spillEngine)
