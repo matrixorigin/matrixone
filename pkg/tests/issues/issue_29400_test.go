@@ -1058,6 +1058,87 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 	})
 }
 
+// TestIssue29400CopyAlterKeepsRelocatedWorkspaceDeletesAfterReturn covers the
+// workspace-owned snapshot advancement on the ALTER COPY return boundary with
+// real storage: a pessimistic-RC transaction owns uncommitted in-memory DELETEs
+// whose underlying committed rows a forced DN flush relocates. ALTER COPY on an
+// unrelated table advances the shared workspace, and when it returns the
+// transaction must keep the advanced (transferred) snapshot so the deleted rows
+// stay deleted. A timestamp-only rewind leaves the workspace and the snapshot in
+// different generations and resurrects the relocated deletes.
+func TestIssue29400CopyAlterKeepsRelocatedWorkspaceDeletesAfterReturn(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db1.Close()
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		flushConn, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer flushConn.Close()
+		for _, conn := range []*sql.Conn{conn0, flushConn} {
+			_, err = conn.ExecContext(ctx, "set session transaction_isolation='READ-COMMITTED'")
+			require.NoError(t, err)
+		}
+
+		const database = "issue_29400_copy_return_deletes"
+		execSQLRequire(t, ctx, db0, "create database "+database)
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+		}()
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".src(id int primary key, v int)")
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".victim(id int primary key, v int)")
+		execSQLRequire(t, ctx, db0,
+			"insert into "+database+".src select result, result from generate_series(1, 8) g")
+		execSQLRequire(t, ctx, db0,
+			"insert into "+database+".victim select result, result from generate_series(1, 20) g")
+
+		tx, err := conn0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx,
+			"delete from "+database+".victim where id <= 10")
+		require.NoError(t, err)
+
+		// Relocate the committed victim rows behind the uncommitted deletes so
+		// the workspace advancement inside ALTER COPY transfers those deletes
+		// to their post-flush row locations.
+		_, err = flushConn.ExecContext(ctx,
+			"select mo_ctl('dn', 'flush', '"+database+".victim')")
+		require.NoError(t, err)
+
+		_, err = tx.ExecContext(ctx,
+			"alter table "+database+".src algorithm=copy, add column extra int")
+		require.NoError(t, err,
+			"the COPY ALTER must complete inside the pessimistic-RC transaction")
+
+		var remaining int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			"select count(*) from "+database+".victim").Scan(&remaining))
+		require.Equal(t, 10, remaining,
+			"the relocated uncommitted deletes must survive the ALTER COPY return")
+
+		require.NoError(t, tx.Commit())
+		require.NoError(t, conn0.QueryRowContext(ctx,
+			"select count(*) from "+database+".victim").Scan(&remaining))
+		require.Equal(t, 10, remaining)
+	})
+}
+
 func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 	faultEnabledHere := fault.Enable()
 	if faultEnabledHere {

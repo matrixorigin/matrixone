@@ -1360,32 +1360,20 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	initialSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
 	lineageTxnOp := c.proc.GetTxnOperator()
-	lineageOriginalSnapshot := timestamp.Timestamp{}
-	lineageRestoreSnapshot := false
-	defer func() {
-		if lineageRestoreSnapshot {
-			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
-		}
-	}()
 	if isTemp && lineageTxnOp.Txn().IsPessimistic() {
 		if err = c.lockAlterCopySource(dbSource, dbName, tblName, originRel, qry); err != nil {
 			return err
 		}
 	}
-	if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
+	// The workspace owns snapshot advancement: AdvanceSnapshot relocates
+	// transaction-local tombstones to their post-flush row locations before the
+	// new snapshot is used. The advanced snapshot is therefore retained on
+	// every return path; rewinding only the transaction timestamp would leave
+	// the workspace and snapshot in different generations (see
+	// databranchutils.AdvanceLineageSnapshot).
+	if shouldAdvanceAlterDataBranchLineageSnapshot(
 		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 	) {
-		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-		lineageRestoreSnapshot = true
-		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
-			return err
-		}
-		initialSnapshotAdvanced = true
-	} else if isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
-		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
-	) {
-		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-		lineageRestoreSnapshot = true
 		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
 			return err
 		}
