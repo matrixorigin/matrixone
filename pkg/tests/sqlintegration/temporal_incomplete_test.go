@@ -90,6 +90,8 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 			{"week", "week($date,0)", "8", false},
 			{"last_day", "last_day($date)", "2024-02-29", false},
 			{"date_add", "date_add($date,interval 1 day)", "2024-03-01", false},
+			{"date_add_text_interval", "date_add($date,interval '1.5' day)", "2024-03-01", false},
+			{"date_sub_text_interval", "date_sub($date,interval '1.5' day)", "2024-02-28", false},
 			{"datediff", "datediff($date,'2024-01-01')", "59", false},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

@@ -153,6 +153,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	if features.IncompleteTemporalStrings {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
 	return requiredVersion, nil
 }
 

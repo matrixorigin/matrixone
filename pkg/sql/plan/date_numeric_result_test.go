@@ -145,9 +145,18 @@ func TestDateNumericPersistedAdmissionAndFoldedView(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, defines.MORPCVersion112, required, "legacy serialized ABI remains supported")
 
-	for _, call := range []string{"week('2024-12-31',3)", "dayofyear('2024-12-31')"} {
-		t.Run(call, func(t *testing.T) {
-			createSQL := "create view v_calendar as select " + call + " as v"
+	for _, tc := range []struct {
+		call     string
+		required int64
+	}{
+		{"week('2024-12-31',3)", defines.MORPCVersion117},
+		{"week('2024-12-31')", defines.MORPCVersion117},
+		{"week(cast('2024-12-31' as date),3)", defines.MORPCVersion112},
+		{"dayofyear('2024-12-31')", defines.MORPCVersion112},
+	} {
+		t.Run(tc.call, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			createSQL := "create view v_calendar as select " + tc.call + " as v"
 			build := func(floor int64) (*Plan, error) {
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
@@ -157,14 +166,14 @@ func TestDateNumericPersistedAdmissionAndFoldedView(t *testing.T) {
 				defer stmt.Free()
 				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
 			}
-			_, err := build(defines.MORPCVersion111)
-			require.ErrorContains(t, err, "protocol version 112")
-			created, err := build(defines.MORPCVersion112)
+			_, err := build(tc.required - 1)
+			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", tc.required))
+			created, err := build(tc.required)
 			require.NoError(t, err)
 			var view ViewData
 			require.NoError(t, json.Unmarshal([]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &view))
 			require.NotNil(t, view.RequiredProtocolVersion)
-			require.Equal(t, defines.MORPCVersion112, *view.RequiredProtocolVersion, "pre-fold observation fences the stored SQL")
+			require.Equal(t, tc.required, *view.RequiredProtocolVersion, "pre-fold observation fences the stored SQL")
 		})
 	}
 }

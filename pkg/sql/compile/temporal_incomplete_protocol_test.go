@@ -1,0 +1,191 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package compile
+
+import (
+	"context"
+	"testing"
+
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
+)
+
+func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		plan2.MakePlan2Int64ConstExprWithType(3),
+	})
+	require.NoError(t, err)
+	require.Equal(t, function.EncodeOverloadID(function.WEEK, 5), expr.GetF().Func.Obj)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.IncompleteTemporalStrings)
+	require.True(t, features.DateNumericResultContracts)
+	require.False(t, features.WeekSessionDefault)
+	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+	// A string DATE_ADD can also contain the upstream v115 interval normalizer.
+	// Preserve both requirements: a v116 worker supports only the latter.
+	interval := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_interval)}, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		plan2.MakePlan2StringConstExprWithType("1.5"), plan2.MakePlan2StringConstExprWithType("DAY"),
+	}}}}
+	combined, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "date_add", []*planpb.Expr{
+		expr.GetF().Args[0], interval,
+	})
+	require.NoError(t, err)
+	combinedFeatures, err := planpb.RequiredRemoteExpressionFeatures(combined)
+	require.NoError(t, err)
+	require.True(t, combinedFeatures.IncompleteTemporalStrings)
+	require.True(t, combinedFeatures.CalendarIntervalNormalization)
+	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(combinedFeatures))
+	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(combined)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion117, floor)
+	expressions := []*planpb.Expr{expr, combined}
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = expressions
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	for _, version := range []int64{defines.MORPCVersion116, defines.MORPCVersion117} {
+		client.version = version
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		if version == defines.MORPCVersion116 {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+		}
+	}
+	// Every send must observe the actual destination, including a rollback after success.
+	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion116, defines.MORPCVersion117} {
+		client.version = version
+		data, sendErr := encodeRemoteScope(scope, c.proc)
+		if version == defines.MORPCVersion116 {
+			require.ErrorContains(t, sendErr, "version 117")
+			require.Nil(t, data)
+		} else {
+			require.NoError(t, sendErr)
+		}
+	}
+	client.customResponse = true
+	client.response = &query.Response{}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 117")
+	require.Equal(t, client.calls, client.releases)
+	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{{ProjectList: expressions}}}}}
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, version := range []any{nil, "117", defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion116} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		decoded, decodeErr := decodeScope(data, c.proc, true, nil)
+		if version != defines.MORPCVersion117 {
+			if version == defines.MORPCVersion116 {
+				require.ErrorContains(t, decodeErr, "version 117")
+			} else {
+				// Unknown floors may fail the earlier calendar-v115 gate first.
+				require.ErrorContains(t, decodeErr, "protocol version")
+			}
+			require.Nil(t, decoded)
+		} else {
+			require.NoError(t, decodeErr)
+			require.NotNil(t, decoded)
+			decoded.release()
+		}
+	}
+}
+
+func TestIncompleteTemporalProtocolPlanAdmissionAndCachedRun(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	// An unresolved parameter keeps the string overload through prepared binding.
+	arg := &planpb.Expr{Typ: types.T_any.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "date_format", []*planpb.Expr{arg, plan2.MakePlan2StringConstExprWithType("%Y-%m-%d")})
+	require.NoError(t, err)
+	require.Equal(t, function.EncodeOverloadID(function.DATE_FORMAT, 2), expr.GetF().Func.Obj)
+	for _, owner := range []*planpb.TableDef{
+		{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}},
+		{Cols: []*planpb.ColDef{{GeneratedCol: &planpb.GeneratedCol{Expr: expr}}}},
+		{Cols: []*planpb.ColDef{{OnUpdate: &planpb.OnUpdate{Expr: expr}}}},
+		{Checks: []*planpb.CheckDef{{Check: expr}}},
+	} {
+		pn := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{TableDef: owner}}}}}
+		data, err := pn.Marshal()
+		require.NoError(t, err)
+		cached := &planpb.Plan{}
+		require.NoError(t, cached.Unmarshal(data))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+		require.NoError(t, validateIncompleteTemporalStringProtocol(c.proc, cached))
+		// Reuse the same logical generation after the effective floor rolls back.
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+		compile := &Compile{proc: c.proc, pn: cached}
+		require.ErrorContains(t, compile.Compile(context.Background(), cached, nil), "version 117")
+		_, err = compile.Run(0)
+		require.ErrorContains(t, err, "version 117")
+		for _, version := range []any{nil, "117", defines.MORPCVersion116} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.ErrorContains(t, validateIncompleteTemporalStringProtocol(c.proc, cached), "version 117")
+			required, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion117, required)
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, owner), "version 117")
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+		require.NoError(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, owner))
+	}
+	require.ErrorContains(t, validateIncompleteTemporalStringProtocol(nil, expr), "version 117")
+	typed, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", []*planpb.Expr{
+		{Typ: types.T_date.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}, plan2.MakePlan2Int64ConstExprWithType(3),
+	})
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	require.NoError(t, validateIncompleteTemporalStringProtocol(c.proc, typed))
+}
+
+func TestIncompleteTemporalWeekSessionSnapshot(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	source := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	for _, explicit := range []bool{false, true} {
+		args := []*planpb.Expr{source}
+		if explicit {
+			args = append(args, plan2.MakePlan2Int64ConstExprWithType(3))
+		}
+		expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", args)
+		require.NoError(t, err)
+		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		require.Equal(t, !explicit, features.WeekSessionDefault)
+		c.proc.Base.SessionInfo.DefaultWeekFormatSet = false
+		err = validateRemoteExpressionFeatures(c.proc, features)
+		if explicit {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "session snapshot")
+		}
+		c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
+		require.NoError(t, validateRemoteExpressionFeatures(c.proc, features))
+	}
+}
