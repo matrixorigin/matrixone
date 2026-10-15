@@ -1611,6 +1611,14 @@ func doSetVar(
 				if evalErr != nil {
 					return evaluatedAssignment{}, evalErr
 				}
+				// character_set_server and collation_server are stored
+				// independently. Validate their effective pair before the
+				// session setters run so an inconsistent historical/global
+				// configuration cannot publish a partial SET NAMES DEFAULT
+				// state.
+				if evalErr = validateCharsetCollationPair(value, setNamesCollation); evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
 			default:
 				setNamesCollation, evalErr = resolveImplicitSetNamesCollation(ses, value)
 				if evalErr != nil {

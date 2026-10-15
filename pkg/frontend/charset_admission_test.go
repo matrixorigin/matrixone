@@ -207,6 +207,48 @@ func TestSetNamesDefaultCompatibility(t *testing.T) {
 	require.Equal(t, wantCollation, got)
 }
 
+func TestSetNamesDefaultRejectsIncompatibleServerDefaults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	// The two server defaults have independent catalog entries. Simulate an
+	// old/manual catalog containing a collation from a different charset and
+	// ensure SET NAMES DEFAULT rejects it before changing session state.
+	globalVars := ses.gSysVars.Clone()
+	globalVars.Set("character_set_server", "utf8mb4")
+	globalVars.Set("collation_server", "utf8_unicode_ci")
+	ses.gSysVars = globalVars
+	ses.sesSysVars = globalVars.Clone()
+	for _, name := range []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, name, "binary"))
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "collation_connection", "binary"))
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set names default", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.singleStatementQuery = true
+	err = doSetVar(ses, execCtx, stmt.(*tree.SetVar), "set names default", false)
+	require.ErrorContains(t, err, "not valid for CHARACTER SET")
+
+	for _, name := range []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	} {
+		got, getErr := ses.GetSessionSysVar(name)
+		require.NoError(t, getErr)
+		require.Equal(t, "binary", got)
+	}
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, "binary", got)
+}
+
 func TestSetNamesImplicitCollation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

@@ -67,31 +67,55 @@ func validateCharsetAssignment(assign *tree.VarAssignmentExpr, value interface{}
 		if !ok {
 			return moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
 		}
-		name := literal.String()
-		if err := validateCharsetSystemVariable("collation_connection", name); err != nil {
-			return err
+		return validateCharsetCollationPair(value, literal.String())
+	}
+	return nil
+}
+
+// validateCharsetCollationPair checks the effective charset/collation pair
+// before SET NAMES publishes any session state.  This is also needed for
+// SET NAMES DEFAULT: the two server defaults are independently configurable,
+// so an old or manually changed catalog can contain an incompatible pair.
+func validateCharsetCollationPair(charsetValue interface{}, collationName string) error {
+	charsetName, ok := charsetValue.(string)
+	if !ok {
+		return moerr.NewInvalidInputNoCtx("character set must be a string")
+	}
+	if err := validateCharsetSystemVariable("character_set_server", charsetName); err != nil {
+		return err
+	}
+	if err := validateCharsetSystemVariable("collation_connection", collationName); err != nil {
+		return err
+	}
+	charsetID, ok := collation.ResolveCharset(charsetName)
+	if !ok {
+		return moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", charsetValue)
+	}
+	collationID, collationRevision, ok := collation.ResolveSession(collationName)
+	if !ok {
+		return moerr.NewInvalidInputNoCtxf("unsupported collation '%s'", collationName)
+	}
+	charset, err := collation.EffectiveDefinition(uint32(charsetID), 0)
+	if err != nil {
+		return err
+	}
+	coll, err := collation.EffectiveDefinition(uint32(collationID), uint32(collationRevision))
+	if err != nil {
+		return err
+	}
+	// ResolveCharset intentionally preserves MatrixOne's historical utf8
+	// compatibility alias as utf8mb4. Native UCA400 collations carry their
+	// actual charset, so compare the requested spelling directly here rather
+	// than accidentally rejecting utf8_unicode_ci or accepting a mismatch.
+	if coll.Semantics == collation.UCA400 {
+		requestedCharset := collation.CanonicalCharsetName(charsetName)
+		if requestedCharset != coll.Charset.Name() {
+			return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", collationName, charsetValue)
 		}
-		charsetID, _ := collation.ResolveCharset(value.(string))
-		collationID, collationRevision, ok := collation.ResolveSession(name)
-		if !ok {
-			return moerr.NewInvalidInputNoCtxf("unsupported collation '%s'", name)
-		}
-		charset, _ := collation.EffectiveDefinition(uint32(charsetID), 0)
-		coll, _ := collation.EffectiveDefinition(uint32(collationID), uint32(collationRevision))
-		// ResolveCharset intentionally preserves MatrixOne's historical utf8
-		// compatibility alias as utf8mb4.  Native UCA400 collations carry their
-		// actual charset, so compare the requested spelling directly here rather
-		// than accidentally rejecting utf8_unicode_ci or accepting a mismatch.
-		if coll.Semantics == collation.UCA400 {
-			requestedCharset := collation.CanonicalCharsetName(value.(string))
-			if requestedCharset != coll.Charset.Name() {
-				return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", name, value)
-			}
-			return nil
-		}
-		if charset.Charset != coll.Charset {
-			return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", name, value)
-		}
+		return nil
+	}
+	if charset.Charset != coll.Charset {
+		return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", collationName, charsetValue)
 	}
 	return nil
 }
