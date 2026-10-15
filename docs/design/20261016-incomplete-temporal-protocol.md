@@ -1,0 +1,84 @@
+# Incomplete temporal strings — revision 3
+
+Issue: #30234. Implementation: https://github.com/matrixorigin/matrixone/pull/30311.
+Status: proposed; independent approval remains external to this repair.
+
+## Problem and invariant
+
+String inputs with incomplete calendar components must reach their consuming
+function without a global DATE/DATETIME conversion. The PR appends execution
+identities for DATE_FORMAT, DATEDIFF, TO_DAYS, TO_SECONDS, DAYOFWEEK and WEEK,
+and adds rejection warnings to existing string LAST_DAY and DATE_ADD/SUB paths.
+An older worker either lacks the new identity or produces different diagnostics.
+The existing signed WEEK result detector also misses new overloads 4 and 5,
+causing the folded-view admission regression in run 38751428918, attempt 1.
+
+Every expression using these contracts must require MORPC 117. Official main
+76deafc8062f9a7e33a31a4df858ebcdb9477cb5 has latest version 116; the candidate
+is latest + 1 and must be recalculated if main changes before delivery.
+Official v115 CalendarIntervalNormalization remains independently detected and gated;
+Official v116 SELECT division warnings retain their execution-only floor;
+expressions combining these capabilities require the maximum floor, 117.
+Division warning policy does not add a persisted expression requirement.
+Independent signed-result and session-snapshot requirements remain intact.
+Typed temporal storage, global casts and released overload identities do not
+change. SQL value/warning semantics follow the existing issue acceptance matrix
+and function tests; this document closes their distributed compatibility.
+
+## Owners and flow
+
+The function registry owns identities. The protobuf expression walker detects
+`IncompleteTemporalStrings` by numeric function/overload identity, never names
+or constant values: DATE_FORMAT 2; DATEDIFF 1–3; TO_DAYS/TO_SECONDS 1;
+DAYOFWEEK 3; WEEK 4/5; LAST_DAY 0/1; DATE_ADD 2/3/6; DATE_SUB 2/3/5.
+WEEK 0–5 with INT32 results additionally retains its v112 result feature;
+one-argument WEEK 0/1/4 retains its session-snapshot feature.
+
+The existing planner observer records the maximum requirement before folding
+and persists it with VIEW SQL. Runtime and authoring floors reject unsupported
+persisted owners. Placement falls back to one CN when a peer cannot support
+117. Actual destination validation probes again for every send. Receiver
+validation rejects an insufficient or unknown floor before constructing
+operators. Compile and Run admission recheck the expression floor before pipeline
+initialization and operator Prepare, including cached executions after a protocol
+rollback. No capability cache or
+new resource owner is introduced. Existing cancellation and probe timeout
+behavior is reused unchanged.
+
+## Alternatives and rollout
+
+Broadening only the v112/v98 WEEK detectors fixes the assertion but allows
+pre-PR v116 workers to receive unknown overloads. Reusing typed overloads and
+encoding zero components in DATE/DATETIME would violate the storage contract.
+Disabling remote execution for all temporal functions would unnecessarily
+restrict unaffected typed expressions. A single additional expression feature
+uses the established version-floor mechanism with the smallest boundary.
+
+Upgrade all CN binaries before authoring these expressions at floor 117.
+During mixed-version rollout, one-CN fallback is safe on the upgraded
+coordinator. A rollback of the effective floor to 116 rejects newly authored
+persisted expressions and cached affected pipelines before operator Prepare; existing
+typed WEEK expressions retain floor 112. Catalogs containing new floor-117
+owners require upgraded readers or removal/rebinding before binary downgrade;
+no automatic catalog rewrite or claim that an old binary enforces a future
+floor is made. Backup/restore preserves the existing owner metadata. Failures
+use the existing unsupported-protocol diagnostics and acquire no new resources.
+
+## Cost and verification
+
+Detection adds bounded comparisons per visited function and one boolean in the
+existing feature set. The walker remains linear in expression size. Compile/Run
+admission takes a constant-time fast path at a supported floor; an insufficient
+or unknown floor adds one owner traversal. Probe
+count, memory retention, background work and statement warning ownership are
+unchanged. No new SQL privilege or external trust boundary is introduced.
+
+Acceptance: serialized detection covers every affected identity plus typed and
+unknown-overload controls; one-argument string WEEK requires a captured default;
+folded VIEW authoring and persisted owners reject 116 and accept 117; typed
+WEEK still rejects 111 and accepts 112. Placement, actual send, receiver decode
+and Prepare accept 117 and reject its immediate predecessor, including rollback
+after an earlier success. Run focused tests, owning packages and incremental
+static checks. Reuse the PR's passing BVT evidence for unchanged value semantics.
+No throughput claim, benchmark or new cluster fixture is needed for the bounded
+feature predicates. Independent design approval is not asserted by this file.
