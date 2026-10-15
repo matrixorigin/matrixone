@@ -131,6 +131,39 @@ func TestInsertValuesScalarSubqueries(t *testing.T) {
 	}
 }
 
+func TestInsertValuesSQLUdfAdmission(t *testing.T) {
+	for _, expr := range []string{"f_values_lookup()", "f_values_nested_lookup()", "f_increment(f_values_lookup())"} {
+		for _, rows := range []int{1, maxValuesSubqueryBranches, maxValuesSubqueryBranches + 1} {
+			t.Run(fmt.Sprintf("%s/%d", expr, rows), func(t *testing.T) {
+				ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+				text := "insert into dept(deptno,dname,loc) values " + strings.TrimSuffix(strings.Repeat("("+expr+",'udf','x'),", rows), ",")
+				stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				builder := NewQueryBuilder(plan.Query_INSERT, ctx, false, true)
+				_, _, err = builder.buildValueScan(false, false, false, NewBindContext(builder, nil), ctx.tables["dept"], stmt.(*tree.Insert).Rows.Select.(*tree.ValuesClause), []string{"deptno", "dname", "loc"})
+				require.ErrorContains(t, err, "SQL UDF subqueries in INSERT VALUES are not supported")
+				require.Empty(t, builder.qry.Nodes, "reject expansion before any subquery plan is built")
+				require.Equal(t, valuesSubqueryBinding{}, builder.valuesSubqueryBinding)
+			})
+		}
+	}
+	// Expression-only UDFs do not introduce a relational branch. A UDF inside an
+	// explicit scalar subquery is covered by that VALUES row's existing admission.
+	for _, text := range []string{
+		"insert into dept values " + strings.TrimSuffix(strings.Repeat("(f_values_constant(),'udf','x'),", maxValuesSubqueryBranches+1), ","),
+		"insert into dept values((select f_values_lookup()),'explicit','x')",
+		"replace into dept values(f_values_lookup(),'unchanged','x')",
+	} {
+		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+		stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err, text)
+	}
+}
+
 func TestInsertValuesSubqueryFreePlan(t *testing.T) {
 	for _, sql := range []string{
 		"insert into dept(deptno,dname,loc) values(1,'literal',null),(2,'second','x')",

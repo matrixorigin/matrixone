@@ -5105,6 +5105,14 @@ func bindFuncExprImplUdf(
 				return nil, err
 			}
 		} else {
+			if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
+				b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
+				// VALUES admission inspects the caller's AST, not SQL UDF bodies.
+				// Preserve the existing rejection of UDF-created subqueries rather
+				// than letting expansion bypass the bounded relational row source.
+				return nil, moerr.NewNotSupported(b.GetContext(),
+					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
+			}
 			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err

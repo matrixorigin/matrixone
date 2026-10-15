@@ -72,6 +72,25 @@ insert into dest values(21,(select id from `user` where id=1),'transaction');
 rollback;
 select count(*) as rollback_rows from dest where id=21;
 
+-- SQL UDF expansion must not bypass the explicit-subquery row admission bound.
+create table udf_dest(v int);
+create function values_lookup() returns int language sql as 'select max(id) from `user`';
+create function values_nested_lookup() returns int language sql as 'values_lookup()';
+create function values_constant() returns int language sql as '1+1';
+insert into udf_dest values(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup());
+select count(*) as udf_partial_rows from udf_dest;
+insert into udf_dest values(values_nested_lookup());
+insert into udf_dest values((select 1)),(values_lookup());
+select count(*) as udf_partial_rows from udf_dest;
+insert into udf_dest values(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant());
+select count(*) as expression_rows,sum(v) as expression_sum from udf_dest;
+insert into udf_dest values((select values_lookup()));
+select count(*) as bounded_lookup_rows from udf_dest where v=2;
+drop function values_nested_lookup();
+drop function values_lookup();
+drop function values_constant();
+drop table udf_dest;
+
 -- An INSERT-only user still needs SELECT on the SQL-visible lookup source.
 create role values_lookup_role;
 create user values_lookup_user identified by 'values_lookup_test' default role values_lookup_role;
