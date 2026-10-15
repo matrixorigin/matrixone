@@ -574,6 +574,89 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 	}
 }
 
+func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	mock := NewMockOptimizer(false, proc)
+	sink := &loadAssignmentWarningSink{}
+	proc.WarningSink = sink
+	params := vector.NewVec(types.T_text.ToType())
+	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select 1 where date_sub(time '00:00:00', interval cast(? as decimal(10,1)) hour) is null", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	for _, value := range []string{"900", "1000000000", "0", "900"} {
+		params.CleanOnlyData()
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+		proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger})
+		bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+			[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
+			[]any{ParamValue{Value: value}})
+		require.NoError(t, err)
+		require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
+		cast := false
+		require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+			return planpb.VisitExprTree(root, func(expr *Expr) error {
+				cast = cast || function.IsExplicitDecimalCast(expr)
+				return nil
+			})
+		}))
+		require.Equal(t, value == "1000000000", cast, bound.Plan.String())
+		require.Empty(t, sink.codes, "binding probes must not publish diagnostics")
+	}
+}
+
+func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, value                       string
+		null, missing, column, standalone bool
+		target                            types.T
+		literal, dependent                bool
+	}{
+		{name: "NULL", null: true, target: types.T_decimal64, literal: true, dependent: true},
+		{name: "lexical warning", value: "bad", target: types.T_decimal64, dependent: true},
+		{name: "missing binding", value: "900", missing: true, target: types.T_decimal64, dependent: true},
+		{name: "row source", value: "900", column: true, target: types.T_decimal64},
+		{name: "ordinary cast", value: "900", standalone: true, target: types.T_decimal64},
+		{name: "unsupported literal", value: "900", target: types.T_decimal256, dependent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			if !tc.missing {
+				proc.SetPrepareParams(params)
+			}
+			source := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			if tc.column {
+				source.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{}}
+			}
+			target := types.New(tc.target, 10, 1).PlanType()
+			cast, err := appendExplicitCastBeforeExpr(proc.Ctx, source, target)
+			require.NoError(t, err)
+			originalType := cast.Typ
+			expr := &Expr{Typ: makeSimplePlan2Type(types.T_time), Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DATE_SUB, 0)}, Args: []*Expr{cast},
+			}}}
+			if tc.standalone {
+				expr = cast
+			}
+			state := &preparedSourceBindingState{values: []any{ParamValue{Value: tc.value}}}
+			require.NoError(t, specializePreparedTemporalDecimalCasts(proc, state, expr))
+			require.Equal(t, tc.literal, cast.GetLit() != nil)
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.Equal(t, originalType, cast.Typ)
+			require.Empty(t, sink.codes)
+			if tc.null {
+				require.True(t, cast.GetLit().GetIsnull())
+			}
+		})
+	}
+}
+
 func TestPreparedDomainlessNullUsesConcreteRelationalColumns(t *testing.T) {
 	for _, query := range []string{
 		"select ? group by 1",

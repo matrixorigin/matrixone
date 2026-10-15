@@ -40,6 +40,9 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 		typ := types.T(expr.Typ.Id)
 		return typ != types.T_any && !typ.IsMySQLString()
 	}
+	if IsStatementConstantTemporalCall(expr) {
+		return true
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
@@ -48,14 +51,35 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 	switch id {
 	case CAST:
 		target := types.T(expr.Typ.Id)
-		switch target {
-		case types.T_time, types.T_date, types.T_datetime, types.T_timestamp:
-			return true
-		}
 		return len(fn.Args) > 0 && fn.Args[0] != nil &&
 			types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
 			(target.ToType().IsNumeric() ||
 				(fn.Args[0].GetP() != nil && target != types.T_any && !target.IsMySQLString()))
+	case INTERNAL_JSON_COMPARISON_PARAM, INTERNAL_JSON_ORDERING_PARAM:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsStatementConstantTemporalCall identifies a temporal diagnostic owner before
+// considering whether a child conversion needs its own row-scoped owner.
+func IsStatementConstantTemporalCall(expr *plan.Expr) bool {
+	if expr == nil || !IsStatementConstantInput(expr) {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := DecodeOverloadID(fn.Func.Obj)
+	switch id {
+	case CAST:
+		switch types.T(expr.Typ.Id) {
+		case types.T_time, types.T_date, types.T_datetime, types.T_timestamp:
+			return true
+		}
+		return false
 	case DATE:
 		// DATE(text) reports an out-of-range SQL error for malformed input.
 		// Typed temporal inputs use non-parsing overloads and need no owner.
@@ -63,7 +87,7 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 			types.T(fn.Args[0].Typ.Id).IsMySQLString()
 	case TIME, MAKETIME, SEC_TO_TIME, TIMESTAMP,
 		DATE_ADD, DATE_SUB, TIMESTAMPADD, ADDTIME, SUBTIME, TIMEDIFF,
-		PERIOD_ADD, PERIOD_DIFF, INTERNAL_JSON_COMPARISON_PARAM, INTERNAL_JSON_ORDERING_PARAM:
+		PERIOD_ADD, PERIOD_DIFF:
 		return true
 	default:
 		return false
