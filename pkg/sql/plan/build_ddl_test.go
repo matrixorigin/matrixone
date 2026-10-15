@@ -3777,14 +3777,31 @@ func TestBuildCreateTablePreservesSingleStatementSQL(t *testing.T) {
 }
 
 func TestBuildCreateTableRejectsCaseInsensitiveDuplicateColumns(t *testing.T) {
-	const rootSQL = "CREATE TABLE duplicate_column_case (Id INT, id INT)"
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 0)
-	require.NoError(t, err)
-	defer stmt.Free()
+	for _, tc := range []struct {
+		name, left, right string
+		duplicate         bool
+	}{
+		{"ascii", "Id", "id", true},
+		{"kelvin", "K", "K", true},
+		{"sigma", "Σ", "ς", true},
+		{"long_s", "S", "ſ", true},
+		{"dotless_i", "I", "ı", false},
+		{"sharp_s", "ß", "ss", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rootSQL := fmt.Sprintf("CREATE TABLE duplicate_column_case (`%s` INT, `%s` INT)", tc.left, tc.right)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 0)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDupFieldName), err)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			if tc.duplicate {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDupFieldName), err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {

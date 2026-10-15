@@ -175,21 +175,21 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		accepted        bool
 		validationError string
 	}{
-		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 1 0", embeddedBatches: "1", accepted: true},
-		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 1 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
-		{name: "bounded-issues-default", want: "8 2 1 0", accepted: true},
-		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 1 0", accepted: true},
-		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 1 0", accepted: true},
-		{name: "embedded-pool-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "8 2 2 1", accepted: true},
+		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
+		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
+		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
+		{name: "embedded-pool-serial-rollback", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=1"}, want: "8 2 1 0", accepted: true},
 		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "8 1 1 1", accepted: true},
-		{name: "prebuild-explicit-opt-in", args: []string{"UT_PREBUILD_EMBEDDED=1"}, want: "8 2 1 1", accepted: true},
+		{name: "prebuild-explicit-opt-in", args: []string{"UT_PREBUILD_EMBEDDED=1"}, want: "8 2 2 1", accepted: true},
 		{name: "prebuild-explicit-disable", args: []string{"UT_ISSUES_BATCHES=4", "UT_PREBUILD_EMBEDDED=0"}, want: "4 1 1 0", accepted: true},
 		{name: "four-batch-rollback", args: []string{"UT_ISSUES_BATCHES=4"}, want: "4 1 1 1", accepted: true},
 		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1 1", accepted: true},
-		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "8 2 2 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
 		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "8 18446744073709551618 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
-		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 1", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.embeddedBatches == "" {

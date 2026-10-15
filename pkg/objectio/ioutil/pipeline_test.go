@@ -79,26 +79,30 @@ func (rejectingJobQueue) Enqueue(item any) (any, error) {
 }
 
 func TestSchedulerPrefetchDoesNotCompleteAcceptedJobTwice(t *testing.T) {
-	pipeline := &IoPipeline{waitQ: rejectingJobQueue{}}
-	pipeline.prefetch.scheduler = inlineJobScheduler{}
-
-	job := new(tasks.Job)
-	job.Init(context.Background(), "completed-before-wait-queue", tasks.JTInvalid,
-		func(context.Context) *tasks.JobResult {
-			return &tasks.JobResult{}
+	for _, accepted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "wait_queue_rejected", true: "wait_queue_accepted"}[accepted], func(t *testing.T) {
+			pipeline := &IoPipeline{waitQ: rejectingJobQueue{}}
+			if accepted {
+				queue := sm.NewSafeQueue(1, 1, pipeline.onWait)
+				queue.Start()
+				t.Cleanup(queue.Stop)
+				pipeline.waitQ = queue
+			}
+			pipeline.prefetch.scheduler = inlineJobScheduler{}
+			job := new(tasks.Job)
+			job.Init(t.Context(), "completed-before-wait-queue", tasks.JTInvalid,
+				func(context.Context) *tasks.JobResult { return &tasks.JobResult{} })
+			require.NotPanics(t, func() { pipeline.schedulerPrefetch(job) })
+			// Queue cleanup joins the accepted callback and its terminal recycle.
 		})
-
-	require.NotPanics(t, func() {
-		pipeline.schedulerPrefetch(job)
-	})
+	}
 }
 
 func TestNewIOPipeline(t *testing.T) {
 	p := NewIOPipeline(makeIOPipelineOptions(0))
 	p.Start()
+	t.Cleanup(p.Stop)
 	assert.Equal(t, p.active.Load(), true)
-	// waiting pipeline's queue initial done
-	time.Sleep(time.Millisecond * 100)
 
 	service := makeFileService(t)
 	location := makeLocation()
