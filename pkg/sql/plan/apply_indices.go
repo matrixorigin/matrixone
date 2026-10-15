@@ -414,6 +414,94 @@ func containsInt32(list []int32, target int32) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesWithOrder(nodeID, colRefCnt, idxColMap, false)
+}
+
+// fullTextOrderOverwritten proves that an explicit ordering will replace a
+// child's implicit relevance order before any consumer can observe it. Only
+// PROJECT/FILTER with pure expressions are transparent; other operators
+// conservatively end the proof.
+// A SORT's own pagination observes its explicit order, so it is not a barrier
+// to the proof that this SORT gives its children.
+func fullTextOrderOverwritten(node *plan.Node, inherited bool) bool {
+	switch node.NodeType {
+	case plan.Node_SORT:
+		if len(node.OrderBy) == 0 || node.RankOption != nil {
+			return false
+		}
+		for _, order := range node.OrderBy {
+			if order == nil || !fullTextOrderExprIsPure(order.Expr) {
+				return false
+			}
+		}
+		return true
+	case plan.Node_PROJECT, plan.Node_FILTER:
+		if !inherited || node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+			return false
+		}
+		for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList} {
+			for _, expr := range exprs {
+				if !fullTextOrderExprIsPure(expr) {
+					return false
+				}
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// A sequence/volatile expression observes which row arrives first, even if a
+// later sort hides input order. Do not use exprCanRemoveProject here: it keeps
+// pure fulltext_match placeholders for binding ownership, not evaluation-order
+// reasons. Their registered overloads are pure, and their arguments are checked
+// recursively just like any other scalar function.
+func fullTextOrderExprIsPure(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		// Python handlers have no purity declaration. The wrapper's registry
+		// flags do not prove that a handler cannot observe evaluation order.
+		functionID, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		if functionID == function.PYTHON_UDF {
+			return false
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !fullTextOrderExprIsPure(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		if e.List == nil {
+			return false
+		}
+		for _, item := range e.List.List {
+			if !fullTextOrderExprIsPure(item) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Lit, *plan.Expr_Col, *plan.Expr_Corr, *plan.Expr_P, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	default:
+		// Session variables, subqueries, windows and unclassified expression forms
+		// do not establish an order-independence proof.
+		return false
+	}
+}
+
+func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, orderOverwritten bool) (int32, error) {
 	if builder.isViewSchemaMemoScan(nodeID) {
 		return nodeID, nil
 	}
@@ -424,12 +512,13 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	}
 
 	node := builder.qry.Nodes[nodeID]
+	childOrderOverwritten := fullTextOrderOverwritten(node, orderOverwritten)
 	for i, childID := range node.Children {
 		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
 			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
 			continue
 		}
-		node.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+		node.Children[i], err = builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
 		if err != nil {
 			return -1, err
 		}
@@ -445,7 +534,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
-		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForProjectWithOrder(nodeID, node, colRefCnt, idxColMap, childOrderOverwritten)
 
 	case plan.Node_SORT:
 		// Second entry point for the vector rule: a Top-K SORT whose parent is not a
@@ -750,6 +839,10 @@ func isFullTextAggHavingBarrier(node *plan.Node) bool {
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForProjectWithOrder(nodeID, projNode, colRefCnt, idxColMap, false)
+}
+
+func (builder *QueryBuilder) applyIndicesForProjectWithOrder(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, orderOverwritten bool) (int32, error) {
 	defer builder.clearProjectGuard(projNode.NodeId)
 	// FullText
 	{
@@ -807,7 +900,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(projids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
-					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap, orderOverwritten)
 			}
 		} else {
 			// No single scan under this project: a JOIN in between takes the per-child route,

@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -1390,7 +1391,12 @@ func (builder *QueryBuilder) appendUpdateParentKeyLocks(
 						}
 					}
 				}
-				if len(keyParts) > 1 || (matchedIndex != nil && indexTableStoresSerializedKey(matchedIndex)) {
+				if matchedIndex != nil && matchedIndex.KeyFormat == collation.KeyFormatV1 && matchedIndex.Unique {
+					lockExpr, buildErr = bindIndexKeyExpr(builder.GetContext(), matchedIndex, keyParts)
+					if buildErr != nil {
+						return 0, 0, buildErr
+					}
+				} else if len(keyParts) > 1 || (matchedIndex != nil && indexTableStoresSerializedKey(matchedIndex)) {
 					lockExpr, buildErr = BindFuncExprImplByPlanExpr(
 						builder.GetContext(), "serial", keyParts)
 					if buildErr != nil {
@@ -2978,6 +2984,9 @@ func (builder *QueryBuilder) buildUpdateMutationIndexKey(
 		if err != nil {
 			return nil, err
 		}
+	}
+	if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+		return bindIndexKeyExpr(builder.GetContext(), idxDef, args)
 	}
 	if !indexTableStoresSerializedKey(idxDef) {
 		return args[0], nil

@@ -65,11 +65,11 @@ func TestMaterializedViewCompileProtocolAdmission(t *testing.T) {
 		ordinary        bool
 		wantErr         bool
 	}{
-		{"old scan protocol", defines.MORPCVersion113, defines.MORPCVersion114, false, false, true},
-		{"current scan protocol", defines.MORPCVersion114, defines.MORPCVersion114, false, false, false},
-		{"ordinary scan", defines.MORPCVersion113, defines.MORPCVersion113, false, true, false},
-		{"old registration protocol", defines.MORPCVersion113, defines.MORPCVersion114, true, false, true},
-		{"old registration floor", defines.MORPCVersion114, defines.MORPCVersion113, true, false, true},
+		{"old scan protocol", defines.MORPCVersion114, defines.MORPCVersion115, false, false, true},
+		{"current scan protocol", defines.MORPCVersion115, defines.MORPCVersion115, false, false, false},
+		{"ordinary scan", defines.MORPCVersion114, defines.MORPCVersion114, false, true, false},
+		{"old registration protocol", defines.MORPCVersion114, defines.MORPCVersion115, true, false, true},
+		{"old registration floor", defines.MORPCVersion115, defines.MORPCVersion114, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)

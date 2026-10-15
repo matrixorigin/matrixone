@@ -32,7 +32,7 @@ var Handler = &versionHandle{
 		UpgradeCluster:          versions.Yes,
 		UpgradeTenant:           versions.No,
 		VersionOffset:           uint32(len(catalog.MaterializedViewCatalogDDLs)),
-		RequiredProtocolVersion: defines.MORPCVersion114,
+		RequiredProtocolVersion: defines.MORPCVersion115,
 	},
 }
 

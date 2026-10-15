@@ -602,7 +602,10 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				execSQLRequire(t, ctx, db0, "create table "+solo+".fk_guard(i int)")
 				holder, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
-				operationCtx, cancelOperation := context.WithTimeout(ctx, 15*time.Second)
+				// The waiter stays blocked while we inspect catalogs and commit
+				// its lock holder. Bound it by the existing test deadline rather
+				// than charging that coordination/commit I/O to a second timer.
+				operationCtx, cancelOperation := context.WithCancel(ctx)
 				defer cancelOperation()
 				var done chan error
 				finished := false

@@ -530,3 +530,70 @@ owning parser suites and typed planner consumer tests cover the overlap; broader
 old-head CI is retained only within its semantic scope. No extra fixtures,
 retries, skips or thresholds are added. No new code blockers were found in this
 merge scope; external RFC/design review remains pending separately.
+
+
+### 2026-10-15: FK publication waiter owns cancellation, not coordination timing
+
+Exact failed head: `02ce42dc57df449b4333c0f9470a70677d53f760`, ALL CI
+`38713744052`, ordinary UT job `116353860779`. SCA, shared build, coverage UT,
+both BVT groups and coverage aggregation passed. The sole failed test event is
+`TestIssue29400CopyAlterRetainedGatePromotionFastFails/fk_publication/forward_true`,
+with `context deadline exceeded` at the existing successful-CREATE assertion.
+
+The FK CREATE intentionally queues behind a retained lifecycle lock while the
+test goroutine checks both catalogs and commits the holder. Its separate
+15-second child deadline starts before holder setup/connection/session work.
+CI shows WAL append/commit delays of 6.4 seconds and multiple delayed Raft ticks;
+the CREATE is canceled at 11:15:33.44 UTC, before the holder commit completes at
+11:15:34.60 UTC. Cancellation therefore defeats the very release the positive
+publication case is waiting for. This evidence establishes a competing test
+budget, not a demonstrated native lock-release failure or a clean-baseline
+attribution of a pre-existing CI failure.
+
+Use a cancellable child of the existing two-minute test context for this waiter.
+The outer bound is unchanged. Cancellation, holder rollback, connection close
+and waiter joining retain their existing lexical owners. The queued barrier,
+zero table/FK catalog counts before release, successful CREATE after commit,
+current parent generation and invalid-reference rejection assertions all remain.
+No sleeps, retries, skips, weaker result acceptance or larger outer timeout are
+introduced. Fast-fail/deadlock error-class cases are unchanged.
+
+Also merge verified main `e8b3ed7f21c2b1966d74814adaa2bcd96d8c129f` to resolve
+the current protocol-number conflict. Preserve main's native Unicode UNIQUE
+protocol 114; move all MV authoring/read/registration and catalog-upgrade gates
+to 115. Typed tests reject protocol/floor 114 and accept 115, while ordinary
+scans retain their prior admission. The automatic planner merges retain both
+upstream Unicode/fulltext/locking-read changes and MV hooks; no generated
+parser or protobuf change is required.
+
+Review map: the waiter cancellation fixture is R1 with a concurrency timing
+trigger; the MV protocol allocation is R3 compatibility; this evidence is R0.
+The parent deadline remains the liveness bound, and exact output/error/catalog
+state remain the oracles. No new process fixture, data, hook or production wait
+mechanism is added. Fresh exact-root normal/race validation and focused protocol
+consumer checks are recorded below; full new-head CI remains separate.
+
+
+Validation of the merged/fixed source (Go 1.27.1, linux/amd64, repository CGo
+wrapper, `matrixone_test`, `-short`, `-count=1`):
+
+- Exact failed root in normal mode: PASS, 14.300 s; all 17 subcases PASS,
+  including both FK-publication directions; zero failures/skips.
+- Exact failed root under `-race`: PASS, 33.390 s; all 17 subcases PASS,
+  zero failures/skips and no race report. Adaptive stress budget B=30 s gives
+  N=clamp(floor(30/33.390),1,100)=1; the measured exact-root run supplies that
+  one execution. Build time is excluded from this measurement.
+- MV-focused frontend/compile/plan/v4_0_15 tests: all four packages PASS,
+  covering current 115 and immediately preceding 114 admission boundaries.
+- Full owning frontend: PASS, 23.589 s; compile: PASS, 10.006 s;
+  plan: PASS, 22.058 s; v4_0_15: PASS, 0.055 s.
+- Six-package vet PASS; configured incremental golangci-lint 2.14.0 reports
+  0 issues. Formatting, unresolved-entry and diff whitespace checks PASS.
+
+Logs: `/workspace/mv-ci/issue29400-{fixed,race}.jsonl`,
+`issue29400-mv-protocol.log`, `issue29400-owning.log`, `issue29400-vet.log`
+and `issue29400-lint.log`. The exact failing concurrency group is the owning
+test closure; unrelated issue roots are left to full CI. Normal/race timing is
+functional evidence, not a performance comparison to the slow CI runner.
+No new blockers were found in final-scope self-review. The new remote CI result
+and the existing external design/re-review gates remain separate.
