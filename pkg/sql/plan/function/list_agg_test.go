@@ -97,6 +97,26 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	}
 }
 
+func TestStatisticalAggBoolEnumResolution(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+		for _, input := range []struct {
+			typ, target types.T
+		}{
+			{types.T_bool, types.T_int8},
+			{types.T_enum, types.T_uint16},
+		} {
+			t.Run(name+"/"+input.typ.String(), func(t *testing.T) {
+				got, err := GetFunctionByName(t.Context(), name, []types.Type{input.typ.ToType()})
+				require.NoError(t, err)
+				casts, shouldCast := got.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.Type{input.target.ToType()}, casts)
+				require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+			})
+		}
+	}
+}
+
 func TestJSONNumericAggResolution(t *testing.T) {
 	for _, name := range []string{
 		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
@@ -120,22 +140,42 @@ func TestJSONNumericAggResolutionRejectsInvalidShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := GetFunctionByName(context.Background(), name, nil)
 			require.Error(t, err)
-			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_bool.ToType()})
+			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_uuid.ToType()})
 			require.Error(t, err)
 		})
 	}
 }
 
-func TestMySQLNumericAggSupportsDecimal256(t *testing.T) {
-	input := types.New(types.T_decimal256, 65, 30)
+func TestMySQLStatisticalAggResultDomain(t *testing.T) {
+	for _, input := range []types.Type{
+		types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 18),
+		types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 38),
+		types.New(types.T_decimal256, 65, 30), types.T_float64.ToType(), types.T_int64.ToType(),
+	} {
+		for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+			t.Run(name+"/"+input.String(), func(t *testing.T) {
+				got, err := GetFunctionByName(t.Context(), name, []types.Type{input})
+				require.NoError(t, err)
+				require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+				_, cast := got.ShouldDoImplicitTypeCast()
+				require.False(t, cast, "native numeric input must retain its exact domain")
+			})
+		}
+	}
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
-		t.Run(name, func(t *testing.T) {
-			got, err := GetFunctionByName(context.Background(), name, []types.Type{input})
+		for _, input := range []types.Type{types.T_date.ToType(), types.New(types.T_time, 0, 6), types.New(types.T_datetime, 0, 6), types.New(types.T_timestamp, 0, 6)} {
+			got, err := GetFunctionByName(t.Context(), name, []types.Type{input})
 			require.NoError(t, err)
 			require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
-			_, shouldCast := got.ShouldDoImplicitTypeCast()
-			require.False(t, shouldCast)
-		})
+			casts, cast := got.ShouldDoImplicitTypeCast()
+			require.True(t, cast)
+			require.Equal(t, types.New(types.T_decimal128, 38, input.Scale), casts[0])
+		}
+	}
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(t.Context(), name, []types.Type{types.New(types.T_decimal128, 38, 18)})
+		require.NoError(t, err)
+		require.True(t, got.GetReturnType().Oid.IsDecimal(), "exact SUM/AVG domain is independent")
 	}
 }
 
@@ -154,8 +194,8 @@ func TestBitSumAvgUsesExistingUnsignedDomain(t *testing.T) {
 	}
 }
 
-func TestEnumAggregatesUseOrdinalDomain(t *testing.T) {
-	for _, name := range []string{"sum", "avg", "bit_and", "bit_or", "bit_xor"} {
+func TestEnumBitwiseAggregatesUseOrdinalDomain(t *testing.T) {
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
 		t.Run(name, func(t *testing.T) {
 			got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
 			require.NoError(t, err)
@@ -170,6 +210,21 @@ func TestEnumAggregatesUseOrdinalDomain(t *testing.T) {
 				require.Error(t, err)
 			}
 		})
+	}
+}
+
+func TestEnumSumAvgUsesDoubleDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
+		require.NoError(t, err)
+		casts, cast := got.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, []types.Type{types.T_float64.ToType()}, casts)
+		require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_uuid.ToType()}} {
+			_, err := GetFunctionByName(context.Background(), name, inputs)
+			require.Error(t, err)
+		}
 	}
 }
 
@@ -329,7 +384,7 @@ func TestMySQLNumericAggTypeCheckRejectsAndHandlesSpecialTypes(t *testing.T) {
 	result = mysqlNumericAggTypeCheck([]types.Type{types.T_int64.ToType()})
 	require.Equal(t, succeedMatched, result.status)
 
-	result = mysqlNumericAggTypeCheck([]types.Type{types.T_bool.ToType()})
+	result = mysqlNumericAggTypeCheck([]types.Type{types.T_uuid.ToType()})
 	require.Equal(t, failedAggParametersWrong, result.status)
 }
 
