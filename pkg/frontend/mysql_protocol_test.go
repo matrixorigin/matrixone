@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"reflect"
@@ -2487,32 +2488,11 @@ func Test_beginPacket(t *testing.T) {
 		defer proto.Close()
 
 		proto.tcpConn.maxBytesToFlush = 1024 * 1024 * 1024
-		mysqlPack := func(payload []byte) []byte {
-			n := len(payload)
-			var curLen int
-			var header [4]byte
-			data := make([]byte, 0, n+(n/int(MaxPayloadSize)+1)*HeaderLengthOfTheProtocol)
-			var sequenceId byte = 0
-			for i := 0; i < n; i += curLen {
-				curLen = min(int(MaxPayloadSize), n-i)
-				binary.LittleEndian.PutUint32(header[:], uint32(curLen))
-				header[3] = sequenceId
-				sequenceId++
-				data = append(data, header[:]...)
-				data = append(data, payload[i:i+curLen]...)
-				if i+curLen == n && curLen == int(MaxPayloadSize) {
-					binary.LittleEndian.PutUint32(header[:], uint32(0))
-					header[3] = sequenceId
-					sequenceId++
-					data = append(data, header[:]...)
-				}
-			}
-			return data
-		}
 
 		type kase struct {
 			size int
 			len  int
+			seq  byte
 		}
 
 		kases := []kase{
@@ -2537,6 +2517,7 @@ func Test_beginPacket(t *testing.T) {
 			},
 			{
 				size: 4 * int(MaxPayloadSize),
+				seq:  254, // Multiple packets cross the one-byte sequence boundary.
 				len: HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
@@ -2545,29 +2526,52 @@ func Test_beginPacket(t *testing.T) {
 			},
 		}
 
+		payloadWindow := make([]byte, 64<<10)
 		for _, c := range kases {
 			data := make([]byte, c.size)
 			if c.size == 4 {
 				copy(data, []byte{1, 2, 3, 4})
+			} else {
+				// Distinguish payload positions around every packet boundary.
+				for offset := 0; offset < len(data); offset += int(MaxPayloadSize) {
+					data[offset] = byte(offset/int(MaxPayloadSize) + 1)
+					data[min(offset+int(MaxPayloadSize), len(data))-1] = 0xa5
+				}
 			}
-			proto.SetSequenceID(0)
+			proto.SetSequenceID(c.seq)
+			require.NoError(t, proto.beginPacket())
+			require.NoError(t, proto.append(data...))
+			require.NoError(t, proto.finishedPacket())
+			require.Equal(t, c.len, proto.tcpConn.bufferLength)
 
-			proto.beginPacket()
-			convey.So(err, convey.ShouldBeNil)
-
-			proto.append(data...)
-
-			err = proto.finishedPacket()
-			convey.So(err, convey.ShouldBeNil)
-
-			want := mysqlPack(data)
-
-			convey.So(c.len, convey.ShouldEqual, len(want))
-
-			res := proto.tcpConn.bufferLength
-			convey.So(res, convey.ShouldEqual, len(want))
-
-			proto.flush()
+			// Read the real wire buffers without copying the entire expected packet.
+			wire := net.Buffers{proto.tcpConn.fixBuf.AvailableData()}
+			for node := proto.tcpConn.dynamicWrBuf.Front(); node != nil; node = node.Next() {
+				wire = append(wire, node.Value.(*MemBlock).AvailableData())
+			}
+			payloadOffset := 0
+			for packet := 0; packet <= len(data)/int(MaxPayloadSize); packet++ {
+				var header [HeaderLengthOfTheProtocol]byte
+				_, err := io.ReadFull(&wire, header[:])
+				require.NoError(t, err)
+				length := int(binary.LittleEndian.Uint32(header[:]) & 0xffffff)
+				wantLength := min(int(MaxPayloadSize), len(data)-payloadOffset)
+				require.Equal(t, wantLength, length)
+				require.Equal(t, c.seq+byte(packet), header[3])
+				for remaining := length; remaining > 0; {
+					n := min(remaining, len(payloadWindow))
+					_, err := io.ReadFull(&wire, payloadWindow[:n])
+					require.NoError(t, err)
+					require.True(t, bytes.Equal(data[payloadOffset:payloadOffset+n], payloadWindow[:n]),
+						"packet %d payload offset %d", packet, payloadOffset)
+					payloadOffset += n
+					remaining -= n
+				}
+			}
+			var extra [1]byte
+			_, err = wire.Read(extra[:])
+			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, proto.flush())
 		}
 	})
 
