@@ -226,6 +226,8 @@ func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
 		{name: "native", sql: "select with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "distinct native", sql: "select distinct with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "distinct computed", sql: "select distinct n_nationkey is null as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "aggregate min computed", sql: "select min(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "aggregate max computed", sql: "select max(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "union native", sql: "select with_grant_option from mo_catalog.mo_role_privs union all select with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "derived native", sql: "select x from (select with_grant_option x from mo_catalog.mo_role_privs) u", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "computed", sql: "select with_grant_option = 1 from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},

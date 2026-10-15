@@ -1178,6 +1178,18 @@ func resultColumnExpressionIsComputed(
 			return true
 		}
 	}
+	// Aggregate output slots use a different negative relation position
+	// (RelPos == -2) and are defined by AggList rather than the child
+	// projection.  Following the child for these slots would classify an
+	// aggregate over a predicate (for example MIN(n IS NULL)) as the stored
+	// BOOLEAN input, causing the wire metadata to be advertised as BIT.
+	if node.NodeType == plan.Node_AGG && ref.RelPos == -2 && ref.ColPos >= 0 &&
+		int(ref.ColPos) < len(node.AggList) {
+		aggExpr := node.AggList[ref.ColPos]
+		if aggExpr != nil && aggExpr.GetCol() == nil {
+			return true
+		}
+	}
 
 	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
 	if projected != nil {
