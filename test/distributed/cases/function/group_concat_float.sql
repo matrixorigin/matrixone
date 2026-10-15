@@ -26,4 +26,17 @@ prepare group_concat_float_stmt from
 execute group_concat_float_stmt;
 deallocate prepare group_concat_float_stmt;
 
+-- Approximate numeric text uses MySQL bytes across scalar and JSON consumers.
+select hex(cast(cast('-1e20' as double) as char)) as negative_scalar_hex, hex(cast(json_array(cast('-1e20' as double)) as char)) as negative_json_hex;
+select id, hex(cast(d as char)) as scalar_hex, hex(concat(d)) as concat_hex from float_values where id in (2,3,4) order by id;
+select hex(cast(greatest(9007199254740993,cast(9007199254740992 as double)) as char)) as greatest_hex, hex(cast(least(9007199254740993,cast(9007199254740992 as double)) as char)) as least_hex;
+select id, json_type(json_extract(json_array(d),'$[0]')) as numeric_type, hex(cast(json_array(d) as char)) as json_hex, hex(json_unquote(json_extract(json_array(d),'$[0]'))) as unquote_hex, json_contains(json_array(d),cast(d as char)) as contains_value from float_values where id in (2,3,4) order by id;
+select id, cast(json_arrayagg(d) as char) = concat('[',cast(d as char),']') as array_text, cast(json_objectagg(cast(id as char),d) as char) = concat('{"',cast(id as char),'": ',cast(d as char),'}') as object_text from float_values where id in (2,3,4) group by id order by id;
+select id, cast(json_set(json_object(),'$.v',d) as char) = concat('{"v": ',cast(d as char),'}') as set_text from float_values where id in (2,3,4) order by id;
+select cast(json_array(cast(2 as double),cast(2 as signed),cast('2.00' as decimal(3,2)),'2',null) as char) as json_controls;
+select cast(cast('1e-15' as double) as char) as fixed_boundary, cast(cast('1e-16' as double) as char) as exponent_boundary, cast(cast('1000000000000000.2' as double) as char) as fractional_large;
+insert into float_values values (7,1.23456789,1.23456789);
+select cast(f as char) as float_text, cast(d as char) as double_text, group_concat(f) as float_aggregate from float_values where id = 7 group by f,d;
+select cast(null as char) is null as null_cast, concat(cast(null as double)) is null as null_concat, cast(cast('123.450' as decimal(6,3)) as char) as decimal_control;
+
 drop database group_concat_float_28660;
