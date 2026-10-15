@@ -45,4 +45,21 @@ from (
 ) q
 order by sort_region, sort_product;
 
+-- SELECT aliases identify the same detail and subtotal keys as source names.
+select r, p, gr, gp, c, s
+from (
+  select region as r, product as p, grouping(region) as gr,
+         grouping(product) as gp, count(*) as c, sum(amount) as s
+  from t_rollup
+  group by r, p with rollup
+) q
+order by gr, r, gp, p;
+
+-- Ranking consumes the combined ROLLUP result after alias resolution.
+select region as r, sum(amount) as s,
+       row_number() over (order by sum(amount) desc) as rn
+from t_rollup
+ group by r with rollup
+order by s desc;
+
 drop database mysql_compat_null_rollup_grouping;
