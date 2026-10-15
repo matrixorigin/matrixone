@@ -6764,8 +6764,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
 
+	// FK data checks run after all ALTER actions. Keep the original name for
+	// binding and execution, but use the final relation name for those checks.
+	finalTableName := tableDef.Name
+	for _, option := range stmt.Options {
+		if rename, ok := option.(*tree.AlterOptionTableName); ok {
+			if name := string(rename.Name.ToTableName().ObjectName); name != tableDef.Name {
+				finalTableName = name
+			}
+		}
+	}
+
 	var detectSqls []string
 	var updateSqls []string
+	var renameFkSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	// Planning must consume ALTER actions in statement order without mutating
@@ -6907,7 +6919,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					sqls, err := genSqlsForCheckFKSelfRefer(
 						ctx.GetContext(),
 						databaseName,
-						currentTableDef.Name,
+						finalTableName,
 						currentTableDef.Cols,
 						[]*plan.ForeignKeyDef{fkData.Def},
 					)
@@ -6952,7 +6964,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					sql, err := genSqlForCheckFKConstraints(
 						ctx.GetContext(),
 						fkData.Def,
-						databaseName, tableDef.Name, tableDef.Cols,
+						databaseName, finalTableName, tableDef.Cols,
 						fkData.ParentDbName,
 						fkData.ParentTableName,
 						parentTableDef.Cols,
@@ -7257,7 +7269,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if !tableDef.IsTemporary {
-				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+				renameFkSqls = append(renameFkSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
 			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
@@ -7451,7 +7463,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	alterTable.DetectSqls = detectSqls
-	alterTable.UpdateFkSqls = updateSqls
+	// Ordered ADD/DROP catalog mutations use the original identity. Rename
+	// their surviving rows and incoming references only after all mutations.
+	alterTable.UpdateFkSqls = append(updateSqls, renameFkSqls...)
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
