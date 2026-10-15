@@ -423,9 +423,11 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
   shared read-only by the sub-index searches, freed when the reader closes.
 - **GPU mask**: built per query; never written into the shared delete bitsets or their device
   caches, and never bumps their version. `id_to_index_` is not used.
-- **Rounds**: bounded by the caps, about `log2(cap / start)`. Each cagra/ivfpq round rebuilds
-  the host mask (one pass over `host_ids`); ivfpq rounds re-scan earlier lists, about twice the
-  final round in total; ivfflat rounds do not re-scan.
+- **Rounds**: bounded by the caps, about `log2(cap / start)`. A cagra/ivfpq `iterative` search
+  builds the host mask once (`prepare_bitset`: one pass over `host_ids`, one mask per index,
+  shard and overflow) and every round searches with it; the deletes are those when it is built.
+  ivfpq rounds re-scan earlier lists, about twice the final round in total; ivfflat rounds do
+  not re-scan.
 - **No lock is held across a GPU call** (`CLAUDE.md`).
 
 ## Alternatives
@@ -502,6 +504,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - A session knob is written only into a scan of an algorithm that uses it, so a fulltext search
   does not require `vectorscan.SearchKnobsProtocolVersion`.
 - Accepted costs: members without an index entry (NULL vectors, rows not yet indexed) make an
-  hnsw, cagra or ivfpq `iterative` search widen to its cap; each cagra and ivfpq `iterative`
-  round rebuilds its CPU filter mask; the first ivfflat round is not capped at 4096 lists;
+  hnsw, cagra or ivfpq `iterative` search widen to its cap; a cagra or ivfpq `iterative`
+  search does not see a delete made between its rounds; the first ivfflat round is not capped
+  at 4096 lists;
   session knobs are resolved per row in a correlated APPLY.

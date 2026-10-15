@@ -103,11 +103,12 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if rt.Iterative {
 		return s.searchIterative(anyquery, rt, cardinality)
 	}
-	return s.searchOnce(anyquery, rt, cardinality)
+	return s.searchOnce(anyquery, rt, cardinality, nil)
 }
 
-// searchOnce runs one search of rt over an index of cardinality rows.
-func (s *CagraSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) (keys []int64, distances []float64, err error) {
+// searchOnce runs one search of rt over an index of cardinality rows. A non-nil
+// bitset is the filter of rt prepared by searchIterative for all its rounds.
+func (s *CagraSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64, bitset *cuvs.MultiBitset) (keys []int64, distances []float64, err error) {
 	limit := vectorindex.ClampSearchLimit(rt.Limit, cardinality, math.MaxUint32)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -130,13 +131,16 @@ func (s *CagraSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfi
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
 	}
-	mem, err := docfilter.CExactMembershipOf(rt.Membership)
-	if err != nil {
-		return nil, nil, err
-	}
-	if rt.FilterJSON != "" || rt.Membership != nil {
+	switch {
+	case bitset != nil:
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithBitset(qB, 1, dim, uint32(limit), sp, bitset)
+	case rt.FilterJSON != "" || rt.Membership != nil:
+		var mem docfilter.CMembership
+		if mem, err = docfilter.CExactMembershipOf(rt.Membership); err != nil {
+			return nil, nil, err
+		}
 		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON, mem)
-	} else {
+	default:
 		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
 	if err != nil {
@@ -868,11 +872,23 @@ func (s *CagraSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.Runtime
 		MaxInternalTopK: uint64(rt.MaxLimit),
 	}
 	stats := searchplugin.SearchStats{IndexRows: cardinality, Members: uint64(rt.MembershipCount)}
+	// The filter mask is built once and every round searches with it.
+	var bitset *cuvs.MultiBitset
+	if rt.FilterJSON != "" || rt.Membership != nil {
+		mem, err := docfilter.CExactMembershipOf(rt.Membership)
+		if err != nil {
+			return nil, nil, err
+		}
+		if bitset, err = s.MultiIndex.PrepareBitset(rt.FilterJSON, mem); err != nil {
+			return nil, nil, err
+		}
+		defer bitset.Free()
+	}
 	policy := IterativeSearch{}
 	round := policy.StartRound(nil, req, stats)
 	for {
 		rt.Limit = uint(round.ITopK)
-		keys, distances, err := s.searchOnce(anyquery, rt, cardinality)
+		keys, distances, err := s.searchOnce(anyquery, rt, cardinality, bitset)
 		if err != nil {
 			return nil, nil, err
 		}

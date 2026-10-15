@@ -167,3 +167,87 @@ func TestGpuBruteForcePreparedBitset(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{1005, 1050, -1}, neighbors)
 }
+
+// bitsetTestOverflow returns a brute-force overflow of rows n..n+m-1 at (i, i)
+// with ids 1000 + i.
+func bitsetTestOverflow(t *testing.T, n, m uint64) *GpuBruteForce[float32, float32] {
+	dataset := make([]float32, m*2)
+	ids := make([]int64, m)
+	for i := uint64(0); i < m; i++ {
+		dataset[i*2] = float32(n + i)
+		dataset[i*2+1] = float32(n + i)
+		ids[i] = int64(1000 + n + i)
+	}
+	bf, err := NewGpuBruteForceEmpty[float32, float32](m, 2, L2Expanded, 1, 0)
+	require.NoError(t, err)
+	require.NoError(t, bf.Start())
+	require.NoError(t, bf.AddChunkQuantize(dataset, m, ids))
+	require.NoError(t, bf.Build())
+	return bf
+}
+
+func TestMultiGpuCagraPreparedBitset(t *testing.T) {
+	const n, m, dimension, limit = uint64(1000), uint64(50), uint32(2), uint32(4)
+	dataset, ids := bitsetTestDataset(n)
+	index, err := NewGpuCagra[float32, float32](dataset, n, dimension, L2Expanded, DefaultCagraBuildParams(), []int{0}, 1, SingleGpu, ids)
+	require.NoError(t, err)
+	require.NoError(t, index.Start())
+	require.NoError(t, index.Build())
+	overflow := bitsetTestOverflow(t, n, m)
+	defer index.Destroy()
+	defer overflow.Destroy()
+	multi := NewMultiGpuCagra[float32, float32]([]*GpuCagra[float32, float32]{index}, overflow, dimension, L2Expanded)
+
+	// members in the index (1005, 1050) and in the overflow (2010)
+	mem, free := bitsetTestMembership(t, []int64{1005, 1050, 2010})
+	query := []float32{0, 0}
+	sp := DefaultCagraSearchParams()
+	want, _, err := multi.SearchQuantizeWithFilter(query, 1, dimension, limit, sp, "", mem)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []int64{1005, 1050, 2010, -1}, want)
+
+	bitset, err := multi.PrepareBitset("", mem)
+	require.NoError(t, err)
+	defer bitset.Free()
+	free()
+	for round := 0; round < 2; round++ {
+		got, _, err := multi.SearchQuantizeWithBitset(query, 1, dimension, limit, sp, bitset)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+	_, _, err = multi.SearchQuantizeWithBitset(query, 1, dimension, limit, sp, nil)
+	require.ErrorContains(t, err, "bitset is nil")
+}
+
+func TestMultiGpuIvfPqPreparedBitset(t *testing.T) {
+	const n, m, dimension, limit = uint64(1000), uint64(50), uint32(2), uint32(4)
+	dataset, ids := bitsetTestDataset(n)
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 4
+	index, err := NewGpuIvfPq[float32, float32](dataset, n, dimension, L2Expanded, bp, []int{0}, 1, SingleGpu, ids)
+	require.NoError(t, err)
+	require.NoError(t, index.Start())
+	require.NoError(t, index.Build())
+	overflow := bitsetTestOverflow(t, n, m)
+	defer index.Destroy()
+	defer overflow.Destroy()
+	multi := NewMultiGpuIvfPq[float32, float32]([]*GpuIvfPq[float32, float32]{index}, overflow, dimension, L2Expanded)
+
+	mem, free := bitsetTestMembership(t, []int64{1005, 1050, 2010})
+	query := []float32{0, 0}
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 4
+	want, _, err := multi.SearchQuantizeWithFilter(query, 1, dimension, limit, sp, "", mem)
+	require.NoError(t, err)
+	require.Contains(t, want, int64(2010))
+
+	bitset, err := multi.PrepareBitset("", mem)
+	require.NoError(t, err)
+	defer bitset.Free()
+	free()
+	for round := 0; round < 2; round++ {
+		got, _, err := multi.SearchQuantizeWithBitset(query, 1, dimension, limit, sp, bitset)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+}

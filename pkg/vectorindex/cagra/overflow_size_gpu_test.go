@@ -35,6 +35,12 @@ func (s *stubOverflow[B]) SearchQuantizeAsync([]B, uint64, uint32, uint32) (uint
 func (s *stubOverflow[B]) SearchQuantizeWithFilterAsync([]B, uint64, uint32, uint32, string, docfilter.CMembership) (uint64, error) {
 	return 0, nil
 }
+func (s *stubOverflow[B]) PrepareBitset(string, docfilter.CMembership) (*cuvs.Bitset, error) {
+	return nil, nil
+}
+func (s *stubOverflow[B]) SearchQuantizeWithBitsetAsync([]B, uint64, uint32, uint32, *cuvs.Bitset) (uint64, error) {
+	return 0, nil
+}
 func (s *stubOverflow[B]) SearchWait(uint64, uint64, uint32) ([]int64, []float32, error) {
 	return nil, nil, nil
 }
