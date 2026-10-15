@@ -1793,3 +1793,65 @@ func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context
 	h.req = req
 	return h.removed, nil
 }
+
+func TestSessionControlHandlers(t *testing.T) {
+	ctl := gomock.NewController(t)
+	server := mock_moserver.NewMockServer(ctl)
+	server.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+	sid := "session-control-handlers"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	s := &service{mo: server, cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	for _, req := range []*query.Request{nil, {}} {
+		require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+		require.Error(t, s.handleDisconnectSession(ctx, req, &query.Response{}, nil))
+	}
+	req := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	req.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+	rsp := &query.Response{}
+	require.NoError(t, s.handleKillSession(ctx, req, rsp, nil))
+	require.NotNil(t, rsp.KillSessionResponse)
+	require.False(t, rsp.KillSessionResponse.Found)
+	req.KillSessionRequest.ConnID = 1<<32 + 123
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	rsp = &query.Response{}
+	require.NoError(t, s.handleDisconnectSession(ctx, &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}, rsp, nil))
+	require.NotNil(t, rsp.DisconnectSessionResponse)
+}
+
+// A receiver must reject rollback before looking up or acting on any routine.
+// Leaving mo nil makes an accidentally admitted operation fail this test.
+func TestSessionControlHandlersRejectRollback(t *testing.T) {
+	sid := "session-control-rollback"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	s := &service{cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	kill := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	disconnect := &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion119} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		if version == defines.MORPCVersion120 {
+			s.mo = mock_moserver.NewMockServer(gomock.NewController(t))
+			s.mo.(*mock_moserver.MockServer).EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).Times(2)
+			rsp := &query.Response{}
+			kill.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+			require.NoError(t, s.handleKillSession(ctx, kill, rsp, nil))
+			require.NotNil(t, rsp.KillSessionResponse)
+			require.NoError(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil))
+			require.NotNil(t, rsp.DisconnectSessionResponse)
+			s.mo = nil
+			continue
+		}
+		rsp := &query.Response{}
+		require.ErrorContains(t, s.handleKillSession(ctx, kill, rsp, nil), "unsupported protocol version 117")
+		require.Nil(t, rsp.KillSessionResponse)
+		require.ErrorContains(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil), "unsupported protocol version 117")
+		require.Nil(t, rsp.DisconnectSessionResponse)
+	}
+}
