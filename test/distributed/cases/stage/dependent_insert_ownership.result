@@ -3,6 +3,7 @@ create database dependent_external_dml;
 use dependent_external_dml;
 drop stage if exists dependent_ownership_stage;
 create stage dependent_ownership_stage url='file:///$resources/into_outfile/stage';
+remove files from stage if exists 'stage://dependent_ownership_stage/dependent_ownership_*.csv';
 create table src(id int primary key, label varchar(20));
 insert into src values (1, 'one'), (2, 'two');
 create external table dst(id int, label varchar(20))
@@ -37,5 +38,6 @@ select id, label from dst order by id;
 select count(*) from dst;
 ➤ count(*)[-5,64,0]  𝄀
 6
+remove files from stage if exists 'stage://dependent_ownership_stage/dependent_ownership_*.csv';
 drop database dependent_external_dml;
 drop stage dependent_ownership_stage;

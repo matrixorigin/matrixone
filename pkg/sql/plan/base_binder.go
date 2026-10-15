@@ -178,6 +178,39 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		if castType, ok := exprImpl.Type.(*tree.T); ok && castType.InternalType.CastCharsetSpecified {
+			// Reuse the existing CONVERT USING charset owner for conversion and
+			// result metadata, then use the explicit CAST overload to enforce the
+			// requested CHAR width. This keeps conversion separate from assignment
+			// width validation and preserves the engine's admitted charset aliases.
+			charsetName := castType.InternalType.CastCharsetName
+			charsetLiteral := tree.NewNumVal(charsetName, charsetName, false, tree.P_char)
+			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
+			if err != nil {
+				return
+			}
+			if castType.InternalType.DisplayWith < 0 {
+				// With no explicit width, CONVERT already supplies the requested
+				// character set and the source-derived result width. Do not impose
+				// the internal default maximum as a cast width.
+				return
+			}
+			if types.T(typ.Id) == types.T_varbinary {
+				// A binary CHAR(N) cast truncates bytes without padding. SUBSTRING
+				// already uses byte offsets for binary string inputs; apply it before
+				// the VARBINARY(N) cast, whose normal width check rejects long input.
+				expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "substring", []*Expr{
+					expr,
+					makePlan2Int64ConstExprWithType(1),
+					makePlan2Int64ConstExprWithType(int64(typ.Width)),
+				})
+				if err != nil {
+					return
+				}
+			}
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			return
+		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
 		if b.mysqlSpecialTypeInAst(exprImpl.Expr) && makeTypeByPlan2Type(typ).IsNumeric() {
