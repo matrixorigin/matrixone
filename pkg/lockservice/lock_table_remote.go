@@ -82,7 +82,7 @@ type remoteLockTable struct {
 	client                      Client
 	bindChangedHandler          func(pb.LockTable)
 	allocatorStateProvider      func() allocatorState
-	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
+	allocatorBindChangedHandler func(context.Context, string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -840,6 +840,7 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if new.Changed(l.bind) {
 		if l.allocatorBindChangedHandler != nil {
 			return l.allocatorBindChangedHandler(
+				ctx,
 				"remote-bind-refresh",
 				l.bind,
 				new,
@@ -905,6 +906,7 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 			return ErrLockTableBindChanged
 		}
 		if err := l.allocatorBindChangedHandler(
+			ctx,
 			"remote-new-bind",
 			l.bind,
 			refreshedBind,

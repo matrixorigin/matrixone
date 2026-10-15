@@ -117,6 +117,13 @@ type service struct {
 		beforeRemoteLockBindCheck func()
 		serverOpts                []ServerOption
 	}
+	// remoteRouteOwners is a local inventory hint, protected by bindChangeMu.
+	// nil means no snapshot has been read. It only governs route publication
+	// and idle eviction; it must never authorize releasing transaction locks.
+	remoteRouteOwners *remoteRouteOwnerSnapshot
+	// Cold publication can observe membership ahead of the keeper. Coalesce
+	// those publications into one scan so a fast join/leave is not missed.
+	idleRouteScanRequested atomic.Bool
 }
 
 type txnClosureAdmission struct {
@@ -2251,6 +2258,7 @@ func (s *service) publishLockTableBindFromAllocator(
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) (lockTable, error) {
+	confirmed, ownerErr := s.prepareRemoteRoutePublication(ctx, bind)
 	if !s.beginLockTablePublication() {
 		return nil, ErrLockTableBindChanged
 	}
@@ -2276,6 +2284,13 @@ func (s *service) publishLockTableBindFromAllocator(
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if ownerErr != nil {
+		return nil, ownerErr
+	}
+	if !s.canPublishRemoteRouteLocked(bind, confirmed) {
+		return nil, ErrLockTableBindChanged
+	}
+	defer s.remoteRoutePublished(confirmed)
 	current := s.tableGroups.get(group, tableID)
 	if current != nil {
 		if current.getBind().Changed(bind) {
@@ -2287,6 +2302,12 @@ func (s *service) publishLockTableBindFromAllocator(
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+	confirmed, err := s.prepareRemoteRoutePublication(ctx, newBind)
+	if err != nil {
+		return
+	}
 	if !s.beginLockTablePublication() {
 		return
 	}
@@ -2295,6 +2316,10 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if !s.canPublishRemoteRouteLocked(newBind, confirmed) {
+		return
+	}
+	defer s.remoteRoutePublished(confirmed)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil && !current.getBind().Changed(newBind) {
 		return
@@ -2306,12 +2331,14 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 }
 
 func (s *service) handleBindChangedFromAllocator(
+	ctx context.Context,
 	source string,
 	oldBind pb.LockTable,
 	newBind pb.LockTable,
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) error {
+	confirmed, ownerErr := s.prepareRemoteRoutePublication(ctx, newBind)
 	if !s.beginLockTablePublication() {
 		return ErrLockTableBindChanged
 	}
@@ -2320,6 +2347,9 @@ func (s *service) handleBindChangedFromAllocator(
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return lockWaitContextError(ctx, err)
+	}
 	if _, accepted := s.observeAllocatorStateLocked(
 		source,
 		allocator,
@@ -2332,6 +2362,13 @@ func (s *service) handleBindChangedFromAllocator(
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if ownerErr != nil {
+		return ownerErr
+	}
+	if !s.canPublishRemoteRouteLocked(newBind, confirmed) {
+		return ErrLockTableBindChanged
+	}
+	defer s.remoteRoutePublished(confirmed)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil {
 		currentBind := current.getBind()
