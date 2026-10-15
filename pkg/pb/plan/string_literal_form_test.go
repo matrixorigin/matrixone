@@ -1286,3 +1286,27 @@ func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
 	}
 	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
 }
+
+func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		id       int64
+		overload int64
+		want     bool
+	}{
+		{599, 0, true}, {599, 1, true}, {598, 0, false},
+	} {
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: tc.id<<32 | tc.overload}}}}
+		owner := &Node{PhysicalEqualityKeyList: []*Expr{expr}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded Node
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, features.SetOperationFloatKeys)
+		if tc.want {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{SetOperationFloatKeys: true}.Any())
+}

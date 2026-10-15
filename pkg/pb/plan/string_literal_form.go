@@ -399,6 +399,7 @@ const (
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
+// SetOperationFloatKeys requires MORPC v131 for append-only function ID 599.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -406,6 +407,7 @@ type RemoteExpressionFeatures struct {
 	JSONNumericComparisons        bool
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
+	SetOperationFloatKeys         bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
@@ -457,7 +459,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.SetOperationFloatKeys || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -965,6 +967,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
+				}
+				if id == 599 { // SET_OPERATION_FLOAT_KEY; append-only execution identity
+					features.SetOperationFloatKeys = true
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
