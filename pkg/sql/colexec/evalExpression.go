@@ -1669,6 +1669,17 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 		}
 	}
 	for i := 0; i < len(expr.parameterExecutor); i += 2 {
+		// A CASE condition is itself flow-controlled: once an earlier WHEN
+		// matches, later conditions receive an all-false mask.  Do not evaluate
+		// skipped assignment RHS expressions, but still record the value visible
+		// for every assignment target in the condition subtree.  Without this,
+		// assignments wrapped by a function (or nested in another assignment)
+		// leave incomplete row history and a later sibling read falls back to the
+		// pre-statement session value.
+		if err = snapshotSkippedUserVariableAssignments(
+			proc, expr.parameterExecutor[i], rowCount, remaining); err != nil {
+			return err
+		}
 		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, remaining)
 		if err != nil {
 			return err

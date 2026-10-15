@@ -585,6 +585,117 @@ func TestUserVariableAssignmentSnapshotsWrappedSkippedSubtree(t *testing.T) {
 	}
 }
 
+func TestUserVariableAssignmentSnapshotsSkippedCaseCondition(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.False(t, system)
+		require.False(t, global)
+		switch name {
+		case "a", "b":
+			return int64(0), nil
+		default:
+			return nil, errors.New("unexpected variable " + name)
+		}
+	})
+
+	int64Type := types.T_int64.ToType().PlanType()
+	literal := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: value},
+		}}}
+	}
+	varA := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "a"}}}
+	conditionA := bindTestFunction(t, proc, "=", varA, literal(0))
+	assignmentB := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "b", Value: literal(1)},
+	}}
+	conditionB := bindTestFunction(t, proc, "=", assignmentB, literal(1))
+	caseExpr := bindTestFunction(t, proc, "case", conditionA, literal(1), conditionB, literal(2), literal(2))
+	assignment := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "a", Value: caseExpr},
+	}}
+	executor, err := NewExpressionExecutor(proc, assignment)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.New(nil)
+	input.SetRowCount(3)
+	defer input.Clean(proc.Mp())
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 2}, vector.MustFixedColWithTypeCheck[int64](result))
+
+	readB := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "b"}}}
+	readExecutor, err := NewExpressionExecutor(proc, readB)
+	require.NoError(t, err)
+	defer readExecutor.Free()
+	readResult, err := readExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	// The second WHEN is skipped for row zero, but its assignment target must
+	// still have a row-history entry. Rows one and two execute it normally.
+	require.Equal(t, []int64{0, 1, 1}, vector.MustFixedColWithTypeCheck[int64](readResult))
+}
+
+func TestUserVariableAssignmentSkippedCaseConditionAcrossBatches(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.False(t, system)
+		require.False(t, global)
+		switch name {
+		case "a", "b":
+			return int64(0), nil
+		default:
+			return nil, errors.New("unexpected variable " + name)
+		}
+	})
+
+	int64Type := types.T_int64.ToType().PlanType()
+	literal := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: value},
+		}}}
+	}
+	varA := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "a"}}}
+	conditionA := bindTestFunction(t, proc, "=", varA, literal(0))
+	assignmentB := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "b", Value: literal(1)},
+	}}
+	conditionB := bindTestFunction(t, proc, "=", assignmentB, literal(1))
+	caseExpr := bindTestFunction(t, proc, "case", conditionA, literal(1), conditionB, literal(2), literal(2))
+	assignment := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "a", Value: caseExpr},
+	}}
+	assignmentExecutor, err := NewExpressionExecutor(proc, assignment)
+	require.NoError(t, err)
+	defer assignmentExecutor.Free()
+	readB := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "b"}}}
+	readExecutor, err := NewExpressionExecutor(proc, readB)
+	require.NoError(t, err)
+	defer readExecutor.Free()
+
+	firstBatch := batch.New(nil)
+	firstBatch.SetRowCount(2)
+	firstResult, err := assignmentExecutor.Eval(proc, []*batch.Batch{firstBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](firstResult))
+	firstRead, err := readExecutor.Eval(proc, []*batch.Batch{firstBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1}, vector.MustFixedColWithTypeCheck[int64](firstRead))
+	firstBatch.Clean(proc.Mp())
+
+	secondBatch := batch.New(nil)
+	secondBatch.SetRowCount(1)
+	secondResult, err := assignmentExecutor.Eval(proc, []*batch.Batch{secondBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2}, vector.MustFixedColWithTypeCheck[int64](secondResult))
+	secondRead, err := readExecutor.Eval(proc, []*batch.Batch{secondBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondRead))
+	secondBatch.Clean(proc.Mp())
+}
+
 func TestUserVariableAssignmentSkippedNestedRowDoesNotPublish(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
 	proc.Base.IsFrontend = true
