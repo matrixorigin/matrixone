@@ -283,8 +283,19 @@ func TestSQLBackupFactoryOwnsAdmission(t *testing.T) {
 	require.Nil(t, fs)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 	admin := WithSQLFileAccess(t.Context(), "sys", "moadmin")
-	// SQL classification and backup construction must use identical precedence.
-	backup, err := GetForBackup(admin, "s3-opts,endpoint=disk,is-hdfs=true,bucket="+t.TempDir()+":object", "")
+	// Both factories construct from admitted arguments, while preserving their
+	// existing HDFS option semantics. No HDFS connection is needed to prove selection.
+	spec, err := ParsePath("s3-opts,endpoint=owned.invalid,is-hdfs=true,bucket=owned,key=caller,secret=owned:object")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		forETL bool
+		want   objectStorageBackend
+	}{{true, objectStorageAWS}, {false, objectStorageHDFS}} {
+		args, err := admitSQLFilePath(admin, spec, tc.forETL)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, selectObjectStorageBackend(args))
+	}
+	backup, err := GetForBackup(admin, "s3-opts,endpoint=disk,bucket="+t.TempDir()+":object", "")
 	require.NoError(t, err)
 	defer backup.Close(admin)
 	require.IsType(t, &diskObjectStorage{}, backup.(*S3FS).rawStorage)

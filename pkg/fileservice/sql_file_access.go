@@ -40,15 +40,15 @@ func WithSQLFileAccess(ctx context.Context, account, role string) context.Contex
 // SQLFilePathRequiresAdmin classifies every dependency without acquiring it.
 // Dynamic SQL providers may use caller credentials, never server auxiliaries.
 func SQLFilePathRequiresAdmin(path Path) (bool, error) {
-	_, server, err := sqlFilePathResources(path)
+	_, server, err := sqlFilePathResources(path, true)
 	return server, err
 }
 
-func sqlFilePathResources(path Path) (args ObjectStorageArguments, server bool, err error) {
+func sqlFilePathResources(path Path, forETL bool) (args ObjectStorageArguments, server bool, err error) {
 	if path.Service == "" || len(path.ServiceArguments) == 0 {
 		return args, true, nil
 	}
-	args, err = parseETLArguments(path)
+	args, err = parseFileServiceArguments(path, forETL)
 	if err != nil {
 		return args, false, err
 	}
@@ -97,7 +97,7 @@ func (o ObjectStorageArguments) validateSQLResources() error {
 	return moerr.NewInvalidInputNoCtx("SQL dynamic object storage requires explicit credentials")
 }
 
-func admitSQLFilePath(ctx context.Context, path Path) (ObjectStorageArguments, error) {
+func admitSQLFilePath(ctx context.Context, path Path, forETL bool) (ObjectStorageArguments, error) {
 	if ctx == nil {
 		return ObjectStorageArguments{}, moerr.NewInternalErrorNoCtx("SQL file access policy is required")
 	}
@@ -108,11 +108,11 @@ func admitSQLFilePath(ctx context.Context, path Path) (ObjectStorageArguments, e
 	if err := ctx.Err(); err != nil {
 		return ObjectStorageArguments{}, moerr.ConvertGoError(ctx, err)
 	}
-	return policy.admit(path)
+	return policy.admit(path, forETL)
 }
 
-func (p sqlFileAccessPolicy) admit(path Path) (ObjectStorageArguments, error) {
-	args, server, err := sqlFilePathResources(path)
+func (p sqlFileAccessPolicy) admit(path Path, forETL bool) (ObjectStorageArguments, error) {
+	args, server, err := sqlFilePathResources(path, forETL)
 	if err != nil {
 		return args, err
 	}
@@ -124,6 +124,6 @@ func (p sqlFileAccessPolicy) admit(path Path) (ObjectStorageArguments, error) {
 
 // AuthorizeSQLFileAccessPath is the pure preflight form of factory admission.
 func AuthorizeSQLFileAccessPath(account, role string, path Path) error {
-	_, err := (sqlFileAccessPolicy{serverData: strings.ToLower(account) == "sys" && strings.ToLower(role) == "moadmin"}).admit(path)
+	_, err := (sqlFileAccessPolicy{serverData: strings.ToLower(account) == "sys" && strings.ToLower(role) == "moadmin"}).admit(path, true)
 	return err
 }

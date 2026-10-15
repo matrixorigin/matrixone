@@ -37,7 +37,10 @@ Fileservice owns the single provider parser, dependency policy and actual
 acquisition. `GetForETL`, its parsed-path form and `GetForBackup` require a
 scoped SQL file policy; missing policy rejects every target before acquisition.
 The parsed-path form checks agreement with the raw target and constructs from
-its own authoritative parse. Process helpers derive the policy from current
+its own authoritative parse. The parser preserves each factory's existing
+provider semantics: ETL selects HDFS through the service name, while backup also
+honors its `is-hdfs` option. Within each factory the admitted arguments are the
+ones used for construction. Process helpers derive the policy from current
 account/role names; planning preflight delegates to the same stateless rule.
 Stageutil owns catalog resolution and confers no additional authority.
 
@@ -251,7 +254,10 @@ available through existing endpoint-only URLs and stages. Native configuration
 constructors retain their deliberate provider contracts; an explicit
 no-default-credentials setting is no longer overridden by a destination role.
 SQL callers of generic ETL Go APIs must bind the current operation policy; an
-unmarked context is no longer implicitly trusted. `StatementOption.Params()`
+unmarked context is no longer implicitly trusted. The legacy
+`MO_NO_DEFAULT_CREDENTIALS` / `NoDefaultCredentialsForETL` switch no longer selects
+SQL credential behavior: SQL acquisition always disables ambient discovery.
+`StatementOption.Params()`
 now returns `(vector, error)`; external Go consumers must handle the error and
 rebuild. Unused `ReadFromFile`/`ReadFromFileOffsetSize` Go wrappers are removed;
 SQL file functions retain their public names. Backup SQL is restricted to

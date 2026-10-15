@@ -62,8 +62,9 @@ func etlParallelMode(ctx context.Context) ParallelMode {
 	return ParallelOff
 }
 
-// parseETLArguments is the single argument parser for admission and construction.
-func parseETLArguments(path Path) (args ObjectStorageArguments, err error) {
+// parseFileServiceArguments is shared by admission and construction. ETL has
+// always selected HDFS through its service name; backup also accepts is-hdfs.
+func parseFileServiceArguments(path Path, forETL bool) (args ObjectStorageArguments, err error) {
 	argv := path.ServiceArguments
 	switch strings.ToLower(path.Service) {
 	case "s3", "minio":
@@ -86,7 +87,9 @@ func parseETLArguments(path Path) (args ObjectStorageArguments, err error) {
 		if err = args.SetFromString(argv); err != nil {
 			return args, err
 		}
-		args.IsHDFS = strings.EqualFold(path.Service, "hdfs")
+		if forETL || strings.EqualFold(path.Service, "hdfs") {
+			args.IsHDFS = strings.EqualFold(path.Service, "hdfs")
+		}
 	default:
 		return args, moerr.NewInvalidInputNoCtxf("no such service: %s", path.Service)
 	}
@@ -127,7 +130,7 @@ func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string
 }
 
 func getForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string, fsPath Path) (res ETLFileService, readPath string, err error) {
-	args, err := admitSQLFilePath(ctx, fsPath)
+	args, err := admitSQLFilePath(ctx, fsPath, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -191,7 +194,7 @@ func GetForBackup(ctx context.Context, spec string, backend string) (res FileSer
 		return nil, err
 	}
 
-	sqlArgs, err := admitSQLFilePath(ctx, fsPath)
+	sqlArgs, err := admitSQLFilePath(ctx, fsPath, false)
 	if err != nil {
 		return nil, err
 	}
