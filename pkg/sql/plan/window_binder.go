@@ -953,11 +953,11 @@ func bindWindowSpec(
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING.")
 		}
 		if ws.Frame.End.Type == tree.Preceding || ws.Frame.End.Type == tree.CurrentRow {
-			return nil, newWindowFrameIllegalError(b.GetContext())
+			return nil, newWindowFrameOrderError(b.GetContext())
 		}
 	case tree.CurrentRow:
 		if ws.Frame.End.Type == tree.Preceding {
-			return nil, newWindowFrameIllegalError(b.GetContext())
+			return nil, newWindowFrameOrderError(b.GetContext())
 		}
 	}
 
@@ -1444,6 +1444,10 @@ func setWindowIntervalValue(
 	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
+}
+
+func newWindowFrameOrderError(ctx context.Context) error {
+	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start cannot be after frame end.")
 }
 
 func newWindowFrameIllegalError(ctx context.Context) error {
