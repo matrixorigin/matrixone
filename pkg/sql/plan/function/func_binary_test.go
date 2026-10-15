@@ -5757,6 +5757,43 @@ func TestFindInSetInt32ResultWrapper(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestFindInSetEmptyStringList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "needle", "", "", "", "", "needle", ""},
+				[]bool{false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "", ",", ",a", "a,", "a,,b", "", ""},
+				[]bool{false, false, false, false, false, false, true, false}),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{0, 0, 1, 1, 2, 2, 0, 0},
+			[]bool{false, false, false, false, false, false, true, true}),
+		FindInSet,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+func TestFindInSetEmptyStringListInt32ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "x", "", "a"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", ",a", "a,b"}, nil),
+		},
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{0, 0, 1, 1}, []bool{false, false, false, false}),
+		FindInSet,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+}
+
 func TestFindInSetSetDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	caseData := NewFunctionTestCase(
