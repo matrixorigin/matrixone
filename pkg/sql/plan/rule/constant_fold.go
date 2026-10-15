@@ -1078,6 +1078,14 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 // Children are folded first, so ordinary arithmetic with a nonzero constant
 // denominator retains its constant-folding fast path.
 func ContainsSqlModeDependentDivision(expr *plan.Expr) bool {
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsSqlModeDependentDivision(item) {
+				return true
+			}
+		}
+		return false
+	}
 	fn := expr.GetF()
 	if fn == nil {
 		return false

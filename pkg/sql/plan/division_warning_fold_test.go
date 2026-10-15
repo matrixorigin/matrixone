@@ -28,36 +28,48 @@ import (
 
 func TestDivisionWarningSubtreesSurviveConstantFolding(t *testing.T) {
 	for _, folder := range []string{"binder", "optimizer", "prepare optimizer"} {
-		for _, denominator := range []int64{0, 2} {
-			t.Run(folder+"/"+string(rune('0'+denominator)), func(t *testing.T) {
-				proc := testutil.NewProcess(t)
-				defer proc.Free()
-				proc.SetStmtProfile(&process.StmtProfile{})
-				proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
-				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "", nil })
-				literal := func(value int64) *planpb.Expr {
-					return &planpb.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}}}
-				}
-				division, err := BindFuncExprImplByPlanExpr(proc.Ctx, "div", []*planpb.Expr{literal(1), literal(denominator)})
-				require.NoError(t, err)
-				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "coalesce", []*planpb.Expr{division, literal(7)})
-				require.NoError(t, err)
-				if folder == "binder" {
-					expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, false)
+		for _, parent := range []string{"coalesce", "in", "not_in"} {
+			for _, denominator := range []int64{0, 2} {
+				t.Run(folder+"/"+parent+"/"+string(rune('0'+denominator)), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					proc.SetStmtProfile(&process.StmtProfile{})
+					proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+					proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "", nil })
+					literal := func(value int64) *planpb.Expr {
+						return &planpb.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}}}
+					}
+					division, err := BindFuncExprImplByPlanExpr(proc.Ctx, "div", []*planpb.Expr{literal(1), literal(denominator)})
 					require.NoError(t, err)
-				} else {
-					node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
-					rule.NewConstantFold(folder == "prepare optimizer").Apply(node, nil, proc)
-					expr = node.ProjectList[0]
-				}
-				if denominator == 0 {
-					require.NotNil(t, expr.GetF(), "parent must preserve the runtime division")
-					require.NotNil(t, expr.GetF().Args[0].GetF())
-				} else {
-					require.NotNil(t, expr.GetLit(), "safe nonzero arithmetic should still fold")
-					require.Equal(t, int64(0), expr.GetLit().GetI64Val())
-				}
-			})
+					args := []*planpb.Expr{division, literal(7)}
+					if parent != "coalesce" {
+						args = []*planpb.Expr{literal(1), {Typ: division.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{division, literal(2)}}}}}
+					}
+					expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, parent, args)
+					require.NoError(t, err)
+					if folder == "binder" {
+						expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, false)
+						require.NoError(t, err)
+					} else {
+						node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
+						rule.NewConstantFold(folder == "prepare optimizer").Apply(node, nil, proc)
+						expr = node.ProjectList[0]
+					}
+					if denominator == 0 {
+						require.NotNil(t, expr.GetF(), "parent must preserve the runtime division")
+						features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+						require.NoError(t, err)
+						require.True(t, features.ScalarDivision)
+					} else {
+						require.NotNil(t, expr.GetLit(), "safe nonzero arithmetic should still fold")
+						if parent == "coalesce" {
+							require.Equal(t, int64(0), expr.GetLit().GetI64Val())
+						} else {
+							require.Equal(t, parent == "not_in", expr.GetLit().GetBval())
+						}
+					}
+				})
+			}
 		}
 	}
 }

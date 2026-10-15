@@ -45,6 +45,54 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
+// ScalarDivisionNeedsRowEvaluation is used only for scalar /, DIV and MOD.
+// Their otherwise constant results must retain the actual evaluation row count
+// when a successful call can produce SELECT diagnostics. Safe nonzero and NULL
+// constants keep the runtime folding fast path. Resolve policy per execution,
+// after prepared parameters have been materialized, rather than at construction.
+func ScalarDivisionNeedsRowEvaluation(parameters []*vector.Vector, proc *process.Process) bool {
+	if len(parameters) != 2 || !parameters[0].GetType().IsNumeric() || !parameters[1].GetType().IsNumeric() ||
+		parameters[0].IsConstNull() || parameters[1].IsConstNull() || !proc.DivisionByZeroWarningsEnabled() {
+		return false
+	}
+	right := parameters[1]
+	if !right.IsConst() {
+		// Literal vectors are also accepted by the runtime folder. They are not
+		// a proven nonzero scalar, so preserve their diagnostic evaluation too.
+		return true
+	}
+	switch right.GetType().Oid {
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](right, 0) == 0
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](right, 0) == 0
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](right, 0) == 0
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](right, 0) == 0
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](right, 0) == 0
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](right, 0) == 0
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](right, 0) == 0
+	case types.T_uint64, types.T_bit:
+		return vector.GetFixedAtNoTypeCheck[uint64](right, 0) == 0
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](right, 0) == 0
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](right, 0) == 0
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](right, 0) == 0
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](right, 0) == (types.Decimal128{})
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](right, 0) == (types.Decimal256{})
+	default:
+		return false
+	}
+}
+
 // The kernels own values and strict DML errors. Successful scalar arithmetic
 // owns SELECT diagnostics here, including the heterogeneous integer DIV paths.
 // Batches without NULL results do not resolve variables or scan input rows.

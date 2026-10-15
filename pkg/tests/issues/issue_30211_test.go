@@ -122,12 +122,45 @@ func TestSelectDivisionByZeroWarnings(t *testing.T) {
 			}
 			checkWarnings(want)
 		}
+		for _, operator := range []string{"IN", "NOT IN"} {
+			func() {
+				exec("SET SESSION sql_mode=''")
+				exec("PREPARE div_warning_list FROM 'SELECT 1 " + operator + " (1 DIV 0,2)'")
+				defer exec("DEALLOCATE PREPARE div_warning_list")
+				for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO", "", "TRADITIONAL"} {
+					exec("SET SESSION sql_mode='" + mode + "'")
+					require.Equal(t, [][]string{{"NULL"}}, query("EXECUTE div_warning_list"))
+					want := 0
+					if mode != "" {
+						want = 1
+					}
+					checkWarnings(want)
+				}
+			}()
+		}
 
 		// Two independently flushed blocks let both CNs evaluate arithmetic.
 		// Reuse the existing cluster and placement switch instead of creating
 		// a large table merely to cross the cost-based scheduling threshold.
 		exec("CREATE DATABASE select_division_warning_remote")
 		defer exec("DROP DATABASE select_division_warning_remote")
+		// Constant arithmetic is evaluated once for each selected input row,
+		// including beneath a runtime conditional or a constant-looking parent.
+		exec("CREATE TABLE select_division_warning_remote.local_rows(id INT)")
+		exec("INSERT INTO select_division_warning_remote.local_rows VALUES(1),(2),(3)")
+		for _, expression := range []string{"1/0", "1 DIV 0", "MOD(1,0)"} {
+			t.Log("row diagnostics", expression)
+			require.Equal(t, [][]string{{"NULL"}, {"NULL"}, {"NULL"}}, query("SELECT "+expression+" FROM select_division_warning_remote.local_rows ORDER BY id"))
+			checkWarnings(3)
+			require.Equal(t, [][]string{{"NULL"}, {"NULL"}, {"7"}}, query("SELECT IF(id<=2,"+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
+			checkWarnings(2)
+			require.Equal(t, [][]string{{"7"}, {"NULL"}, {"NULL"}}, query("SELECT CASE WHEN id>=2 THEN "+expression+" ELSE 7 END FROM select_division_warning_remote.local_rows ORDER BY id"))
+			checkWarnings(2)
+			require.Equal(t, [][]string{{"7"}, {"7"}, {"7"}}, query("SELECT COALESCE("+expression+",7) FROM select_division_warning_remote.local_rows ORDER BY id"))
+			checkWarnings(3)
+			query("SELECT " + expression + " FROM select_division_warning_remote.local_rows WHERE FALSE")
+			checkWarnings(0)
+		}
 		exec("CREATE TABLE select_division_warning_remote.src(n INT,d INT)")
 		for range 2 {
 			exec("INSERT INTO select_division_warning_remote.src VALUES(1,0)")

@@ -70,6 +70,7 @@ func TestDivisionWarningModeSourcesAndScope(t *testing.T) {
 				NewFunctionTestInput(typ, []int64{0}, nil),
 			}, NewFunctionTestResult(typ, false, nil, nil), integerDivFn)
 			defer test.Free()
+			require.Equal(t, tc.want > 0, ScalarDivisionNeedsRowEvaluation(test.parameters, proc))
 			require.NoError(t, test.result.PreExtendAndReset(1))
 			require.NoError(t, test.fn(test.parameters, test.result, proc, 1, nil))
 			require.True(t, test.GetResultVectorDirectly().IsNull(0))
@@ -134,6 +135,7 @@ func TestDivisionWarningsMixedIntegerDomains(t *testing.T) {
 			}
 			test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(resultType, false, nil, nil), integerDivFn)
 			defer test.Free()
+			require.True(t, ScalarDivisionNeedsRowEvaluation(test.parameters, proc))
 			require.NoError(t, test.result.PreExtendAndReset(1))
 			require.NoError(t, test.fn(test.parameters, test.result, proc, 1, nil))
 			require.Equal(t, uint64(1), sink.total)

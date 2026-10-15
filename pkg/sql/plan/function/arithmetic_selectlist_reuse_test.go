@@ -362,6 +362,9 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 						tcc := NewFunctionTestCase(proc, inputs,
 							NewFunctionTestResult(resultType, false, nil, nil), op.fn)
 						defer tcc.Free()
+						if shape.leftConst && shape.rightConst {
+							require.Equal(t, !mode.strict && state.name != "all_null", ScalarDivisionNeedsRowEvaluation(tcc.parameters, proc))
+						}
 						require.NoError(t, tcc.result.PreExtendAndReset(2))
 						err := tcc.fn(tcc.parameters, tcc.result, proc, 2, selectList)
 
