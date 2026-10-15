@@ -249,6 +249,31 @@ func TestSetNamesDefaultRejectsIncompatibleServerDefaults(t *testing.T) {
 	require.Equal(t, "binary", got)
 }
 
+func TestValidateCharsetCollationPair(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		charset   interface{}
+		collation string
+		err       string
+	}{
+		{name: "non-string charset", charset: 1, collation: "utf8mb4_general_ci", err: "character set must be a string"},
+		{name: "unknown charset", charset: "latin1", collation: "latin1_swedish_ci", err: "unsupported character set"},
+		{name: "unknown collation", charset: "utf8mb4", collation: "utf8mb4_0900_bin", err: "unsupported collation"},
+		{name: "native mismatch", charset: "utf8mb4", collation: "utf8_unicode_ci", err: "not valid for CHARACTER SET"},
+		{name: "native utf8 pair", charset: "utf8", collation: "utf8_unicode_ci"},
+		{name: "legacy utf8mb4 pair", charset: "utf8mb4", collation: "utf8mb4_general_ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCharsetCollationPair(tc.charset, tc.collation)
+			if tc.err == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+			}
+		})
+	}
+}
+
 func TestSetNamesImplicitCollation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

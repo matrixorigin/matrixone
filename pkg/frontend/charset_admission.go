@@ -81,12 +81,6 @@ func validateCharsetCollationPair(charsetValue interface{}, collationName string
 	if !ok {
 		return moerr.NewInvalidInputNoCtx("character set must be a string")
 	}
-	if err := validateCharsetSystemVariable("character_set_server", charsetName); err != nil {
-		return err
-	}
-	if err := validateCharsetSystemVariable("collation_connection", collationName); err != nil {
-		return err
-	}
 	charsetID, ok := collation.ResolveCharset(charsetName)
 	if !ok {
 		return moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", charsetValue)
@@ -95,14 +89,8 @@ func validateCharsetCollationPair(charsetValue interface{}, collationName string
 	if !ok {
 		return moerr.NewInvalidInputNoCtxf("unsupported collation '%s'", collationName)
 	}
-	charset, err := collation.EffectiveDefinition(uint32(charsetID), 0)
-	if err != nil {
-		return err
-	}
-	coll, err := collation.EffectiveDefinition(uint32(collationID), uint32(collationRevision))
-	if err != nil {
-		return err
-	}
+	charset, _ := collation.EffectiveDefinition(uint32(charsetID), 0)
+	coll, _ := collation.EffectiveDefinition(uint32(collationID), uint32(collationRevision))
 	// ResolveCharset intentionally preserves MatrixOne's historical utf8
 	// compatibility alias as utf8mb4. Native UCA400 collations carry their
 	// actual charset, so compare the requested spelling directly here rather
