@@ -8,7 +8,7 @@
 - 本文是对缺失设计门禁的补件，**不声称设计先于已有实现获批**。设计修订以 Git commit 固定，PR 正文必须链接该精确版本；修订变化重新审查受影响决策。
 - 完整范围是跨 allocator、PRE_INSERT、行仲裁、FK 存储读取、最终键锁及 wire 的所有权/协议重构，满足规模和复杂度门禁，不能因 PR 类型为 BUG 而豁免。
 - [旧 IGNORE 设计](20260908-auto-increment-boundaries.md)只提出后续 acceptance cursor；[#23371 设计](CLAUDE_AUTO_INCREMENT_23371.md)明确排除本问题。其批准、实现 APPROVE、CI 成功均不构成本文的设计批准。
-- 当前审查记录：`设计 r2 / 受影响决策待独立复审`。不得提前 resolve 设计门禁线程。独立审查应记录设计 commit、决定、阻塞项及接受的权衡，不要求额外 human-approval 标签或 RFC 转换。
+- 当前审查记录：`设计 r2 / 受影响决策待独立复审`。XuPeng-SH 对 r1 的独立审查已认可所有权/生命周期/兼容方案并关闭缺失 artifact 的疑虑，但明确因默认 ordered-FK 缺少性能资格保持 REQUEST_CHANGES；iamlinjunhong 同样提出该 P2。本文补齐测量，不把它自动变为设计 PASS。不得提前 resolve 设计门禁线程。独立审查应记录设计 commit、决定、阻塞项及接受的权衡，不要求额外 human-approval 标签或 RFC 转换。
 
 ## 1. 问题、依据与成功条件
 
@@ -184,9 +184,36 @@ ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点
 - 相同 source tree 的本地 owning 8 包、静态检查、build 与上述 4 个 SQL 各两轮已通过（每轮 59/121/95/128），本地日志不在 Git 中；不能要求外部 reviewer 仅凭本机路径复核。
 - PR 早期正文报告 allocator race 100 次、MySQL 8.4.11、16,384 输入的真实 two-CN 结果；它们没有在 reviewer 的冻结输入中携带 receipts，本文只标为**作者报告、待独立验证证据**，不升级为独立通过。
 - 未部署旧版本 CN binary；混版现有证据是确定性 codec/admission rejection，不宣称真实 upgrade/topology 演练通过。
-- 未提供该新 ordered FK 路径相对基线的吞吐/reader-I/O/锁争用 benchmark，旧 #28349 benchmark 不可移植为本方案性能证据。
+- r2 已提供 [生产入口对照与逐样本附件](CLAUDE_INSERT_IGNORE_FK_BENCH_30107.md)；baseline `17a6200f59e764729e5544908fffd5480ae88279`，head `b812d7b6b3`。两端各 270 个成功 SQL 样本及 36 个争用样本；源代码不含运行期 benchmark hook，插桩仅存在于独立测量产物且已还原。旧 #28349 benchmark 仍不能替代本次证据。
 
-上线接受条件：功能与 terminal/resource 矩阵非空且真实退出成功；变更代码覆盖率≥75%；所有真实失败可清理且无 partial publication；所需 race/真实 topology receipts 能被复核；mixed-version refusal 保持；allocator 仍按块请求，probe 工作区不会随 N 累积父表数据，pool/ctx 的容量和取消路径有效。另需为 ordered FK 的目标 workload 记录对照的扫描量、锁等待和峰值，明确接受其粗粒度锁成本；**在此证据补齐前不声明性能或全面生产 rollout 就绪**。
+上线接受条件：功能与 terminal/resource 矩阵非空且真实退出成功；变更代码覆盖率≥75%；所有真实失败可清理且无 partial publication；所需 race/真实 topology receipts 能被复核；mixed-version refusal 保持；allocator 仍按块请求，probe 工作区不会随 N 累积父表数据，pool/ctx 的容量和取消路径有效。ordered FK 的扫描量、锁等待和峰值已由下节补齐，但测量揭示真实成本放大；**未获得对以下限制/权衡的独立接受前，不声明默认大批量路径或全面生产 rollout 就绪**。
+
+### 9.1 r2 性能资格：测得的代价与待接受限制
+
+工具为 [有界 SQL 驱动与方法](../../optools/insert_ignore_fk_bench/CLAUDE_README.md)，fixture/计量代码可重跑；完整 540 个 SQL 与 72 个锁样本见附件，而不是仅给不可访问的 `/tmp` 日志。相同 Go 1.27.1 / darwin-arm64 / GOEXPERIMENT=simd、单 CN/TN/LOG、GOMAXPROCS=2、GOGC=50；父表显式 flush，**允许缓存，不是冷盘测试**。执行、commit 分开计时，DDL/fixture/oracle 不计入吞吐。存在其它构建负载，绝对延迟与两端比值有时序噪声，不能声称统计等价、多 CN 或 p99。
+
+以下是 P=4096、N=256、F=1、INSERT IGNORE 的三次中位数（ms），逻辑 reader 行数为 residual 前的实际返回量：
+
+| 路径 | base / head 执行 ms | base / head reader rows | head batch bytes | head storage-layer bytes（含缓存） |
+| --- | --- | --- | --- | --- |
+| ordinary-FK 控制 | 13.967 / 13.235 | 4096 / 4096 | 32768 | 16417 |
+| auto PK FK | 13.870 / 20.894 | 4096 / 1048576 | 8388608 | 4202752 |
+| auto 非主 UNIQUE FK | 14.569 / 31.336 | 4096 / 1048576 | 8388608 | 4202752 |
+| auto 复合非主 UNIQUE FK | 66.376 / 64.696 | 4096 / 1048576 | 16777216 | 4249600 |
+| 非 auto 复合 self-FK | 310.723 / 275.648 | 12800 / 1052672 | 16809984 | 8432161 |
+
+不能只挑 INSERT 的较好结果：**self-composite / P4096 / N256 / LOAD IGNORE** 的 base 样本为 10.953/4.319/4.956ms，head 为 270.913/386.453/464.742ms，中位比 **77.98x**；对应逻辑读取由 8704 增至 1052672 行。LOCAL 同规模中位比 **8.70x**，最慢 head 样本 **636.342ms**。这是本次实测的吞吐退化，不再仅是理论验证缺口，不能用绿色 CI 或其它组合更快来抵消。
+
+父写实验更新未引用的父行：baseline 和 ordinary 控制均不等待；head 三类 auto FK 的 27 个样本均通过公共 `mo_locks()` 确认真实等待，证明 shared table lock 带来额外串行化。holder commit 后完成范围 **12.025–55.862ms**；取消被阻塞父 writer **0.382–4.707ms**，反向取消被父写阻塞的 child **0.406–4.196ms**，均返回 `(1317, context canceled)`，取消 child 零提交。三次观察的 max 不是 tail percentile，也不限制用户刻意延长事务造成的总等待。
+
+allocator store requests 在所有计量窗口均为 **0**，因为独立 CREATE/seed 已预分配；它证明该 warm-cache fixture 没有窗口内逐行 store 请求，**不证明冷 miss/耗尽时零请求**。进程采样峰值 base/head RSS **462.281/738.312MiB**、heap objects **338.767/347.885MiB**；包含服务/native/cache/历史 DDL，不能归因成每语句增量或据此断言泄漏/精确 native 峰值。
+
+**接受提案而非已批准 SLO：**本轮只建议审查“小批、正确性优先”的单 CN、单约束范围：每语句候选 **N≤64**，父 footprint **P≤4096**，**F=1**，应用禁止长事务持有该 parent table lock、与热 parent 写入口隔离。该子矩阵实际最大执行 **111.591ms**、逻辑 rows **266240**、batch bytes **4227072**、storage-layer bytes **2120353**。建议预算为每语句执行 ≤250ms、逻辑 batch bytes ≤5MiB、storage-layer bytes ≤3MiB；取消/释放 trigger→completion ≤100ms；隔离服务 RSS ≤1GiB。它们是供独立 reviewer 决定的工程预算，不是预先声明并统计验证的生产承诺。
+
+- **N256 大批量、F>1、大父表、长事务/热父写、冷 I/O、多 CN 不在接受提案中**；N256 是暴露放大效应的诊断规模，不因运行成功而获得资格。
+- planner 当前没有执行期规模阈值/feature flag，以上只是部署/应用准入要求，**不是已实现的自动保护**。无法约束入口时，应暂停该 rollout；不得退回会丢候选的旧 FK 路径、关闭 FK 检查或自动拆分语句改变原子性/发号语义。
+- 若要默认开放大 bulk，需另行设计并独立批准批量 parent lookup / 有界缓存 / 更细粒度保护的等价性、所有权、排序/NULL/collation/self 可见性及 unhappy-path，再实现并重测。本轮不在设计门禁未 PASS 前暗中引入该架构扩展。
+- r2 的结论是**比较证据已补齐、粗锁及放大成本已量化；大 bulk 性能资格未通过、小批预算等待独立接受**。不提前 resolve 性能设计线程。
 
 ## 10. 实现索引与决策记录
 
@@ -204,4 +231,4 @@ ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点
 | 最终输出后 PK lock + lease TS 检查 | 不锁临时 NULL、不制造未验证号码；失败使用既有 txn retry |
 | 114 三向拒绝而非降级丢字段 | 混版不能 silent orphan/错误 ID 映射；没有新的存储 migration |
 
-设计级阻塞：**本文精确修订尚待独立设计审查/PASS**。功能代码不能因补了一份文档就自动获批。benchmark/旧 binary 演练的证据缺口由 PR 作者与实现 reviewer 在 rollout 决策前处理；它们不是本文暗中承诺的成功结果。r2 的协议号重分配与性能预算须独立复审，不能沿用 r1 的任何认可替代新决策审查。
+设计级阻塞：**本文精确修订尚待独立设计审查/PASS**。功能代码不能因补了一份文档就自动获批。benchmark 已补件但发现的 bulk 退化及小批预算仍待权衡接受；旧 binary / topology / race receipts 的其余缺口由 PR 作者与实现 reviewer 在 rollout 决策前处理，它们不是本文暗中承诺的成功结果。r2 的协议号重分配与性能预算须独立复审，不能沿用 r1 的任何认可替代新决策审查。
