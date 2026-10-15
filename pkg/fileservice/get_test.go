@@ -19,8 +19,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"iter"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestGetForBackup(t *testing.T) {
@@ -87,6 +88,7 @@ func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
 		path string
 		want bool
 	}{
+		{name: "empty service arguments still local", path: ",endpoint=disk:file", want: true},
 		{name: "s3 disk", path: "s3,disk,region,bucket,key,secret,prefix:file", want: true},
 		{name: "s3 opts disk", path: "s3-opts,endpoint=disk,bucket=/tmp/file:file", want: true},
 		{name: "s3 opts caller hdfs is normalized away", path: "s3-opts,endpoint=disk,is-hdfs=true,bucket=/tmp/file:file", want: true},
@@ -98,7 +100,9 @@ func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path, err := ParsePath(tt.path)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.want, PathUsesLocalETLBackend(path))
+			local, err := PathUsesLocalETLBackend(path)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, local)
 		})
 	}
 }
@@ -173,4 +177,34 @@ func TestGetFromMappings(t *testing.T) {
 
 	_, err = Get[FileService](fs1, "other")
 	assert.Error(t, err)
+}
+
+func TestETLProviderAdmissionRejectsMalformedArguments(t *testing.T) {
+	for _, spec := range []string{
+		"s3,disk:r", "unknown,endpoint=disk:r", "s3-opts,endpoint=disk,is-minio=maybe:r",
+		"s3-opts,endpoint=disk,is-hdfs=maybe:r", "s3-opts,concurrency=bad:r",
+		"s3-opts,no-default-credentials=bad:r", "s3-opts,max-conns-per-host=bad:r",
+	} {
+		t.Run(spec, func(t *testing.T) {
+			p, err := ParseETLService(spec)
+			assert.NoError(t, err)
+			_, err = PathUsesLocalETLBackend(p)
+			assert.Error(t, err)
+			_, _, err = GetForETLWithParsedPath(t.Context(), nil, spec, p)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestETLProviderAdmissionLeavesGlobToExpansion(t *testing.T) {
+	for _, spec := range []string{"/owned/test_[bgnslz]*.parquet", "/owned/test_?.parquet"} {
+		p, err := ParseETLService(spec)
+		assert.NoError(t, err)
+		assert.Equal(t, spec, p.File)
+		local, err := PathUsesLocalETLBackend(p)
+		assert.NoError(t, err)
+		assert.True(t, local)
+		_, err = ParsePath(spec)
+		assert.Error(t, err, "concrete file grammar is unchanged")
+	}
 }

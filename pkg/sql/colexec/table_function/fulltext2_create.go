@@ -203,25 +203,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
-	if err != nil {
-		return err
-	}
-	defer cleanup() // remove the spill file once its INSERTs have run — bounds temp disk too
-	storageProc := sqlproc.WithSystemFileAccess()
-	for i, s := range sqls {
-		// ToInsertSqls emits ordinary metadata before generated spill reads.
-		execProc := sqlproc
-		if i > 0 {
-			execProc = storageProc
-		}
-		res, e := fulltext2_runSql(execProc, s)
-		if e != nil {
-			return e
-		}
-		res.Close()
-	}
-	return nil
+	return seg.Persist(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
 }
 
 // rowInclude reads row nthRow's INCLUDE column values (the trailing argVecs after the text

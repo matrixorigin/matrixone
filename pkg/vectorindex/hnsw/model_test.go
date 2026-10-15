@@ -24,6 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -460,9 +463,8 @@ func TestModel(t *testing.T) {
 	fmt.Printf("%v\n", deletesqls)
 
 	// ToSql will release the index so index is nil
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	fmt.Printf("%v\n", sqls)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
 
 	// unload with nil index will output error
 	err = idx.Unload()
@@ -482,7 +484,7 @@ func TestModel(t *testing.T) {
 
 }
 
-func TestModelToSqlStringLiterals(t *testing.T) {
+func TestModelPersistenceValuesRemainData(t *testing.T) {
 	for _, tc := range []struct{ name, id, file string }{
 		{"plain", "model-id", "model.bin"},
 		{"quoted ID", "model'\\id", "model.bin"},
@@ -490,23 +492,28 @@ func TestModelToSqlStringLiterals(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tc.file)
-			require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))
-			// An already serialized model exercises the real SQL producer without
-			// allocating a native index. The parser supplies an independent oracle.
+			data := []byte{0, 255, '\'', '\\', 0}
+			require.NoError(t, os.WriteFile(path, data, 0600))
 			model := HnswModel[float32]{Id: tc.id, Path: path}
-			sqls, err := model.ToSql(vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"})
+			require.NoError(t, model.PreparePersistence())
+			txn := executortest.NewMockTxnExecutor(gomock.NewController(t))
+			txn.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				insert := stmt.(*tree.Insert)
+				require.Len(t, insert.Rows.Select.(*tree.ValuesClause).Rows, 1)
+				require.NotContains(t, sql, path)
+				mp := mpool.MustNewZero()
+				vec, err := opts.Params(mp)
+				require.NoError(t, err)
+				defer vec.Free(mp)
+				require.Equal(t, tc.id, string(vec.GetRawBytesAt(0)))
+				require.Equal(t, data, vec.GetRawBytesAt(1))
+				return executor.Result{}, nil
+			})
+			w, err := sqlexec.NewChunkInserter(t.Context(), txn, executor.StatementOption{}, "db", "store", 2000)
 			require.NoError(t, err)
-			require.Len(t, sqls, 1)
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sqls[0], 1)
-			require.NoError(t, err)
-			insert := stmt.(*tree.Insert)
-			rows := insert.Rows.Select.(*tree.ValuesClause).Rows
-			require.Len(t, rows, 1)
-			require.Len(t, rows[0], 4)
-			require.Equal(t, tc.id, rows[0][0].(*tree.NumVal).String())
-			load := rows[0][2].(*tree.FuncExpr)
-			url := load.Exprs[0].(*tree.CastExpr).Expr.(*tree.NumVal).String()
-			require.Equal(t, "file://"+path+"?offset=0&size=5", url)
+			require.NoError(t, model.PersistChunks(w))
 		})
 	}
 }
@@ -514,15 +521,14 @@ func TestModelToSqlStringLiterals(t *testing.T) {
 func TestModelNil(t *testing.T) {
 
 	var err error
-	var tblcfg vectorindex.IndexTableConfig
 
 	idx := HnswModel[float32]{}
 	err = idx.SaveToFile()
 	require.Nil(t, err)
 
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	require.Equal(t, len(sqls), 0)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
+	require.Zero(t, idx.FileSize)
 
 	_, err = idx.Empty()
 	require.NotNil(t, err)

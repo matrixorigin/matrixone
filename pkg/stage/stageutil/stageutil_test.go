@@ -330,3 +330,32 @@ func TestStageListWithPatternNoWildcard(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{path.Join(dir, "a.txt")}, list)
 }
+
+func TestStagePatternsAuthorizeBeforeExpansion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	dir := t.TempDir()
+	for _, name := range []string{"part_a1.txt", "part_b2.txt", "part_c3.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0600))
+	}
+	proc.GetStageCache().Set("patterns", stage.StageDef{Id: 1, Name: "patterns", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}})
+	for _, pattern := range []string{"part_[ab]*.txt", "part_[ab]?.txt", "part_[ab][12].txt"} {
+		files, err := StageListWithPattern("", path.Join(dir, pattern), proc)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{path.Join(dir, "part_a1.txt"), path.Join(dir, "part_b2.txt")}, files)
+	}
+	proc.Base.SessionInfo.Role = "public"
+	_, err := StageListWithPattern("", path.Join(dir, "part_[ab]*.txt"), proc)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = DeleteStageFiles(t.Context(), proc, "stage://patterns/part_[ab]*.txt", false)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = os.Stat(filepath.Join(dir, "part_a1.txt"))
+	require.NoError(t, err)
+	proc.Base.SessionInfo.Role = "moadmin"
+	n, err := DeleteStageFiles(t.Context(), proc, "stage://patterns/part_[ab]%3F.txt", false)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	_, err = os.Stat(filepath.Join(dir, "part_c3.txt"))
+	require.NoError(t, err)
+}

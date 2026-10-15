@@ -89,13 +89,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				}
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
-						storageProc := sqlproc.WithSystemFileAccess()
 						startChunk, err := fulltext2.NextTailChunkId(sqlproc, w.cfg)
 						if err != nil {
 							return err
 						}
 						// The frames are already on disk (TailBuilder spilled them into packed spool
-						// files): INSERT them via load_file, batched at maxInsertTuples rows per
+						// files): persist their bytes, batched at maxInsertTuples rows per
 						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
 						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
 						// contiguous in frame order, so recency is unchanged.
@@ -103,15 +102,11 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// THIS transaction alongside the bytes they describe -- so an index's
 						// recorded coverage can never disagree with what it actually stores,
 						// which a watermark read from elsewhere cannot promise.
-						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
-							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
-						for _, s := range sqls {
-							res, e := sqlexec.RunSql(storageProc, s)
-							if e != nil {
-								return e
-							}
-							res.Close()
+						chunkID, err := tb.PersistFinished(sqlproc, w.cfg, startChunk, r.GetToTS().Physical())
+						if err != nil {
+							return err
 						}
+
 						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
 						// flushes often, so this would flood production logs at Info (see the 46 GB
 						// stdout incident). Available at Debug when diagnosing CDC ingest.

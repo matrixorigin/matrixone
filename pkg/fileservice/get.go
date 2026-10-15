@@ -63,38 +63,54 @@ func etlParallelMode(ctx context.Context) ParallelMode {
 	return ParallelOff
 }
 
-// PathUsesLocalETLBackend reports whether an argumented ETL path selects the
-// process-local disk backend.  Keep this classification next to GetForETL so
-// authorization and construction use the same provider selection rules.  It
-// only parses the already supplied path arguments; it does not create a
-// backend or touch the filesystem.
-func PathUsesLocalETLBackend(path Path) bool {
-	if len(path.ServiceArguments) == 0 {
-		return path.Service == ""
-	}
-
+// parseETLArguments is the single argument parser for admission and construction.
+func parseETLArguments(path Path) (args ObjectStorageArguments, err error) {
+	argv := path.ServiceArguments
 	switch strings.ToLower(path.Service) {
-	case "s3", "s3-no-key":
-		return len(path.ServiceArguments) > 0 &&
-			strings.EqualFold(path.ServiceArguments[0], "disk")
+	case "s3", "minio":
+		if len(argv) < 6 {
+			return args, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+		}
+		args = ObjectStorageArguments{Endpoint: argv[0], Region: argv[1], Bucket: argv[2], KeyID: argv[3], KeySecret: argv[4], KeyPrefix: argv[5], IsMinio: strings.EqualFold(path.Service, "minio")}
+		if len(argv) > 6 {
+			args.Name = argv[6]
+		}
+	case "s3-no-key":
+		if len(argv) < 4 {
+			return args, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+		}
+		args = ObjectStorageArguments{Endpoint: argv[0], Region: argv[1], Bucket: argv[2], KeyPrefix: argv[3]}
+		if len(argv) > 4 {
+			args.Name = argv[4]
+		}
 	case "s3-opts", "opts", "options", "hdfs":
-		var args ObjectStorageArguments
-		if err := args.SetFromString(path.ServiceArguments); err != nil {
-			return false
+		if err = args.SetFromString(argv); err != nil {
+			return args, err
 		}
-		// GetForETL normalizes this field from the service name immediately
-		// before constructing the provider. Mirror that normalization here;
-		// caller-supplied is-hdfs must not make a disk endpoint look remote.
-		isHDFS := path.Service == "hdfs"
-		if isHDFS || args.IsMinio {
-			return false
-		}
-		return strings.EqualFold(args.Endpoint, "disk")
+		args.IsHDFS = strings.EqualFold(path.Service, "hdfs")
 	default:
-		// minio and unknown providers are not constructed as the disk backend
-		// by GetForETL.
-		return false
+		return args, moerr.NewInvalidInputNoCtxf("no such service: %s", path.Service)
 	}
+	args.NoBucketValidation = true
+	return args, nil
+}
+
+// PathUsesLocalETLBackend applies the exact backend selection used by NewS3FS.
+// Malformed providers are errors, never an implicit remote authorization grant.
+func PathUsesLocalETLBackend(path Path) (bool, error) {
+	// GetForETL selects the service-less local owner before considering
+	// arguments; even an empty CSV service with arguments stays local.
+	if path.Service == "" {
+		return true, nil
+	}
+	if len(path.ServiceArguments) == 0 {
+		return false, nil
+	}
+	args, err := parseETLArguments(path)
+	if err != nil {
+		return false, err
+	}
+	return selectObjectStorageBackend(args) == objectStorageDisk, nil
 }
 
 // GetForETL get or creates a FileService instance for ETL operations
@@ -134,143 +150,14 @@ func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string
 		readPath = file
 
 	} else if len(fsPath.ServiceArguments) > 0 {
-		// service with arguments, create dynamically
-		switch fsPath.Service {
-
-		case "s3":
-			arguments := fsPath.ServiceArguments
-			if len(arguments) < 6 {
-				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
-			}
-			endpoint := arguments[0]
-			region := arguments[1]
-			bucket := arguments[2]
-			accessKey := arguments[3]
-			accessSecret := arguments[4]
-			keyPrefix := arguments[5]
-			var name string
-			if len(arguments) > 6 {
-				name = arguments[6]
-			}
-
-			res, err = NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					NoBucketValidation: true,
-					Endpoint:           endpoint,
-					Region:             region,
-					Bucket:             bucket,
-					KeyID:              accessKey,
-					KeySecret:          accessSecret,
-					KeyPrefix:          keyPrefix,
-					Name:               name,
-					ParallelMode:       etlParallelMode(ctx),
-				},
-				DisabledCacheConfig,
-				nil,
-				true,
-				NoDefaultCredentialsForETL,
-			)
-			if err != nil {
-				return nil, "", err
-			}
-
-		case "s3-no-key":
-			arguments := fsPath.ServiceArguments
-			if len(arguments) < 4 {
-				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
-			}
-			endpoint := arguments[0]
-			region := arguments[1]
-			bucket := arguments[2]
-			keyPrefix := arguments[3]
-			var name string
-			if len(arguments) > 4 {
-				name = arguments[4]
-			}
-
-			res, err = NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					NoBucketValidation: true,
-					Endpoint:           endpoint,
-					Region:             region,
-					Bucket:             bucket,
-					KeyPrefix:          keyPrefix,
-					Name:               name,
-					ParallelMode:       etlParallelMode(ctx),
-				},
-				DisabledCacheConfig,
-				nil,
-				true,
-				NoDefaultCredentialsForETL,
-			)
-			if err != nil {
-				return nil, "", err
-			}
-
-		case "s3-opts", "opts", "options", "hdfs":
-			var args ObjectStorageArguments
-			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
-				return nil, "", err
-			}
-			args.NoBucketValidation = true
-			args.IsHDFS = fsPath.Service == "hdfs"
-			args.ParallelMode = etlParallelMode(ctx)
-			res, err = NewS3FS(
-				ctx,
-				args,
-				DisabledCacheConfig,
-				nil,
-				true,
-				NoDefaultCredentialsForETL,
-			)
-			if err != nil {
-				return nil, "", err
-			}
-
-		case "minio":
-			arguments := fsPath.ServiceArguments
-			if len(arguments) < 6 {
-				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
-			}
-			endpoint := arguments[0]
-			region := arguments[1]
-			_ = region
-			bucket := arguments[2]
-			accessKey := arguments[3]
-			accessSecret := arguments[4]
-			keyPrefix := arguments[5]
-			var name string
-			if len(arguments) > 6 {
-				name = arguments[6]
-			}
-
-			res, err = NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					NoBucketValidation: true,
-					Endpoint:           endpoint,
-					Region:             region,
-					Bucket:             bucket,
-					KeyID:              accessKey,
-					KeySecret:          accessSecret,
-					KeyPrefix:          keyPrefix,
-					Name:               name,
-					IsMinio:            true,
-					ParallelMode:       etlParallelMode(ctx),
-				},
-				DisabledCacheConfig,
-				nil,
-				true,
-				NoDefaultCredentialsForETL,
-			)
-			if err != nil {
-				return nil, "", err
-			}
-
-		default:
-			err = moerr.NewInvalidInputNoCtxf("no such service: %s", fsPath.Service)
+		args, parseErr := parseETLArguments(fsPath)
+		if parseErr != nil {
+			return nil, "", parseErr
+		}
+		args.ParallelMode = etlParallelMode(ctx)
+		res, err = NewS3FS(ctx, args, DisabledCacheConfig, nil, true, NoDefaultCredentialsForETL)
+		if err != nil {
+			return nil, "", err
 		}
 
 		readPath = fsPath.File

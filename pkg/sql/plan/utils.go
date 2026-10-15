@@ -3121,7 +3121,11 @@ func AuthorizeExternalFileAccess(param *tree.ExternParam, proc *process.Process)
 	if err != nil {
 		return err
 	}
-	return process.AuthorizeSQLFileAccess(proc, target)
+	provider, err := fileservice.ParseETLService(target)
+	if err != nil {
+		return err
+	}
+	return process.AuthorizeSQLFileAccessPath(proc, provider)
 }
 
 func etlPathWithType(param *tree.ExternParam, prefix string) (string, error) {

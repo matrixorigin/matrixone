@@ -17,6 +17,7 @@ package executor
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -493,19 +494,40 @@ func (opts StatementOption) HasParams() bool {
 
 func (opts StatementOption) Params(
 	mp *mpool.MPool,
-) *vector.Vector {
-	vec := vector.NewVec(types.T_varchar.ToType())
+) (*vector.Vector, error) {
 	nulls := opts.paramNulls
-	if len(nulls) != len(opts.params) {
+	if len(nulls) != 0 && len(nulls) != len(opts.params) {
+		return nil, moerr.NewInvalidInputNoCtx("parameter NULL bitmap length mismatch")
+	}
+	if len(nulls) == 0 {
 		nulls = make([]bool, len(opts.params))
 	}
-	vector.AppendStringList(
+	// The complete parameter batch is known here. Reserve its varlen area
+	// once; growing it per 64 KiB chunk otherwise repeatedly copies megabytes.
+	areaSize := 0
+	for i, value := range opts.params {
+		if !nulls[i] && len(value) > types.VarlenaInlineSize {
+			if int64(len(value)) > mpool.MaxAllocationSize()-int64(areaSize) {
+				return nil, moerr.NewInvalidInputNoCtx("parameter values exceed allocator limit")
+			}
+			areaSize += len(value)
+		}
+	}
+	vec := vector.NewVec(types.T_varchar.ToType())
+	if err := vec.PreExtendWithArea(len(opts.params), areaSize, mp); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
+	if err := vector.AppendStringList(
 		vec,
 		opts.params,
 		nulls,
 		mp,
-	)
-	return vec
+	); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
+	return vec, nil
 }
 
 func (opts StatementOption) WithParams(

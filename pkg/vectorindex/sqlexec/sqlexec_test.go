@@ -59,7 +59,9 @@ func (m *identityCapturingSQLExecutor) Exec(ctx context.Context, _ string, opts 
 	return executor.Result{}, nil
 }
 
-func (m *identityCapturingSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+func (m *identityCapturingSQLExecutor) ExecTxn(ctx context.Context, _ func(executor.TxnExecutor) error, opts executor.Options) error {
+	m.ctx = ctx
+	m.opts = opts
 	return nil
 }
 
@@ -88,6 +90,9 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	require.True(t, spy.opts.StatementOption().HasAccountID())
 	require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
 
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "publisher_db", spy.opts.Database())
 	streamCh := make(chan executor.Result, 1)
 	errCh := make(chan error, 1)
 	_, err = RunStreamingSql(subscriberCtx, sqlproc, "select 1", streamCh, errCh)
@@ -163,6 +168,8 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	_, err := RunSql(sqlproc, "select 1")
 	require.NoError(t, err)
 	assertExecutionIdentity("subscriber")
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
+	assertExecutionIdentity("subscriber")
 
 	streamCtx := context.WithValue(context.Background(), key, "stream")
 	streamCtx = defines.AttachAccountId(streamCtx, 7)
@@ -181,26 +188,6 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	require.Same(t, txnOp, proc.GetTxnOperator())
 	require.Equal(t, "subscriber_db", proc.Base.SessionInfo.Database)
 	require.Equal(t, "subscriber", proc.GetTopContext().Value(key))
-}
-
-func TestSqlProcessSystemFileAccessIsScoped(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	proc.Base.SessionInfo.Account = "tenant"
-	proc.Base.SessionInfo.Role = "accountadmin"
-
-	regular := NewSqlProcess(proc)
-	account, role := regular.StatementOption().SessionIdentity()
-	require.Equal(t, "tenant", account)
-	require.Equal(t, "accountadmin", role)
-
-	storage := regular.WithSystemFileAccess()
-	require.NotSame(t, regular, storage)
-	account, role = storage.StatementOption().SessionIdentity()
-	require.Equal(t, "sys", account)
-	require.Equal(t, "moadmin", role)
-	account, role = regular.StatementOption().SessionIdentity()
-	require.Equal(t, "tenant", account)
-	require.Equal(t, "accountadmin", role)
 }
 
 func TestSqlTxnError(t *testing.T) {

@@ -82,6 +82,9 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 			Params: []byte(param),
 		},
 	}
+	mockIndexTxn(t, proc, func(sql string, _ executor.StatementOption) (executor.Result, error) {
+		return hnsw_runSql(sqlexec.NewSqlProcess(proc), sql)
+	})
 	return ret
 }
 

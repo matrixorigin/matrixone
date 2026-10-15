@@ -110,6 +110,12 @@ func (st *parseJsonlState) start(tf *TableFunction, proc *process.Process, nthRo
 		return moerr.NewInvalidInput(proc.Ctx, "data source must be varchar or text")
 	}
 
+	if !st.fromData {
+		if err := process.AuthorizeSQLFileAccess(proc, dataSrcStr); err != nil {
+			return err
+		}
+	}
+
 	// Now open the reader.
 	st.reader, err = crt.GetIOReadCloserSimple(proc, st.fromData, dataSrcStr)
 	if err != nil {

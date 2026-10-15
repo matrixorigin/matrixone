@@ -273,7 +273,7 @@ func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDe
 }
 
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
+	const wildcards = "*?["
 	const sep = "/"
 	fs := proc.GetFileService()
 
@@ -365,8 +365,12 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 }
 
 func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
-	if err := process.AuthorizeSQLFileAccess(proc, fileservice.JoinPath(service, pattern)); err != nil {
+	const wildcards = "*?["
+	provider, err := fileservice.ParseETLService(fileservice.JoinPath(service, pattern))
+	if err != nil {
+		return nil, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
 		return nil, err
 	}
 
@@ -403,7 +407,11 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 	if err != nil {
 		return 0, err
 	}
-	if err := process.AuthorizeSQLFileAccess(proc, fspath); err != nil {
+	provider, err := fileservice.ParseETLService(fspath)
+	if err != nil {
+		return 0, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
 		return 0, err
 	}
 	if query != "" {
@@ -422,7 +430,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 	if filePattern == "/" {
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
-	if strings.ContainsAny(filePattern, "*?") {
+	if strings.ContainsAny(filePattern, "*?[") {
 		fileList, err := StageListWithPattern(service, filePattern, &procCtx)
 		if err != nil {
 			return 0, err

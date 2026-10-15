@@ -538,7 +538,11 @@ func (exec *txnExecutor) Exec(
 
 	prepared := false
 	if statementOption.HasParams() {
-		vec := statementOption.Params(exec.s.mp)
+		vec, err := statementOption.Params(exec.s.mp)
+		if err != nil {
+			proc.Free()
+			return executor.Result{}, err
+		}
 		proc.SetPrepareParams(vec)
 		prepared = true
 		defer vec.Free(proc.Mp())

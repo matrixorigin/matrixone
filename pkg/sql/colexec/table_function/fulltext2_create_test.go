@@ -17,8 +17,7 @@ package table_function
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -511,8 +510,8 @@ func TestFulltext2CreateEndNotInited(t *testing.T) {
 }
 
 // TestFulltext2CreateSealAndEnd forces a seal (capacity=1) so the persistence path runs:
-// DeleteAllBasesSqls + ToInsertSqls (spilling to an os temp file, since no LOCAL
-// fileservice) are captured by a stubbed fulltext2_runSql, then end() seals the final
+// DeleteAllBasesSqls + Persist (spilling to an os temp file, since no LOCAL
+// fileservice) are captured at the borrowed executor boundary, then end() seals the final
 // (empty) segment and evicts the cache.
 func TestFulltext2CreateSealAndEnd(t *testing.T) {
 	for _, tc := range []struct {
@@ -531,22 +530,34 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 			prev := fulltext2_runSql
 			t.Cleanup(func() { fulltext2_runSql = prev })
 			var ran int
-			var spill string
+			dir := t.TempDir()
+			t.Setenv("TMPDIR", dir)
+			proc.Base.FileService = nil
 			fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				ran++
 				account, role := sqlproc.StatementOption().SessionIdentity()
-				if start := strings.Index(sql, "file://"); start >= 0 {
-					require.Equal(t, "sys", account)
-					require.Equal(t, "moadmin", role)
-					spill, _, _ = strings.Cut(sql[start+len("file://"):], "?")
-					_, err := os.Stat(spill)
-					require.NoError(t, err, "the generated spill must exist until execution finishes")
-					return executor.Result{}, tc.err
-				}
-				require.Equal(t, "tenant", account, "metadata and deletes retain caller authority")
+				require.Equal(t, "tenant", account)
 				require.Equal(t, "accountadmin", role)
 				return executor.Result{}, nil
 			}
+			mockIndexTxn(t, proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				ran++
+				account, role := opts.SessionIdentity()
+				require.Equal(t, "tenant", account)
+				require.Equal(t, "accountadmin", role)
+				require.NotContains(t, sql, "load_file")
+				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+				require.NoError(t, err)
+				require.Len(t, files, 1, "owned spill exists through synchronous execution")
+				if opts.HasParams() {
+					vec, err := opts.Params(mp)
+					require.NoError(t, err)
+					require.NotEmpty(t, vec.GetRawBytesAt(1))
+					vec.Free(mp)
+					return executor.Result{}, tc.err
+				}
+				return executor.Result{}, nil
+			})
 
 			// capacity=1 seals one real spill without additional data or services.
 			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1})
@@ -574,9 +585,9 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 			require.Equal(t, int64(1), st.capacity)
 			require.Equal(t, 1, st.segIdx)
 			require.True(t, st.basesCleared)
-			require.NotEmpty(t, spill)
-			_, err = os.Stat(spill)
-			require.ErrorIs(t, err, os.ErrNotExist, "success/error/cancellation must remove the owned spill")
+			files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+			require.NoError(t, err)
+			require.Empty(t, files, "success/error/cancellation removes the owned spill")
 			require.Equal(t, "tenant", proc.GetSessionInfo().Account)
 			require.Equal(t, "accountadmin", proc.GetSessionInfo().Role)
 		})

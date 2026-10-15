@@ -19,6 +19,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,6 +35,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
+
+func installPersistenceExecutor(t *testing.T, sp *sqlexec.SqlProcess, execFn func(string, executor.StatementOption) (executor.Result, error)) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	sqlExec := executortest.NewMockSQLExecutor(ctrl)
+	txnExec := executortest.NewMockTxnExecutor(ctrl)
+	rt := moruntime.ServiceRuntime(sp.GetService())
+	prev, exists := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, prev)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+		}
+	})
+	sqlExec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, fn func(executor.TxnExecutor) error, _ executor.Options) error {
+		return fn(txnExec)
+	}).AnyTimes()
+	sqlExec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		return execFn(sql, opts.StatementOption())
+	}).AnyTimes()
+	txnExec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(execFn).AnyTimes()
+}
 
 // swapRunSql / swapRunStreamingSql install a mock and return a restore func. The engine
 // indirects sqlexec.RunSql / RunStreamingSql through these package vars so DB round-trips
@@ -417,13 +445,9 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	var deleteAllRan, insertRan bool
 	swapRunSql(t, func(execProc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		account, role := execProc.StatementOption().SessionIdentity()
-		if strings.Contains(sql, "load_file(") {
-			require.Equal(t, "sys", account)
-			require.Equal(t, "moadmin", role)
-		} else {
-			require.Equal(t, "tenant", account, "metadata and deletes retain caller authority: %s", sql)
-			require.Equal(t, "accountadmin", role)
-		}
+		require.Equal(t, "tenant", account)
+		require.Equal(t, "accountadmin", role)
+
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
@@ -449,6 +473,8 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 			return executor.Result{Mp: mp}, nil
 		}
 	})
+
+	installPersistenceExecutor(t, sp, func(sql string, opts executor.StatementOption) (executor.Result, error) { return runSql(sp, sql) })
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)

@@ -44,7 +44,9 @@ func (p Path) ServiceString() string {
 	return strings.Join(append([]string{p.Service}, p.ServiceArguments...), ",")
 }
 
-func ParsePath(s string) (path Path, err error) {
+// ParseETLService parses the provider without certifying the file expression.
+// LOAD admission uses it before the existing glob expansion; concrete I/O uses ParsePath.
+func ParseETLService(s string) (path Path, err error) {
 	// split
 	i := strings.LastIndex(s, ServiceNameSeparator)
 	if i == -1 {
@@ -57,6 +59,15 @@ func ParsePath(s string) (path Path, err error) {
 			return
 		}
 		path.File = s[i+1:]
+	}
+
+	return
+}
+
+func ParsePath(s string) (path Path, err error) {
+	path, err = ParseETLService(s)
+	if err != nil {
+		return
 	}
 
 	// validate

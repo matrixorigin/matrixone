@@ -57,8 +57,11 @@ func AuthorizeSQLFileAccessPath(proc *Process, path fileservice.Path) error {
 	// Keep this admission check aligned with GetForETL's provider selection so
 	// an argumented disk backend cannot be classified as remote here while the
 	// resolver creates a server-owned local filesystem at the I/O boundary.
-	if path.Service != "" && len(path.ServiceArguments) > 0 &&
-		!fileservice.PathUsesLocalETLBackend(path) {
+	local, err := fileservice.PathUsesLocalETLBackend(path)
+	if err != nil {
+		return err
+	}
+	if path.Service != "" && len(path.ServiceArguments) > 0 && !local {
 		return nil
 	}
 
