@@ -107,7 +107,7 @@ func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, snapshot)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
 	require.NoError(t, err)
 	require.True(t, handled, "the fixture must clear every covered-path guard")
 
@@ -127,7 +127,7 @@ func TestTryApplyCoveredFulltext2NoSnapshotLeavesSearchUnsnapshotted(t *testing.
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
 	require.NoError(t, err)
 	require.True(t, handled)
 
