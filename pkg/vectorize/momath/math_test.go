@@ -154,3 +154,54 @@ func TestCotRejectsZeroAndReciprocalOverflow(t *testing.T) {
 		}
 	}
 }
+
+// Issue #30199: Go's math.Sinh overflows to +-Inf once math.Exp(|v|)
+// overflows (~709.78) even though the exact result stays representable up
+// to asinh(math.MaxFloat64) ~= 710.476. MySQL returns those finite values
+// and only reports ERROR 1690 beyond the representable range, so Sinh must
+// recover the finite window instead of erroring early.
+func TestSinhKeepsFiniteResultsNearOverflow(t *testing.T) {
+	for _, input := range []float64{0, 0.5, -0.5, 1, -1, 100, -100, 709.7, -709.7, 709.8, -709.8, 710, 710.4, -710.4} {
+		got, err := Sinh(input)
+		if err != nil {
+			t.Errorf("Sinh(%g) returned unexpected error: %v", input, err)
+			continue
+		}
+		if math.IsInf(got, 0) || math.IsNaN(got) {
+			t.Errorf("Sinh(%g) = %g, want finite", input, got)
+			continue
+		}
+		if math.Signbit(got) != math.Signbit(input) {
+			t.Errorf("Sinh(%g) = %g, sign mismatch", input, got)
+			continue
+		}
+		if math.Abs(input) <= 100 {
+			if got != math.Sinh(input) {
+				t.Errorf("Sinh(%g) = %g, want math.Sinh %g", input, got, math.Sinh(input))
+			}
+			continue
+		}
+		// ln(2*|sinh(x)|) == |x| once the e^(-|x|) term is far below double
+		// precision, so this checks the magnitude independently of the
+		// scaled-exp implementation.
+		lnMag := math.Log(math.Abs(got)) + math.Ln2
+		if math.Abs(lnMag-math.Abs(input)) > 1e-12 {
+			t.Errorf("Sinh(%g) = %g, magnitude mismatch: ln(2|result|) = %g, want %g",
+				input, got, lnMag, math.Abs(input))
+		}
+	}
+
+	// MySQL reference value for sinh(709.8) (80-digit exact computation in
+	// issue #30199): 9.145201086359238...e307.
+	const mysqlSinh7098 = 9.145201086359238e307
+	got, err := Sinh(709.8)
+	if err != nil || math.Abs(got/mysqlSinh7098-1) > 1e-12 {
+		t.Errorf("Sinh(709.8) = %g, %v; want %g (MySQL)", got, err, mysqlSinh7098)
+	}
+
+	for _, input := range []float64{710.6, -710.6, 1e3, math.Inf(1), math.Inf(-1)} {
+		if got, err := Sinh(input); !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			t.Errorf("Sinh(%g) = %g, %v; want out of range", input, got, err)
+		}
+	}
+}

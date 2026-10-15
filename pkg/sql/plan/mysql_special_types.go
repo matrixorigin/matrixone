@@ -845,7 +845,7 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if !hasProvenanceCandidate {
 		return result, nil
 	}
-	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 		if err != nil {
 			return nil, err
