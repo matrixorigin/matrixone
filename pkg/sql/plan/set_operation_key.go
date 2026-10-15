@@ -22,6 +22,24 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// setArmHasSingletonBoundary proves a bound before correlated predicates are
+// pulled through the arm. Do not infer it from estimated cardinality or from
+// a base-table key: the bound must survive every outer correlation key.
+func (builder *QueryBuilder) setArmHasSingletonBoundary(id int32) bool {
+	node := builder.qry.Nodes[id]
+	if limit, ok := getLiteralUint64(node.Limit); ok && limit <= 1 {
+		return true
+	}
+	if node.NodeType == planpb.Node_AGG {
+		return len(node.GroupBy) == 0 && len(node.GroupingFlag) == 0 && len(node.AggList) > 0
+	}
+	switch node.NodeType {
+	case planpb.Node_PROJECT, planpb.Node_SORT, planpb.Node_FILTER:
+		return len(node.Children) == 1 && builder.setArmHasSingletonBoundary(node.Children[0])
+	}
+	return false
+}
+
 // buildSetOperationPhysicalKeys refines membership without changing the visible
 // row or the shared GROUP BY/DISTINCT equality domain. Both initial planning and
 // prepared-plan specialization must derive keys from the resolved output types.

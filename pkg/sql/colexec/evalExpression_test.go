@@ -21,9 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -4952,5 +4954,36 @@ func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
 			require.Equal(t, 3, sink.warningCount, "the scalar probe must not leak a fourth warning")
 		}
 		require.Same(t, sink, proc.WarningSink)
+	}
+}
+
+// Operator Prepare must reject a rolled-back coordinator before allocating a key
+// executor, even when the expression was specialized after initial planning.
+func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	for _, typ := range []types.T{types.T_float32, types.T_float64} {
+		expr := bindTestFunction(t, proc, "set_operation_float_key", &plan.Expr{Typ: typ.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
+		for _, floor := range []any{defines.MORPCVersion115, "unknown", defines.MORPCVersion116} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
+			before := proc.Mp().CurrNB()
+			executor, err := NewExpressionExecutor(proc, expr)
+			if floor == defines.MORPCVersion116 {
+				require.NoError(t, err)
+				executor.Free()
+			} else {
+				require.ErrorContains(t, err, "version 116")
+				require.Nil(t, executor)
+			}
+			require.Equal(t, before, proc.Mp().CurrNB())
+		}
 	}
 }

@@ -392,8 +392,10 @@ const (
 // TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
 // execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
+// SetOperationFloatKeys requires MORPC v117 for append-only function ID 599.
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
+	SetOperationFloatKeys         bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision                  bool
@@ -438,7 +440,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.SetOperationFloatKeys || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -933,6 +935,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
+				}
+				if id == 599 { // SET_OPERATION_FLOAT_KEY; append-only execution identity
+					features.SetOperationFloatKeys = true
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
