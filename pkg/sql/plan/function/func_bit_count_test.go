@@ -316,3 +316,49 @@ func TestBitCountTypeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(14), get.overloadId)
 }
+
+func TestBitCountStringWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		values                      []string
+		want                        []uint64
+		nulls                       []bool
+		mask                        *FunctionSelectList
+		binary, rowBinary, constant bool
+		warnings                    int
+	}{
+		{name: "text", values: []string{"3x", "2.9", "3 ", "", "bad", "3x"}, want: []uint64{2, 1, 2, 0, 0, 0}, nulls: []bool{false, false, false, false, false, true}, warnings: 3},
+		{name: "binary_literal", values: []string{"3x"}, want: []uint64{8}, binary: true},
+		{name: "runtime_domains", values: []string{"3x", "3x", "3"}, want: []uint64{8, 2, 2}, rowBinary: true, warnings: 1},
+		{name: "partial_selection", values: []string{"bad", "3x", "bad"}, want: []uint64{0, 2, 0}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
+		{name: "constant_rows", values: []string{"3x"}, want: []uint64{2, 2, 2}, constant: true, warnings: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			outputNulls := tc.nulls
+			if tc.mask != nil {
+				outputNulls = []bool{true, false, true}
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, outputNulls), BitCountNonBinaryString).WithSelectList(tc.mask)
+			defer fc.Free()
+			fc.parameters[0].SetIsBin(tc.binary)
+			if tc.rowBinary {
+				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, proc.Mp()))
+			}
+			if tc.constant {
+				fc.parameters[0].SetClass(vector.CONSTANT)
+				fc.fnLength = 3
+			}
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, session.warnings, tc.warnings)
+			for _, warning := range session.warnings {
+				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warning.code)
+				require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
+			}
+		})
+	}
+}
