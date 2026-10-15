@@ -608,7 +608,6 @@ func (parser *CSVParser) readRecord() error {
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
 
 	isEmptyLine := true
-	whitespaceLine := true
 	foundStartingByThisLine := false
 	prevToken := csvTokenNewLine
 	fieldIsQuoted := false
@@ -695,14 +694,12 @@ outside:
 
 		switch firstToken {
 		case csvTokenComma:
-			whitespaceLine = false
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
 			fieldIsQuoted = false
 		case csvTokenDelimiter:
 			if prevToken != csvTokenComma && prevToken != csvTokenNewLine {
 				if parser.unescapedQuote {
-					whitespaceLine = false
 					parser.recordBuffer = append(parser.recordBuffer, parser.quote...)
 					continue
 				}
@@ -712,21 +709,23 @@ outside:
 				return err
 			}
 			fieldIsQuoted = true
-			whitespaceLine = false
 		case csvTokenNewLine:
 			foundStartingByThisLine = false
 			// new line = end of field (ignore empty lines)
 			prevToken = firstToken
+			// An explicit LF terminator also accepts CRLF. A lone unquoted CR
+			// before that terminator is an empty record, not field data. Keep
+			// quoted CR and a CR at EOF as data.
+			if err == nil && bytes.Equal(parser.newLine, newlineByte) &&
+				len(parser.fieldIndexes) == 0 && !fieldIsQuoted &&
+				len(parser.recordBuffer) == 1 && parser.recordBuffer[0] == '\r' {
+				parser.recordBuffer = parser.recordBuffer[:0]
+				isEmptyLine = true
+			}
 			if !parser.allowEmptyLine {
 				if isEmptyLine {
 					// The record has not started yet: it begins at the first
 					// line with content, not where the scan started.
-					parser.recordStartLine = parser.lineNo
-					continue
-				}
-				// skip lines only contain whitespaces
-				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
-					parser.recordBuffer = parser.recordBuffer[:0]
 					parser.recordStartLine = parser.lineNo
 					continue
 				}

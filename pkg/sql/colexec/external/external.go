@@ -1889,6 +1889,43 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
+// parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
+// unquoted external CSV decimal text uses exact assignment rounding.
+func parseCSVInt(field csvparser.Field, bits int, round bool) (int64, error) {
+	value, err := strconv.ParseInt(field.Val, 10, bits)
+	if err == nil || !round || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+		return value, err
+	}
+	integer, err := function.ParseDecimalInteger(field.Val)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(integer, 10, bits)
+}
+
+func parseCSVUint(field csvparser.Field, bits int, round bool) (uint64, error) {
+	value, err := strconv.ParseUint(field.Val, 10, bits)
+	if err == nil || !round || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+		return value, err
+	}
+	integer, err := function.ParseDecimalInteger(field.Val)
+	if err != nil {
+		return 0, err
+	}
+	// Keep negative zero accepted, while negative fractions that round to zero
+	// still fail unsigned conversion as before.
+	if integer == "-0" {
+		mantissa := field.Val
+		if exponent := strings.IndexAny(mantissa, "eE"); exponent >= 0 {
+			mantissa = mantissa[:exponent]
+		}
+		if strings.Trim(mantissa, "-0.") == "" {
+			integer = "0"
+		}
+	}
+	return strconv.ParseUint(integer, 10, bits)
+}
+
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
 	colIdx := attr.ColIndex
 	colName := attr.ColName
@@ -1974,6 +2011,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return nil
 	}
 
+	roundExternalInteger := param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) && param.Extern.Format == tree.CSV
 	switch id {
 	case types.T_bool:
 		b, err := types.ParseBool(field.Val)
@@ -2001,14 +2039,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_int8:
-		d, err := strconv.ParseInt(field.Val, 10, 8)
+		d, err := parseCSVInt(field, 8, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int8(d), false, mp); err != nil {
 				return err
 			}
 		} else {
 			// if field.HasStringQuote is true, like load "1.9" into int type, return error, if load 1.9, can load successful
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
 			}
@@ -2022,13 +2060,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int16:
-		d, err := strconv.ParseInt(field.Val, 10, 16)
+		d, err := parseCSVInt(field, 16, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int16(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
 			}
@@ -2050,13 +2088,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			min, max = -(1 << 23), (1<<23)-1
 			valueType = "mediumint"
 		}
-		d, err := strconv.ParseInt(field.Val, 10, bits)
+		d, err := parseCSVInt(field, bits, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int32(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
@@ -2070,13 +2108,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int64:
-		d, err := strconv.ParseInt(field.Val, 10, 64)
+		d, err := parseCSVInt(field, 64, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
 			}
@@ -2090,13 +2128,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint8:
-		d, err := strconv.ParseUint(field.Val, 10, 8)
+		d, err := parseCSVUint(field, 8, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint8(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
 			}
@@ -2110,13 +2148,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint16:
-		d, err := strconv.ParseUint(field.Val, 10, 16)
+		d, err := parseCSVUint(field, 16, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint16(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
 			}
@@ -2138,13 +2176,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			max = (1 << 24) - 1
 			valueType = "mediumint unsigned"
 		}
-		d, err := strconv.ParseUint(field.Val, 10, bits)
+		d, err := parseCSVUint(field, bits, roundExternalInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint32(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
@@ -2169,13 +2207,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 				return err
 			}
 		} else {
-			d, err := strconv.ParseUint(field.Val, 10, 64)
+			d, err := parseCSVUint(field, 64, roundExternalInteger)
 			if err == nil {
 				if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 					return err
 				}
 			} else {
-				if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+				if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
 				}
