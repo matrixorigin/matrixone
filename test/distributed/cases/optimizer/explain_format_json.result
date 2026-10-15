@@ -158,6 +158,88 @@ explain (analyze false, format json) select * from t;
 EXPLAIN
 explain format=json update t set v = 99 where id = 1;
 EXPLAIN
+explain format=json update t set v = v + 1 where id = 1;
+EXPLAIN
+explain format=json update t set v = null where id = 1;
+EXPLAIN
+prepare e30130_update from 'explain format=json update t set v = 7 where id = 1';
+execute e30130_update;
+EXPLAIN
+deallocate prepare e30130_update;
+create table update_peer(id int primary key, v int);
+insert into update_peer values (1, 30);
+explain format=json update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+EXPLAIN
+explain format=json update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+EXPLAIN
+select id, v from t order by id;
+id	v
+1	10
+2	20
+select v from update_peer;
+v
+30
+update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+select v from t where id = 1;
+v
+99
+select v from update_peer;
+v
+88
+update t set v = 10 where id = 1;
+update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+select id, v from t order by id;
+id	v
+1	101
+2	102
+update t set v = id * 10;
+update update_peer set v = 1 where id = 1;
+insert into update_peer values (3, null);
+explain format=json update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+EXPLAIN
+explain format=json update t a set v = a.id in (select v from update_peer);
+EXPLAIN
+explain format=json update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+EXPLAIN
+explain format=json update t a set v = a.id not in (select v from update_peer);
+EXPLAIN
+select id, v from t order by id;
+id	v
+1	10
+2	20
+update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+id	v
+1	1
+2	0
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+id	v
+1	1
+2	NULL
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+id	v
+1	0
+2	NULL
+update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+id	v
+1	0
+2	1
+delete from update_peer;
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+id	v
+1	0
+2	0
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+id	v
+1	1
+2	1
+update t set v = id * 10;
+drop table update_peer;
 explain format=json delete from t where id = 1;
 EXPLAIN
 explain format=json insert into t values (3, 30);

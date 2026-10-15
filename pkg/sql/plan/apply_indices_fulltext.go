@@ -1271,6 +1271,10 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	}
 
 	// ---- All guards passed: build the covered plan. From here on we mutate. ----
+	// All qualification now runs inside the search. Only its own score order
+	// permits early truncation; another ordering must keep the full stream.
+	searchLimit := builder.coveredFulltext2ScoreLimit(nodeID, projNode, sortNode,
+		scanNode, projids, paginationLimit, paginationOffset)
 	ctx := builder.ctxByNode[nodeID]
 
 	// Remove the MATCH filter from the base scan (it is fully served by the TVF now). This is
@@ -1292,6 +1296,7 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		return false, err
 	}
 	ftnode := builder.qry.Nodes[ftnodeID]
+	ftnode.IndexSearchScan.CandidateLimit = searchLimit
 	ftTag := ftnode.BindingTags[0]
 
 	// The TVF's doc_id (col 0) carries the source pk; retype it to the pk's real type, as the
@@ -1397,6 +1402,91 @@ func isProjIndexPosition(projids []int32, i int32) bool {
 		}
 	}
 	return false
+}
+
+// coveredFulltext2ScoreLimit is called only after exact predicate and projection
+// coverage has been proved. OFFSET remains on the outer sort; the search keeps
+// LIMIT+OFFSET score-ranked candidates, including legal arbitrary cutoff ties.
+func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+	projids []int32, limit, offset *plan.Expr) *plan.Expr {
+	if limit == nil || builder.sqlCalcFoundRows || projNode.RankOption != nil || scanNode.RankOption != nil {
+		return nil
+	}
+	if sortNode != nil {
+		if sortNode.RankOption != nil || len(sortNode.OrderBy) != 1 || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+			return nil
+		}
+		col := sortNode.OrderBy[0].Expr.GetCol()
+		ctx := builder.ctxByNode[nodeID]
+		if col == nil || ctx == nil || col.RelPos != ctx.projectTag || col.ColPos < 0 ||
+			!isProjIndexPosition(projids, col.ColPos) {
+			return nil
+		}
+	}
+	bound, ok := buildCandidateLimit(limit, offset)
+	if !ok {
+		return nil
+	}
+	return bound
+}
+
+// pushCoveredFulltext2ScoreLimitFromSort handles the bound SQL shape where the
+// explicit ORDER BY score LIMIT is above the covered projection's implicit
+// score sort. Only a direct column projection and that equivalent sort may
+// separate the outer sort from the search; joins and residual filters decline.
+func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
+	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
+		len(sortNode.Children) != 1 || len(sortNode.OrderBy) != 1 || len(sortNode.FilterList) != 0 {
+		return
+	}
+	bound, ok := buildCandidateLimit(sortNode.Limit, sortNode.Offset)
+	if !ok || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+		return
+	}
+	keyCol := sortNode.OrderBy[0].Expr.GetCol()
+	project := builder.qry.Nodes[sortNode.Children[0]]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
+		len(project.BindingTags) != 1 || len(project.FilterList) != 0 ||
+		project.Limit != nil || project.Offset != nil || project.RankOption != nil ||
+		keyCol == nil || keyCol.RelPos != project.BindingTags[0] || keyCol.ColPos < 0 ||
+		int(keyCol.ColPos) >= len(project.ProjectList) {
+		return
+	}
+	innerSort := builder.qry.Nodes[project.Children[0]]
+	if innerSort.NodeType != plan.Node_SORT || len(innerSort.Children) != 1 ||
+		len(innerSort.OrderBy) != 1 || len(innerSort.FilterList) != 0 ||
+		innerSort.Limit != nil || innerSort.Offset != nil || innerSort.RankOption != nil ||
+		!fulltext2ScoreDescending(innerSort.OrderBy[0]) {
+		return
+	}
+	search := builder.qry.Nodes[innerSort.Children[0]]
+	spec := search.IndexSearchScan
+	if search.NodeType != plan.Node_INDEX_SEARCH_SCAN || spec == nil ||
+		!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) ||
+		len(search.BindingTags) != 1 || spec.CandidateLimit != nil ||
+		search.Limit != nil || search.Offset != nil || len(search.FilterList) != 0 {
+		return
+	}
+	scoreTag := search.BindingTags[0]
+	innerKey := innerSort.OrderBy[0].Expr.GetCol()
+	projectScore := project.ProjectList[keyCol.ColPos].GetCol()
+	if innerKey == nil || innerKey.RelPos != scoreTag || innerKey.ColPos != 1 ||
+		projectScore == nil || projectScore.RelPos != scoreTag || projectScore.ColPos != 1 {
+		return
+	}
+	for _, expr := range project.ProjectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != scoreTag {
+			return
+		}
+	}
+	spec.CandidateLimit = bound
+}
+
+func fulltext2ScoreDescending(key *plan.OrderBySpec) bool {
+	return key != nil && key.Expr != nil && key.Flag&plan.OrderBySpec_DESC != 0 &&
+		key.Flag&plan.OrderBySpec_ASC == 0 &&
+		key.Flag&(plan.OrderBySpec_NULLS_FIRST|plan.OrderBySpec_NULLS_LAST) == 0
 }
 
 // coveredBaseColRefs walks expr and invokes visit(colPos, name) for every base-scan ColRef
