@@ -611,7 +611,7 @@ UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 UT_ISSUES_BATCHES ?= 8
 UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
 UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
-# Audited DML/SQL batching applies only to the ordinary, non-prebuild path.
+# Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
 UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping two clusters increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
