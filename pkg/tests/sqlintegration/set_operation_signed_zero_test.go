@@ -194,6 +194,80 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.NoError(t, err, q)
 				require.Equal(t, []string{"3", "4"}, readWindowNullRows(t, rows))
 			})
+
+			t.Run("existential-predicate-templates", func(t *testing.T) {
+				for _, q := range []string{
+					"create table predicate_inner(a int,b int,f double)",
+					"create table predicate_outer(id int,a int,b int,f double)",
+					"insert into predicate_inner values(1,10,-0e0),(1,10,-0e0),(2,20,0e0),(3,30,1e0),(NULL,40,NULL)",
+					"insert into predicate_outer values(1,1,10,-0e0),(2,2,20,0e0),(3,3,30,1e0),(4,NULL,40,NULL),(5,9,99,2e0)",
+				} {
+					_, err := conn.ExecContext(ctx, q)
+					require.NoError(t, err, q)
+				}
+				qAggregate := "select id from predicate_outer o where exists (select count(*) from (select a,f from predicate_inner union select a,f from predicate_inner) u where u.a=o.a having count(*)=1) order by id"
+				aggregateRows, aggregateErr := conn.QueryContext(ctx, qAggregate)
+				require.NoError(t, aggregateErr, qAggregate)
+				require.Equal(t, []string{"1", "2", "3"}, readWindowNullRows(t, aggregateRows))
+				for _, tc := range []struct {
+					name, predicate string
+					want            []string
+				}{
+					{"or", "i.a=o.a or i.b=o.b", []string{"1", "2", "3", "4"}},
+					{"outer-conjunct", "i.a=o.a and o.b>10", []string{"2", "3"}},
+					{"outer-only", "o.b>10", []string{"2", "3", "4", "5"}},
+					{"null-safe", "i.a<=>o.a", []string{"1", "2", "3", "4"}},
+					{"float-range", "i.f>o.f", []string{"1", "2"}},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						arm := "select f from predicate_inner i where (" + tc.predicate + ")"
+						q := "select id from predicate_outer o where exists (" + arm + " union " + arm + ") order by id"
+						rows, err := conn.QueryContext(ctx, q)
+						require.NoError(t, err, q)
+						require.Equal(t, tc.want, readWindowNullRows(t, rows))
+						q = "select id from predicate_outer o where exists ((" + arm + " union " + arm + ") union " + arm + ") order by id"
+						rows, err = conn.QueryContext(ctx, q)
+						require.NoError(t, err, q)
+						require.Equal(t, tc.want, readWindowNullRows(t, rows))
+						excluded := []string{}
+						for _, id := range []string{"1", "2", "3", "4", "5"} {
+							included := false
+							for _, match := range tc.want {
+								included = included || id == match
+							}
+							if !included {
+								excluded = append(excluded, id)
+							}
+						}
+						q = "select id from predicate_outer o where not exists (" + arm + " union " + arm + ") order by id"
+						rows, err = conn.QueryContext(ctx, q)
+						require.NoError(t, err, q)
+						require.Equal(t, excluded, readWindowNullRows(t, rows))
+						arm = "select 1 from predicate_inner i where (" + tc.predicate + ") and ?"
+						q = "select id from predicate_outer o where exists (" + arm + " union " + arm + ") order by id"
+						stmt, err := conn.PrepareContext(ctx, q)
+						require.NoError(t, err)
+						defer stmt.Close()
+						for _, args := range [][2]int{{0, 1}, {1, 0}, {0, 0}, {1, 1}, {0, 1}} {
+							rows, err := stmt.QueryContext(ctx, args[0], args[1])
+							require.NoError(t, err, q)
+							want := tc.want
+							if args == [2]int{0, 0} {
+								want = nil
+							}
+							require.Equal(t, want, readWindowNullRows(t, rows))
+						}
+					})
+				}
+				q := "select id from predicate_outer o where not exists (select f from predicate_inner i where i.f>o.f union select f from predicate_inner i where i.f>o.f) order by id"
+				rows, err := conn.QueryContext(ctx, q)
+				require.NoError(t, err, q)
+				require.Equal(t, []string{"3", "4", "5"}, readWindowNullRows(t, rows))
+				q = "select id from predicate_outer o where exists (select f from predicate_inner i where o.b>0 and i.a<0 union select f from predicate_inner i where o.b>0 and i.a<0)"
+				rows, err = conn.QueryContext(ctx, q)
+				require.NoError(t, err, q)
+				require.Empty(t, readWindowNullRows(t, rows), "outer-only true must not create an inner row")
+			})
 			t.Run("opposite-float-members", func(t *testing.T) {
 				var value float64
 				err := conn.QueryRowContext(ctx, "select (select d from zeros i where i.id=o.id union select -d from zeros i where i.id=o.id) from zeros o where id=1").Scan(&value)
