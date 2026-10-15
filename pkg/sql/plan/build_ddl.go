@@ -3278,7 +3278,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 	}
 
 	// Column lookup is case-insensitive even when lower_case_table_names is 0.
-	columnNames := make([]string, 0, len(tableDef.Cols))
+	columnNames := make(map[string]struct{}, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden {
 			continue
@@ -3288,12 +3288,11 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		for _, existingName := range columnNames {
-			if strings.EqualFold(existingName, compareName) {
-				return moerr.NewErrDupFieldName(ctx, name)
-			}
+		key := equalFoldKey(compareName)
+		if _, exists := columnNames[key]; exists {
+			return moerr.NewErrDupFieldName(ctx, name)
 		}
-		columnNames = append(columnNames, compareName)
+		columnNames[key] = struct{}{}
 	}
 	return nil
 }
