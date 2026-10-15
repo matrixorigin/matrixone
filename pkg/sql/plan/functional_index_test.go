@@ -21,8 +21,139 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+// Mutated planner metadata is a defensive typed oracle, not a SQL reproduction.
+func TestFunctionalIndexResolvedOverloadMetadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, had := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion116)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion116)
+		}
+	})
+	build := func(sql string) *TableDef {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		return p.GetDdl().GetCreateTable().TableDef
+	}
+	for _, expression := range []string{
+		"lower(name)", "upper(name)", "to_lower(name)", "ucase(name)",
+		"id+1", "id-1", "id*2", "abs(id)", "abs(u)", "id+u", "+id", "-id", "+u",
+		"cast(id as signed)", "cast(name as varchar(40))",
+		"lower('a\\\\b')", "cast(doc ->> '$.kind' as char(20))",
+	} {
+		t.Run("valid/"+expression, func(t *testing.T) {
+			table := build("create table fi(id int,u bigint unsigned,name varchar(40),doc json,index idx((" + expression + ")))")
+			require.NoError(t, ValidateFunctionalIndexMetadata(t.Context(), table))
+			_, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			require.NoError(t, err)
+		})
+	}
+	mutations := []struct {
+		name   string
+		change func(*Expr)
+	}{
+		{"unknown_function", func(e *Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(0x7fffffff, 0) }},
+		{"negative_identity", func(e *Expr) { e.GetF().Func.Obj = -1 }},
+		{"out_of_range_overload", func(e *Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(function.LOWER, 1) }},
+		{"wrong_function_identity", func(e *Expr) { e.GetF().Func.Obj = function.EncodeOverloadID(function.UPPER, 0) }},
+		{"wrong_function_name", func(e *Expr) { e.GetF().Func.ObjName = "upper" }},
+		{"unsupported_name", func(e *Expr) { e.GetF().Func.ObjName = "case" }},
+		{"missing_function_ref", func(e *Expr) { e.GetF().Func = nil }},
+		{"missing_argument", func(e *Expr) { e.GetF().Args = nil }},
+		{"extra_argument", func(e *Expr) { e.GetF().Args = append(e.GetF().Args, DeepCopyExpr(e.GetF().Args[0])) }},
+		{"nil_argument", func(e *Expr) { e.GetF().Args[0] = nil }},
+		{"nil_column", func(e *Expr) { e.GetF().Args[0].Expr = &pb.Expr_Col{} }},
+		{"nil_literal", func(e *Expr) { e.GetF().Args[0].Expr = &pb.Expr_Lit{} }},
+		{"nil_function", func(e *Expr) { e.GetF().Args[0].Expr = &pb.Expr_F{} }},
+		{"nested_nil_cast_argument", func(e *Expr) {
+			e.GetF().Args[0].Expr = &pb.Expr_F{F: &pb.Function{
+				Func: &pb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+				Args: []*Expr{nil, {Typ: e.GetF().Args[0].Typ, Expr: &pb.Expr_T{T: &pb.TargetType{}}}},
+			}}
+		}},
+		{"wrong_column_type", func(e *Expr) { e.GetF().Args[0].Typ.Id = int32(types.T_int64) }},
+		{"out_of_range_type", func(e *Expr) { e.GetF().Args[0].Typ.Id = 256 }},
+		{"unknown_type", func(e *Expr) { e.GetF().Args[0].Typ.Id = 251 }},
+		{"wrong_result_width", func(e *Expr) { e.Typ.Width++ }},
+		{"invalid_collation", func(e *Expr) { e.GetF().Args[0].Typ.Charset = 256 }},
+	}
+	for _, dependency := range []bool{false, true} {
+		sql := "create table fi(name varchar(40),index idx((lower(name))))"
+		label := "direct"
+		if dependency {
+			sql = "create table fi(name varchar(40),g varchar(40) as (lower(name)) virtual,index idx((lower(g))))"
+			label = "transitive"
+		}
+		table := build(sql)
+		for _, mutation := range mutations {
+			t.Run(label+"/"+mutation.name, func(t *testing.T) {
+				bad := DeepCopyTableDef(table, true)
+				expr := functionalIndexColumn(bad, bad.Indexes[0]).GeneratedCol.Expr
+				if dependency {
+					expr = FindColumn(bad.Cols, "g").GeneratedCol.Expr
+				}
+				for expr.GetF().Func.ObjName == "cast" {
+					expr = expr.GetF().Args[0]
+				}
+				mutation.change(expr)
+				require.False(t, functionalExpressionEligible(functionalIndexColumn(bad, bad.Indexes[0]).GeneratedCol.Expr, bad.Cols, make(map[int32]bool)))
+				require.Error(t, ValidateFunctionalIndexMetadata(t.Context(), bad))
+				_, _, err := constructCreateTableSQL(ctx, bad, nil, false, nil, false, nil)
+				require.Error(t, err, "the real SQL reconstruction consumer must reject damaged metadata")
+			})
+		}
+	}
+	castTable := build("create table fi(id int,index idx((cast(id as signed))))")
+	for _, kind := range []string{"wrong_target", "missing_target", "nil_target", "unrelated_overload"} {
+		t.Run("cast/"+kind, func(t *testing.T) {
+			bad := DeepCopyTableDef(castTable, true)
+			fn := functionalIndexColumn(bad, bad.Indexes[0]).GeneratedCol.Expr.GetF()
+			require.NotNil(t, fn)
+			switch kind {
+			case "wrong_target":
+				fn.Args[1].Typ.Id = int32(types.T_varchar)
+			case "missing_target":
+				fn.Args[1].Expr = &pb.Expr_Lit{Lit: &pb.Literal{}}
+			case "nil_target":
+				fn.Args[1] = nil
+			case "unrelated_overload":
+				fn.Func.Obj = function.EncodeOverloadID(function.CAST, function.TemporalIntegerArgumentCastOverload)
+			}
+			require.Error(t, ValidateFunctionalIndexMetadata(t.Context(), bad))
+		})
+	}
+	jsonTable := build("create table fi(doc json,index idx((cast(doc ->> '$.kind' as char(20)))))")
+	for _, kind := range []string{"mismatched_nested_identity", "unquote_result_width", "unquote_result_charset", "extract_result_width"} {
+		t.Run("json/"+kind, func(t *testing.T) {
+			bad := DeepCopyTableDef(jsonTable, true)
+			unquote := functionalIndexColumn(bad, bad.Indexes[0]).GeneratedCol.Expr.GetF().Args[0]
+			switch kind {
+			case "mismatched_nested_identity":
+				unquote.GetF().Func.ObjName = "lower"
+			case "unquote_result_width":
+				unquote.Typ.Width++
+			case "unquote_result_charset":
+				unquote.Typ.Charset = uint32(types.CharsetUTF8)
+			case "extract_result_width":
+				unquote.GetF().Args[0].Typ.Width++
+			}
+			require.Error(t, ValidateFunctionalIndexMetadata(t.Context(), bad))
+			_, _, err := constructCreateTableSQL(ctx, bad, nil, false, nil, false, nil)
+			require.Error(t, err, "the real SQL reconstruction consumer must reject damaged JSON result metadata")
+		})
+	}
+}
 
 func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))

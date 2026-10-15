@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -125,6 +126,72 @@ func TestFunctionalIndexCheckpointDDL(t *testing.T) {
 	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
 	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.Error(t, err)
+}
+
+// Corrupt only the typed expression, keeping the genuine planner's catalog
+// encoding and printable SQL intact. This is a defensive restore oracle.
+func TestFunctionalCheckpointResolvedOverload(t *testing.T) {
+	for _, input := range []struct {
+		name, sql string
+	}{
+		{"ordinary", "create table fi(name varchar(40),index idx((lower(name))))"},
+		{"transitive", "create table fi(name varchar(40),g varchar(40) as (lower(name)) virtual,index idx((lower(g))))"},
+		{"json", "create table fi(doc json,index idx((cast(doc ->> '$.kind' as char(20)))))"},
+	} {
+		for _, damage := range []string{"unknown_function", "out_of_range_overload", "mismatched_name", "missing_argument"} {
+			t.Run(input.name+"/"+damage, func(t *testing.T) {
+				schema, columns, indexes, table := checkpointFunctionalFixture(t, input.sql)
+				tables := &LogicalTableView{
+					Headers: []string{"object", "block", "row", "rel_id", "relname", catalog.SystemRelAttr_Constraint},
+					Rows:    [][]string{{"o", "0", "0", "42", "fi", encodedConstraint(t, &engine.IndexDef{Indexes: table.Indexes})}},
+				}
+				// The same complete catalog caller must export the untouched control.
+				require.Contains(t, createTableDDLFromCatalogViews(42, tables, columns), "KEY")
+				attachFunctionalIndexExpressions(schema, columns, 42)
+				require.NotEmpty(t, RenderCreateTableDDLFromSchema(cloneTableSchema(schema)))
+				statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+				require.NoError(t, err)
+				require.NotEmpty(t, statements)
+				for _, row := range columns.Rows {
+					selected := strings.HasPrefix(row[4], "__mo_fi_")
+					if input.name == "transitive" {
+						selected = row[4] == "g"
+					}
+					if !selected {
+						continue
+					}
+					var generated plan.GeneratedCol
+					require.NoError(t, types.Decode([]byte(row[7]), &generated))
+					expr := generated.Expr
+					for expr.GetF().Func.ObjName == "cast" {
+						expr = expr.GetF().Args[0]
+					}
+					fn := expr.GetF()
+					switch damage {
+					case "unknown_function":
+						fn.Func.Obj = function.EncodeOverloadID(0x7fffffff, 0)
+					case "out_of_range_overload":
+						fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+						fn.Func.Obj = function.EncodeOverloadID(fid, 0x7fffffff)
+					case "mismatched_name":
+						fn.Func.ObjName = "upper"
+					case "missing_argument":
+						fn.Args = nil
+					}
+					raw, err := types.Encode(&generated)
+					require.NoError(t, err)
+					row[7] = string(raw)
+				}
+				attachFunctionalIndexExpressions(schema, columns, 42)
+				require.True(t, schema.invalidFunctionalMetadata)
+				require.Empty(t, RenderCreateTableDDLFromSchema(cloneTableSchema(schema)))
+				statements, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+				require.Error(t, err)
+				require.Empty(t, statements)
+				require.Empty(t, createTableDDLFromCatalogViews(42, tables, columns), "no substitute DDL through catalog fallback")
+			})
+		}
+	}
 }
 
 func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {

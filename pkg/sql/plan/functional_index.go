@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -105,16 +106,22 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 	if expr == nil {
 		return false
 	}
+	if _, ok := functionalRuntimeType(expr.Typ); !ok {
+		return false
+	}
 	switch e := expr.Expr.(type) {
 	case *pb.Expr_Lit:
-		return true
+		return e != nil && e.Lit != nil
 	case *pb.Expr_Col:
+		if e == nil || e.Col == nil {
+			return false
+		}
 		pos := e.Col.ColPos
 		if e.Col.RelPos != 0 || pos < 0 || int(pos) >= len(cols) || visiting[pos] {
 			return false
 		}
 		col := cols[pos]
-		if col == nil || col.Hidden || col.Typ.AutoIncr {
+		if col == nil || col.Hidden || col.Typ.AutoIncr || !sameFunctionalValueType(expr.Typ, col.Typ) {
 			return false
 		}
 		if col.GeneratedCol != nil {
@@ -125,17 +132,26 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 		}
 		return true
 	case *pb.Expr_T:
-		return true
+		return e != nil && e.T != nil
 	case *pb.Expr_F:
-		if e.F == nil || e.F.Func == nil {
+		resolved, ok := functionalResolvedFunction(expr)
+		if !ok {
 			return false
 		}
-		switch e.F.Func.ObjName {
-		case "lower", "upper":
+		fid, overload := function.DecodeOverloadID(e.F.Func.Obj)
+		switch fid {
+		case function.LOWER, function.UPPER:
 			if len(e.F.Args) != 1 || !functionalTextType(e.F.Args[0].Typ) || !functionalTextType(expr.Typ) {
 				return false
 			}
-		case "+", "-", "*", "abs":
+		case function.PLUS, function.MINUS, function.MULTI, function.ABS, function.UNARY_PLUS, function.UNARY_MINUS:
+			arity := 2
+			if fid == function.ABS || fid == function.UNARY_PLUS || fid == function.UNARY_MINUS {
+				arity = 1
+			}
+			if len(e.F.Args) != arity {
+				return false
+			}
 			if !types.T(expr.Typ.Id).IsInteger() {
 				return false
 			}
@@ -144,7 +160,12 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 					return false
 				}
 			}
-		case "cast":
+		case function.CAST:
+			// These are the implicit, explicit and comparison casts emitted by
+			// the binder. Other registered CAST kernels have different contracts.
+			if overload < 0 || overload > 2 {
+				return false
+			}
 			if functionalJSONTextCastEligible(expr, cols, visiting) {
 				return true
 			}
@@ -163,9 +184,7 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				}
 			}
 			// Identity casts inserted by generated-column assignment are safe.
-			if len(e.F.Args) != 2 || e.F.Args[0].Typ.Id != expr.Typ.Id ||
-				e.F.Args[0].Typ.Width != expr.Typ.Width || e.F.Args[0].Typ.Scale != expr.Typ.Scale ||
-				e.F.Args[0].Typ.Charset != expr.Typ.Charset || e.F.Args[0].Typ.PadSpace != expr.Typ.PadSpace {
+			if !sameFunctionalValueType(e.F.Args[0].Typ, expr.Typ) {
 				return false
 			}
 		default:
@@ -176,10 +195,108 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				return false
 			}
 		}
+		expected := resolved.GetReturnType().PlanType()
+		// The binder carries CHAR/padded argument provenance on text results;
+		// it is deliberately not part of the runtime registry Type.
+		if fid == function.CAST {
+			expected = e.F.Args[1].Typ
+		} else if fid == function.LOWER || fid == function.UPPER {
+			expected.PadSpace = hasPadSpaceStringProvenance(e.F.Args[0])
+		}
+		if !sameFunctionalValueType(expected, expr.Typ) {
+			return false
+		}
 		return true
 	default:
 		return false
 	}
+}
+
+// Validate the serialized identity using the same registry/type checker as the
+// binder, without inserting coercions or trusting the display name. The
+// eligibility owner still decides which of these resolved kernels are safe.
+func functionalResolvedFunction(expr *Expr) (function.FuncGetResult, bool) {
+	invalid := function.FuncGetResult{}
+	if expr == nil {
+		return invalid, false
+	}
+	e, ok := expr.Expr.(*pb.Expr_F)
+	if !ok || e == nil || e.F == nil || e.F.Func == nil {
+		return invalid, false
+	}
+	fn := e.F
+	// Limit registry lookup to this owner's scalar families. In particular,
+	// damaged names must not enter unrelated functions' type checkers.
+	switch fn.Func.ObjName {
+	case "lower", "to_lower", "lcase", "upper", "to_upper", "ucase",
+		"+", "-", "*", "abs", "unary_plus", "unary_minus", "cast",
+		"json_extract", "json_unquote":
+	default:
+		return invalid, false
+	}
+	if _, ok := functionalRuntimeType(expr.Typ); !ok {
+		return invalid, false
+	}
+	if _, exists := function.GetFunctionByIdWithoutError(fn.Func.Obj); !exists {
+		return invalid, false
+	}
+	args := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		if arg == nil {
+			return invalid, false
+		}
+		var ok bool
+		args[i], ok = functionalRuntimeType(arg.Typ)
+		if !ok {
+			return invalid, false
+		}
+	}
+	resolved, ok := function.GetFunctionByNameWithoutError(fn.Func.ObjName, args)
+	if !ok {
+		return invalid, false
+	}
+	fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+	if fid == function.CAST {
+		// CAST's normal lookup selects overload 0; explicit/comparison casts
+		// are selected by the binder's overload-aware API.
+		if fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+			!sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
+			return invalid, false
+		}
+		target, ok := fn.Args[1].Expr.(*pb.Expr_T)
+		if !ok || target == nil || target.T == nil {
+			return invalid, false
+		}
+		var err error
+		resolved, err = function.GetFunctionByNameWithOverload(context.Background(), "cast", args, overload)
+		if err != nil {
+			return invalid, false
+		}
+	}
+	if resolved.GetEncodedOverloadID() != fn.Func.Obj {
+		return invalid, false
+	}
+	if targets, needed := resolved.ShouldDoImplicitTypeCast(); needed {
+		if len(targets) != len(args) {
+			return invalid, false
+		}
+		for i := range args {
+			if !args[i].Eq(targets[i]) {
+				return invalid, false
+			}
+		}
+	}
+	return resolved, true
+}
+
+func functionalRuntimeType(typ Type) (types.Type, bool) {
+	// TypeFromPlan checks wire widths/collations, but TypeLen panics for an
+	// unassigned OID inside that range. Catalog admission must fail closed.
+	if err := typ.ValidateCollation(); err != nil || strings.HasPrefix(types.T(typ.Id).String(), "unexpected type:") {
+		return types.Type{}, false
+	}
+	runtimeType, err := types.TypeFromPlan(typ)
+	return runtimeType, err == nil
 }
 
 func functionalTextType(typ Type) bool {

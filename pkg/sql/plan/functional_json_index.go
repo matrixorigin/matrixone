@@ -28,6 +28,15 @@ import (
 var functionalJSONPath = regexp.MustCompile(`^\$(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[0-9]+\])*$`)
 
 func functionalKnownFunction(expr *Expr, id int32, overloads ...int32) bool {
+	resolved, ok := functionalResolvedFunction(expr)
+	if !ok {
+		return false
+	}
+	// JSON producers bypass the ordinary expression walk, which validates
+	// registry result metadata. Apply that contract at this admission boundary.
+	if id != function.CAST && !sameFunctionalValueType(resolved.GetReturnType().PlanType(), expr.Typ) {
+		return false
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != id {
 		return false
