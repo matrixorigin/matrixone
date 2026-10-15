@@ -69,6 +69,7 @@ explain select id from t_cagra where grp = 1 order by l2_distance(v, '[0,0,0,0,0
 -- @separator:table
 -- @regex("Join Type: SEMI", true)
 -- @regex("Index Filter: [^\n]*category = 1", true)
+-- @regex("Filter Cond: \(t_ivfpq.grp = 1\), \(t_ivfpq.category = 1\)", true)
 explain select id from t_ivfpq where category = 1 and grp = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre', 'nprobe=1';
 -- the default mode keeps it after the search
 -- @separator:table
