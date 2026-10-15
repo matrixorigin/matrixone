@@ -159,9 +159,12 @@ func materializeWindowBound(
 	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
 		return runtimeBound, nil
 	}
-	// Temporal RANGE bounds are normalized interval expression lists at bind
-	// time. They are already immutable constants, not deferred parameters.
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
+		value, err := materializeWindowInterval(proc, planned.Val)
+		if err != nil {
+			return nil, err
+		}
+		runtimeBound.Val = value
 		return runtimeBound, nil
 	}
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetVec() != nil {
@@ -844,6 +847,7 @@ func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
 func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
 	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
 		frame.Start == nil || frame.End == nil ||
+		hasNullIntervalBound(frame) ||
 		len(orderVecs) != 1 || len(orderVecs[0].Vec) != 1 || orderVecs[0].Vec[0] == nil ||
 		!finiteRangeStart(frame.Start) || !finiteRangeEnd(frame.End) {
 		return false
@@ -1737,7 +1741,7 @@ func (ctr *container) timestampRangeSelection(
 	// cross a timezone transition, so the ordinary RANGE path already has the
 	// complete peer interval and fold indexing must not address it by logical
 	// row position.
-	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) || hasNullIntervalBound(frame) {
 		return nil, nil
 	}
 	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
@@ -2154,6 +2158,14 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 }
 
 func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	if hasNullIntervalBound(frame) {
+		vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
+		// NULL current keys still form their ordinary peer group. Only a
+		// non-NULL temporal key has NULL interval arithmetic and an empty frame.
+		if !vec.IsConstNull() && !vec.GetNulls().Contains(uint64(rowIdx)) {
+			return rowIdx, rowIdx, nil
+		}
+	}
 	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
