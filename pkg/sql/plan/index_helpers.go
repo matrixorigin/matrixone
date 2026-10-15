@@ -15,7 +15,11 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -31,10 +35,37 @@ func indexTableStoresSerializedKey(idxDef *planpb.IndexDef) bool {
 // an index-table key. Non-unique serialized keys retain NULL components so the
 // hidden table can represent every base-table row.
 func indexTableStoredKeySerialFunc(idxDef *planpb.IndexDef) string {
+	if idxDef != nil && idxDef.KeyFormat == collation.KeyFormatV1 {
+		return "physical_serial"
+	}
 	if idxDef != nil && !idxDef.Unique && indexTableStoresSerializedKey(idxDef) {
 		return "serial_full"
 	}
 	return "serial"
+}
+
+// bindIndexKeyExpr builds the canonical value stored in (or compared with) a
+// regular index table.  Versioned Unicode unique indexes store opaque physical
+// collation keys; every DML producer and probe must use the same expression,
+// even when the optimizer has pruned the source column's type metadata.
+// Legacy indexes retain their historical raw/s serial representation.
+func bindIndexKeyExpr(ctx context.Context, idxDef *planpb.IndexDef, parts []*planpb.Expr) (*planpb.Expr, error) {
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	if idxDef != nil && idxDef.KeyFormat == collation.KeyFormatV1 {
+		if len(parts) == 1 {
+			if !types.IsUnicodeCollation(uint8(parts[0].Typ.Charset)) || !types.T(parts[0].Typ.Id).IsMySQLString() {
+				return parts[0], nil
+			}
+			return BindFuncExprImplByPlanExpr(ctx, "physical_collation_key", parts)
+		}
+		return BindFuncExprImplByPlanExpr(ctx, "physical_serial", parts)
+	}
+	if len(parts) == 1 {
+		return parts[0], nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, indexTableStoredKeySerialFunc(idxDef), parts)
 }
 
 // indexTableComparisonSerialFunc identifies the serializer for SQL comparison
