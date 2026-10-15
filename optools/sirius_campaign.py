@@ -104,7 +104,7 @@ def controller_sha256():
         "sirius_campaign_v2.py",
         "sirius_campaign_common.py",
         "sirius_resource.py",
-        "sirius_profile_exit.gdb",
+        "sirius_profile_exit.py",
     ):
         digest.update(name.encode() + b"\0")
         digest.update((Path(__file__).parent / name).read_bytes())
@@ -647,7 +647,7 @@ class PublicExecutor:
             if after["window"] != before["window"] + 1:
                 raise v2.CampaignError("native cleanup successor is ambiguous")
             for pool in before["pools"]:
-                if pool["tier"] != "gpu" or not (
+                if pool["tier"] == "gpu" and not (
                     pool["end"]["allocated_bytes"] or pool["end"]["reserved_bytes"]
                 ):
                     continue
@@ -1216,7 +1216,7 @@ def run_complete(arguments, *, provenance=None):
                     "gdb",
                     "--batch",
                     "-x",
-                    str(Path(__file__).with_name("sirius_profile_exit.gdb")),
+                    str(Path(__file__).with_name("sirius_profile_exit.py")),
                     "--args",
                     *command,
                 ]
@@ -1405,6 +1405,7 @@ def run_complete(arguments, *, provenance=None):
                     allocation_summary,
                     MAX_LEDGER_BYTES,
                     MAX_SORT_FILE_BYTES,
+                    reconcile_host_pool,
                 )
 
                 check_workspace()
@@ -1436,7 +1437,6 @@ def run_complete(arguments, *, provenance=None):
                     raise v2.CampaignError("resource profile phase coverage differs")
                 baseline = measured[0]["before_bytes"]
                 after = final[0]["before_bytes"]
-                growth = sum(max(0, after[kind] - baseline[kind]) for kind in baseline)
                 tagged = [
                     run["native_pools"]
                     for run in envelope["records"]
@@ -1455,11 +1455,19 @@ def run_complete(arguments, *, provenance=None):
                     provenance=provenance,
                     warmed_baseline_bytes=baseline,
                     post_cleanup_bytes=after,
-                    unexplained_growth_bytes=growth,
-                    pool_baseline_reconciled=growth == 0 and logical_gpu_clean,
                     logical_pool_scope="query-window",
                     physical_baseline_scope="idle-cn-process",
                 )
+                by_identity = {run["query_id"]: run for run in envelope["records"]}
+                allocation["host_pool_reconciliation"] = reconcile_host_pool(
+                    allocation,
+                    by_identity[measured[0]["query_id"]],
+                    by_identity[measured[-1]["query_id"]],
+                    final[0]["query_id"],
+                    provenance["config"],
+                )
+                allocation["unexplained_growth_bytes"] = allocation["host_pool_reconciliation"]["unexplained_growth_bytes"]
+                allocation["pool_baseline_reconciled"] = allocation["unexplained_growth_bytes"] == 0 and logical_gpu_clean
                 private_json(output / f"resource-phase-{phase_number}.json", allocation)
                 private_json(
                     output / f"excluded-phase-{phase_number}.json",

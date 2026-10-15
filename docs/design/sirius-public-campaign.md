@@ -411,7 +411,7 @@ The first SF1 capture contained 2.55 million memory events and a 717 MiB SQLite
 export; the separate trace bounds allow the required tenfold scale. Go's direct
 `exit_group` skips native atexit finalizers and leaves Nsight's CUDA trace
 incomplete. Allocation profiling runs the unchanged packaged service under the
-bounded GDB exit wrapper in `optools/sirius_profile_exit.gdb`. It validates the
+bounded GDB exit wrapper in `optools/sirius_profile_exit.py`. It validates the
 linux/amd64 runtime exit instruction sequence, preserves nonzero exits, and
 invokes libc exit after successful Go shutdown so native finalizers flush CUDA.
 This is profiling-only; the 744 timing executions remain uninstrumented. The
@@ -616,3 +616,32 @@ The archive SHA-256 is fixed above; its internal `checksums.json` has SHA-256
 The unchanged CLI verifies every listed artifact and returns
 `local_acceptance_complete: true`. CI and reviewer approval remain separate final
 acceptance and merge gates; an archived local result does not infer them.
+
+
+### E resource-accounting correction
+
+Fresh main and E SF10 controls both exposed 8 MiB of physical pinned growth.
+CUDA allocation stacks identify `fixed_size_host_memory_resource::expand_pool`,
+not a retained query payload. The host pool adds 128 free 64 KiB blocks and
+retains that free capacity until engine destruction. Idle charged bytes are
+unchanged, and all native host capacity is freed during shutdown.
+
+Reconcile that capacity from two independent measurements. The pinned ABI
+creates an empty 64 MiB result reservation before `StandaloneQueryScope` logs
+QueryBegin, then initializes the engine and activates input producers. At this
+boundary, physical host-pool capacity equals free blocks times block size plus
+charged bytes minus the empty result reservation. QueryBegin of the cleanup
+probe supplies the actual successor observation after the measured query closes.
+
+The current validator requires matching native space/window/query identities,
+unchanged live charged bytes, monotonic free capacity within the existing 16 GiB
+host budget, an exact match between physical pinned growth and extra free native
+capacity, unchanged external pinned/device baselines, and release of all native
+host capacity at process shutdown. Unexplained growth must still be zero. Missing
+proof, one extra leaked byte, increased live usage or an exceeded budget fails;
+old captures use their recorded tool version rather than a compatibility path.
+
+GDB now invokes native exit after leaving the breakpoint callback. It observes
+the target inferior's actual exit event, including after a calling thread exits,
+and propagates nonzero or unknown outcomes. A requested Go exit code alone is
+not proof of successful native teardown.

@@ -265,9 +265,19 @@ def validate(
                 type(value) is not int or value < 0
                 for value in list(before.values()) + list(after.values())
             )
-            or sum(max(0, after[kind] - before[kind]) for kind in before) != 0
         ):
             raise campaign.CampaignError("physical warmed allocation baseline grew")
+        from sirius_resource import reconcile_host_pool
+        reconciliation = reconcile_host_pool(
+            allocation,
+            matched[measured[0]["sequence"]],
+            matched[measured[-1]["sequence"]],
+            spans[-1]["query_id"],
+            identity["config"],
+        )
+        if allocation.get("host_pool_reconciliation") != reconciliation:
+            raise campaign.CampaignError("native host pool reconciliation differs")
+
     for artifact in (lifecycle, sanitizer, baselines):
         _record_identity(identity, artifact.get("provenance", {}))
     cases = lifecycle.get("cases", [])

@@ -35,6 +35,7 @@ def evidence():
 
     def records(manifest, offset):
         result = []
+        windows = {}
         for spec in manifest["schedule"]:
             row = {
                 **spec,
@@ -89,6 +90,14 @@ def evidence():
                         for tier in ("host", "gpu")
                     ],
                 }
+            if spec["backend"] == "embedded":
+                key = (spec["scale_factor"], spec["streams"])
+                windows[key] = windows.get(key, 22) + 1
+                row["native_pools"].update(public_query_id=row["query_id"], window=windows[key])
+                for pool in row["native_pools"]["pools"]:
+                    pool["space"] = -1 if pool["tier"] == "host" else 0
+                    if pool["tier"] == "host":
+                        pool["begin"] = {"allocated_bytes": (64 << 20) + (1 << 16), "free_blocks": 4}
             if manifest["resource_campaign"]:
                 row["resource_span"] = {
                     "time_domain": "unix-epoch-ns",
@@ -109,7 +118,7 @@ def evidence():
                     "phase": row["phase"],
                     "sequence": row["sequence"],
                     "query_id": row["query_id"],
-                    "before_bytes": {"pinned": 1, "device": 1},
+                    "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                 }
                 for row in resource_rows
                 if row["scale_factor"] == scale
@@ -126,8 +135,9 @@ def evidence():
                     "allocation_counts": {"pinned": 1, "device": 1},
                     "unexplained_growth_bytes": 0,
                     "pool_baseline_reconciled": True,
-                    "warmed_baseline_bytes": {"pinned": 1, "device": 1},
-                    "post_cleanup_bytes": {"pinned": 1, "device": 1},
+                    "warmed_baseline_bytes": {"pinned": (5 << 16) + 1, "device": 1},
+                    "post_cleanup_bytes": {"pinned": (5 << 16) + 1, "device": 1},
+                    "final_bytes": {"pinned": 1, "device": 1},
                     "runs": [
                         {
                             "phase": "resource-warmup",
@@ -137,7 +147,7 @@ def evidence():
                             "scope": "runner-lifetime",
                             "start_ns": measured[0]["start_ns"] - 50 + 2 * index,
                             "end_ns": measured[0]["start_ns"] - 49 + 2 * index,
-                            "before_bytes": {"pinned": 1, "device": 1},
+                            "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                         }
                         for index in range(22)
                     ]
@@ -151,11 +161,26 @@ def evidence():
                             "scope": "runner-lifetime",
                             "start_ns": measured[-1]["end_ns"] + 1,
                             "end_ns": measured[-1]["end_ns"] + 2,
-                            "before_bytes": {"pinned": 1, "device": 1},
+                            "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                         }
                     ],
                 }
             )
+    for allocation in allocations:
+        rows = [row for row in resource_rows if row["backend"] == "embedded" and row["scale_factor"] == allocation["scale_factor"] and row["streams"] == allocation["streams"]]
+        cleanup = allocation["runs"][-1]["query_id"]
+        for index, row in enumerate(rows):
+            host = next(pool for pool in row["native_pools"]["pools"] if pool["tier"] == "host")
+            host["after_close"] = {"source": "next-query-window-begin", "window": row["native_pools"]["window"] + 1, "query_id": rows[index+1]["query_id"] if index+1 < len(rows) else cleanup, **host["begin"]}
+        allocation["host_pool_reconciliation"] = {
+            "source": "native-host-pool-and-cupti", "space": -1,
+            "first_query_id": rows[0]["query_id"], "cleanup_query_id": cleanup,
+            "block_bytes": 1 << 16, "empty_result_reservation_bytes": 64 << 20,
+            "capacity_limit_bytes": 16 << 30, "capacity_before_bytes": 5 << 16,
+            "capacity_after_bytes": 5 << 16, "physical_growth_bytes": 0,
+            "free_capacity_growth_bytes": 0, "unexplained_growth_bytes": 0,
+            "external_pinned_baseline_bytes": 1,
+        }
     lifecycle = {
         "provenance": identity,
         "cases": [
@@ -438,6 +463,31 @@ class AcceptanceTest(unittest.TestCase):
         next_pool["begin"]["allocated_bytes"] = 768
         with self.assertRaisesRegex(campaign.CampaignError, "retains"):
             acceptance.validate(*inputs)
+
+    def test_free_host_capacity_growth_is_reconciled_but_not_a_query_leak(self):
+        inputs = evidence()
+        allocation = inputs[4][0]
+        last_span = [span for span in allocation["runs"] if span["phase"] == "resource-validation"][-1]
+        last = next(row for row in inputs[3] if row["query_id"] == last_span["query_id"])
+        host = next(pool for pool in last["native_pools"]["pools"] if pool["tier"] == "host")
+        host["after_close"]["free_blocks"] += 128
+        allocation["post_cleanup_bytes"]["pinned"] += 8 << 20
+        allocation["runs"][-1]["before_bytes"]["pinned"] += 8 << 20
+        allocation["host_pool_reconciliation"].update(
+            capacity_after_bytes=(5 << 16) + (8 << 20),
+            physical_growth_bytes=8 << 20,
+            free_capacity_growth_bytes=8 << 20,
+        )
+        acceptance.validate(*inputs)
+        for mutate in (
+            lambda a: a["host_pool_reconciliation"].update(free_capacity_growth_bytes=0),
+            lambda a: a["final_bytes"].update(pinned=2),
+            lambda a: a.pop("host_pool_reconciliation"),
+        ):
+            changed = copy.deepcopy(inputs)
+            mutate(changed[4][0])
+            with self.subTest(mutate=mutate), self.assertRaises(campaign.CampaignError):
+                acceptance.validate(*changed)
 
     def test_complete_local_evidence_still_requires_ci_and_review(self):
         result = acceptance.validate(*evidence())
