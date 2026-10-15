@@ -245,6 +245,56 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 	}
 }
 
+// A covered projection may retain an equivalent implicit score sort during a
+// rewrite pass. Only that ordering permits the outer score page to reach search.
+func TestCoveredFulltext2ScoreLimitThroughExistingSort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(inner, search *plan.Node)
+		want   uint64
+	}{
+		{name: "equivalent score ordering", want: 3},
+		{name: "local page", change: func(inner, _ *plan.Node) {
+			inner.Limit = makePlan2Uint64ConstExprWithType(1)
+		}},
+		{name: "constant ordering", change: func(inner, _ *plan.Node) {
+			inner.OrderBy[0].Expr = makePlan2Int64ConstExprWithType(1)
+		}},
+		{name: "different key", change: func(inner, search *plan.Node) {
+			inner.OrderBy[0].Expr = GetColExpr(search.TableDef.Cols[0].Typ, search.BindingTags[0], 0)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, nodeID, project, _, scan, index := coveredFulltext2Fixture(t, nil)
+			project.ProjectList = append(project.ProjectList, DeepCopyExpr(scan.FilterList[0]))
+			handled, err := b.tryApplyCoveredFulltext2(nodeID, project, nil, scan,
+				[]int32{0}, []*plan.IndexDef{index}, []int32{1}, nil, map[int32]int32{0: 0}, nil, nil, false)
+			require.NoError(t, err)
+			require.True(t, handled)
+			search := findCoveredFulltext2Scan(t, b)
+			inner := b.qry.Nodes[project.Children[0]]
+			require.Equal(t, plan.Node_SORT, inner.NodeType)
+			if tc.change != nil {
+				tc.change(inner, search)
+			}
+			project.BindingTags = []int32{b.genNewBindTag()}
+			projectID := b.appendNode(project, b.ctxByNode[nodeID])
+			outer := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{projectID},
+				Limit: makePlan2Uint64ConstExprWithType(2), Offset: makePlan2Uint64ConstExprWithType(1),
+				OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC,
+					Expr: GetColExpr(project.ProjectList[1].Typ, project.BindingTags[0], 1)}},
+			}
+			b.pushCoveredFulltext2ScoreLimitFromSort(outer)
+			if tc.want == 0 {
+				require.Nil(t, fulltextScanLimit(search))
+			} else {
+				require.NotNil(t, fulltextScanLimit(search))
+				require.Equal(t, tc.want, fulltextScanLimit(search).GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
 // findCoveredFulltext2Scan returns the single fulltext2 index search scan appended by the
 // rewrite.
 func findCoveredFulltext2Scan(t *testing.T, builder *QueryBuilder) *plan.Node {
