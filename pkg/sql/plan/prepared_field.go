@@ -79,6 +79,21 @@ func fieldStringStaticDomain(expr *Expr) preparedFieldStringDomain {
 	return preparedFieldStringDomain{kind: kind}
 }
 
+// Internal conversions can change representation without owning a declaration.
+// Folded constants retain that conversion in Src; SQL-authored casts still win.
+func preparedFieldPrivateCastSource(expr *Expr, overload int32) *Expr {
+	if expr == nil {
+		return nil
+	}
+	if lit := expr.GetLit(); lit != nil {
+		expr = lit.Src
+	}
+	if !isCastOverload(expr, overload) || expr.GetF().GetSyntaxExplicitCast() || len(expr.GetF().Args) == 0 {
+		return nil
+	}
+	return expr.GetF().Args[0]
+}
+
 func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStringDomain) {
 	if expr == nil {
 		return preparedFieldStringDomain{}
@@ -140,6 +155,11 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		}
 		return result
 	}
+	// CAST3 implements set-operation representation, not an explicit SQL
+	// declaration. Merge branch sources before consuming the set output.
+	if source := preparedFieldPrivateCastSource(expr, 3); source != nil {
+		return r.expr(source)
+	}
 	if isExplicitPreparedCast(expr) {
 		return result
 	}
@@ -195,6 +215,12 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	var values []*Expr
 	switch name {
 	case "case":
+		// Retained/provisional declarations were resolved above. A concrete
+		// binary CASE without such history already owns its bound declaration;
+		// inferring bare markers again would manufacture an inferred origin.
+		if !r.unresolvedParameters && r.parameterTypes == nil && result.kind == fieldStringBinary {
+			return result
+		}
 		for i := 1; i < len(fn.Args); i += 2 {
 			values = append(values, fn.Args[i])
 		}
@@ -203,8 +229,29 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		}
 	case "if", "iff":
 		values = fn.Args[1:]
-	case "coalesce", "greatest", "least":
+	case "coalesce":
 		values = fn.Args
+	case "greatest", "least":
+		// Comparison consumers do not turn a NULL-inferred BLOB into a real
+		// binary contributor. Ignore their private string comparison casts,
+		// but retain numeric conversions and SQL-authored declarations.
+		domains := make([]preparedFieldStringDomain, len(fn.Args))
+		for i, arg := range fn.Args {
+			for arg != nil && types.T(arg.Typ.Id).IsMySQLString() {
+				source := preparedFieldPrivateCastSource(arg, 2)
+				if source == nil {
+					break
+				}
+				arg = source
+			}
+			domains[i] = r.expr(arg)
+			if domains[i].inferredBinary {
+				domains[i].kind = fieldStringText
+				domains[i].inferredBinary = false
+				domains[i].resolved = types.Type{}
+			}
+		}
+		return r.commonDomains(domains)
 	case "concat_ws":
 		// NULL-derived BLOB domains are not binary contributors, even through
 		// value wrappers or in the separator. Explicit binary declarations remain.
@@ -278,7 +325,16 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		}
 	default:
 		if pos := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
-			result = fieldStringArgumentDeclaration(r.expr(fn.Args[pos]))
+			domain := fieldStringArgumentDeclaration(r.expr(fn.Args[pos]))
+			// Unlike value selectors, byte-transforming functions own the TEXT
+			// representation they actually consumed. Do not relabel transformed
+			// bytes using a real binary declaration hidden behind a private cast.
+			if !r.unresolvedParameters && r.parameterTypes == nil && !domain.inferredBinary && domain.kind == fieldStringBinary &&
+				fieldStringStaticDomain(fn.Args[pos]).kind == fieldStringText && result.kind == fieldStringText {
+				result.parameter, result.history = domain.parameter, domain.history
+				return result
+			}
+			result = domain
 			result.parameterDeclaration = false
 			result.resolved = types.Type{}
 			if result.kind != fieldStringBinary {
@@ -291,10 +347,12 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		// type. Unresolved markers have their declaration, not their wire type.
 		resolveReturn := r.unresolvedParameters || r.parameterTypes != nil
 		if !resolveReturn {
-			// A restored CASE/relational declaration carries the same inferred
-			// origin as a declaration resolved from this pass's parameters.
+			// Restored/relational declarations may differ from their physical
+			// comparison/set representation, even without runtime parameters.
 			for _, arg := range fn.Args {
-				if fieldStringArgumentDeclaration(r.expr(arg)).inferredBinary {
+				domain := fieldStringArgumentDeclaration(r.expr(arg))
+				differentStringDeclaration := (domain.kind == fieldStringText || domain.kind == fieldStringBinary) && domain.kind != fieldStringStaticDomain(arg).kind
+				if domain.inferredBinary || differentStringDeclaration {
 					resolveReturn = true
 					break
 				}
@@ -318,7 +376,7 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 					declaredInputs[i] = types.T_text.ToType()
 				}
 			}
-			if dependent {
+			if dependent || !r.unresolvedParameters && r.parameterTypes == nil {
 				if resolved, err := function.GetFunctionByName(r.binder.GetContext(), name, inputs); err == nil {
 					typ := resolved.GetReturnType()
 					result = fieldStringStaticDomain(&Expr{Typ: makePlan2Type(&typ)})
@@ -473,7 +531,9 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 		if len(node.Children) == 1 {
 			return r.output(node.Children[0], tag, pos, fallback)
 		}
-	case planpb.Node_PARTITION:
+	case planpb.Node_PARTITION, planpb.Node_FILTER, planpb.Node_SORT:
+		// These nodes preserve their child's output declarations. Their
+		// binding-time ProjectList need not expose that output yet.
 		if len(node.Children) == 1 {
 			return r.output(node.Children[0], tag, pos, fallback)
 		}
