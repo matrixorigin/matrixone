@@ -22,7 +22,7 @@ affected-row count. Long retention prevents the real-time cron from expiring
 these future rows. No sleeps or additional service fixture were introduced.
 The old production source fails precisions 0 and 3 (two deletions instead of one);
 precision 6 is a control, including a sub-microsecond invocation fraction.
-`before.txt` retains the terminal failure excerpt. The final test adds successful
+`before.txt` retains the terminal failure excerpt with indentation and trailing whitespace normalized. The final test adds successful
 per-case table cleanup to avoid exceeding the discovery candidate window when
 running the original temporal matrix in the same database.
 
