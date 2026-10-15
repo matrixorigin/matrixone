@@ -2056,8 +2056,15 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
+	// Column inference binds and rewrites the SELECT tree in place. Materialized
+	// view admission and refresh SQL must inspect the original AST, so keep the
+	// source used for definition building isolated from view-column inference.
+	viewSource := stmt.AsSource
+	if stmt.Materialized {
+		viewSource = DeepCopySelect(stmt.AsSource)
+	}
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
+		ctx, viewSource, stmt.ColNames, createView.Database, string(viewName), true)
 	if err != nil {
 		return nil, err
 	}
