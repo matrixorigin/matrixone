@@ -1152,6 +1152,9 @@ func resultColumnExpressionIsComputed(
 	if expr == nil {
 		return false
 	}
+	if visited == nil {
+		visited = make(map[[3]int32]bool)
+	}
 	if expr.GetCol() == nil {
 		// A window expression is owned by the WINDOW node rather than by the
 		// projection slot that happens to carry its result.  Preserve the

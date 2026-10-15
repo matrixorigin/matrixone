@@ -259,3 +259,47 @@ func TestGetResultColumnsFromPlanPreservesStoredBooleanBesideWindowResult(t *tes
 	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED, columns[0].ResultColumnKind)
 	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[1].ResultColumnKind)
 }
+
+func TestResultColumnWindowExpressionProvenanceGuards(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_bool)}
+	stored := &planpb.Expr{
+		Typ:  typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0, Name: "t.flag"}},
+	}
+	query := &planpb.Query{Nodes: []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ProjectList: []*planpb.Expr{stored},
+	}}}
+
+	firstValue := func(arg *planpb.Expr) *planpb.WindowSpec {
+		return &planpb.WindowSpec{WindowFunc: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "first_value"},
+			Args: []*planpb.Expr{arg},
+		}}}}
+	}
+
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0, nil, nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0, &planpb.WindowSpec{}, nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0,
+		&planpb.WindowSpec{WindowFunc: &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{}}}}, nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0,
+		&planpb.WindowSpec{WindowFunc: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{}}}}, nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0,
+		&planpb.WindowSpec{WindowFunc: &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{}}}}, nil))
+	emptyFunction := &planpb.WindowSpec{WindowFunc: &planpb.Expr{
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "first_value"}}},
+	}}
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0, emptyFunction, nil))
+	require.False(t, resultColumnWindowExpressionIsComputed(query, 0, firstValue(stored), nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(query, 0, firstValue(&planpb.Expr{
+		Typ:  typ,
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "isnull"}, Args: []*planpb.Expr{stored}}},
+	}), nil))
+	require.True(t, resultColumnWindowExpressionIsComputed(nil, 0, firstValue(stored), nil))
+	require.False(t, resultColumnWindowExpressionIsComputed(query, 0, &planpb.WindowSpec{
+		WindowFunc: stored,
+	}, nil))
+	require.False(t, resultColumnWindowExpressionIsComputed(nil, 0, &planpb.WindowSpec{
+		WindowFunc: stored,
+	}, nil))
+}
