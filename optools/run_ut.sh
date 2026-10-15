@@ -3134,6 +3134,7 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local analysis_tool
   local failed_output=""
   local setup_summary=""
   local setup_status=0
@@ -3165,11 +3166,11 @@ function ut_summary(){
     fi
   fi
 
-  if ! install_go_ut_analysis; then
+  if ! analysis_tool=$(install_go_ut_analysis); then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
-    go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    "${analysis_tool}" test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
     analysis_status=$?
   fi
 
