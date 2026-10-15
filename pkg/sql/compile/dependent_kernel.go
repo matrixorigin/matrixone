@@ -300,7 +300,23 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			case plan.Node_PRE_INSERT_SK:
 				op = constructPreInsertSk(n)
 			case plan.Node_INSERT:
-				if isExternalWriteInsert(n) {
+				if iceberg, checkErr := isIcebergAppendInsert(proc.Ctx, n); checkErr != nil {
+					return nil, checkErr
+				} else if iceberg {
+					// Use the execution process without mutating/copying the shared
+					// compiler. Overwrite and row-level DML need the same security,
+					// scan metadata and object-IO ownership as ordinary Iceberg DML.
+					writerCompile := &Compile{
+						proc: proc, db: c.db,
+						icebergScanPlanner: c.icebergScanPlanner,
+						icebergScanPlans:   c.icebergScanPlans,
+					}
+					var nodes []*plan.Node
+					if c.anal != nil && c.anal.qry != nil {
+						nodes = c.anal.qry.Nodes
+					}
+					op, err = writerCompile.constructIcebergInsert(nodes, n)
+				} else if isExternalWriteInsert(n) {
 					op, err = constructExternalInsert(proc, n, c.e, externalInsertStmtTime(proc, c.startAt))
 				} else {
 					op, err = constructInsert(proc, n, c.e, false)
