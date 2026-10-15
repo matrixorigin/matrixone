@@ -41,13 +41,23 @@ const (
 	loadFirstLineSampleSize = 1 << 20
 )
 
+// Textual LOAD keeps TIME fields intact until the shared assignment cast owns
+// syntax, precision and range policy. The scan's TableDef retains the target
+// type for field preprocessing; only its physical column references are text.
+func loadTimeInputType(format string, typ plan.Type) plan.Type {
+	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	return typ
+}
+
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	var externalProject []*Expr
 	colToIndex := make(map[string]int32, 0)
 	for i, col := range tableDef.Cols {
 		if col.Name != catalog.FakePrimaryKeyColName {
 			colExpr := &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -79,7 +89,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: newTableDef.Cols[tbColIdx].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, newTableDef.Cols[tbColIdx].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -755,11 +765,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Parallel CSV staging converts file columns first. Enforce byte limits
-	// before defaults can read those assigned values, including the FK fallback.
+	// Enforce payload, TIME and MEDIUMINT assignment limits before defaults read
+	// assigned values, including parallel CSV staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
-			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
@@ -1002,7 +1013,7 @@ func getProjectNode(
 		}
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colListId),
@@ -1217,10 +1228,10 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || isMediumIntPlanType(typ) {
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || typ.Id == int32(types.T_time) || isMediumIntPlanType(typ) {
 			// The following assignment projection owns both conversion and
-			// width enforcement. An ordinary TINYTEXT cast here would silently
-			// truncate before strict/IGNORE assignment can inspect the payload.
+			// domain enforcement. An ordinary cast here would truncate BLOB/TEXT
+			// or clamp TIME/MEDIUMINT before assignment sees the original value.
 			ret = append(ret, planExpr)
 			continue
 		}
