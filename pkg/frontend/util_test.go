@@ -2511,6 +2511,27 @@ func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
 	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
 }
 
+func TestAggregateBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"select min(n_nationkey is null) as p from nation",
+		"select max(n_nationkey is null) as p from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, uint32(8), column.Length())
+		})
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string
