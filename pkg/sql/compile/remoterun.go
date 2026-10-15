@@ -2419,8 +2419,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
-	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
-		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 114")
+	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 115")
 	}
 	return nil
 }
@@ -2933,7 +2933,7 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	}
 	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"view metadata remote execution requires MORPC protocol version 114",
+			"view metadata remote execution requires MORPC protocol version 115",
 		)
 	}
 	return nil
