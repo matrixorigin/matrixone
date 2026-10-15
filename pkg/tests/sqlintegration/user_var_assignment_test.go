@@ -208,6 +208,7 @@ func TestUserVariableAssignmentCaseConditionHistory(t *testing.T) {
 				require.NoError(t, err)
 				rows, err := db.QueryContext(ctx, tc.query)
 				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
 				for row, expected := range tc.want {
 					require.True(t, rows.Next(), "missing result row %d", row)
 					var a, b, c int64
@@ -218,7 +219,6 @@ func TestUserVariableAssignmentCaseConditionHistory(t *testing.T) {
 				}
 				require.False(t, rows.Next(), "unexpected extra result row")
 				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
 
 				var a, b, c int64
 				require.NoError(t, db.QueryRowContext(ctx, "select @a, @b, @c").Scan(&a, &b, &c))
