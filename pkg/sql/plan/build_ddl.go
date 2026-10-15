@@ -4323,7 +4323,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			)
 		}
 		if err := RequirePersistedProtocolVersionForAuthoring(
-			ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion113,
+			ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion114,
 		); err != nil {
 			return err
 		}
