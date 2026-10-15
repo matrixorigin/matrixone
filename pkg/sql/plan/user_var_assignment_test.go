@@ -192,6 +192,19 @@ func TestUserVariableAssignmentRejectsReadBeforeWriteInWhere(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUserVariableAssignmentRejectsReadBeforeWriteInHaving(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(),
+		"select @a := @a + 1 from select_test.bind_select having @a < 2", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"reading a user variable in HAVING before its assignment projection")
+}
+
 func TestUserVariableAssignmentRejectsReadBeforeWriteInJoinOn(t *testing.T) {
 	for _, sql := range []string{
 		"select @a := @a + 1 from (select 1 as x) l join (select 1 as y) r on @a < 2",
@@ -348,7 +361,29 @@ func TestUserVariableAssignmentRejectsAggregateAndGeneratedColumn(t *testing.T) 
 	compiler := NewMockCompilerContext(true, newPlanTestProcess(t))
 	_, err = BuildPlan(compiler, create, false)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "user-variable assignment is not supported in generated column expressions")
+	require.Contains(t, err.Error(), "persisted table expressions")
+}
+
+func TestUserVariableAssignmentRejectsPersistedTableExpressions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "default", sql: "create table user_var_default (id int default (@ddl := 42))"},
+		{name: "check", sql: "create table user_var_check (id int, check ((@ddl := id) > 0))"},
+		{name: "alter default", sql: "alter table user_var_target add column v int default (@ddl := 42)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "persisted table expressions")
+		})
+	}
 }
 
 func TestSelectContainsUserVariableAssignmentAcrossStatements(t *testing.T) {

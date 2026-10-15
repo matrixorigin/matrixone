@@ -299,6 +299,19 @@ func rejectUserVarAssignmentInView(ctx context.Context, stmt tree.Statement) err
 	return rejectUserVarAssignmentInDML(ctx, stmt, "view definitions")
 }
 
+// rejectUserVarAssignmentInPersistedDDL is the admission fence for table
+// expressions that are stored in the catalog (DEFAULT, CHECK, generated and
+// other column definitions).  Those expressions are evaluated by later DML,
+// outside the SELECT projection owner that publishes user-variable state.
+// Rejecting the whole statement before binding also prevents a partially
+// updated table definition from being persisted.
+func rejectUserVarAssignmentInPersistedDDL(ctx context.Context, stmt tree.Statement, scope string) error {
+	if stmt == nil || !containsUserVarAssignmentValue(reflect.ValueOf(stmt), make(map[assignmentVisit]struct{})) {
+		return nil
+	}
+	return userVarAssignmentNotSupported(ctx, scope)
+}
+
 func validateUserVarAssignmentScope(
 	ctx context.Context,
 	clause *tree.SelectClause,
@@ -373,8 +386,18 @@ func validateUserVarAssignmentScope(
 			}
 		}
 	}
-	if clause.Having != nil && containsUserVarAssignment(clause.Having.Expr) {
-		return userVarAssignmentNotSupported(ctx, "HAVING")
+	if clause.Having != nil {
+		if containsUserVarAssignment(clause.Having.Expr) {
+			return userVarAssignmentNotSupported(ctx, "HAVING")
+		}
+		if hasAssignment {
+			for name := range userVariableReadsBeforeAssignment(clause.Having.Expr) {
+				if _, assigned := assignedUserVariables[name]; assigned {
+					return userVarAssignmentNotSupported(ctx,
+						"reading a user variable in HAVING before its assignment projection")
+				}
+			}
+		}
 	}
 	for _, definition := range clause.Windows {
 		if definition == nil || definition.Spec == nil {
