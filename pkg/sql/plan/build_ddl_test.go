@@ -584,7 +584,7 @@ func TestBuildCreateTableNativeUnicodeUniqueRequiresAuthoringProtocol(t *testing
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 
 	_, err = BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
-	require.ErrorContains(t, err, "protocol version 113")
+	require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", defines.MORPCVersion114))
 }
 
 func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
