@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +29,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUserVariableAssignmentValueCanonicalizesDecimalAndJSON(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+
+	decimalCases := []struct {
+		name string
+		typ  types.Type
+		add  func(*vector.Vector) error
+		want string
+	}{
+		{name: "decimal64", typ: types.New(types.T_decimal64, 10, 2), add: func(v *vector.Vector) error {
+			return vector.AppendFixed(v, types.Decimal64(123), false, mp)
+		}, want: "1.23"},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 2), add: func(v *vector.Vector) error {
+			d, err := types.ParseDecimal128("1.23", 38, 2)
+			if err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, d, false, mp)
+		}, want: "1.23"},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 76, 2), add: func(v *vector.Vector) error {
+			d, err := types.ParseDecimal256("1.23", 76, 2)
+			if err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, d, false, mp)
+		}, want: "1.23"},
+	}
+	for _, tc := range decimalCases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.typ)
+			defer v.Free(mp)
+			require.NoError(t, tc.add(v))
+			require.Equal(t, tc.want, userVariableAssignmentValue(v, 0))
+		})
+	}
+
+	v := vector.NewVec(types.T_json.ToType())
+	defer v.Free(mp)
+	encoded, err := bytejson.ParseJsonByteFromString(`{"answer":1}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(v, encoded, false, mp))
+	require.Equal(t, types.DecodeJson(encoded).String(), userVariableAssignmentValue(v, 0))
+}
 
 type userVariableAssignmentBatchProbe struct {
 	rowCounts []int
