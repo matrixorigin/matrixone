@@ -13865,6 +13865,22 @@ var supportedOthersBuiltIns = []FuncNew{
 	{functionId: TO_CALENDAR_INTERVAL, class: plan.Function_STRICT,
 		layout: STANDARD_FUNCTION, checkFn: fixedTypeMatch, Overloads: calendarIntervalOverloads()},
 	{
+		functionId: TIMESTAMPADD_SECOND_INTERVAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 1, args: []types.T{types.T_char}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 2, args: []types.T{types.T_text}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 3, args: []types.T{types.T_float32}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 4, args: []types.T{types.T_float64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 5, args: []types.T{types.T_decimal64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 6, args: []types.T{types.T_decimal128}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 7, args: []types.T{types.T_decimal256}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+		},
+	},
+	{
 		functionId: TO_INTERVAL_MICROSECOND,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,

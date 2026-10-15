@@ -881,17 +881,20 @@ const (
 
 	TO_CALENDAR_INTERVAL = 598
 
-	FUNCTION_END_NUMBER = 599
+	TIMESTAMPADD_SECOND_INTERVAL = 599
+
+	FUNCTION_END_NUMBER = 600
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"format_bytes":            FORMAT_BYTES,
-	"format_pico_time":        FORMAT_PICO_TIME,
-	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
-	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
-	"extractvalue":            EXTRACTVALUE,
-	"updatexml":               UPDATEXML,
+	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
+	"format_bytes":                 FORMAT_BYTES,
+	"format_pico_time":             FORMAT_PICO_TIME,
+	"to_interval_microsecond":      TO_INTERVAL_MICROSECOND,
+	"to_calendar_interval":         TO_CALENDAR_INTERVAL,
+	"extractvalue":                 EXTRACTVALUE,
+	"updatexml":                    UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,
