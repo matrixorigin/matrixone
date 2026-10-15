@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r14-2026-10-15`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r15-2026-10-16`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -250,4 +250,25 @@ The nine idempotent shared-function entries and catalog repair 4.0.15 are
 unchanged; this revision adds no execution, production or security scope.
 
 Independent Architecture and SQL/Planner approval of r14 remains pending.
+Mechanical rebase, protocol allocation and validation do not supply it.
+
+## r15 protocol allocation addendum (2026-10-16)
+
+Official main `99f52528308289e08ab6f07f87b0a54719b877a3` assigns MORPC 115
+to type-sensitive calendar DAY and truncating SECOND intervals. The governing
+`python-udf-current-stage-r15-2026-10-16` revision moves Python's single new
+capability to 116, with 115 as the immediate predecessor rejection case.
+Calendar normalization remains at 115 and native Unicode UNIQUE semantics at 114.
+Both remote-expression feature detectors and their distinct admission floors
+are retained after rebase.
+
+Shared revision publication and reads, cached/prepared/evaluator checks,
+actual remote-destination admission, receiver validation, catalog repair
+metadata and login compensation, and `GetPythonUdfStatus` all require Python
+capability 116. Predecessor-only and mixed 116/115 CNs are rejected before
+catalog mutation. Ordinary SQL UDFs retain their pre-floor legacy fallback.
+The nine idempotent shared-function entries and catalog repair 4.0.15 are
+unchanged; this revision adds no execution, production or security scope.
+
+Independent Architecture and SQL/Planner approval of r15 remains pending.
 Mechanical rebase, protocol allocation and validation do not supply it.
