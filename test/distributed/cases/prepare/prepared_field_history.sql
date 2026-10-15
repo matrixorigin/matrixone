@@ -372,6 +372,38 @@ SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
 DEALLOCATE PREPARE p_field_history;
 SET @field_condition = 1;
+-- Comparison consumers discard inferred binary contributions, not real declarations.
+PREPARE p_field_history FROM 'SELECT FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS greatest_f, FIELD(LEAST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''z''),''A'',''a'') AS least_f, FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS greatest_binary_f, FIELD(LEAST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''z''),''A'',''a'') AS least_binary_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS union_inferred_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT _binary '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS union_binary_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+-- A concrete first binary binding keeps its declaration without inferred history.
+PREPARE p_field_history FROM 'SELECT FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS first_binary_greatest_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS first_binary_union_f';
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+-- Set-operation CAST3 preserves branch declarations; SQL CAST stays opaque.
+SELECT FIELD(x,'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(x,'A','a') FROM (SELECT 'z' x UNION ALL SELECT _binary 'a') d WHERE x<>'z';
+SELECT FIELD(x,'A','a') FROM (SELECT _binary 'a' x UNION SELECT '') d WHERE x<>'';
+SELECT FIELD(x,'A','a') FROM (SELECT 'a' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(x,'A','a') FROM (SELECT CAST(_binary 'a' AS CHAR) x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(x,'A','a') FROM (SELECT CAST('a' AS BINARY(1)) x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(CAST(x AS CHAR),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(CAST(x AS BINARY(1)),'A','a') FROM (SELECT 'a' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(CONCAT_WS('',ELT(1,x)),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(CONCAT_WS('',ELT(1,CAST(x AS CHAR))),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+-- Byte transforms retain the TEXT representation they actually consumed.
+SELECT FIELD(LOWER(x),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+SELECT FIELD(CONCAT_WS('',LOWER(x)),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);

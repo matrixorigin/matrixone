@@ -223,6 +223,22 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 		{"concat_ws('',(select elt(1,x) from (select case when ? then lower(coalesce(?,null)) else null end x limit 1) d))", false, false, true, false},
 		{"concat_ws('',elt(1,(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select '') d where x<>'' limit 1)))", false, false, true, false},
 		{"concat_ws('',elt(1,(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select null) d where x<>'' limit 1)))", false, false, true, false},
+		{"greatest(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"greatest('',case when ? then lower(coalesce(?,null)) else null end)", false, false, true, false},
+		{"least(case when ? then lower(coalesce(?,null)) else null end,'z')", false, false, true, false},
+		{"least('z',case when ? then lower(coalesce(?,null)) else null end)", false, false, true, false},
+		{"greatest(case when ? then lower(coalesce(?,null)) else null end,_binary '')", false, true, true, false},
+		{"least(case when ? then lower(coalesce(?,null)) else null end,_binary 'z')", false, true, true, false},
+		{"greatest(case when ? then lower(coalesce(?,null)) else _binary '' end,'')", false, true, false, false},
+		{"least(case when ? then lower(coalesce(?,null)) else _binary '' end,'z')", false, true, false, false},
+		{"greatest(case when ? then ? else null end,'')", false, false, true, true},
+		{"least(case when ? then ? else null end,'z')", false, false, true, true},
+		{"greatest(case when ? then lower(coalesce(?,null)) else null end,1)", false, false, true, false},
+		{"least(case when ? then lower(coalesce(?,null)) else null end,1)", false, false, true, false},
+		{"greatest(elt(1,case when ? then lower(coalesce(?,null)) else null end),'')", false, false, true, false},
+		{"least(elt(1,case when ? then lower(coalesce(?,null)) else null end),'z')", false, false, true, false},
+		{"concat_ws('',greatest(case when ? then lower(coalesce(?,null)) else null end,''))", false, false, true, false},
+		{"concat_ws('',least(case when ? then lower(coalesce(?,null)) else null end,'z'))", false, false, true, false},
 	} {
 		for _, textCondition := range []bool{false, true} {
 			name := "/numeric"
@@ -280,6 +296,33 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestPreparedFieldSetResolvedDeclaration(t *testing.T) {
+	// A concrete first binding can need no retained CASE facts. Identity
+	// relational nodes must still expose its real branch declaration.
+	for _, peer := range []string{"''", "null"} {
+		for _, order := range []string{"", " order by x"} {
+			for _, oid := range []types.T{types.T_varchar, types.T_blob} {
+				t.Run(peer+order+"/"+oid.String(), func(t *testing.T) {
+					sql := "select field(concat_ws('',elt(1,(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select " + peer + ") d where x<>''" + order + " limit 1))),'A','a')"
+					ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: oid.ToType()}}
+					values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: "a", SourceType: bindings[1].Type, HasSourceType: true}}
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					require.NoError(t, err)
+					require.Nil(t, bound.FieldTypes)
+					field := findPlanFunctionExpr(bound.Plan, "field")
+					require.NotNil(t, field)
+					got := types.StaticStringDomain(makeTypeByPlan2Expr(field.GetF().Args[0]))
+					require.Equal(t, oid == types.T_blob, got == types.StringDomainBinary)
+				})
+			}
 		}
 	}
 }

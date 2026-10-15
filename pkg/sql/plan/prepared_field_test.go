@@ -94,6 +94,18 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 		{"select field(coalesce('a', 'x'), 'A', 'a')", false},
 		{"select field(nullif('a', _binary 'x'), 'A', 'a')", false},
 		{"select field(x, 'A', 'a') from (select coalesce('a', _binary 'x') x limit 1) d", true},
+		{"select field(x,'A','a') from (select _binary 'a' x union all select '') d where x<>''", true},
+		{"select field(x,'A','a') from (select 'z' x union all select _binary 'a') d where x<>'z'", true},
+		{"select field(x,'A','a') from (select _binary 'a' x union select '') d where x<>''", true},
+		{"select field(x,'A','a') from (select 'a' x union all select '') d where x<>''", false},
+		{"select field(x,'A','a') from (select cast(_binary 'a' as char) x union all select '') d where x<>''", false},
+		{"select field(x,'A','a') from (select cast('a' as binary(1)) x union all select '') d where x<>''", true},
+		{"select field(cast(x as char),'A','a') from (select _binary 'a' x union all select '') d where x<>''", false},
+		{"select field(cast(x as binary(1)),'A','a') from (select 'a' x union all select '') d where x<>''", true},
+		{"select field(concat_ws('',elt(1,x)),'A','a') from (select _binary 'a' x union all select '') d where x<>''", true},
+		{"select field(concat_ws('',elt(1,cast(x as char))),'A','a') from (select _binary 'a' x union all select '') d where x<>''", false},
+		{"select field(lower(x),'A','a') from (select _binary 'A' x union all select '') d where x<>''", false},
+		{"select field(concat_ws('',lower(x)),'A','a') from (select _binary 'A' x union all select '') d where x<>''", false},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
@@ -105,6 +117,35 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 			require.NotNil(t, field)
 			got := types.StaticStringDomain(makeTypeByPlan2Expr(field.GetF().Args[0])) == types.StringDomainBinary
 			require.Equal(t, tc.binary, got, field.String())
+		})
+	}
+}
+
+func TestPreparedFieldSetConversionSource(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		explicit, folded bool
+	}{
+		{"set conversion", false, false},
+		{"folded set conversion", false, true},
+		{"SQL declaration", true, false},
+		{"folded SQL declaration", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			target := types.T_text.ToType()
+			converted, err := appendSetOperationCastBeforeExpr(ctx, makePlan2StringConstExprWithType("a", true), makePlan2Type(&target))
+			require.NoError(t, err)
+			require.True(t, isCastOverload(converted, 3))
+			converted.GetF().SyntaxExplicitCast = tc.explicit
+			require.True(t, isExplicitPreparedCast(converted), "do not change the shared numeric-specialization predicate")
+			if tc.folded {
+				folded := makePlan2StringConstExprWithType("a")
+				folded.GetLit().Src = converted
+				converted = folded
+			}
+			r := newPreparedFieldStringResolver(&baseBinder{sysCtx: ctx})
+			require.Equal(t, !tc.explicit, r.expr(converted).kind == fieldStringBinary)
 		})
 	}
 }
