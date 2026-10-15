@@ -439,6 +439,7 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o.N_NATIONKEY,("+arm+" union "+arm+") from NATION o")
 	require.NoError(t, err)
 	single, memberGroups, outerGroups := false, false, false
+	identities := 0
 	seen := make(map[int32]bool)
 	var visit func(int32)
 	visit = func(id int32) {
@@ -447,6 +448,16 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 		}
 		seen[id] = true
 		node := p.GetQuery().Nodes[id]
+		if node.NodeType == planpb.Node_WINDOW {
+			for _, expr := range node.WinSpecList {
+				window := expr.GetW()
+				if window.WindowFunc.GetF().Func.ObjName == "row_number" {
+					require.Empty(t, window.PartitionBy)
+					require.Empty(t, window.OrderBy)
+					identities++
+				}
+			}
+		}
 		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE {
 			single = true
 			require.Len(t, node.OnList, 1)
@@ -466,4 +477,47 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 	require.True(t, single, "the final optimizer must preserve scalar cardinality checking")
 	require.True(t, memberGroups, "membership must retain outer identity, marker and visible set key")
 	require.True(t, outerGroups, "final scalar aggregation must partition by outer identity")
+	require.Equal(t, 1, identities, "outer identity must survive optimization as a global WINDOW")
+}
+
+func TestScalarSetCompositionRetainsOuterProducer(t *testing.T) {
+	arm := "select cast(i.N_NATIONKEY as double) from NATION i where i.N_NATIONKEY>o.N_NATIONKEY"
+	scalar := "(" + arm + " union " + arm + ")"
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"select o.r,"+scalar+","+scalar+" from (select N_NATIONKEY,rand() as r from NATION) o")
+	require.NoError(t, err)
+	identities, producers, cardinalityChecks := 0, 0, 0
+	var visit func(int32)
+	visit = func(id int32) {
+		node := p.GetQuery().Nodes[id]
+		if node.NodeType == planpb.Node_WINDOW {
+			for _, expr := range node.WinSpecList {
+				window := expr.GetW()
+				if window.WindowFunc.GetF().Func.ObjName == "row_number" {
+					require.Empty(t, window.PartitionBy)
+					identities++
+				}
+			}
+		}
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE {
+			cardinalityChecks++
+		}
+		for _, expr := range node.ProjectList {
+			require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+				if f := e.GetF(); f != nil && f.Func.ObjName == "rand" {
+					producers++
+				}
+				return nil
+			}))
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, step := range p.GetQuery().Steps {
+		visit(step)
+	}
+	require.Equal(t, 2, identities)
+	require.Equal(t, 2, cardinalityChecks)
+	require.Equal(t, 1, producers, "each scalar must consume the same outer producer without duplicating volatile evaluation")
 }

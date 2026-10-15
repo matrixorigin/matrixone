@@ -312,6 +312,94 @@ func TestSetOperationSignedZero(t *testing.T) {
 						}
 					})
 				}
+				t.Run("scalar-outer-shapes", func(t *testing.T) {
+					for _, shape := range []string{
+						"predicate_outer o",
+						"(select id,a,b,f from predicate_outer) o",
+						"(select id,a+0 as a,b,f from predicate_outer) o",
+						"predicate_outer o inner join predicate_outer p on p.id=o.id",
+						"predicate_outer o left join predicate_outer p on p.id=o.id and p.id<3",
+						"(select id,a,b,f from predicate_outer union all select id,a,b,f from predicate_outer) o",
+						"(select distinct id,a,b,f from predicate_outer) o",
+					} {
+						t.Run(shape, func(t *testing.T) {
+							arm := "select f from predicate_inner i where i.a=o.a or i.b=o.b"
+							q := "select o.id,cast((" + arm + " union " + arm + ") as varchar) from " + shape + " order by o.id"
+							rows, err := conn.QueryContext(ctx, q)
+							require.NoError(t, err, q)
+							want := []string{"1:-0", "2:0", "3:1", "4:NULL", "5:NULL"}
+							if shape == "(select id,a,b,f from predicate_outer union all select id,a,b,f from predicate_outer) o" {
+								want = []string{"1:-0", "1:-0", "2:0", "2:0", "3:1", "3:1", "4:NULL", "4:NULL", "5:NULL", "5:NULL"}
+							}
+							require.Equal(t, want, readWindowNullRows(t, rows))
+						})
+					}
+				})
+				t.Run("scalar-composition", func(t *testing.T) {
+					first := "select f from predicate_inner i where i.a=o.a or i.b=o.b"
+					first = "(" + first + " union " + first + ")"
+					second := "select f from predicate_inner j where j.a=o.a and o.b>10"
+					second = "(" + second + " union " + second + ")"
+					for _, tc := range []struct {
+						name, q string
+						want    []string
+					}{
+						{"two-select", "select id,cast(" + first + " as varchar),cast(" + second + " as varchar) from predicate_outer o order by id", []string{"1:-0:NULL", "2:0:0", "3:1:1", "4:NULL:NULL", "5:NULL:NULL"}},
+						{"where-then-select", "select id,cast(" + second + " as varchar) from predicate_outer o where " + first + " is not null order by id", []string{"1:NULL", "2:0", "3:1"}},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							rows, err := conn.QueryContext(ctx, tc.q)
+							require.NoError(t, err, tc.q)
+							require.Equal(t, tc.want, readWindowNullRows(t, rows))
+						})
+					}
+				})
+				t.Run("scalar-stream-identity", func(t *testing.T) {
+					arm := "select f from predicate_inner i where i.a=o.a or i.b=o.b"
+					scalar := "cast((" + arm + " union " + arm + ") as varchar)"
+					for _, tc := range []struct {
+						name, q string
+						want    []string
+					}{
+						{"one-to-many", "select o.id," + scalar + " from predicate_outer o join predicate_inner p on p.a=o.a order by o.id", []string{"1:-0", "1:-0", "2:0", "3:1"}},
+						{"left-null", "select o.id,p.id," + scalar + " from predicate_outer o left join predicate_outer p on p.id=o.id and p.id<3 order by o.id", []string{"1:1:-0", "2:2:0", "3:NULL:1", "4:NULL:NULL", "5:NULL:NULL"}},
+						{"aliases", "select o.id,o.a,o.other_a," + scalar + " from (select id,a,a as other_a,b,f from predicate_outer) o order by o.id,o.other_a", []string{"1:1:1:-0", "2:2:2:0", "3:3:3:1", "4:NULL:NULL:NULL", "5:9:9:NULL"}},
+						{"existing-window", "select o.id,row_number() over(order by o.id)," + scalar + " from predicate_outer o order by o.id", []string{"1:1:-0", "2:2:0", "3:3:1", "4:4:NULL", "5:5:NULL"}},
+						{"derived-window", "select o.id,o.rn," + scalar + " from (select id,a,b,row_number() over(order by id) rn from predicate_outer) o order by o.id", []string{"1:1:-0", "2:2:0", "3:3:1", "4:4:NULL", "5:5:NULL"}},
+						{"empty-outer", "select o.id," + scalar + " from (select id,a,b,f from predicate_outer where id<0) o", nil},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							rows, err := conn.QueryContext(ctx, tc.q)
+							require.NoError(t, err, tc.q)
+							require.Equal(t, tc.want, readWindowNullRows(t, rows))
+						})
+					}
+					first := "select f from predicate_inner i where i.a=o.a or i.b=o.b"
+					first = "(" + first + " union " + first + ")"
+					second := "select f from predicate_inner j where j.a=o.a and o.b>10"
+					second = "(" + second + " union " + second + ")"
+					rows, err := conn.QueryContext(ctx, "select id,cast("+second+" as varchar),cast("+first+" as varchar) from predicate_outer o order by id")
+					require.NoError(t, err)
+					require.Equal(t, []string{"1:NULL:-0", "2:0:0", "3:1:1", "4:NULL:NULL", "5:NULL:NULL"}, readWindowNullRows(t, rows))
+					rows, err = conn.QueryContext(ctx, "select id,cast("+first+" as varchar) from predicate_outer o where "+second+" is not null order by id")
+					require.NoError(t, err)
+					require.Equal(t, []string{"2:0", "3:1"}, readWindowNullRows(t, rows))
+				})
+				t.Run("scalar-identity-across-batches", func(t *testing.T) {
+					// One row beyond the standard batch boundary; identity must not
+					// restart when the global WINDOW receives another input batch.
+					_, err := conn.ExecContext(ctx, "create table scalar_outer_batches(id int,a int,b int)")
+					require.NoError(t, err)
+					_, err = conn.ExecContext(ctx, "insert into scalar_outer_batches select result,3,30 from generate_series(1,8193) g")
+					require.NoError(t, err)
+					q := "select count(*),count(v),sum(v) from (select (select f from predicate_inner i where i.a=o.a or i.b=o.b union select f from predicate_inner i where i.a=o.a or i.b=o.b) v from scalar_outer_batches o) u"
+					var rows, values int
+					var sum float64
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&rows, &values, &sum))
+					require.Equal(t, 8193, rows)
+					require.Equal(t, 8193, values)
+					require.Equal(t, float64(8193), sum)
+				})
 				t.Run("scalar-set-boundaries", func(t *testing.T) {
 					_, err := conn.ExecContext(ctx, "insert into predicate_inner values(4,50,-0e0)")
 					require.NoError(t, err)
