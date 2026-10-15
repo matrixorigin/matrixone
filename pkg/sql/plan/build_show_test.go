@@ -299,6 +299,9 @@ func TestCoverage_buildShowTables(t *testing.T) {
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
+		"show full tables from tpch",
+		"show tables from tpch where Tables_in_tpch = 'nation'",
+		"show full tables from tpch where Table_type = 'VIEW'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }

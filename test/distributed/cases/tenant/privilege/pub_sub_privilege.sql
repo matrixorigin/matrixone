@@ -8,7 +8,9 @@ create database pub_db_priv_test;
 use pub_db_priv_test;
 create table t1(a int, b varchar(50));
 insert into t1 values(1, 'hello'),(2, 'world'),(3, 'test');
-create publication pub_priv_test database pub_db_priv_test account all;
+create table hidden_publisher_table(a int);
+create publication pub_priv_test database pub_db_priv_test table t1 account all;
+create cluster table mo_catalog.metadata_show_cluster(a int);
 
 -- create tenant
 create account acc_priv_test admin_name 'root' identified by '111';
@@ -16,6 +18,11 @@ create account acc_priv_test admin_name 'root' identified by '111';
 -- acc_priv_test admin: subscribe and setup role/user
 -- @session:id=1&user=acc_priv_test:root&password=111
 create database sub_db from sys publication pub_priv_test;
+show tables from mo_catalog like 'mo_tables';
+show tables from mo_catalog like 'metadata_show_cluster';
+-- A local same-name table in another tenant is never made visible by the publisher.
+create database pub_db_priv_test;
+create table pub_db_priv_test.t1(a int);
 
 -- admin can query subscription db
 select * from sub_db.t1 order by a;
@@ -32,12 +39,14 @@ grant connect on account * to sub_reader_role;
 -- @session:id=2&user=acc_priv_test:sub_reader:sub_reader_role&password=111
 select count(*) from information_schema.tables where table_schema = 'sub_db';
 select count(*) from information_schema.columns where table_schema = 'sub_db';
+show tables from sub_db;
+show columns from sub_db.t1;
+show create table sub_db.t1;
 -- @session
 
 -- grant metadata and data privileges through the reader's active role
 -- @session:id=1&user=acc_priv_test:root&password=111
 grant show databases on account * to sub_reader_role;
-grant show tables on database sub_db to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
 -- @session
 
@@ -47,6 +56,12 @@ select * from sub_db.t1 order by a;
 use sub_db;
 select * from t1 order by a;
 show tables;
+show full tables from sub_db;
+show columns from sub_db.t1;
+show create table sub_db.t1;
+show tables from sub_db like 'hidden%';
+show columns from sub_db.hidden_publisher_table;
+show columns from pub_db_priv_test.t1;
 select table_schema, table_name from information_schema.tables
 where table_schema = 'sub_db' order by table_name;
 select table_schema, table_name, column_name, ordinal_position from information_schema.columns
@@ -58,11 +73,13 @@ where table_schema = 'sub_db' order by table_name, ordinal_position;
 drop user sub_reader;
 drop role sub_reader_role;
 drop database sub_db;
+drop database pub_db_priv_test;
 -- @session
 
 -- cleanup: sys tenant
 drop account acc_priv_test;
 drop publication pub_priv_test;
+drop table mo_catalog.metadata_show_cluster;
 drop database pub_db_priv_test;
 
 set global enable_privilege_cache = on;

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -362,6 +363,18 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
 		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+
+	// Historical rows cannot be matched against current object grants. A
+	// subscription is admitted by subscriber-local broad authorization and keeps
+	// the publication allowlist below instead of using publisher role/object IDs.
+	if stmt.AtTsExpr == nil && sub == nil {
+		protocol := int64(defines.MORPCMinVersion)
+		if requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
+			protocol = defines.MORPCVersion41
+		}
+		sql = sysview.MetadataVisibilityCTE(protocol) + sql
+		sql += fmt.Sprintf(" and (EXISTS (SELECT 1 FROM __mo_visible_tables visible WHERE visible.account_id = mo_tables.account_id AND visible.rel_id = mo_tables.rel_id) or (account_id = 0 and (%s)))", mustShowTable+clusterTable)
+	}
 
 	// Do not show views in sub-db
 	if sub != nil {
