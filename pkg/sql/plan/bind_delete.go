@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -436,6 +437,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				if err != nil {
 					return 0, err
 				}
+				if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+					leftExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{leftExpr})
+					if err != nil {
+						return 0, err
+					}
+				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
 				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
@@ -456,11 +463,21 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					}
 				}
 
-				fnName := "serial"
-				if !idxDef.Unique {
-					fnName = "serial_full"
+				if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+					leftExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+					if err != nil {
+						return 0, err
+					}
+				} else {
+					fnName := "serial"
+					if !idxDef.Unique {
+						fnName = "serial_full"
+					}
+					leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+					if err != nil {
+						return 0, err
+					}
 				}
-				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
 			}
 
 			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{

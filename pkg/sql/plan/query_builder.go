@@ -6145,12 +6145,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							// Keep branch-local duplicate elimination after
 							// grouping NULL normalization to reduce rows before
@@ -6167,7 +6167,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  selectClause.Having,
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -7580,6 +7580,32 @@ func rewriteRollupWindowSelect(
 	return rewritten, hasWindow
 }
 
+// ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
+// to every branch so aggregate binding stays identical for shared input plans.
+// Keep fresh wrappers because a CTE declaration can be bound more than once.
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
+		return nil
+	}
+	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
+	if having != nil {
+		result.Expr = having.Expr
+	}
+	if guardEmptyInput {
+		count := &tree.FuncExpr{
+			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
+			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
+		}
+		positive := tree.NewComparisonExpr(tree.GREAT_THAN, count, tree.NewNumVal(int64(0), "0", false, tree.P_int64))
+		if result.Expr == nil {
+			result.Expr = positive
+		} else {
+			result.Expr = tree.NewAndExpr(tree.NewParentExpr(result.Expr), positive)
+		}
+	}
+	return result
+}
+
 func rewriteRollupWindowSelectWithHeadingProvenance(
 	ctx *BindContext,
 	selectClause *tree.SelectClause,
@@ -7620,18 +7646,12 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 	groupingAliases := rollupWindowGroupingAliases(selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
 	branchAliases := groupingAliases
 	if selectClause.Having != nil {
-		branchAliases = selectClause.Exprs
-	}
-	rewriteState.addBranchAliasExprs(branchAliases)
-	var rewrittenHaving *tree.Where
-	if selectClause.Having != nil {
 		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
 		// source columns (including ambiguity) before SELECT aliases. Hidden
 		// projections retain the original non-window aliases for the fallback.
-		nextHaving := *selectClause.Having
-		nextHaving.RollupHaving = true
-		rewrittenHaving = &nextHaving
+		branchAliases = selectClause.Exprs
 	}
+	rewriteState.addBranchAliasExprs(branchAliases)
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
 		return nil, true, nil
@@ -7652,6 +7672,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		}
 	}
 	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
@@ -7677,7 +7698,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: rewrittenHaving,
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}
