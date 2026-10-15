@@ -670,11 +670,6 @@ func TestSelectSharedLockParse(t *testing.T) {
 			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE NOWAIT",
 			want: "select id from t where id = 1 for share nowait",
 		},
-		{
-			name: "for share skip locked",
-			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE SKIP LOCKED",
-			want: "select id from t where id = 1 for share skip locked",
-		},
 	}
 
 	for _, test := range tests {
@@ -691,8 +686,6 @@ func TestSelectSharedLockParse(t *testing.T) {
 				require.Equal(t, tree.SelectLockForUpdateNoWait, selectStmt.SelectLockInfo.LockType)
 			case "for share nowait":
 				require.Equal(t, tree.SelectLockForShareNoWait, selectStmt.SelectLockInfo.LockType)
-			case "for share skip locked":
-				require.Equal(t, tree.SelectLockForShareSkipLocked, selectStmt.SelectLockInfo.LockType)
 			default:
 				require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
 			}
@@ -711,6 +704,7 @@ func TestSelectLockModifiersRemainUsableAsIdentifiers(t *testing.T) {
 func TestSelectLockRejectsUnsupportedOrConflictingModifiers(t *testing.T) {
 	for _, sql := range []string{
 		"SELECT id FROM t FOR UPDATE SKIP LOCKED",
+		"SELECT id FROM t FOR SHARE SKIP LOCKED",
 		"SELECT id FROM t FOR UPDATE NOWAIT NOWAIT",
 		"SELECT id FROM t FOR SHARE NOWAIT SKIP LOCKED",
 	} {

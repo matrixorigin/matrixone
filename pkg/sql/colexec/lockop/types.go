@@ -59,7 +59,6 @@ type LockOptions struct {
 	admissionOnly            bool
 	admissionResult          *lock.Result
 	noWait                   bool
-	skipLocked               bool
 	waitPolicy               *lock.WaitPolicy
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
@@ -122,7 +121,6 @@ type lockTarget struct {
 	changeDef                    bool
 	mode                         lock.LockMode
 	noWait                       bool
-	skipLocked                   bool
 	lockRows                     *plan.Expr
 	lockTableAtTheEnd            bool
 }
@@ -142,11 +140,7 @@ type hasNewVersionInRangeFunc func(
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {
-	parker *types.Packer
-	// skipLockedOutput is the operator-owned copy returned to downstream
-	// consumers. It remains live until the next Call or operator cleanup so a
-	// consumer may finish using the borrowed batch before it is reclaimed.
-	skipLockedOutput     *batch.Batch
+	parker               *types.Packer
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc

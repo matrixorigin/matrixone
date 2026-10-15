@@ -1152,10 +1152,8 @@ func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.
 	for _, tc := range []struct {
 		name   string
 		noWait bool
-		skip   bool
 	}{
 		{name: "NOWAIT", noWait: true},
-		{name: "SKIP LOCKED", skip: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
@@ -1174,7 +1172,7 @@ func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.
 			originalRoot := source.RootOp
 			target := &plan.LockTarget{
 				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
-				Mode: lockpb.LockMode_Shared, NoWait: tc.noWait, SkipLocked: tc.skip,
+				Mode: lockpb.LockMode_Shared, NoWait: tc.noWait,
 			}
 
 			got, err := c.compileLock(&plan.Node{LockTargets: []*plan.LockTarget{target}}, []*Scope{source})
@@ -1200,7 +1198,7 @@ func TestCompileRejectsOptimisticNonBlockingBeforeScopeConstruction(t *testing.T
 		Nodes: []*plan.Node{{
 			NodeType: plan.Node_LOCK_OP,
 			LockTargets: []*plan.LockTarget{{
-				TableId: 42, Mode: lockpb.LockMode_Shared, SkipLocked: true,
+				TableId: 42, Mode: lockpb.LockMode_Shared, NoWait: true,
 			}},
 		}},
 	}}}
