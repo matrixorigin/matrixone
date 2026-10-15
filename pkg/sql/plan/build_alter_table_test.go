@@ -959,6 +959,87 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
 }
 
+func TestAlterTableInplaceForeignKeysUseFinalTableName(t *testing.T) {
+	for _, tc := range []struct {
+		name, options, finalName, parent string
+		mutations                        []string
+	}{
+		{"external rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"external rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a), RENAME TO renamed", "renamed", "fk_parent", []string{"insert"}},
+		{"self rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"insert"}},
+		{"self rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO renamed", "renamed", "t1", []string{"insert"}},
+		{"ordered replacement", "RENAME TO renamed, DROP FOREIGN KEY fk_old, ADD CONSTRAINT fk_old FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"delete", "insert"}},
+		{"ordered add drop", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), DROP FOREIGN KEY fk_new", "renamed", "t1", []string{"insert", "delete"}},
+		{"quoted target", "RENAME TO `renamed``t1`, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed`t1", "t1", []string{"insert"}},
+		{"no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"checks disabled rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"checks disabled no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"no-op rename", "RENAME TO t1, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "t1", "t1", []string{"insert"}},
+		{"trailing no-op rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO t1", "renamed", "t1", []string{"insert"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			if strings.HasPrefix(tc.name, "checks disabled") {
+				originalContext := mock.ctxt
+				mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "foreign_key_checks" {
+						return int64(0), nil
+					}
+					return originalContext.ResolveVariable(name, system, global)
+				}
+			}
+			table := mock.ctxt.tables["t1"]
+			table.Cols[1].Typ = table.Cols[0].Typ
+			table.Fkeys = []*plan.ForeignKeyDef{{Name: "fk_old", Cols: []uint64{table.Cols[1].ColId}, ForeignCols: []uint64{table.Cols[0].ColId}}}
+			parent := DeepCopyTableDef(table, true)
+			parent.Name, parent.TblId = "fk_parent", table.TblId+10000
+			parent.Fkeys = nil
+			mock.ctxt.tables[parent.Name] = parent
+			mock.ctxt.objects[parent.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: parent.Name, Obj: int64(parent.TblId)}
+
+			logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 "+tc.options)
+			require.NoError(t, err)
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			require.Equal(t, "t1", alter.TableDef.Name, "execution must still open the original relation")
+			require.Equal(t, "t1", table.Name)
+			require.Len(t, table.Fkeys, 1, "planning must not mutate catalog state")
+			require.Len(t, alter.DetectSqls, 1)
+			finalIdent := "`tpch`.`" + strings.ReplaceAll(tc.finalName, "`", "``") + "`"
+			require.Contains(t, alter.DetectSqls[0], "from "+finalIdent)
+			if tc.finalName != "t1" {
+				require.NotContains(t, alter.DetectSqls[0], "`tpch`.`t1`")
+			}
+			if tc.parent == "t1" {
+				require.Equal(t, 2, strings.Count(alter.DetectSqls[0], "from "+finalIdent))
+			} else {
+				require.Contains(t, alter.DetectSqls[0], "from `tpch`.`fk_parent`")
+			}
+			parsed, err := mysql.ParseOne(t.Context(), alter.DetectSqls[0], 1)
+			require.NoError(t, err)
+			parsed.Free()
+			for _, action := range alter.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					require.Equal(t, tc.parent, fk.TableName, "declaration binding retains its original parent")
+				}
+			}
+			updates := alter.UpdateFkSqls
+			want := len(tc.mutations)
+			if tc.finalName != "t1" {
+				want += 2
+			}
+			require.Len(t, updates, want)
+			for i, mutation := range tc.mutations {
+				require.True(t, strings.HasPrefix(updates[i], mutation), updates[i])
+			}
+			if tc.finalName != "t1" {
+				require.Contains(t, updates[want-2], "set table_name = ")
+				require.Contains(t, updates[want-1], "set refer_table_name = ")
+			}
+		})
+	}
+}
+
 func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) {
 	newMock := func() *MockOptimizer {
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
