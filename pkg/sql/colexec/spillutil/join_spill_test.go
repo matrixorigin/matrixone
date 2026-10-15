@@ -360,10 +360,9 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	initTestSpillFiles(engine, []*os.File{
 		writeBuildFile(proc, t.Name(), build),
 	}, int64(len(values)))
-	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, result, err := engine.RebuildHashmap(
 		proc,
-		analyzer,
+		process.NewAnalyzer(0, false, false, "test"),
 	)
 	require.NoError(t, err)
 	func() {
@@ -377,58 +376,7 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, BucketQueueEmpty, result)
-	require.False(t, engine.recoveryStarted.IsZero())
-	require.False(t, engine.recoveryEnded.Before(engine.recoveryStarted))
 	engine.Cleanup(proc)
-	require.True(t, engine.recoveryStarted.IsZero())
-	require.True(t, engine.recoveryEnded.IsZero())
-	extra := analyzer.GetOpStats().ExtraStats
-	require.EqualValues(t, 1, extra["JoinSpillRecoveryBuckets"])
-	require.EqualValues(t, 1, extra["JoinSpillRecoveryRecords"])
-	require.EqualValues(t, 1, extra["JoinSpillRecoveryAdviceChecks"])
-	require.EqualValues(t, 1, extra["JoinSpillCopySamples"])
-	require.EqualValues(t, 1, extra["MemoryGrowthSamples"], "ordinary copy only needs the pre-copy decision")
-	require.Zero(t, extra["JoinSpillPostCopyExpansionChecks"])
-	require.EqualValues(t, build.Size(), extra["JoinSpillReadSampleBytes"])
-	require.EqualValues(t, len(values), extra["JoinSpillReadSampleRows"])
-	require.Positive(t, extra["JoinSpillBuildMapNanos"])
-	engine.Cleanup(proc)
-	require.EqualValues(t, 1, extra["JoinSpillRecoveryRecords"], "cleanup publishes once")
-}
-
-func TestRebuildHashmapRechecksExpandedCopy(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	const rows = 4096
-	build := batch.NewWithSize(2)
-	defer build.Clean(proc.Mp())
-	var err error
-	build.Vecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(7), rows, proc.Mp())
-	require.NoError(t, err)
-	build.Vecs[1], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("abcdefghijklmnop"), rows, proc.Mp())
-	require.NoError(t, err)
-	build.SetRowCount(rows)
-	const threshold = 200_000 // byte threshold, crossed when the second record completes the retained tail
-	require.Less(t, int64(build.Size()), int64(threshold))
-	engine := newExactTestSpillEngine(t, SpillEngineConfig{
-		BuildKeyExprs: makeTestKeyExpr(), NeedsBuildForEmptyProbe: true, SpillThreshold: threshold,
-	})
-	defer engine.Cleanup(proc)
-	initTestSpillFiles(engine, []*os.File{writeBuildRecords(proc, t.Name(), build, build)}, 2*rows)
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	jm, result, err := engine.RebuildHashmap(proc, analyzer)
-	require.NoError(t, err)
-	if jm != nil {
-		defer jm.Free()
-	}
-	require.Nil(t, jm)
-	require.Equal(t, BucketReSpilled, result)
-	require.EqualValues(t, 1, analyzer.GetOpStats().ExtraStats["JoinSpillPostCopyExpansionChecks"])
-	var recovered int64
-	for _, bucket := range engine.buckets {
-		recovered += bucket.BuildRows
-	}
-	require.EqualValues(t, 2*rows, recovered)
 }
 
 func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
@@ -437,13 +385,13 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	builder.Batches.MemSize = 120_000
 
 	spill, adaptive, err := shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, nil, &groupingSeen, nil,
+		builder, nil, math.MaxInt64, nil, &groupingSeen,
 	)
 	require.NoError(t, err)
 	require.False(t, spill)
 	require.False(t, adaptive)
 
-	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil, &groupingSeen, nil)
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil, &groupingSeen)
 	require.NoError(t, err)
 	require.True(t, spill)
 	require.False(t, adaptive)
@@ -460,7 +408,7 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	require.NoError(t, err)
 
 	spill, adaptive, err = shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, first, &groupingSeen, nil,
+		builder, nil, math.MaxInt64, first, &groupingSeen,
 	)
 	require.NoError(t, err)
 	require.True(t, spill)

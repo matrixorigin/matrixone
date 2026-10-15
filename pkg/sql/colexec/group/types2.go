@@ -969,7 +969,6 @@ func (group *Group) logDiagnostics(proc *process.Process, pipelineFailed bool, e
 		zap.String("query_id", proc.QueryId()),
 		zap.String("operator", thisOperatorName),
 		zap.Int("node_idx", group.GetIdx()),
-		zap.String("worker", fmt.Sprintf("%p", group)),
 		zap.Bool("pipeline_failed", pipelineFailed),
 		zap.Error(err),
 		zap.Any("extra_stats", extra))

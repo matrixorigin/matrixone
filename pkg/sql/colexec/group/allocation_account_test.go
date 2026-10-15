@@ -594,7 +594,6 @@ func TestGroupAdaptiveSpillProjectsRecoveryGrowth(t *testing.T) {
 	require.True(t, spill)
 	require.Equal(t, int64(1),
 		analyzer.GetOpStats().ExtraStats["GroupAdaptiveSpillTriggers"])
-	require.EqualValues(t, 1, analyzer.GetOpStats().ExtraStats["MemoryGrowthSamples"])
 
 	ctr.releaseMemoryGrowthParticipant()
 	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)

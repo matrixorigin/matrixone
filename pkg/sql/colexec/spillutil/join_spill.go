@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -35,16 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -1482,10 +1478,9 @@ func (p *ReusableBufferPool) Release(proc *process.Process) {
 
 // SpillEngineConfig configures a SpillEngine with operator-specific parameters.
 type SpillEngineConfig struct {
-	DiagnosticNodeIdx int          // plan node identity for the worker's terminal summary
-	BuildKeyExprs     []*plan.Expr // key exprs for hash partitioning during re-spill
-	ProbeKeyExprs     []*plan.Expr // probe keys admitted before expression evaluation
-	SpillThreshold    int64        // memory threshold for re-spill; 0 disables
+	BuildKeyExprs  []*plan.Expr // key exprs for hash partitioning during re-spill
+	ProbeKeyExprs  []*plan.Expr // probe keys admitted before expression evaluation
+	SpillThreshold int64        // memory threshold for re-spill; 0 disables
 	// AdaptiveMemory additionally bounds rebuild growth by the live statement,
 	// CN, and physical-memory headroom. SpillThreshold remains an independent
 	// early bound; adaptive policy can only make re-spill earlier.
@@ -1526,17 +1521,11 @@ const (
 
 // SpillEngine owns the spill bucket queue and drives the probe-batch loop.
 type SpillEngine struct {
-	// Synchronous worker-owned diagnostics; no background reader or shared lock.
-	diagnosticStats      *process.OperatorStats
-	recoveryRecords      uint64
-	recoveryAdviceChecks uint64
-	recoveryStarted      time.Time
-	recoveryEnded        time.Time
-	cfg                  SpillEngineConfig
-	buckets              []SpillBucket
-	spillFS              spillFileServiceCache
-	allocation           *SpillAllocationAccount
-	allocationMP         *mpool.MPool
+	cfg          SpillEngineConfig
+	buckets      []SpillBucket
+	spillFS      spillFileServiceCache
+	allocation   *SpillAllocationAccount
+	allocationMP *mpool.MPool
 
 	// Current bucket state
 	buildReader      BucketReader
@@ -1905,7 +1894,6 @@ func shouldReSpillBeforeRetain(
 	threshold int64,
 	participant *process.ExecutionMemoryGrowthParticipant,
 	groupingSeen *bool,
-	timingStats *process.OperatorStats,
 ) (spill bool, adaptive bool, err error) {
 	if builder == nil {
 		return false, false, nil
@@ -1934,8 +1922,7 @@ func shouldReSpillBeforeRetain(
 	if participant == nil {
 		return spill, false, nil
 	}
-	// The caller selects records; nil keeps every other decision uninstrumented.
-	limit, err := participant.RetainedLimitWithStats(uint64(retainedBytes), 0, timingStats)
+	limit, err := participant.RetainedLimit(uint64(retainedBytes))
 	if err != nil {
 		return false, false, err
 	}
@@ -1999,20 +1986,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		return nil, BucketSkip, nil
 	}
 
-	var stats *process.OperatorStats
-	if analyzer != nil {
-		stats = analyzer.GetOpStats()
-		e.diagnosticStats = stats
-		started := time.Now()
-		if e.recoveryStarted.IsZero() {
-			e.recoveryStarted = started
-		}
-		defer func() {
-			stats.AddExtraStat("JoinSpillRecoveryNanos", time.Since(started).Nanoseconds())
-			stats.AddExtraStat("JoinSpillRecoveryBuckets", 1)
-			e.recoveryEnded = time.Now()
-		}()
-	}
 	builder := &hashbuild.HashmapBuilder{}
 	// The rebuild builder is stack-owned until GetJoinMap detaches its durable
 	// state. Keep a panic-safe terminal guard: the outer pipeline recover cannot
@@ -2068,10 +2041,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	// once the hashmap commits, with this defer covering every unhappy path.
 	defer e.releaseScatterScratch()
 	reSpill := func(pending *batch.Batch) (BucketResult, error) {
-		if stats != nil {
-			started := time.Now()
-			defer func() { stats.AddExtraStat("JoinSpillRepartitionNanos", time.Since(started).Nanoseconds()) }()
-		}
 		// This builder can no longer choose resident growth. Its retained batches
 		// stay exact fixed usage until re-spill physically drains and frees them.
 		releaseMemoryGrowthParticipant()
@@ -2093,19 +2062,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
-		// Sample records, not rows. Raw sample times are deliberately not scaled:
-		// skew and waits make such extrapolation unsuitable as exact wall time.
-		var timingStats *process.OperatorStats
-		var stageStart time.Time
-		if stats != nil && e.recoveryRecords%1024 == 0 {
-			timingStats = stats
-			stageStart = time.Now()
-		}
 		bat, err := e.buildReader.ReadBatch(proc, e.buildReadBatch)
-		if timingStats != nil {
-			stats.AddExtraStat("JoinSpillReadSampleNanos", time.Since(stageStart).Nanoseconds())
-			stats.AddExtraStat("JoinSpillReadSamples", 1)
-		}
 		if err == io.EOF {
 			break
 		}
@@ -2114,25 +2071,15 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
-		e.recoveryRecords++
-		if timingStats != nil {
-			// Size/rows belong to successfully read sampled records only. They
-			// distinguish wider records from lock/IO delay across workers.
-			stats.AddExtraStat("JoinSpillReadSampleBytes", int64(bat.Size()))
-			stats.AddExtraStat("JoinSpillReadSampleRows", int64(bat.RowCount()))
-		}
 		if err := checkSpillCanceled(proc); err != nil {
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		if bucket.Depth < SpillMaxPass {
-			if stats != nil && memoryGrowthParticipant != nil {
-				e.recoveryAdviceChecks++
-			}
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
-					builder, bat, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen, timingStats,
+					builder, bat, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen,
 				)
 			if decisionErr != nil {
 				return nil, BucketSkip, decisionErr
@@ -2148,16 +2095,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 				return nil, result, spillErr
 			}
 		}
-		if timingStats != nil {
-			stageStart = time.Now()
-		}
-		retainedBeforeCopy := builderMemSize(builder)
-		copyErr := builder.CopyBuildBatch(bat, proc)
-		if timingStats != nil {
-			stats.AddExtraStat("JoinSpillCopySampleNanos", time.Since(stageStart).Nanoseconds())
-			stats.AddExtraStat("JoinSpillCopySamples", 1)
-		}
-		if err := copyErr; err != nil {
+		if err := builder.CopyBuildBatch(bat, proc); err != nil {
 			if isBudgetAdmission(err) && bucket.Depth < SpillMaxPass {
 				if analyzer != nil {
 					analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildCopyAdmissionReSpillAttempts", 1)
@@ -2178,20 +2116,10 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		// recursion limit, attempt the build and let aggregate budget admission
 		// decide whether it is safe; a rejected map allocation remains a
 		// controlled query error instead of an OOM.
-		// The pre-copy decision already projected these rows and source bytes.
-		// Recheck only representation expansion / partial-tail completion that
-		// exceeded that projection, just as the resident HashBuild path does.
-		// This does not cache advice across input records or bypass admission.
-		if bucket.Depth < SpillMaxPass && builderMemSize(builder)-retainedBeforeCopy > int64(bat.Size()) {
-			if stats != nil {
-				stats.AddExtraStat("JoinSpillPostCopyExpansionChecks", 1)
-				if memoryGrowthParticipant != nil {
-					e.recoveryAdviceChecks++
-				}
-			}
+		if bucket.Depth < SpillMaxPass {
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
-					builder, nil, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen, timingStats,
+					builder, nil, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen,
 				)
 			if decisionErr != nil {
 				return nil, BucketSkip, decisionErr
@@ -2224,15 +2152,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	// Keep an admitted recovery floor until the hashmap is committed. Releasing
 	// it before map admission would let another concurrent build consume the
 	// only headroom this bucket has already proven it needs to re-spill.
-	var mapStart time.Time
-	if stats != nil {
-		mapStart = time.Now()
-	}
-	mapErr := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc)
-	if stats != nil {
-		stats.AddExtraStat("JoinSpillBuildMapNanos", time.Since(mapStart).Nanoseconds())
-	}
-	if err := mapErr; err != nil {
+	if err := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc); err != nil {
 		// BuildHashmap may destructively canonicalize Dedup batches before a
 		// later allocation is rejected. Only the builder can prove whether its
 		// retained batches still represent the original ingress. Read that
@@ -2721,23 +2641,6 @@ func noProgressError(proc *process.Process, depth int) error {
 
 // Cleanup releases all engine resources.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
-	if stats := e.diagnosticStats; stats != nil {
-		// Clear before logging: repeated Reset/Free must not publish twice or
-		// retain another query's analyzer when a container is reused.
-		e.diagnosticStats = nil
-		stats.AddExtraStat("JoinSpillRecoveryRecords", int64(e.recoveryRecords))
-		stats.AddExtraStat("JoinSpillRecoveryAdviceChecks", int64(e.recoveryAdviceChecks))
-		e.recoveryAdviceChecks = 0
-		e.recoveryRecords = 0
-		logutil.Info("join spill recovery diagnostic summary",
-			trace.ContextField(proc.Ctx), zap.String("query_id", proc.QueryId()),
-			zap.String("operator", stats.OperatorName),
-			zap.Int("node_idx", e.cfg.DiagnosticNodeIdx),
-			zap.Time("recovery_started_at", e.recoveryStarted),
-			zap.Time("recovery_ended_at", e.recoveryEnded),
-			zap.String("worker", fmt.Sprintf("%p", e)), zap.Any("extra_stats", stats.ExtraStats))
-		e.recoveryStarted, e.recoveryEnded = time.Time{}, time.Time{}
-	}
 	for i := range e.buckets {
 		if e.buckets[i].BuildFd != nil {
 			_ = e.buckets[i].BuildFd.Close()
