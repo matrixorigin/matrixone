@@ -858,7 +858,7 @@ func ReturnFirstArgType(typs []types.Type) types.Type {
 var BitOpsSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-	types.T_binary, types.T_varbinary,
+	types.T_binary, types.T_varbinary, types.T_blob,
 	types.T_bit,
 }
 
@@ -873,7 +873,7 @@ func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 var BitOpsReturnType = func(typs []types.Type) types.Type {
-	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary || typs[0].Oid == types.T_blob {
 		return typs[0]
 	}
 	return types.T_uint64.ToType()
