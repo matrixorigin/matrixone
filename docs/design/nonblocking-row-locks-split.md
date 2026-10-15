@@ -1,119 +1,195 @@
-# Nonblocking row locks: NOWAIT foundation and SHARE SKIP LOCKED follow-up
+# Nonblocking row locks: complete series design
 
-Owner: issue #25107. Part A is PR #30183; Part B depends on Part A.
-This document records the delivery boundary for the existing nonblocking-lock
-implementation. Splitting the series does not change its end-to-end contract.
-`FOR UPDATE SKIP LOCKED` is excluded from both parts.
+Owner: issue #25107; NOWAIT foundation #30183, dependent SHARE SKIP LOCKED #30272.
+The design gate covers both parts together. Current independent approval is
+recorded separately against an exact document revision; historical records below
+are context and do not assert approval of this revision.
 
-## Part A: NOWAIT and the common physical admission contract
+## Problem, goals and scope
 
-`FOR UPDATE NOWAIT` and `FOR SHARE NOWAIT` attempt exact row admission without
-waiting. A settled conflict becomes MySQL 3572/HY000. The transaction remains
-active: earlier uncommitted work and valid grants survive until transaction end.
-Transport, binding, cancellation and refresh errors retain their own meanings.
+Ordinary locking reads wait for incompatible row holders. Applications need an
+explicit row-conflict error, or a result containing only admitted Shared rows.
+An untyped FastFail error is insufficient: it can abort earlier transaction work,
+and an old owner can ignore an unknown policy field and enter the waiting path.
+The contract must cross parser, planner, coordinator, physical owner and rollback.
 
-The planner carries `NoWait` to the physical LockOp. Compilation rejects
-optimistic transactions before scheduling or constructing executable sources.
-All candidate scopes are gathered at the transaction coordinator. Nonblocking
-LockOps cannot be serialized to a remote executor; both sender and receiver
-reject that placement. Ordinary blocking lock behavior remains unchanged.
+Support only `FOR UPDATE NOWAIT`, `FOR SHARE NOWAIT` and `FOR SHARE SKIP LOCKED`
+in pessimistic transactions. Preserve ordinary locking reads, query-block policy
+isolation, prior uncommitted work and transaction-owned grants. Optimistic mode,
+remote nonblocking LockOps, coarse locks, mixed target policies and
+`FOR UPDATE SKIP LOCKED` are excluded. No fairness or starvation guarantee is added.
 
-The common physical protocol is MORPC v114: `TryLock` method 25,
-`ForwardTryLock` method 26, `LockOptions.NoWait` field 15, and the settled
-`LockResponse.NoWaitConflict` field 4. The coordinator, forwarder and physical
-owner enforce capability admission before any grant. Unsupported v113 owners
-fail closed; the old ordinary lock method is never a fallback. Main's v112
-signed WEEK/DAYOFYEAR and v113 DECIMAL aggregate contracts remain unchanged.
+The compatibility precedent is MySQL 8.0
+[locking reads](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html):
+NOWAIT reports row conflict as 3572/HY000; SKIP removes conflicted rows and can
+return an inconsistent view, so it is unsuitable for general transactional reads.
+Only row locks are covered. Binding, RPC, metadata and service work can still take
+time; this is not a universal latency deadline. MySQL's
+[error contract](https://dev.mysql.com/doc/refman/8.0/en/innodb-error-handling.html)
+is the precedent for distinguishing statement errors from transaction failure.
+MatrixOne retains its existing snapshot/definition retry and fatal-error rules.
 
-Plan `NoWait` field 18 and pipeline `no_wait` field 13 are additive. Fields are
-not renumbered or reused. Canonical generated consumers travel with schemas.
-Part A has no SkipLocked flag, row filter, LIMIT refill or borrowed output state.
+## Invariants and first owners
 
-Each physical result records the current lock-table binding. The transaction
-registers cleanup routes before admission when known and from the returned
-binding otherwise, including conflicts, partial grants and fatal fences.
-Read-only transactions retain effective cleanup routes through rollback.
-Asynchronous RPC callbacks snapshot pooled request state before reuse.
+| Boundary | Required invariant and owner |
+|---|---|
+| Syntax and plan | Grammar admits only the three forms; the owning query block carries per-target policy. |
+| Execution placement | Compile gathers nonblocking LockOps at the transaction coordinator before execution; sender and receiver reject remote placement. |
+| Physical admission | Lockservice attempts exact-row FastFail only after capability, method, options and binding checks; no silent wait/coarsening/cache bypass. |
+| Conflict identity | Only a settled direct physical-owner conflict is recoverable. Transport, bind, cleanup, cancellation and unsupported-capability errors stay distinct. |
+| Grants and cleanup | Existing active transaction/table bookkeeping owns all actual grants, including a partial prefix and an indeterminate result. |
+| Returned rows | LockOp filters only settled Shared conflicts; every returned row retains its grants until transaction completion. |
+| Retry and lifetime | Pending refresh/definition retry or a fatal later target wins before output publication; LockOp owns copied output until the next Call, Reset or Free. |
 
-## Part B: SHARE SKIP LOCKED on the same physical API
+NoWait becomes MySQL 3572/HY000 without itself rolling back the explicit
+transaction. Earlier writes and valid grants survive; ordinary fatal errors keep
+the existing rollback policy. This is not a promise to recover transport failures.
 
-The coordinator admits the additional `FOR SHARE SKIP LOCKED` syntax and adds
-plan field 19 / pipeline field 14. It uses Part A's exact nonblocking Shared
-admission; this introduces no new physical RPC or weaker owner capability.
-An older v114 NOWAIT owner can therefore serve the physical request. Older SQL
-coordinators still reject the unsupported syntax, and remote LockOp placement
-remains prohibited. No on-disk, catalog or existing numeric result ABI changes.
+## Physical protocol and state transitions
 
-The first owner of filtering is LockOp. A candidate is skipped only for the
-physical owner's settled direct conflict. Joined cleanup/binding/transport
-errors are fatal. Each candidate uses a one-row copy and every successful row
-retains Shared grants until transaction end. All targets must use the same
-Shared/SkipLocked policy; invalid mixed targets and coarse/table locking fail.
+MORPC v114 introduces `TryLock` method 25, `ForwardTryLock` method 26,
+`LockOptions.NoWait` field 15 and `LockResponse.NoWaitConflict` field 4.
+Coordinator, forwarder and owner enforce admission before any grant. An owner
+below v114 fails closed; the ordinary Lock method is never a compatibility retry.
+Main's v112 signed WEEK/DAYOFYEAR and v113 DECIMAL contracts remain unchanged.
 
-An all-skipped child batch is not EOF: pull the next batch until an accepted row
-or actual EOF. LIMIT/OFFSET remain above the row-removing lock filter so skipped
-candidates do not consume the requested result count. A pending snapshot or
-definition retry wins over a later skippable conflict before any accepted prefix
-is published. A fatal later error also prevents prefix publication.
+Plan NoWait field 18 and pipeline no_wait field 13 are additive; Part B adds
+SkipLocked fields 19/14. Existing numbers, unknown fields and result ABI remain
+intact. There is no on-disk/catalog format or new native ABI. Generated consumers
+travel atomically with their schemas and use the existing canonical generators.
 
-The returned copied batch belongs to LockOp and is borrowed downstream. It is
-released on the next Call, Reset or Free, including early LIMIT termination.
-Candidate copies and empty outputs are released in their lexical owner. Work is
-linear in candidate rows and width; there is no retained candidate queue,
-background worker or retry loop. Runtime exact-row budgets are unchanged.
+| Outcome | Publication and cleanup |
+|---|---|
+| Admission rejected | Return the capability/options/placement error; no successful grant is acknowledged. |
+| All keys admitted | Return the result bound to the current physical table; transaction retains grants. |
+| Settled direct conflict | NOWAIT reports 3572; Shared SKIP excludes the candidate. Earlier grants remain transaction-owned. |
+| Binding/capability fence or ambiguous reply | Return a fatal error, never a skippable conflict; preserve a trustworthy cleanup-only binding for any possible partial grant. |
+| Snapshot/definition retry | Return the existing retry identity before an accepted prefix reaches a LIMIT consumer. |
+| Cancel/error/transaction end | Existing cancellation/unlock paths retire the operation and its table witnesses; late callbacks must not recreate completed transaction state. |
 
-## Alternatives and verification
+Register known table cleanup routes before admission. If the route was not yet
+known, use the physical result binding, including on conflict and fatal fences.
+Do not clear that cleanup witness when clearing successful-grant metadata. This
+also closes a first read-only transaction's otherwise-empty client unlock ledger.
+A cleanup binding does not acknowledge that every requested key was granted.
+Unrelated holders remain untouched. Existing transaction generation/terminal
+checks govern callback races, restart and duplicate cleanup; no per-key ledger
+or new background recovery mechanism is introduced.
 
-A single PR preserves one integration boundary but mixes RPC/NOWAIT review with
-filter/retry/output-lifetime review. Separating generated files from their
-schema/grammar would leave a non-buildable boundary. The selected functional
-split keeps each intermediate head buildable and moves every SKIP-specific
-oracle with Part B. Generated parser tables and compressed protobuf descriptors
-may still produce large mechanical diffs in each PR; do not edit them by hand.
+Async RPC callbacks retain only the method and a frozen options-validity value,
+not pooled request pointers/slices. The snapshot is taken before request reuse.
+Late response capability/binding validation remains independent of that snapshot.
 
-Part A proves parser acceptance and query-block policy, optimistic rejection,
-coordinator placement, typed SQL conflicts, protocol rejection before grants,
-transaction continuity, partial-grant cleanup and ordinary-lock controls.
-It explicitly rejects both UPDATE and SHARE SKIP LOCKED until Part B.
-Part B retains filtering, compatible Shared holders, all-skipped continuation,
-LIMIT refill, multi-target refresh/definition/fatal precedence and Reset/Free
-ownership tests. UPDATE SKIP LOCKED remains rejected. Both parts require
-candidate-specific canonical generation, owning-package checks, relevant race
-controls, real frontend SQL in both CN directions and actual head CI results.
+## Coordinator filtering and resource ownership
 
-The recombined physical/protocol/filter implementation retains the original full
-candidate; contextual parsing preserves its public syntax and rejection contract.
-Source-to-generated coherence and all prior distinct oracles are preserved.
-Real mixed-binary cluster execution is a separate evidence dimension, not
-implied by protocol/two-service capability tests or a homogeneous SQL cluster.
+Part A has no SkipLocked flag, row filter, LIMIT refill or borrowed output state;
+it explicitly rejects SHARE SKIP LOCKED until Part B. Both reject UPDATE SKIP.
+Part B uses the same v114 exact-row Shared API, with no new physical RPC. A v114
+NOWAIT-only physical owner can serve it; an older SQL coordinator can reject the
+new syntax. All targets must have consistent Shared/SkipLocked policy.
 
-## Contextual lock spelling and diff budget
+For each candidate, LockOp makes a one-row copy and acquires all target grants.
+Only a direct settled conflict can remove it. A joined binding/transport/cleanup
+error remains fatal. Grants acquired at an earlier target remain transaction-owned
+even if a later target makes the candidate skippable; no row-level unlock is added.
 
-NOWAIT and LOCKED stay ordinary identifiers. Only the lock-option productions
-consume an unquoted ID and compare its spelling case-insensitively; unknown,
-quoted, repeated and conflicting modifiers are rejected. Existing keyword and
-literal-token numbers remain stable, avoiding global parser-table renumbering.
-Part A explicitly rejects the SHARE SKIP identifier form in its grammar action;
-Part B enables only the exact LOCKED spelling with its filter implementation.
-The parser is generated by its unchanged Makefile; no output is edited by hand.
-Both PRs must remain below 10,000 added plus deleted lines against main, including
-all generated output. The dependent PR may still display the foundation until
-it lands because upstream rules restrict dependency-branch creation.
+An all-skipped nonterminal batch is not EOF: pull until accepted rows or actual
+EOF. LIMIT/OFFSET stay above this row-removing operator; skipped candidates do not
+consume the requested result count. Refresh/definition retry discovered at an
+earlier target outranks a later conflict, EOF or successful prefix. A fatal later
+error also prevents publication. Existing compiler/frontend retry owns reexecution.
 
-## Design review provenance
+The input batch remains child-owned. LockOp owns its accepted-index list, one
+candidate copy and copied output. Downstream borrows output until the next Call;
+Reset/Free release the last output when LIMIT stops early. Empty output and
+failed candidate copies are released in their lexical owner on every terminal
+path. There is no retained history, candidate queue, worker or new retry loop.
 
-The independent design-first phase for the complete published NOWAIT/SHARE SKIP
-LOCKED contract was recorded on 2026-10-14 by `public_split_design`
-(`gpt-6.1-sol`, `xhigh`), before the isolated candidates were implemented and
-reviewed. Its frozen input was `b71d98000bb9433925aac3de4f6b318a9b1ee8a8`,
-selected base `071a79b77f82a2d2f8e8270eaef3c27a29fab4d1`; original design SHA-256
-`4f1853aadd0716c58d5470b2972d5f519b5bb3a788d8f4b0c712d95b5f4d255a`.
-The complete original design and approval receipt are retained verbatim in
-[PR #30183's design record](https://github.com/matrixorigin/matrixone/pull/30183#design-review-provenance).
-The decision permitted the isolated implementation; a separate review approved
-lock revision `08e550d03d776a3e82a511b59043d271e1d9e9d2` afterward.
-This is historical approval, not a claim of independent current-head approval.
-The current functional partition preserves those owners and invariants. Main's
-v113 DECIMAL allocation moves lock admission to v114; contextual token spelling
-and the immutable RPC snapshot simplification preserve the admitted contract.
-Current-source validation and later integration reviews remain separate evidence.
+## Alternatives and cost decision
+
+| Alternative | Decision |
+|---|---|
+| Plain FastFail on the ordinary RPC | Reject: unknown fields/default Wait and an untyped error do not establish owner support or a settled negative acknowledgement. |
+| Reused process/session wait policy | Reject: statement and parallel/reused operator state can leak policy. Per-target serialized flags keep the request owner explicit. |
+| Storage/remote-CN filtering or a new cleanup ledger | Reject: duplicates filtering/retry/ownership across boundaries. Coordinator filtering and existing transaction cleanup have one effective owner. |
+| Vectorized acquisition of all candidates | Defer: cheaper RPC batching needs a precise per-row settled-result contract. One-row admission reuses the proven API without adding such a protocol. |
+| One PR or separately delivered generated files | Use two functional PRs; generated files remain with source/schema. Both are buildable and the complete design gate is unchanged. |
+
+Ordinary blocking requests allocate no filtering state. NOWAIT adds the admitted
+physical request/response checks. Shared SKIP costs O(candidates * targets) lock
+attempts, potentially one remote round trip per candidate/target, plus O(rows *
+width) copy work. Memory is bounded by one child batch's selection/output and
+one temporary row; existing row/transaction lock budgets still fail rather than
+coarsen. Coordinator concentration and copy/RPC overhead are explicit opt-in
+tradeoffs. No throughput improvement or benchmark result is claimed. Workload
+performance must be evaluated before adopting this syntax for a production queue.
+
+## Compatibility, rollout and diagnosis
+
+Upgrade coordinators/forwarders/owners to v114 before enabling application use.
+Do not route new syntax through an older SQL coordinator and assume it works.
+Unsupported owners fail closed; homogeneous dual-CN tests do not constitute a
+mixed-binary upgrade test. Existing capability/old-peer/two-service tests prove
+no-grant rejection and cleanup boundaries at their stated source revisions.
+
+Rollback is to stop issuing the new syntax and drain affected transactions before
+downgrading; do not transparently rewrite NOWAIT/SKIP into ordinary waiting reads.
+There is no persisted-data migration. Prepared plans and active v114 requests
+must not be carried into an unsupported coordinator/owner generation.
+
+Existing SQL privilege checks, tenant/table routing and transaction ownership
+remain authoritative; the internal RPCs add no public authorization bypass.
+Keep typed conflict and fatal errors distinguishable in diagnosis. Use existing
+transaction/lock views and RPC/lockservice logs for holders, bindings and terminal
+errors; no unbounded-label metric or new monitoring worker is added.
+
+## Acceptance and reproducible validation
+
+| Contract | Smallest independent proof |
+|---|---|
+| Grammar, query-block propagation and placement | Parser/plan/compile positive and negative tests, including quoted/unknown/mixed modifiers, unsupported mode and sender/receiver rejection. |
+| Admission, ambiguity and rollback | Local/remote/forward owner tests, old-peer no-grant controls, actual read-only client rollback and focused RPC races. |
+| Filtering, retry and borrowed lifetime | LockOp tests for intermediate empty batches, compatible holders, retry/fatal precedence, LIMIT consumer, Reset/Free and resource accounting. |
+| Public frontend/transaction contract | `TestNoWaitAcrossCNs` and Part B `TestShareSkipLockedAcrossCNs` in `pkg/tests/issues/nonblocking_read_test.go`. |
+| Generated/source and integration | Canonical idempotent parser/protobuf generation, owning package/vet/lint checks and final-head CI. |
+
+The durable frontend tests reuse the existing authenticated two-CN fixture and
+three rows. Fresh sessions reverse holder/reader CNs. Direct and binary-prepared
+NOWAIT must return exactly 3572/HY000 while an earlier write survives, then rolls
+back. Shared grants are independently probed, compatible reads succeed, and
+rollback releases them. Part B additionally proves LIMIT refill, OFFSET after
+filtering, all-conflict empty output and unchanged final data. The holder remains
+open until these checks finish; a deadline guards hangs, not the error oracle.
+
+After the repository native prerequisites, reproduce without external services:
+
+```sh
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -vet=all -p=1 -timeout=20m \
+  -run '^Test(NoWait|ShareSkipLocked)AcrossCNs$' ./pkg/tests/issues
+```
+
+Keep command/source/config identities, named results, exit statuses and cleanup
+receipts. Reuse earlier evidence only where relevant semantic inputs are unchanged.
+A green unrelated BVT or build is not execution evidence for the new SQL forms.
+Real mixed-binary execution and workload throughput remain explicitly unclaimed.
+No blocking design choice is deferred; any material deviation requires review.
+
+## Generation and delivery boundary
+
+NOWAIT and LOCKED remain ordinary identifiers. Only lock productions consume an
+unquoted ID and compare exact case-insensitive spelling. Unknown, quoted,
+repeated and conflicting options are rejected. Existing global token numbers
+remain stable, avoiding parser-table renumbering; the unchanged Makefile generates
+the output. No generated file is edited by hand.
+
+Both PRs must have fewer than 10,000 added plus deleted lines against main,
+including generated files. Upstream rules restrict dependency-branch creation,
+so Part B still displays the foundation against main. It depends on Part A; after
+Part A lands, update from main before reviewing/merging the remaining increment.
+Both stay Ready with do-not-merge/wip under the task's explicit no-merge scope.
+
+## Review record
+
+[Historical design and approval receipts](https://github.com/matrixorigin/matrixone/pull/30183#design-review-provenance)
+pin their original input, reviewer and hashes. They are not approval of this
+revision. Current approval must identify this document's exact Git object/hash.
