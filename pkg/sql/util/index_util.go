@@ -198,6 +198,26 @@ func serialWithCompacted(
 ) (*nulls.Nulls, error) {
 	// resolve vs
 	length := vs[0].Length()
+	// Composite unique keys must reject malformed native-UCA values before
+	// packing any row.  CollationKeyOrOriginal intentionally has a tagged raw
+	// fallback for comparison-only callers; using that fallback here would let
+	// the same logical value enter the unique index once as a canonical key and
+	// once as a raw-byte key.  Validate the complete input batch first so a
+	// partial packer state can never escape on error.
+	for _, v := range vs {
+		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+			continue
+		}
+		values, area := vector.MustVarlenaRawData(v)
+		for i := range values {
+			if nulls.Contains(v.GetNulls(), uint64(i)) {
+				continue
+			}
+			if err := types.ValidateCollationValue(*v.GetType(), values[i].GetByteSlice(area)); err != nil {
+				return nil, err
+			}
+		}
+	}
 	val := make([][]byte, 0, length)
 	if length > cap(packers.ps) {
 		packers.Free()

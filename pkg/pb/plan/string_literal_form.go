@@ -388,7 +388,7 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
-// LowPrecisionFloatIntegerArguments requires MORPC v114 because older executors reject
+// LowPrecisionFloatIntegerArguments requires MORPC v115 because older executors reject
 // bf16/float16/float8/float4 sources of private CAST 5..8.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatIntegerArguments bool

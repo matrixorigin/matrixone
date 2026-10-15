@@ -149,8 +149,9 @@ const (
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
 	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
-	MORPCVersion114    int64 = 114 // bf16/float16/float8/float4 sources of private integer CASTs
-	MORPCLatestVersion       = MORPCVersion114
+	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
+	MORPCVersion115    int64 = 115 // bf16/float16/float8/float4 sources of private integer CASTs
+	MORPCLatestVersion       = MORPCVersion115
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

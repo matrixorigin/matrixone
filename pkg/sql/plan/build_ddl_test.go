@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -497,6 +498,93 @@ func TestBuildCreateTableAcceptsNativeUnicodeCollations(t *testing.T) {
 			require.Equal(t, tc.wantCharset, tableDef.Cols[0].Typ.Charset)
 		})
 	}
+}
+
+func TestBuildCreateTableNativeUnicodeUniqueUsesVersionedKeyFormat(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
+		create table t_native_unique (
+			v varchar(8) collate utf8mb4_unicode_ci unique,
+			n int,
+			unique key uq_vn (v, n)
+		)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(collation.KeyFormatV1), tableDef.KeyFormat)
+	require.Len(t, tableDef.Indexes, 2)
+	require.Len(t, p.GetDdl().GetCreateTable().GetIndexTables(), 2)
+	for _, index := range tableDef.Indexes {
+		require.Equal(t, uint32(collation.KeyFormatV1), index.KeyFormat)
+		require.True(t, index.Unique)
+	}
+	for _, indexTable := range p.GetDdl().GetCreateTable().GetIndexTables() {
+		require.Equal(t, uint32(collation.KeyFormatV1), indexTable.KeyFormat)
+		require.NotNil(t, indexTable.Pkey)
+	}
+	// The one-part key is stored as an opaque binary comparison key. The
+	// composite key remains a packed opaque varlena value.
+	var onePart *TableDef
+	for _, indexTable := range p.GetDdl().GetCreateTable().GetIndexTables() {
+		if len(indexTable.Cols) > 0 && indexTable.Cols[0].Typ.Id == int32(types.T_varbinary) {
+			onePart = indexTable
+			break
+		}
+	}
+	require.NotNil(t, onePart)
+}
+
+func TestBuildCreateTableNativeUnicodeUniqueRejectsOtherIndexKinds(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
+		create table t_native_unique_mixed (
+			v varchar(8) collate utf8mb4_unicode_ci unique,
+			n int,
+			key k_n (n)
+		)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.ErrorContains(t, err, "cannot be combined with secondary or fulltext indexes")
+}
+
+func TestBuildCreateTableNativeUnicodeUniqueRejectsTypedExternalTables(t *testing.T) {
+	for _, engine := range []string{"datastream", "sql", "kafka"} {
+		t.Run(engine, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fmt.Sprintf(`
+				create external table t_native_unique_%s (
+					v varchar(8) collate utf8mb4_unicode_ci unique
+				) engine = %s`, engine, engine), 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.ErrorContains(t, err, "cannot create index on external table")
+		})
+	}
+}
+
+func TestBuildCreateTableNativeUnicodeUniqueRequiresAuthoringProtocol(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t_native_unique_gate (v varchar(8) collate utf8mb4_unicode_ci unique)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	proc := newPlanTestProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		}
+	}()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+
+	_, err = BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
+	require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", defines.MORPCVersion114))
 }
 
 func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {

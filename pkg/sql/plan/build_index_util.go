@@ -171,8 +171,8 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 // a hidden one-part index column.  Legacy indexes retain the source type and
 // bytes.  A future versioned collation format stores opaque comparison keys,
 // so its hidden column must be a binary varlena column; otherwise storage and
-// hash consumers could apply the source collation a second time.  Admission of
-// that format is deliberately handled elsewhere and remains fail-closed.
+// hash consumers could apply the source collation a second time. Admission is
+// handled by the owning CREATE TABLE path and the persisted-plan protocol fence.
 func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart, keyFormat uint32) Type {
 	if col == nil {
 		return Type{}
@@ -310,6 +310,21 @@ func lowPrecisionKeyError(ctx context.Context, id int32, colName, kind string) e
 }
 
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
+	return checkIndexColumnSupportabilityWithKeyFormat(ctx, col, keyPart, indexKind, collation.KeyFormatLegacy)
+}
+
+// checkIndexColumnSupportabilityWithKeyFormat validates the logical column
+// restrictions and the physical key contract for one index part.  Native UCA
+// unique keys are only admitted when the owning new table has explicitly
+// selected the versioned physical key format; all callers that do not own that
+// decision retain the legacy fail-closed behavior through the wrapper above.
+func checkIndexColumnSupportabilityWithKeyFormat(
+	ctx context.Context,
+	col *ColDef,
+	keyPart *tree.KeyPart,
+	indexKind string,
+	keyFormat uint32,
+) error {
 	if col == nil || keyPart == nil || keyPart.ColName == nil {
 		return moerr.NewInternalError(ctx, "index column definition is nil")
 	}
@@ -324,8 +339,10 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 			return err
 		}
 	case "unique":
-		if err := rejectNativeUnicodeUniqueKey(ctx, col.Typ, colName); err != nil {
-			return err
+		if keyFormat != collation.KeyFormatV1 {
+			if err := rejectNativeUnicodeUniqueKey(ctx, col.Typ, colName); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -382,11 +399,14 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	return nil
 }
 
+// Do not add a native-Unicode exception to the legacy wrapper: ALTER/CREATE
+// INDEX and ordinary secondary-index callers remain closed until their
+// existing-table backfill and mixed-version gates are ready.
+
 // Native Unicode primary-key bytes are not yet canonicalized by the storage
-// index and lock paths.  Rejecting new definitions is safer than allowing two
-// collation-equivalent values to commit as distinct keys.  Existing catalog
-// metadata is still handled conservatively by the planner's composite-key
-// rewrite guard.
+// index and lock paths. Native Unicode UNIQUE keys use the V1 path only when
+// their owning CREATE TABLE selected that format; this helper remains the
+// fail-closed guard for primary keys and existing-table index changes.
 func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnName string) error {
 	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
 		return moerr.NewNotSupported(ctx,
@@ -398,7 +418,7 @@ func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnN
 func rejectNativeUnicodeUniqueKey(ctx context.Context, typ planpb.Type, columnName string) error {
 	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
 		return moerr.NewNotSupported(ctx,
-			fmt.Sprintf("native Unicode collation column '%s' cannot be in unique index until collation-aware unique-index deduplication is supported", columnName))
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in unique index without the versioned unique-key format", columnName))
 	}
 	return nil
 }

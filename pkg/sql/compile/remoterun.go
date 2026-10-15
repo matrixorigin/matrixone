@@ -2294,8 +2294,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
-		return moerr.NewNotSupportedNoCtxf("low-precision float integer arguments require MORPC protocol version %d", defines.MORPCVersion114)
+	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtxf("low-precision float integer arguments require MORPC protocol version %d", defines.MORPCVersion115)
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")

@@ -11209,9 +11209,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// Numeric aggregates consume ENUM ordinals and SET bitmaps. Resolve
-	// storage before the generic string-numeric conversion.
-	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
+	// Numeric aggregates and BIT_COUNT consume ENUM ordinals and SET bitmaps.
+	// Resolve storage even when a display string matches a string overload.
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11245,12 +11245,12 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	return result
 }
 
-func usesMySQLSpecialNumericAggregateInput(name string, argCount int) bool {
+func usesMySQLSpecialNumericInput(name string, argCount int) bool {
 	if argCount != 1 {
 		return false
 	}
 	switch name {
-	case "sum", "avg", "bit_and", "bit_or", "bit_xor":
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor", "bit_count":
 		return true
 	default:
 		return false
