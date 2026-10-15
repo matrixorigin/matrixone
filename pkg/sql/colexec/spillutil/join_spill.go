@@ -1527,13 +1527,16 @@ const (
 // SpillEngine owns the spill bucket queue and drives the probe-batch loop.
 type SpillEngine struct {
 	// Synchronous worker-owned diagnostics; no background reader or shared lock.
-	diagnosticStats *process.OperatorStats
-	recoveryRecords uint64
-	cfg             SpillEngineConfig
-	buckets         []SpillBucket
-	spillFS         spillFileServiceCache
-	allocation      *SpillAllocationAccount
-	allocationMP    *mpool.MPool
+	diagnosticStats      *process.OperatorStats
+	recoveryRecords      uint64
+	recoveryAdviceChecks uint64
+	recoveryStarted      time.Time
+	recoveryEnded        time.Time
+	cfg                  SpillEngineConfig
+	buckets              []SpillBucket
+	spillFS              spillFileServiceCache
+	allocation           *SpillAllocationAccount
+	allocationMP         *mpool.MPool
 
 	// Current bucket state
 	buildReader      BucketReader
@@ -2001,9 +2004,13 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		stats = analyzer.GetOpStats()
 		e.diagnosticStats = stats
 		started := time.Now()
+		if e.recoveryStarted.IsZero() {
+			e.recoveryStarted = started
+		}
 		defer func() {
 			stats.AddExtraStat("JoinSpillRecoveryNanos", time.Since(started).Nanoseconds())
 			stats.AddExtraStat("JoinSpillRecoveryBuckets", 1)
+			e.recoveryEnded = time.Now()
 		}()
 	}
 	builder := &hashbuild.HashmapBuilder{}
@@ -2108,12 +2115,21 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			return nil, BucketSkip, err
 		}
 		e.recoveryRecords++
+		if timingStats != nil {
+			// Size/rows belong to successfully read sampled records only. They
+			// distinguish wider records from lock/IO delay across workers.
+			stats.AddExtraStat("JoinSpillReadSampleBytes", int64(bat.Size()))
+			stats.AddExtraStat("JoinSpillReadSampleRows", int64(bat.RowCount()))
+		}
 		if err := checkSpillCanceled(proc); err != nil {
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		if bucket.Depth < SpillMaxPass {
+			if stats != nil && memoryGrowthParticipant != nil {
+				e.recoveryAdviceChecks++
+			}
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
 					builder, bat, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen, timingStats,
@@ -2135,6 +2151,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if timingStats != nil {
 			stageStart = time.Now()
 		}
+		retainedBeforeCopy := builderMemSize(builder)
 		copyErr := builder.CopyBuildBatch(bat, proc)
 		if timingStats != nil {
 			stats.AddExtraStat("JoinSpillCopySampleNanos", time.Since(stageStart).Nanoseconds())
@@ -2161,7 +2178,17 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		// recursion limit, attempt the build and let aggregate budget admission
 		// decide whether it is safe; a rejected map allocation remains a
 		// controlled query error instead of an OOM.
-		if bucket.Depth < SpillMaxPass {
+		// The pre-copy decision already projected these rows and source bytes.
+		// Recheck only representation expansion / partial-tail completion that
+		// exceeded that projection, just as the resident HashBuild path does.
+		// This does not cache advice across input records or bypass admission.
+		if bucket.Depth < SpillMaxPass && builderMemSize(builder)-retainedBeforeCopy > int64(bat.Size()) {
+			if stats != nil {
+				stats.AddExtraStat("JoinSpillPostCopyExpansionChecks", 1)
+				if memoryGrowthParticipant != nil {
+					e.recoveryAdviceChecks++
+				}
+			}
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
 					builder, nil, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen, timingStats,
@@ -2699,12 +2726,17 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 		// retain another query's analyzer when a container is reused.
 		e.diagnosticStats = nil
 		stats.AddExtraStat("JoinSpillRecoveryRecords", int64(e.recoveryRecords))
+		stats.AddExtraStat("JoinSpillRecoveryAdviceChecks", int64(e.recoveryAdviceChecks))
+		e.recoveryAdviceChecks = 0
 		e.recoveryRecords = 0
 		logutil.Info("join spill recovery diagnostic summary",
 			trace.ContextField(proc.Ctx), zap.String("query_id", proc.QueryId()),
 			zap.String("operator", stats.OperatorName),
 			zap.Int("node_idx", e.cfg.DiagnosticNodeIdx),
+			zap.Time("recovery_started_at", e.recoveryStarted),
+			zap.Time("recovery_ended_at", e.recoveryEnded),
 			zap.String("worker", fmt.Sprintf("%p", e)), zap.Any("extra_stats", stats.ExtraStats))
+		e.recoveryStarted, e.recoveryEnded = time.Time{}, time.Time{}
 	}
 	for i := range e.buckets {
 		if e.buckets[i].BuildFd != nil {

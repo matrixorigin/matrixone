@@ -55,6 +55,11 @@ func TestMemoryGrowthDiagnosticsPreserveAdmission(t *testing.T) {
 	require.EqualValues(t, 2, stats.ExtraStats["MemoryGrowthSamples"])
 	require.EqualValues(t, 2, otherStats.ExtraStats["MemoryGrowthSamples"])
 	require.EqualValues(t, 1, stats.ExtraStats["MemoryGrowthRefreshSamples"]+otherStats.ExtraStats["MemoryGrowthRefreshSamples"])
+	for _, localStats := range []*OperatorStats{stats, otherStats} {
+		require.LessOrEqual(t, localStats.ExtraStats["MemoryGrowthSampleMaxNanos"], localStats.ExtraStats["MemoryGrowthSampleNanos"])
+		require.LessOrEqual(t, localStats.ExtraStats["MemoryGrowthBudgetWaitSampleMaxNanos"], localStats.ExtraStats["MemoryGrowthBudgetWaitSampleNanos"])
+		require.LessOrEqual(t, localStats.ExtraStats["MemoryGrowthGateWaitSampleMaxNanos"], localStats.ExtraStats["MemoryGrowthGateWaitSampleNanos"])
+	}
 	require.True(t, p.Release())
 	_, err = p.RetainedLimitWithStats(0, 0, stats)
 	require.ErrorIs(t, err, ErrExecutionResourceInvalid)
