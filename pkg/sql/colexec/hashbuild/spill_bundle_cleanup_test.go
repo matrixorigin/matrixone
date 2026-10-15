@@ -140,19 +140,29 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			name := "hashbuild_bundle_cleanup_" + uuid.NewString()
 			fd, err := baseFS.CreateFile(context.Background(), name)
 			require.NoError(t, err)
+			defer fd.Close()
 			_, err = fd.Write([]byte{1})
 			require.NoError(t, err)
-			require.NoError(t, fd.Close())
 			defer func() { _ = baseFS.RemoveFile(context.Background(), name) }()
 			token, err := generation.ReserveSpillDisk(1)
 			require.NoError(t, err)
+			defer token.Release()
+			fdToken, err := generation.ReserveSpillFD(1)
+			require.NoError(t, err)
+			defer fdToken.Release()
 			fault := &blockedBundleRemoveFS{MutableFileService: baseFS, blocked: blocked}
 			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
-				0: {fs: fault, name: name, created: true, diskToken: token},
+				0: {fs: fault, name: name, created: true, file: fd, diskToken: token, fdToken: fdToken},
+				1: nil,
 			}}
 			defer func() { fault.blocked = false; bundle.release() }()
 			op := &HashBuild{ctr: container{spillBundle: bundle}}
 			op.cleanupSpillFiles(proc)
+			_, statErr := fd.Stat()
+			require.Error(t, statErr, "terminal cleanup closes the descriptor even if removal fails")
+			require.Zero(t, generation.SpillFDUsed())
+			_, handoffErr := bundle.accountedFiles(context.Background(), generation)
+			require.ErrorIs(t, handoffErr, process.ErrExecutionSpillReservationInactive)
 			if blocked {
 				physical, openErr := baseFS.OpenFile(context.Background(), name)
 				require.NoError(t, openErr)
