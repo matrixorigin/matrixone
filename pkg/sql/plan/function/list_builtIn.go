@@ -8681,6 +8681,9 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				overloadId: 13,
 				args:       []types.T{types.T_varchar},
+				// Text conversion diagnostics belong to every evaluated row,
+				// including selected branches with a literal argument.
+				volatile: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},

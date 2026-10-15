@@ -81,6 +81,32 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			require.Len(t, queryStringRows(t, ctx, db, "show warnings"), 3)
 			require.Equal(t, [][]string{{"safe"}, {"xx"}, {"NULL"}}, queryStringRows(t, ctx, db, "select if(id=1,'safe',repeat('x',n)) from inputs order by id"))
 			require.Empty(t, queryStringRows(t, ctx, db, "show warnings"), "unselected malformed value must not diagnose")
+			for _, tc := range []struct {
+				name, expression, predicate string
+				want                        [][]string
+				warnings                    int
+			}{
+				{"bit_count_constant", "bit_count('3x')", "", [][]string{{"2"}, {"2"}, {"2"}}, 3},
+				{"bit_count_nested", "bit_count('3x')+1", "", [][]string{{"3"}, {"3"}, {"3"}}, 3},
+				{"bit_count_partial_if", "if(id=1,0,bit_count('3x'))", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
+				{"bit_count_partial_case", "case when id=1 then 0 else bit_count('3x') end", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
+				{"bit_count_partial_coalesce", "coalesce(if(id=1,0,null),bit_count('3x'))", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
+				{"bit_count_column", "bit_count(n)", "", [][]string{{"2"}, {"1"}, {"NULL"}}, 1},
+				{"bit_count_inactive", "if(id>0,0,bit_count('3x'))", "", [][]string{{"0"}, {"0"}, {"0"}}, 0},
+				{"bit_count_empty", "bit_count('3x')", " where id<0", nil, 0},
+				{"bit_count_valid_text", "bit_count('3 ')", "", [][]string{{"2"}, {"2"}, {"2"}}, 0},
+				{"bit_count_numeric", "bit_count(3)", "", [][]string{{"2"}, {"2"}, {"2"}}, 0},
+				{"bit_count_binary", "bit_count(cast('3x' as binary))", "", [][]string{{"8"}, {"8"}, {"8"}}, 0},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					require.Equal(t, tc.want, queryStringRows(t, ctx, db, "select "+tc.expression+" from inputs"+tc.predicate+" order by id"))
+					warnings := queryStringRows(t, ctx, db, "show warnings")
+					require.Len(t, warnings, tc.warnings)
+					for _, warning := range warnings {
+						require.Equal(t, []string{"Warning", "1292", "Truncated incorrect INTEGER value: '3x'"}, warning)
+					}
+				})
+			}
 		})
 		t.Run("prepared_reuse", func(t *testing.T) {
 			for _, prepared := range []struct{ expression, want string }{

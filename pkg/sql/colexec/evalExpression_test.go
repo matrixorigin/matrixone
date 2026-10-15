@@ -4748,3 +4748,63 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 		}
 	})
 }
+
+// Exercise the registered overload through runtime folding, rather than calling
+// its kernel directly: literal diagnostics belong to every selected input row.
+func TestBitCountDiagnosticFolding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source *plan.Expr
+		want   uint64
+		fold   bool
+	}{
+		{"text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 2, false},
+		{"binary", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 8, true},
+		{"numeric", makePlan2Int64ConstExprWithType(3), 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			session := &preparedCastWarningSession{}
+			proc.Session = session
+			executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", tc.source))
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
+			require.NoError(t, err)
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.SetRowCount(3)
+			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
+				executor.ResetForNextQuery()
+				session.warningCount = 0
+				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				require.Equal(t, 3, result.Length())
+				selected := 0
+				for row := 0; row < 3; row++ {
+					if mask == nil || mask[row] {
+						selected++
+						require.False(t, result.IsNull(uint64(row)))
+						require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, row))
+					}
+				}
+				if tc.fold {
+					require.Zero(t, session.warningCount)
+				} else {
+					require.Equal(t, selected, session.warningCount)
+				}
+				if selected > 0 {
+					require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold)
+				}
+			}
+			executor.ResetForNextQuery()
+			session.warningCount = 0
+			input.SetRowCount(0)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Length())
+			require.Zero(t, session.warningCount)
+		})
+	}
+}
