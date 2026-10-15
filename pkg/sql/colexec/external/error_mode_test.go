@@ -301,6 +301,80 @@ func TestJSONLineWithoutErrorColumnsStillFails(t *testing.T) {
 	require.Contains(t, err.Error(), "not a well-formed json object")
 }
 
+func TestJSONLineWhitespaceRecords(t *testing.T) {
+	for _, shape := range []struct {
+		name, jsonData, first, second string
+	}{
+		{"object", tree.OBJECT, `{"a":1,"s":"alpha"}`, `{"a":2,"s":"beta"}`},
+		{"array", tree.ARRAY, `[1,"alpha"]`, `[2,"beta"]`},
+	} {
+		for _, keep := range []int{colMsg, numTestCols} {
+			name := "ordinary"
+			if keep == numTestCols {
+				name = "tolerant"
+			}
+			t.Run(shape.name+"/"+name, func(t *testing.T) {
+				param, proc, bat := errorModeParam(t, tree.JSONLINE, shape.jsonData, keep)
+				content := "   \r\n" + shape.first + "\r\n   \r\n\r\n" + shape.second + "\r\n  \n"
+				require.NoError(t, readAllText(t, param, proc, bat, content))
+				require.Equal(t, 2, bat.RowCount())
+				for i, line := range []int64{2, 5} {
+					require.False(t, bat.Vecs[colA].IsNull(uint64(i)))
+					require.Equal(t, int32(i+1), vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[colA], i))
+					require.Equal(t, []string{"alpha", "beta"}[i], string(bat.Vecs[colS].GetBytesAt(i)))
+					require.Equal(t, line, vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], i))
+					if keep == numTestCols {
+						require.True(t, bat.Vecs[colMsg].IsNull(uint64(i)))
+						require.True(t, bat.Vecs[colText].IsNull(uint64(i)))
+					}
+				}
+			})
+		}
+	}
+
+	// A quoted empty scalar and a tab-delimited malformed record must still
+	// reach JSON validation, even though the first decoded field is empty.
+	for _, content := range []string{"\"\"\n", "\"   \"\n", "\tbad\n"} {
+		t.Run("invalid/"+content, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.OBJECT, colMsg)
+			require.Error(t, readAllText(t, param, proc, bat, content))
+			param, proc, bat = errorModeParam(t, tree.JSONLINE, tree.OBJECT, numTestCols)
+			require.NoError(t, readAllText(t, param, proc, bat, content))
+			require.Equal(t, 1, bat.RowCount())
+			require.True(t, bat.Vecs[colA].IsNull(0))
+			require.False(t, bat.Vecs[colMsg].IsNull(0))
+		})
+	}
+
+	for _, tc := range []struct {
+		name, content string
+		prevStr       string
+		ignore        int
+		maxBytes      uint64
+		want          []wantRow
+	}{
+		{"ignored records", "   \n{\"a\":1,\"s\":\"alpha\"}\n   \n{\"a\":2,\"s\":\"beta\"}\n", "", 1, 1 << 20, []wantRow{{a: 2, s: "beta", line: 4}}},
+		{"continuation", "   \n123}\n", `{"a":1,"s":`, 0, 1 << 20, []wantRow{{a: 1, s: "123", line: 2}}},
+		{"batch bytes", strings.Repeat(" ", 80) + "\n{\"a\":1,\"s\":\"alpha\"}\n{\"a\":2,\"s\":\"beta\"}\n", "", 0, 40, []wantRow{{a: 1, s: "alpha", line: 2}, {a: 2, s: "beta", line: 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.OBJECT, numTestCols)
+			param.maxBatchSize = tc.maxBytes
+			if tc.name == "continuation" {
+				param.ErrorMode.Tolerate = false
+			}
+			r := &CsvReader{param: param, prevStr: tc.prevStr, ignoreLine: tc.ignore, reader: io.NopCloser(strings.NewReader(tc.content))}
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			parser, err := newCSVParserFromReader(param.Extern, r.reader)
+			require.NoError(t, err)
+			r.plh = &ParseLineHandler{csvReader: parser}
+			_, err = r.makeBatchRows(proc, bat)
+			require.NoError(t, err)
+			requireRows(t, bat, tc.want)
+		})
+	}
+}
+
 // kafkaErrorModeParam declares `(a int, s varchar)` plus __mo_message_id, the
 // three error-mode columns and __mo_message_value.
 func kafkaErrorModeParam(t *testing.T, ks *plan.KafkaScan) (*ExternalParam, *process.Process, *batch.Batch) {
