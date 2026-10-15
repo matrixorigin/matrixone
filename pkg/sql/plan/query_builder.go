@@ -7790,7 +7790,7 @@ func rollupWindowGroupingAliases(selectExprs tree.SelectExprs, groupingSets []tr
 	names := make(map[string]struct{})
 	for _, list := range groupingSets {
 		for _, group := range list {
-			walkGroupingSetOrderByExpr(group, func(expr tree.Expr) bool {
+			walkASTExpressions(group, func(expr tree.Expr) bool {
 				if _, subquery := expr.(*tree.Subquery); subquery {
 					return false
 				}
