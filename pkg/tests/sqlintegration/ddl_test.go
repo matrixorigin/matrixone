@@ -218,7 +218,11 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		exec := testutils.GetSQLExecutor(cn)
 		db := testutils.GetDatabaseName(t)
-		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		defer cleanupSQLIntegration(t, cn,
+			"drop cdc all internal",
+			"drop pitr if exists cdc_pitr internal",
+			"drop database if exists "+db,
+		)
 
 		res, err := exec.Exec(ctx, "create database "+db, executor.Options{})
 		require.NoError(t, err)
@@ -280,9 +284,6 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		defer res.Close()
 		require.Equal(t, 0, testutils.ReadCount(res))
-		res, err = exec.Exec(ctx, "drop cdc all internal", executor.Options{})
-		require.NoError(t, err)
-		res.Close()
 	})
 }
 
