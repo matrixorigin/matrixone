@@ -203,6 +203,8 @@ func (p *ExecutionMemoryGrowthParticipant) RetainedLimit(
 // check is an operator-owned sequence, not shared participant state. Counters
 // contain raw sampled nanoseconds (critical includes provider time); they are
 // not full-query wall time and must not be added across concurrent workers.
+// Scheduling/record-size bias also makes multiplication by 1024 unsuitable for
+// an exact total. Sampled maxima expose tails without implying such a total.
 func (p *ExecutionMemoryGrowthParticipant) RetainedLimitWithStats(current, check uint64, stats *OperatorStats) (uint64, error) {
 	if stats == nil || check%1024 != 0 {
 		return p.RetainedLimit(current)
@@ -210,10 +212,14 @@ func (p *ExecutionMemoryGrowthParticipant) RetainedLimitWithStats(current, check
 	var timing memoryGrowthTiming
 	start := time.Now()
 	limit, err := p.retainedLimit(current, &timing)
-	stats.AddExtraStat("MemoryGrowthSampleNanos", time.Since(start).Nanoseconds())
+	elapsed := time.Since(start).Nanoseconds()
+	stats.AddExtraStat("MemoryGrowthSampleNanos", elapsed)
+	stats.SetMaxExtraStat("MemoryGrowthSampleMaxNanos", elapsed)
 	stats.AddExtraStat("MemoryGrowthSamples", 1)
 	stats.AddExtraStat("MemoryGrowthGateWaitSampleNanos", timing.gateWait.Nanoseconds())
+	stats.SetMaxExtraStat("MemoryGrowthGateWaitSampleMaxNanos", timing.gateWait.Nanoseconds())
 	stats.AddExtraStat("MemoryGrowthBudgetWaitSampleNanos", timing.budgetWait.Nanoseconds())
+	stats.SetMaxExtraStat("MemoryGrowthBudgetWaitSampleMaxNanos", timing.budgetWait.Nanoseconds())
 	stats.AddExtraStat("MemoryGrowthCriticalSampleNanos", timing.critical.Nanoseconds())
 	stats.AddExtraStat("MemoryGrowthProviderSampleNanos", timing.provider.Nanoseconds())
 	stats.AddExtraStat("MemoryGrowthRefreshSamples", timing.refreshes)
