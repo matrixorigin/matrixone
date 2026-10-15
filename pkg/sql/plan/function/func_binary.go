@@ -8387,6 +8387,12 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	}
 
 	findInStrList := func(str, strlist string) Tr {
+		// MySQL treats an empty strlist as an empty list and always
+		// returns 0. strings.Split("", ",") would instead yield [""] and
+		// match an empty needle at position 1.
+		if strlist == "" {
+			return toResult(0)
+		}
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
 				return toResult(uint64(j + 1))

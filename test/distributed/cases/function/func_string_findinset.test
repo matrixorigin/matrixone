@@ -91,3 +91,7 @@ select find_in_set("","a,b,c")*find_in_set("","a,b,c,")-find_in_set("bb","a,bbb,
 #drop table nodes, arcs;
 
 
+
+# empty string list always yields 0 in MySQL
+select find_in_set("","") AS empty_list_empty_needle;
+select find_in_set("a","") AS empty_list_other_needle;

@@ -84,3 +84,9 @@ DROP TABLE t1;
 select find_in_set("","a,b,c")*find_in_set("","a,b,c,")-find_in_set("bb","a,bbb,dd");
 find_in_set("","a,b,c")*find_in_set("","a,b,c,")-find_in_set("bb","a,bbb,dd")
 0
+select find_in_set("","") AS empty_list_empty_needle;
+empty_list_empty_needle
+0
+select find_in_set("a","") AS empty_list_other_needle;
+empty_list_other_needle
+0
