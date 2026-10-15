@@ -6267,11 +6267,10 @@ func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 const (
-	// SPACE returns a VARCHAR. Keep the execution bound aligned with the
-	// largest inline SQL string instead of an unrelated, smaller constant.
-	// The bound is still finite: a count supplied by a table must not turn one
-	// row into an unbounded allocation.
-	MaxAllowedValue = types.MaxVarcharLen
+	// Bound generated spaces by the supported large string result size,
+	// rather than the declared capacity of a VARCHAR column. Check this
+	// before converting the count to int or allocating the result.
+	MaxAllowedValue = types.MaxBlobLen
 )
 
 func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
@@ -7896,7 +7895,13 @@ func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 // TimeToMicrosecond returns the microseconds from time (0-999999)
 func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
-		return v.MicroSec()
+		// MySQL returns the nonnegative fractional part (0-999999) even for
+		// negative TIME values; Time.MicroSec keeps the raw int64 sign.
+		ms := v.MicroSec()
+		if ms < 0 {
+			ms = -ms
+		}
+		return ms
 	}, selectList)
 }
 
@@ -7945,7 +7950,13 @@ func StringToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Try parsing as TIME first (most common format for microsecond)
 		timeVal, err1 := types.ParseTime(str, scale)
 		if err1 == nil {
-			if err := rs.Append(timeVal.MicroSec(), false); err != nil {
+			// A negative TIME literal must not leak its sign into the
+			// fractional part; MySQL reports 0-999999.
+			ms := timeVal.MicroSec()
+			if ms < 0 {
+				ms = -ms
+			}
+			if err := rs.Append(ms, false); err != nil {
 				return err
 			}
 			continue
@@ -9231,7 +9242,7 @@ func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
-func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+func unhexToBytes(proc *process.Process, data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
@@ -9244,6 +9255,14 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 
 	bs, err := hex.DecodeString(str)
 	if err != nil {
+		// MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) for malformed
+		// hexadecimal input while still returning NULL for the value.
+		if proc != nil {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+				appender.AppendWarningDiagnostic(moerr.ER_WRONG_VALUE_FOR_TYPE,
+					fmt.Sprintf("Incorrect string value: '%s' for function unhex", functionUtil.QuickBytesToStr(data)))
+			}
+		}
 		return rs.AppendMustNullForBytesResult()
 	}
 	return rs.AppendMustBytesValue(bs)
@@ -9256,7 +9275,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if err := unhexToBytes(data, null, rs); err != nil {
+		if err := unhexToBytes(proc, data, null, rs); err != nil {
 			return err
 		}
 	}

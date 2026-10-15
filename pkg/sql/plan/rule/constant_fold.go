@@ -138,6 +138,10 @@ func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	return r.foldExpr(expr, proc, false)
+}
+
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -157,7 +161,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.constantFold(exprList[i], proc)
+				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -225,13 +229,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if !exists {
 		return expr
 	}
-	// The persisted-expression admission pass runs after optimization. Keep
-	// spatial-distance functions visible until that pass has observed the v86
-	// requirement; folding them to a literal would erase the only durable
-	// capability marker and let an older reader rebind the original SQL under
-	// incompatible planar semantics.
-	if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
-		return expr
+	// Preserve the v90 spatial requirement before evaluating any child. A
+	// successful scan covers this entire subtree, so recursive folding can
+	// reuse it instead of scanning every descendant again.
+	if !spatialChecked {
+		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+			return expr
+		}
+		spatialChecked = true
 	}
 	if f.CannotFold() { // function cannot be fold
 		return expr
@@ -251,7 +256,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.constantFold(fn.Args[i], proc)
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {

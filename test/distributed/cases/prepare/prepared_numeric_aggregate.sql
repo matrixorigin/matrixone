@@ -31,6 +31,19 @@ DEALLOCATE PREPARE p_window;
 
 CREATE TABLE ntile_input(id INT PRIMARY KEY, g INT);
 INSERT INTO ntile_input VALUES (1, 1), (2, 1), (3, 1), (4, 2);
+-- #30300: bucket configuration must not depend on an input row, even on empty input.
+SELECT id, NTILE(id) OVER (ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+SELECT id, NTILE(id + 1) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+SELECT NTILE(g) OVER (ORDER BY id) AS bucket FROM ntile_input WHERE FALSE;
+-- Row-independent expressions keep the normal partition distribution.
+SELECT id, NTILE(1 + 1) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+-- User variables remain valid execution configuration.
+SET @ntile_buckets = 2;
+SELECT id, NTILE(@ntile_buckets) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+-- #30301: invalid bucket values must be input errors.
+SELECT NTILE(0) OVER (ORDER BY id) AS bucket FROM ntile_input;
+SELECT NTILE(-5) OVER (ORDER BY id) AS bucket FROM ntile_input;
+SELECT NTILE(CAST(NULL AS SIGNED)) OVER (ORDER BY id) AS bucket FROM ntile_input;
 PREPARE p_ntile FROM 'SELECT id, NTILE(?) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id';
 SET @value = 2;
 EXECUTE p_ntile USING @value;
@@ -41,6 +54,10 @@ EXECUTE p_ntile USING @value;
 SET @value = '2.5';
 EXECUTE p_ntile USING @value;
 SET @value = '2';
+EXECUTE p_ntile USING @value;
+SET @value = 0;
+EXECUTE p_ntile USING @value;
+SET @value = -5;
 EXECUTE p_ntile USING @value;
 SET @value = NULL;
 EXECUTE p_ntile USING @value;

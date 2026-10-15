@@ -1673,6 +1673,14 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 					require.Len(t, node.Children, 1)
 					input := query.Nodes[node.Children[0]]
 					windowInputTypes = append(windowInputTypes, input.NodeType)
+					// The empty-input row-count guard runs before ranking.
+					if tc.expectedWindowInputType == plan.Node_AGG && input.NodeType == plan.Node_FILTER {
+						require.Len(t, input.FilterList, 1)
+						require.Equal(t, ">", input.FilterList[0].GetF().Func.ObjName)
+						require.Equal(t, int32(types.T_int64), input.FilterList[0].GetF().Args[0].Typ.Id)
+						require.Len(t, input.Children, 1)
+						input = query.Nodes[input.Children[0]]
+					}
 					if input.NodeType == tc.expectedWindowInputType {
 						if input.NodeType == plan.Node_AGG {
 							require.Len(t, input.Children, 1)
@@ -1797,6 +1805,12 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 						require.NotNil(t, fn)
 						require.Equal(t, ">", fn.Func.ObjName)
 						require.NotEmpty(t, fn.Args)
+						// The added COUNT(*) guard is separate from the source-column
+						// HAVING predicate whose alias resolution is checked here.
+						if fn.Args[0].Typ.Id == int32(types.T_int64) {
+							require.Zero(t, fn.Args[1].GetLit().GetI64Val())
+							continue
+						}
 						require.Equal(t, test.expectedHavingType, fn.Args[0].Typ.Id)
 						foundHaving = true
 					}
@@ -1829,6 +1843,10 @@ func TestRollupWindowHavingAliasCollisionWithHiddenGroup(t *testing.T) {
 			require.NotNil(t, fn)
 			require.Equal(t, ">", fn.Func.ObjName)
 			require.NotEmpty(t, fn.Args)
+			if fn.Args[0].Typ.Id == int32(types.T_int64) {
+				require.Zero(t, fn.Args[1].GetLit().GetI64Val())
+				continue
+			}
 			require.Equal(t, int32(types.T_int32), fn.Args[0].Typ.Id)
 			foundHaving = true
 		}
@@ -1962,6 +1980,30 @@ func TestRollupWindowVolatileExprOccurrencesStayIndependent(t *testing.T) {
 	require.Len(t, rowNumber.WindowSpec.OrderBy, 1)
 	_, ok = rowNumber.WindowSpec.OrderBy[0].Expr.(*tree.FuncExpr)
 	require.True(t, ok, "the window's rand occurrence must not reuse either SELECT projection")
+}
+
+func TestRollupSamplePlanning(t *testing.T) {
+	for _, sql := range []string{
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by l_returnflag with rollup",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by rollup(l_returnflag)",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by l_returnflag",
+		"select l_returnflag,sample(l_quantity,1 rows) from lineitem group by grouping sets ((l_returnflag),())",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+			require.True(t, reachableNodeType(logical.GetQuery(), plan.Node_SAMPLE))
+			require.False(t, reachableNodeType(logical.GetQuery(), plan.Node_AGG))
+		})
+	}
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"select l_returnflag,sample(l_quantity,1 rows),count(*) from lineitem group by l_returnflag with rollup")
+	require.ErrorContains(t, err, "cannot fixed non-scalar function and scalar function in the same query")
+	logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"select v from (select sample(l_quantity,1 rows) as v from lineitem) s group by v with rollup")
+	require.NoError(t, err)
+	require.True(t, reachableNodeType(logical.GetQuery(), plan.Node_AGG),
+		"a nested SAMPLE must not disable the outer ROLLUP guard")
 }
 
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {

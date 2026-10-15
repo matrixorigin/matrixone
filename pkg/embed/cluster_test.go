@@ -196,7 +196,8 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.NoError(t, err)
 	c.portLease = ports
 	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
-	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	lease, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err)
 	c.testAdmission = lease
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
@@ -210,7 +211,7 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.Nil(t, c.testAdmission)
 	require.Nil(t, c.portLease)
 	require.True(t, c.CloseComplete())
-	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	next, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err, "completed close must not poison the next cluster")
 	t.Cleanup(func() { require.NoError(t, next.Release()) })
 	require.NoError(t, c.Close())
@@ -375,6 +376,9 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 }
 
 func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	// This scenario owns its cluster independently of earlier shared-fixture tests.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
@@ -735,6 +739,9 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 }
 
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
+	// This lock-only test must own its namespace: other cluster processes may
+	// legitimately acquire a released range before this test reacquires it.
+	t.Setenv("TMPDIR", t.TempDir())
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -1328,11 +1335,10 @@ func TestClusterCloseStopsAtServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	err = c.Close()
@@ -1406,11 +1412,10 @@ func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
 		state:    started,
 		services: []*operator{logOp, tnOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
@@ -1531,6 +1536,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root := t.TempDir()
 	var parsed cnservice.Config
