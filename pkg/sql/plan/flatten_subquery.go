@@ -4363,19 +4363,6 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 	}
 }
 
-func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
-	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
-		return nil, false
-	}
-	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
-		return c, true
-	}
-	if c := f.Args[1].GetCorr(); c != nil && c.Depth == 1 && f.Args[0].GetCol() != nil {
-		return c, true
-	}
-	return nil, false
-}
 
 func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	f := expr.GetF()
