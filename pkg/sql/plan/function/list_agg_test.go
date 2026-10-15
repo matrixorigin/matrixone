@@ -194,8 +194,8 @@ func TestBitSumAvgUsesExistingUnsignedDomain(t *testing.T) {
 	}
 }
 
-func TestEnumAggregatesUseOrdinalDomain(t *testing.T) {
-	for _, name := range []string{"sum", "avg", "bit_and", "bit_or", "bit_xor"} {
+func TestEnumBitwiseAggregatesUseOrdinalDomain(t *testing.T) {
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
 		t.Run(name, func(t *testing.T) {
 			got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
 			require.NoError(t, err)
@@ -210,6 +210,21 @@ func TestEnumAggregatesUseOrdinalDomain(t *testing.T) {
 				require.Error(t, err)
 			}
 		})
+	}
+}
+
+func TestEnumSumAvgUsesDoubleDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
+		require.NoError(t, err)
+		casts, cast := got.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, []types.Type{types.T_float64.ToType()}, casts)
+		require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_uuid.ToType()}} {
+			_, err := GetFunctionByName(context.Background(), name, inputs)
+			require.Error(t, err)
+		}
 	}
 }
 
