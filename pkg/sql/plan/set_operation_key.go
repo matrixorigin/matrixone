@@ -40,6 +40,24 @@ func (builder *QueryBuilder) setArmHasSingletonBoundary(id int32) bool {
 	return false
 }
 
+// setArmHasReuseBoundary keeps general arm reuse within the existing single-arm
+// aggregate/pagination decorrelation owners. Plain multirow arms retain the set
+// route, whose range-correlated scalar fallback deduplicates after outer matching.
+func (builder *QueryBuilder) setArmHasReuseBoundary(id int32) bool {
+	node := builder.qry.Nodes[id]
+	if _, literal := getLiteralUint64(node.Limit); literal {
+		return true
+	}
+	if node.NodeType == planpb.Node_AGG {
+		return true
+	}
+	switch node.NodeType {
+	case planpb.Node_PROJECT, planpb.Node_SORT, planpb.Node_FILTER:
+		return len(node.Children) == 1 && builder.setArmHasReuseBoundary(node.Children[0])
+	}
+	return false
+}
+
 // buildSetOperationPhysicalKeys refines membership without changing the visible
 // row or the shared GROUP BY/DISTINCT equality domain. Both initial planning and
 // prepared-plan specialization must derive keys from the resolved output types.
