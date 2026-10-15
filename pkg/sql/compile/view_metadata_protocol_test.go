@@ -98,7 +98,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
 					if mode == "mixed" {
@@ -121,33 +121,44 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						require.NoError(t, err)
 						op.ProjectList = append(op.ProjectList, statistical)
 					}
+					if mode == "normalized_interval" {
+						normalized, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "to_calendar_interval", []*planpb.Expr{
+							{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+							plan2.MakePlan2Int64ConstExprWithType(int64(types.Day)),
+						})
+						require.NoError(t, err)
+						op.ProjectList = append(op.ProjectList, normalized)
+					}
 					features, err := planpb.RequiredRemoteExpressionFeatures(&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}})
 					require.NoError(t, err)
 					require.True(t, features.ViewMetadataFunctions, "shared analysis must match the actual registry IDs")
 					require.Equal(t, mode == "mixed", features.DecimalDivisionSemantics)
 					require.Equal(t, mode == "calendar", features.DateNumericResultContracts)
 					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
-					require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
+					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
+					require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion115, persistedVersion)
+					require.Equal(t, defines.MORPCVersion116, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion115 {
+						if version == defines.MORPCVersion116 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
 						} else if version == 0 && mode == "mixed" {
 							require.ErrorContains(t, err, "remote destination does not support decimal division")
 						} else if version < defines.MORPCVersion112 && mode == "calendar" {
 							require.ErrorContains(t, err, "remote destination does not support signed date result contracts")
+						} else if version < defines.MORPCVersion115 && mode == "normalized_interval" {
+							require.ErrorContains(t, err, "remote destination does not support calendar interval normalization")
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 115)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 116)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
