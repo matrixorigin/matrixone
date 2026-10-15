@@ -157,7 +157,8 @@ func TestAuthorizeSQLFileAccess(t *testing.T) {
 		{name: "empty service with arguments follows local resolver", proc: newProc("sys", "public"), path: ",endpoint,region,bucket,key,secret,prefix:owned.txt", wantErr: true},
 		{name: "missing identity denied", proc: newProc("", ""), path: "/tmp/owned.txt", wantErr: true},
 		{name: "dynamic s3 remains available", proc: newProc("sys", "public"), path: "s3,endpoint,region,bucket,key,secret,prefix:owned.txt"},
-		{name: "dynamic hdfs remains available", proc: newProc("tenant", "public"), path: "hdfs,endpoint=localhost:9000:owned.txt"},
+		{name: "dynamic hdfs remains available", proc: newProc("tenant", "public"), path: "hdfs,endpoint=localhost:9000,user=caller:owned.txt"},
+		{name: "endpoint-only hdfs remains available", proc: newProc("tenant", "public"), path: "hdfs,endpoint=localhost:9000:owned.txt"},
 		{name: "dynamic disk backend requires system moadmin", proc: newProc("sys", "public"), path: "s3-opts,endpoint=disk,bucket=/tmp/owned:owned.txt", wantErr: true},
 		{name: "legacy dynamic disk backend requires system moadmin", proc: newProc("sys", "public"), path: "s3,disk,region,bucket,key,secret,prefix:owned.txt", wantErr: true},
 		{name: "dynamic disk endpoint with hdfs option remains local", proc: newProc("sys", "public"), path: "s3-opts,endpoint=disk,is-hdfs=true,bucket=/tmp/owned:owned.txt", wantErr: true},
@@ -178,6 +179,16 @@ func TestAuthorizeSQLFileAccess(t *testing.T) {
 			}
 		})
 	}
+	t.Run("HDFS URL and stage preserve simple authentication", func(t *testing.T) {
+		proc := newProc("tenant", "public")
+		_, err := NewDatalink("hdfs://owned.invalid/owned.txt", proc)
+		require.NoError(t, err)
+		u, err := url.Parse("hdfs://owned.invalid/owned.txt")
+		require.NoError(t, err)
+		path, _, err := (stage.StageDef{Url: u}).ToPath()
+		require.NoError(t, err)
+		require.NoError(t, process.AuthorizeSQLFileAccess(proc, path))
+	})
 }
 
 func TestRemoteStageDatalinkKeepsOrdinaryReadWrite(t *testing.T) {
@@ -300,6 +311,7 @@ func TestDatalinkStageReuseRechecksServerAuthority(t *testing.T) {
 	proc.BuildPipelineContext(ctx)
 	proc.Base.SessionInfo.Account = "sys"
 	proc.Base.SessionInfo.Role = "moadmin"
+	proc.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	proc.GetStageCache().Set("owned", stage.StageDef{Id: 1, Name: "owned", Url: stageURL})
 	dl, err := NewDatalink("stage://owned/stage.txt", proc)
 	require.NoError(t, err)
@@ -310,8 +322,8 @@ func TestDatalinkStageReuseRechecksServerAuthority(t *testing.T) {
 	require.NoError(t, r.Close())
 	require.Equal(t, "stage content", string(data))
 
-	// Background execution retains its internal marker, but loses the current
-	// role's file authority. Reuse must reject every subsequent I/O operation.
+	// Retain the old administrator context while changing the current role.
+	// Every I/O owner must rebind from current identity before acquisition.
 	proc.Base.SessionInfo.Role = "public"
 	_, err = dl.NewReadCloser(proc)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
@@ -330,7 +342,7 @@ func TestDatalinkAsyncSourceProviderAdmission(t *testing.T) {
 		{"local", fileservice.Path{File: "owned.txt"}, false},
 		{"configured", fileservice.Path{Service: "SHARED", File: "owned.txt"}, false},
 		{"disk", fileservice.Path{Service: "s3-opts", ServiceArguments: []string{"endpoint=disk", "bucket=owned"}, File: "owned.txt"}, false},
-		{"remote", fileservice.Path{Service: "s3-opts", ServiceArguments: []string{"endpoint=http://127.0.0.1:1", "bucket=owned"}, File: "owned.txt"}, true},
+		{"remote", fileservice.Path{Service: "s3-opts", ServiceArguments: []string{"endpoint=http://127.0.0.1:1", "bucket=owned", "key=caller", "secret=owned"}, File: "owned.txt"}, true},
 		{"malformed", fileservice.Path{Service: "s3", ServiceArguments: []string{"missing"}, File: "owned.txt"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -169,6 +169,10 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.Fileparam.FileCnt = 1
 	}
 	param.Ctx = proc.Ctx
+	if param.Extern.ScanType != tree.INLINE && !param.Extern.Local && param.ForeignScan == nil {
+		param.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
+	}
+	param.Extern.Ctx = param.Ctx
 	param.addParquetProfile(icebergParquetProfileStats(param))
 	// Validate the physical output mapping before constructing a reader. A
 	// failed mapping must not leave a reader or batch behind for the caller to

@@ -3158,7 +3158,7 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 	if param.ScanType == tree.S3 {
 		fs = nil
 	}
-	return fileservice.GetForETL(context.TODO(), fs, target)
+	return fileservice.GetForETL(param.Ctx, fs, target)
 }
 
 func StatFile(param *tree.ExternParam) error {

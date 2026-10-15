@@ -25,7 +25,7 @@ import (
 )
 
 func TestGetForBackup(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	fs, err := GetForBackup(ctx, dir, "DISK")
 	assert.Nil(t, err)
@@ -59,7 +59,7 @@ func TestLocalBackendOf(t *testing.T) {
 }
 
 func TestGetForBackupS3Opts(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	spec := JoinPath("s3-opts,endpoint=disk,bucket="+dir+",prefix=backup-prefix,name=backup", "object")
 	fs, err := GetForBackup(ctx, spec, "DISK")
@@ -82,7 +82,7 @@ func TestBackupObjectStorageUsesDedicatedConnectionPool(t *testing.T) {
 	assert.Equal(t, 7, args.MaxConnsPerHost)
 }
 
-func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
+func TestSQLFileResourcesMirrorBackendSelection(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -92,15 +92,15 @@ func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
 		{name: "s3 disk", path: "s3,disk,region,bucket,key,secret,prefix:file", want: true},
 		{name: "s3 opts disk", path: "s3-opts,endpoint=disk,bucket=/tmp/file:file", want: true},
 		{name: "s3 opts caller hdfs is normalized away", path: "s3-opts,endpoint=disk,is-hdfs=true,bucket=/tmp/file:file", want: true},
-		{name: "hdfs disk endpoint is hdfs provider", path: "hdfs,endpoint=disk:file", want: false},
-		{name: "minio disk endpoint is minio provider", path: "s3-opts,endpoint=disk,is-minio=true,bucket=/tmp/file:file", want: false},
-		{name: "remote s3", path: "s3-opts,endpoint=https://s3.example,bucket=b:file", want: false},
+		{name: "hdfs disk endpoint is hdfs provider", path: "hdfs,endpoint=disk,user=caller:file", want: false},
+		{name: "minio disk endpoint is minio provider", path: "s3-opts,endpoint=disk,is-minio=true,bucket=/tmp/file,key=k,secret=s:file", want: false},
+		{name: "remote s3", path: "s3-opts,endpoint=https://s3.example,bucket=b,key=k,secret=s:file", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path, err := ParsePath(tt.path)
 			assert.NoError(t, err)
-			local, err := PathUsesLocalETLBackend(path)
+			local, err := SQLFilePathRequiresAdmin(path)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.want, local)
 		})
@@ -108,7 +108,7 @@ func TestPathUsesLocalETLBackendMirrorsGetForETL(t *testing.T) {
 }
 
 func TestGetForETLDynamicS3OptsDiskRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	bucket := t.TempDir()
 	spec := JoinPath("s3-opts,endpoint=disk,bucket="+bucket+",prefix=roundtrip", "object")
 
@@ -188,9 +188,9 @@ func TestETLProviderAdmissionRejectsMalformedArguments(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			p, err := ParseETLService(spec)
 			assert.NoError(t, err)
-			_, err = PathUsesLocalETLBackend(p)
+			_, err = SQLFilePathRequiresAdmin(p)
 			assert.Error(t, err)
-			_, _, err = GetForETLWithParsedPath(t.Context(), nil, spec, p)
+			_, _, err = GetForETLWithParsedPath(WithSQLFileAccess(t.Context(), "sys", "moadmin"), nil, spec, p)
 			assert.Error(t, err)
 		})
 	}
@@ -201,7 +201,7 @@ func TestETLProviderAdmissionLeavesGlobToExpansion(t *testing.T) {
 		p, err := ParseETLService(spec)
 		assert.NoError(t, err)
 		assert.Equal(t, spec, p.File)
-		local, err := PathUsesLocalETLBackend(p)
+		local, err := SQLFilePathRequiresAdmin(p)
 		assert.NoError(t, err)
 		assert.True(t, local)
 		_, err = ParsePath(spec)

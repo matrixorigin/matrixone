@@ -44,7 +44,7 @@ import (
 )
 
 func TestReadDirHiddenPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	root := t.TempDir()
 	contents := map[string]string{
 		".data/part-1.csv":     "1\n",
@@ -3449,7 +3449,7 @@ func TestAuthorizeExternalFileAccess(t *testing.T) {
 		{name: "inline", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}}},
 		{name: "owned result scan", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:/query_result/owned"}, ExParam: tree.ExParam{ExternType: int32(plan.ExternType_RESULT_SCAN)}}},
 		{name: "named service", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:owned.csv"}}, denied: true},
-		{name: "remote s3", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "https://owned.example", Bucket: "owned"}}}},
+		{name: "remote s3", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "https://owned.example", Bucket: "owned", APIKey: "owned-key", APISecret: "owned-secret"}}}},
 		{name: "s3 disk", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "disk", Bucket: "/owned"}}}, denied: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

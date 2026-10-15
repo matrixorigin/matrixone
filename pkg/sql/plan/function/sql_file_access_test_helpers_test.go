@@ -26,5 +26,6 @@ func newSQLFileAccessTestProc(t *testing.T) *process.Process {
 	proc := testutil.NewProc(t)
 	proc.Base.SessionInfo.Account = "sys"
 	proc.Base.SessionInfo.Role = "moadmin"
+	proc.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	return proc
 }

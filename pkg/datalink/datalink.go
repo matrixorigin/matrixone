@@ -97,7 +97,7 @@ func (d Datalink) validateAsyncSource() error {
 	if err != nil {
 		return err
 	}
-	local, err := fileservice.PathUsesLocalETLBackend(path)
+	local, err := fileservice.SQLFilePathRequiresAdmin(path)
 	if err != nil {
 		return err
 	}
@@ -141,15 +141,7 @@ func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
 }
 
 func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
-	path, err := d.parsedPath()
-	if err != nil {
-		return nil, err
-	}
-	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
-		return nil, err
-	}
-
-	return fileservice.NewFileServiceWriterWithFileService(proc.GetFileService(), d.MoPath, proc.Ctx)
+	return fileservice.NewFileServiceWriterWithFileService(proc.GetFileService(), d.MoPath, process.SQLFileAccessContext(proc.Ctx, proc))
 }
 
 // ParseDatalink extracts data from a Datalink string
@@ -219,11 +211,8 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
-		return nil, err
-	}
 	fs := proc.GetFileService()
-	fs, readPath, err := fileservice.GetForETLWithParsedPath(proc.Ctx, fs, d.MoPath, path)
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), fs, d.MoPath, path)
 	if fs == nil || err != nil {
 		if fs != nil && d.ownsService(path) {
 			fs.Close(proc.Ctx)
@@ -266,10 +255,7 @@ func (d Datalink) StatFile(proc *process.Process) (*fileservice.DirEntry, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
-		return nil, err
-	}
-	fs, readPath, err := fileservice.GetForETLWithParsedPath(proc.Ctx, proc.GetFileService(), d.MoPath, path)
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), proc.GetFileService(), d.MoPath, path)
 	if fs == nil || err != nil {
 		if fs != nil && d.ownsService(path) {
 			fs.Close(proc.Ctx)

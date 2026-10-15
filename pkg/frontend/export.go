@@ -180,7 +180,7 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 		readPath = filePath
 
 	} else {
-		ep.FileService, readPath, err = fileservice.GetForETLWithParsedPath(ctx, nil, filePath, fspath)
+		ep.FileService, readPath, err = fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(ctx, ep.proc), nil, filePath, fspath)
 		if err != nil {
 			return err
 		}
@@ -1024,7 +1024,7 @@ func writeParquetToFile(ep *ExportConfig, data []byte) error {
 		fs = getPu(ep.service).FileService
 		readPath = filePath
 	} else {
-		fs, readPath, err = fileservice.GetForETLWithParsedPath(ep.ctx, nil, filePath, fspath)
+		fs, readPath, err = fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(ep.ctx, ep.proc), nil, filePath, fspath)
 		if err != nil {
 			return err
 		}

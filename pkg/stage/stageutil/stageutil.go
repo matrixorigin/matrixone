@@ -305,7 +305,7 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
 			p := fileservice.JoinPath(service, prefix)
-			etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+			etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 			if err != nil {
 				return nil, err
 			}
@@ -350,7 +350,7 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 
 	fs := proc.GetFileService()
 	p := fileservice.JoinPath(service, pattern)
-	etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+	etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 	if err != nil {
 		return nil, err
 	}
@@ -395,6 +395,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
 
+	ctx = process.SQLFileAccessContext(ctx, proc)
 	procCtx := *proc
 	procCtx.Ctx = ctx
 

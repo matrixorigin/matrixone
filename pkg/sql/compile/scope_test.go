@@ -1336,7 +1336,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-	ctx := context.TODO()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: "test.csv",
@@ -2096,7 +2096,7 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 			Format:   tree.PARQUET,
 		},
 		ExParam: tree.ExParam{
-			Ctx: context.Background(),
+			Ctx: fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"),
 		},
 	}
 

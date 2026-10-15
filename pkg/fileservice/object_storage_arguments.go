@@ -28,6 +28,8 @@ import (
 )
 
 type ObjectStorageArguments struct {
+	// Set only by the SQL acquisition owner, never parsed from provider options.
+	callerCredentialsOnly bool
 	// misc
 	Name                 string       `toml:"name"`
 	KeyPrefix            string       `toml:"key-prefix"`
@@ -261,16 +263,5 @@ func probeAWSRegionWithClient(
 }
 
 func (o *ObjectStorageArguments) shouldLoadDefaultCredentials() bool {
-
-	// default credentials enabled
-	if !o.NoDefaultCredentials {
-		return true
-	}
-
-	// default credentials disabled, but role arn is not empty
-	if o.RoleARN != "" {
-		return true
-	}
-
-	return false
+	return !o.NoDefaultCredentials
 }

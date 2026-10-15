@@ -104,7 +104,7 @@ func NewS3FS(
 	noDefaultCredential bool,
 ) (*S3FS, error) {
 
-	args.NoDefaultCredentials = noDefaultCredential
+	args.NoDefaultCredentials = args.NoDefaultCredentials || noDefaultCredential || args.callerCredentialsOnly
 
 	fs := &S3FS{
 		name:            args.Name,

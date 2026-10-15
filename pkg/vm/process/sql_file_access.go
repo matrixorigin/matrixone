@@ -15,15 +15,9 @@
 package process
 
 import (
-	"strings"
+	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-)
-
-const (
-	systemAccountName = "sys"
-	moAdminRoleName   = "moadmin"
 )
 
 // AuthorizeSQLFileAccess admits the SQL file targets that are intentionally
@@ -33,13 +27,8 @@ const (
 // Both are server-owned resources and require the same system moadmin
 // identity used by other server-control SQL functions.
 //
-// Supported argumented remote services are resolved by GetForETL (and retain
-// its validation), so this helper does not duplicate remote credentials
-// policy.  An argumented path that selects the process-local disk backend is
-// still server-owned and follows the local-path rule. The check is
-// repeated at I/O admission because prepared plans and Datalinks can outlive
-// the statement that created them. Stage resolution and background execution
-// do not confer authority over server-owned files.
+// Planning preflight shares fileservice resource classification. Actual acquisition
+// independently enforces the statement policy at the ETL factory.
 func AuthorizeSQLFileAccess(proc *Process, moPath string) error {
 	path, err := fileservice.ParsePath(moPath)
 	if err != nil {
@@ -53,25 +42,20 @@ func AuthorizeSQLFileAccess(proc *Process, moPath string) error {
 // ETL callers pass the unchanged result of fileservice.ParsePath. Owners that
 // always open local storage may construct a service-less Path for admission.
 func AuthorizeSQLFileAccessPath(proc *Process, path fileservice.Path) error {
-
-	// Keep this admission check aligned with GetForETL's provider selection so
-	// an argumented disk backend cannot be classified as remote here while the
-	// resolver creates a server-owned local filesystem at the I/O boundary.
-	local, err := fileservice.PathUsesLocalETLBackend(path)
-	if err != nil {
-		return err
-	}
-	if path.Service != "" && len(path.ServiceArguments) > 0 && !local {
-		return nil
-	}
-
+	var account, role string
 	if proc != nil && proc.Base != nil {
 		info := proc.GetSessionInfo()
-		if strings.ToLower(info.Account) == systemAccountName &&
-			strings.ToLower(info.Role) == moAdminRoleName {
-			return nil
-		}
+		account, role = info.Account, info.Role
 	}
+	return fileservice.AuthorizeSQLFileAccessPath(account, role, path)
+}
 
-	return moerr.NewInternalErrorNoCtx("only the sys account moadmin role can access SQL file paths")
+// SQLFileAccessContext snapshots the current statement identity on any request context.
+func SQLFileAccessContext(ctx context.Context, proc *Process) context.Context {
+	var account, role string
+	if proc != nil && proc.Base != nil {
+		info := proc.GetSessionInfo()
+		account, role = info.Account, info.Role
+	}
+	return fileservice.WithSQLFileAccess(ctx, account, role)
 }

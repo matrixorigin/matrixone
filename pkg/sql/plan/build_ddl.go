@@ -8525,7 +8525,9 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 		if err := AuthorizeExternalFileAccess(stmt.Param, proc); err != nil {
 			return err
 		}
-		hiveCols, err = inferHivePartitionColumns(ctx, stmt.Param)
+		scoped := *stmt.Param
+		scoped.Ctx = process.SQLFileAccessContext(ctx, proc)
+		hiveCols, err = inferHivePartitionColumns(scoped.Ctx, &scoped)
 		if err != nil {
 			return err
 		}

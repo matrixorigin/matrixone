@@ -164,7 +164,7 @@ func (w *externalWriter) open(ctx context.Context, analyzer process.Analyzer) er
 	}
 
 	fw, err := process.MeasureFilesystemWait(analyzer, func() (*fileservice.FileServiceWriter, error) {
-		return fileservice.NewFileServiceWriter(moPath, ctx)
+		return fileservice.NewFileServiceWriter(moPath, process.SQLFileAccessContext(ctx, w.proc))
 	})
 	if err != nil {
 		return err

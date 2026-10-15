@@ -19,7 +19,8 @@ select the local `disk` provider.
 | Resource | Admission owner and behavior |
 | --- | --- |
 | Local path, configured named service, dynamic local-disk service | The current execution must carry `sys` / `moadmin` authority. |
-| Remote argumented provider or remote stage | Existing provider credentials, stage status and tenant catalog rules remain applicable. |
+| Remote argumented provider or remote stage | Use caller-supplied credentials or the existing explicitly selected MinIO anonymous mode. Stage status and tenant catalog rules remain applicable. |
+| Dynamic provider auxiliary dependencies | SQL cannot name server certificate/keytab files or select server profile/instance credentials, regardless of role. |
 | `LOAD DATA LOCAL`, INLINE | Client data: no CN filesystem authority is acquired. |
 | Asynchronous indexed Datalink sources | Only argumented remote providers and remote stages are supported. Server-owned source references are rejected before installing the lifecycle or committing new indexed values, even for administrators. |
 | Generated index storage files | The storage owner reads its own artifacts natively and supplies binary chunk values to ordinary SQL in the existing transaction. No SQL identity is elevated. |
@@ -32,10 +33,41 @@ admission applies when export is enabled. This fix does not claim to enforce
 
 ## Owners and execution boundaries
 
-`process.AuthorizeSQLFileAccessPath` is the single stateless execution policy.
-Fileservice owns provider classification and construction. Stageutil owns
-catalog resolution. The generic GetForETL remains usable by trusted internal
-storage owners, without dependencies on SQL sessions.
+Fileservice owns the single provider parser, dependency policy and actual
+acquisition. `GetForETL`, its parsed-path form and `GetForBackup` require a
+scoped SQL file policy; missing policy rejects every target before acquisition.
+The parsed-path form checks agreement with the raw target and constructs from
+its own authoritative parse. Process helpers derive the policy from current
+account/role names; planning preflight delegates to the same stateless rule.
+Stageutil owns catalog resolution and confers no additional authority.
+
+Policy is created only in actual file operations. It is immutable, scoped to
+that operation and rebound from the executing process, including prepared and
+remote execution. Existing statement identity propagation remains the source
+of truth. No global query/process policy hook, grant cache or new wire field
+is introduced. External owners bind both runtime and ExternParam contexts after
+remote reconstruction; helpers consume that context rather than replacing it
+with Background/TODO. Blank internal identity stays restricted.
+
+Generic backup callers are SQL backup operations and follow the same policy.
+Native configured file services and owned engine/index artifacts continue using
+their existing constructors. Missing SQL context never selects a trusted route.
+Local table dump has an existing native owner: its caller admits a service-less
+target before construction, independently of punctuation in the filename.
+
+Dynamic SQL providers use caller-only construction. Supplied optional tokens
+stay empty when absent; AWS S3 and STS do not load default configuration. Role
+acquisition uses explicit upstream credentials, propagates errors and keeps the
+same upstream for refresh. The SQL-scoped MinIO STS client borrows its owning
+operation context because the pinned SDK creates STS requests without one.
+
+HDFS simple authentication retains its supplied username or fixed `hadoop`
+default; that default does not read CN configuration or credentials. Explicit
+password authentication keeps the existing HDFS contract; local keytabs are
+rejected before construction. MinIO retains anonymous access only when
+`no-default-credentials=true` is explicit and all credential/delegation inputs
+are absent. Missing/partial object-store credentials otherwise fail; no new
+anonymous syntax or mode is introduced for other providers.
 
 Admission runs before local directory creation, stat, list, read or write in:
 
@@ -166,18 +198,29 @@ character classes and wildcard syntax are never validated as concrete names.
 
 ## Alternatives and cost
 
-A directory-only check leaves the question of which tenant may access that
-server directory unanswered. Restricting generic ETL breaks storage and engine
-owners that do not execute user SQL. A new catalog privilege, allowlist cache
-or policy state machine is unnecessary for the existing server-admin contract.
-The selected design uses existing identity and one shared bounded admission
-function, with no policy storage, RPC, catalog lookup or extra file I/O.
+Entry-only checks allow a newly added acquisition caller to forget its
+preflight. Mandatory factory admission makes such a caller fail before resource
+acquisition. A global SQL marker plus a trusted fallback would require extra
+lifecycle propagation and make lost context meaningful; requiring policy for
+all generic acquisition avoids both. Existing native configuration constructors
+already provide the separate engine-owner boundary.
 
-Ordinary queries add no file-service work. Existing per-statement identity
-refresh uses a session-local lock; file admission has no cross-session lock.
-Parsed-path admission is reused where the target is already parsed. File
-streaming and row encoding do not repeat authorization per byte or record.
-NULL/filtered/empty file-function inputs short-circuit before admission.
+A capability registry, catalog privilege, root-directory configuration and
+per-read success logging introduce state, migration or operational costs that
+this contract does not need. Existing statement logging is retained. A bounded
+source-owner inventory is a regression aid alongside actual factory and public
+SQL tests; it is not a proof about arbitrary future Go code. New provider
+options must be reviewed for dependencies; the current validator cannot claim
+to automatically classify unknown future fields.
+
+Ordinary queries add no file-service policy work. The complete PR refreshes the
+existing current identity at the statement owner under one session-local lock;
+DML target planning additionally scans column metadata when indexes exist, then
+returns immediately for tables without Datalink columns. These bounded changes
+still require ordinary workload measurements. Actual file policy has no
+cross-session lock, storage, RPC or extra file I/O. Streaming and row encoding
+do not repeat admission per byte or record. NULL/filtered/empty file-function
+inputs short-circuit before admission.
 
 Index transport adds immutable strings, parameter vectors and expression/INSERT
 vectors. Their copies, vector-growth peaks and backend/transaction buffers must
@@ -201,6 +244,19 @@ Such workloads must use a remote tenant stage or an explicitly trusted system
 operation. Asynchronous local-Datalink sources are unsupported even for an
 administrator; use foreground materialization into TEXT for that lifecycle. This is a behavior correction, without a temporary permissive mode.
 
+Dynamic SQL providers require explicit credentials or the existing explicit
+MinIO anonymous mode, and cannot name server certificate/keytab files, profiles
+or instance roles, including for moadmin. HDFS simple authentication remains
+available through existing endpoint-only URLs and stages. Native configuration
+constructors retain their deliberate provider contracts; an explicit
+no-default-credentials setting is no longer overridden by a destination role.
+SQL callers of generic ETL Go APIs must bind the current operation policy; an
+unmarked context is no longer implicitly trusted. `StatementOption.Params()`
+now returns `(vector, error)`; external Go consumers must handle the error and
+rebuild. Unused `ReadFromFile`/`ReadFromFileOffsetSize` Go wrappers are removed;
+SQL file functions retain their public names. Backup SQL is restricted to
+sys/moadmin rather than every sys role.
+
 No catalog migration or new wire field is introduced. Older CNs do not enforce
 this contract: the deployment must update all SQL-serving CNs before considering
 the fix effective. Rolling back restores the old behavior.
@@ -220,3 +276,19 @@ source/view refusal, short-read/error/cancellation cleanup and transaction
 rollback/retry behavior. Both normal and race execution must cover affected
 owners. GPU compile/runtime and multi-CN evidence are separate platform proofs;
 their absence cannot be reported as a pass.
+
+## Review record
+
+The issue task ledger contains the design-first approval for owned artifact
+persistence and asynchronous Datalink admission, followed by provider and
+acquisition amendments. The acquisition-only revision supersedes the earlier
+global policy propagation proposal. This document states the resulting contract
+as one design. The local first-principles correction preserves HDFS simple and
+explicit MinIO anonymous behavior, closes acquisition cancellation and removes
+dead reader wrappers. It does not approve an unvalidated implementation.
+
+Delivery must pin the reviewed document revision, implementation revision and
+validation record. GPU native execution remains unverified because no suitable
+machine is available; the user explicitly permitted PR update with that gap
+visible. Root confinement and bounded reading of trusted operator certificate
+configuration are separate configuration/lifecycle contracts.

@@ -2297,6 +2297,8 @@ func prepareFSForDiffAsFile(
 	cleanup func(),
 	err error,
 ) {
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
+
 	var (
 		ok           bool
 		stagePath    string
@@ -3135,6 +3137,8 @@ func flushSqlValues(
 	return err
 }
 func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (err error) {
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
+
 	if len(dirPath) == 0 {
 		return nil
 	}

@@ -4389,7 +4389,7 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	proc := newSQLFileAccessTestProc(t)
-	ctx := context.Background()
+	ctx := proc.Ctx
 	filePath1 := filepath.Join(dir, "test1")
 	filePath2 := filepath.Join(dir, "test2")
 	writeFile := func(filePath string, data []byte) {
@@ -4442,13 +4442,15 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
-func TestReadFromFileOffsetSizeHonorsContext(t *testing.T) {
+func TestReadLoadFileContentsHonorsContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owned.txt")
 	require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))
-	ctx, cancel := context.WithCancel(context.Background())
+	proc := newSQLFileAccessTestProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
 	cancel()
+	proc.Ctx = ctx
 
-	r, err := ReadFromFileOffsetSizeWithContext(ctx, path, nil, 0, -1)
+	r, err := readLoadFileContents(path, proc)
 	require.Nil(t, r)
 	require.ErrorIs(t, err, context.Canceled)
 }
@@ -4696,7 +4698,7 @@ func requireLoadFileResult(t *testing.T, result *vector.Vector, values []string,
 func TestLoadFileCardinalityAndSelection(t *testing.T) {
 	dir := t.TempDir()
 	proc := newSQLFileAccessTestProc(t)
-	ctx := context.Background()
+	ctx := proc.Ctx
 	valuePath := filepath.Join(dir, "value")
 	largeValuePath := filepath.Join(dir, "large-value")
 	emptyPath := filepath.Join(dir, "empty")

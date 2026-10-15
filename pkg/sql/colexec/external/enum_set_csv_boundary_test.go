@@ -129,7 +129,7 @@ func TestReadFileOffsetStrictEnumSet(t *testing.T) {
 		{"mixed", " red , 4 ,", []plan.Type{{Id: int32(types.T_enum), Enumvalues: " ,red,"}, {Id: int32(types.T_uint64), Enumvalues: " a,a,中文"}, {Id: int32(types.T_enum), Enumvalues: "red,blue"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 			fs := testutil.NewFS(t)
 			t.Cleanup(func() { fs.Close(ctx) })
 			cols := make([]*plan.ColDef, 0, 1+len(tc.types))

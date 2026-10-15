@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,8 +51,6 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	}
 	return
 }
-
-var NoDefaultCredentialsForETL = os.Getenv("MO_NO_DEFAULT_CREDENTIALS") != ""
 
 func etlParallelMode(ctx context.Context) ParallelMode {
 	if mode, ok := parallelModeFromContext(ctx); ok {
@@ -95,24 +94,6 @@ func parseETLArguments(path Path) (args ObjectStorageArguments, err error) {
 	return args, nil
 }
 
-// PathUsesLocalETLBackend applies the exact backend selection used by NewS3FS.
-// Malformed providers are errors, never an implicit remote authorization grant.
-func PathUsesLocalETLBackend(path Path) (bool, error) {
-	// GetForETL selects the service-less local owner before considering
-	// arguments; even an empty CSV service with arguments stays local.
-	if path.Service == "" {
-		return true, nil
-	}
-	if len(path.ServiceArguments) == 0 {
-		return false, nil
-	}
-	args, err := parseETLArguments(path)
-	if err != nil {
-		return false, err
-	}
-	return selectObjectStorageBackend(args) == objectStorageDisk, nil
-}
-
 // GetForETL get or creates a FileService instance for ETL operations
 // if service part of path is empty, a LocalETLFS will be created
 // if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
@@ -129,16 +110,27 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 	if err != nil {
 		return nil, "", err
 	}
-	return GetForETLWithParsedPath(ctx, fs, path, fsPath)
+	return getForETLWithParsedPath(ctx, fs, path, fsPath)
 }
 
-// GetForETLWithParsedPath is the parsed-path form used by callers that must
-// authorize a target before resolving it. rawPath is retained because an
-// absolute service-less path has information that ParsePath intentionally
-// removes from Path.File. Keeping the parsed value avoids a second CSV/path
-// parse on each SQL file operation without moving provider construction into
-// the authorization package.
+// GetForETLWithParsedPath verifies the raw target against its supplied parse.
+// Construction uses the authoritative parse and the current SQL policy.
 func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string, fsPath Path) (res ETLFileService, readPath string, err error) {
+	actual, err := ParsePath(rawPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if actual.Service != fsPath.Service || actual.File != fsPath.File || !slices.Equal(actual.ServiceArguments, fsPath.ServiceArguments) {
+		return nil, "", moerr.NewInvalidInputNoCtx("SQL file target disagrees with its parsed path")
+	}
+	return getForETLWithParsedPath(ctx, fs, rawPath, actual)
+}
+
+func getForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string, fsPath Path) (res ETLFileService, readPath string, err error) {
+	args, err := admitSQLFilePath(ctx, fsPath)
+	if err != nil {
+		return nil, "", err
+	}
 
 	if fsPath.Service == "" {
 		// no service, create local ETL fs
@@ -150,12 +142,8 @@ func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string
 		readPath = file
 
 	} else if len(fsPath.ServiceArguments) > 0 {
-		args, parseErr := parseETLArguments(fsPath)
-		if parseErr != nil {
-			return nil, "", parseErr
-		}
 		args.ParallelMode = etlParallelMode(ctx)
-		res, err = NewS3FS(ctx, args, DisabledCacheConfig, nil, true, NoDefaultCredentialsForETL)
+		res, err = NewS3FS(ctx, args, DisabledCacheConfig, nil, true, true)
 		if err != nil {
 			return nil, "", err
 		}
@@ -203,12 +191,16 @@ func GetForBackup(ctx context.Context, spec string, backend string) (res FileSer
 		return nil, err
 	}
 
+	sqlArgs, err := admitSQLFilePath(ctx, fsPath)
+	if err != nil {
+		return nil, err
+	}
 	if fsPath.Service == "" {
 		// no service, create local fs in the format matching the cluster data
 		if strings.EqualFold(backend, diskV2FileServiceBackend) {
-			res, err = NewLocalFS2(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+			res, err = NewLocalFS2(ctx, "backup", spec, DisabledCacheConfig, nil)
 		} else {
-			res, err = NewLocalFS(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+			res, err = NewLocalFS(ctx, "backup", spec, DisabledCacheConfig, nil)
 		}
 		if err != nil {
 			return nil, err
@@ -219,10 +211,7 @@ func GetForBackup(ctx context.Context, spec string, backend string) (res FileSer
 		switch fsPath.Service {
 
 		case "s3-opts":
-			var args ObjectStorageArguments
-			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
-				return nil, err
-			}
+			args := sqlArgs
 			args.NoBucketValidation = true
 			setBackupConnectionPool(&args)
 			res, err = NewS3FS(

@@ -135,7 +135,7 @@ func openTableDumpFS(
 		if err := process.AuthorizeSQLFileAccess(ses.proc, decoded); err != nil {
 			return nil, nil, err
 		}
-		etlFS, root, err := fileservice.GetForETL(ctx, nil, decoded)
+		etlFS, root, err := fileservice.GetForETL(process.SQLFileAccessContext(ctx, ses.proc), nil, decoded)
 		if err != nil {
 			return nil, nil, err
 		}

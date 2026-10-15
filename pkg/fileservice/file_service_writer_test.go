@@ -66,7 +66,7 @@ func (f *trackingETLFileService) Close(ctx context.Context) {
 // the partial output instead of persisting it, and is idempotent / safe after
 // Close as documented.
 func TestFileServiceWriterCloseAndAbort(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	dir := t.TempDir()
 
 	// Close persists what was written.
@@ -103,7 +103,7 @@ func TestFileServiceWriterCloseAndAbort(t *testing.T) {
 }
 
 func TestFileServiceWriterDoesNotCloseBorrowedService(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	memory, err := NewMemoryFS("shared", DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	service := &trackingETLFileService{MemoryFS: memory}
@@ -128,7 +128,7 @@ func TestFileServiceWriterDoesNotCloseBorrowedService(t *testing.T) {
 }
 
 func TestFileServiceWriterPropagatesWriteFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	memory, err := NewMemoryFS("shared", DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	writeErr := errors.New("write failed")
@@ -148,7 +148,7 @@ func TestFileServiceWriterPropagatesWriteFailure(t *testing.T) {
 }
 
 func TestFileServiceWriterPropagatesCompletionFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	memory, err := NewMemoryFS("shared", DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	completionErr := errors.New("completion failed")

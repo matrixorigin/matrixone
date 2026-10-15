@@ -115,7 +115,7 @@ func TestHDFS(t *testing.T) {
 			// test GetForETL
 			endpoint := kase.Addr + "?user=" + kase.User
 			_, _, err = GetForETL(
-				context.Background(),
+				WithSQLFileAccess(context.Background(), "sys", "moadmin"),
 				nil,
 				"hdfs,is-hdfs=true,endpoint="+endpoint+",bucket="+kase.Path+":/foo/bar/baz",
 			)

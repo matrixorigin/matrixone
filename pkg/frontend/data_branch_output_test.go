@@ -2231,7 +2231,7 @@ func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2327,7 +2327,7 @@ func installDataBranchTestFileService(
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
 	require.NoError(t, err)
 
@@ -2419,7 +2419,7 @@ func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2443,7 +2443,7 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2512,7 +2512,7 @@ func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	filePath := filepath.Join(t.TempDir(), "diff.sql")
 	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
 

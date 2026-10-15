@@ -77,9 +77,9 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	}
 	prepared, err := conn.PrepareContext(t.Context(), "insert into docs values(?,?)")
 	require.NoError(t, err)
+	defer prepared.Close()
 	_, err = prepared.ExecContext(t.Context(), 2, local)
 	require.ErrorContains(t, err, "asynchronous indexes require remote Datalink sources")
-	require.NoError(t, prepared.Close())
 
 	// Both async algorithms share final-value admission; synchronous fulltext
 	// still reads authorized local content within the foreground statement.

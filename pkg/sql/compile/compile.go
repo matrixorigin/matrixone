@@ -2656,7 +2656,7 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	}
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
-	param.Ctx = c.proc.Ctx
+	param.Ctx = process.SQLFileAccessContext(c.proc.Ctx, c.proc)
 
 	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
 		// Keep the prepared plan's bound source and derived file metadata, but

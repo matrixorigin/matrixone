@@ -5850,32 +5850,7 @@ func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	)
 }
 
-func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
-}
-
-func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	return ReadFromFileOffsetSizeWithContext(context.TODO(), Filepath, fs, offset, size)
-}
-
-// ReadFromFileOffsetSizeWithContext is the context-aware entry point used by
-// SQL execution. The legacy wrapper above remains for callers that do not
-// have a request context.
-func ReadFromFileOffsetSizeWithContext(ctx context.Context, Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	path, err := fileservice.ParsePath(Filepath)
-	if err != nil {
-		return nil, err
-	}
-	return readFromParsedPath(ctx, Filepath, path, fs, offset, size)
-}
-
 func readFromParsedPath(ctx context.Context, rawPath string, path fileservice.Path, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ownsService := path.Service == "" || len(path.ServiceArguments) > 0
 	fs, readPath, err := fileservice.GetForETLWithParsedPath(ctx, fs, rawPath, path)
 	if fs == nil || err != nil {
@@ -5933,10 +5908,7 @@ func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
-		return nil, err
-	}
-	r, err := readFromParsedPath(proc.Ctx, filePath, path, proc.GetFileService(), 0, -1)
+	r, err := readFromParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), filePath, path, proc.GetFileService(), 0, -1)
 	if err != nil {
 		return nil, err
 	}

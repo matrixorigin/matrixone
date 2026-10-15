@@ -92,6 +92,23 @@ func TestSQLFileAccessAuthorization(t *testing.T) {
 			require.Equal(t, "owned inline data", line)
 		})
 
+		t.Run("dynamic provider resource dependencies", func(t *testing.T) {
+			base := "s3-opts,endpoint=https://owned.invalid,region=us-east-1,bucket=owned,key=owned-key,secret=owned-secret"
+			for _, db := range []*sql.DB{publicDB, admin} {
+				for _, tc := range []struct{ path, expected string }{
+					{base + ",cert-files=" + input + ":object", "server-local auxiliary files"},
+					{base + ",kerberos-keytab-path=" + input + ":object", "server-local auxiliary files"},
+					{base + ",shared-config-profile=owned:object", "server credential discovery"},
+					{"s3-opts,endpoint=https://owned.invalid,region=us-east-1,bucket=owned:object", "requires explicit credentials"},
+					{"s3-opts,endpoint=https://owned.invalid,region=us-east-1,bucket=owned,role-arn=owned-role:object", "requires explicit credentials"},
+				} {
+					var content string
+					err := db.QueryRow("select load_file(" + sqlquote.String(tc.path) + ")").Scan(&content)
+					require.ErrorContains(t, err, tc.expected)
+				}
+			}
+		})
+
 		var content string
 		err = publicDB.QueryRow(fmt.Sprintf("select load_file('%s')", input)).Scan(&content)
 		require.ErrorContains(t, err, "only the sys account moadmin role")

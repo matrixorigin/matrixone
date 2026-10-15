@@ -258,7 +258,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		return DefaultHugeStats()
 	}
 	param.FileService = builder.compCtx.GetProcess().GetFileService()
-	param.Ctx = builder.compCtx.GetProcess().Ctx
+	param.Ctx = process.SQLFileAccessContext(builder.compCtx.GetProcess().Ctx, builder.compCtx.GetProcess())
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
 	fileList, fileSize, err := ReadDir(param)
 	spanReadDir.End()

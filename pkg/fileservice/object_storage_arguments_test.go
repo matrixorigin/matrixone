@@ -300,7 +300,7 @@ func TestObjectStorageArgumentsShouldLoadDefaultCredentials(t *testing.T) {
 		NoDefaultCredentials: true,
 		RoleARN:              "arn",
 	}
-	assert.True(t, args.shouldLoadDefaultCredentials())
+	assert.False(t, args.shouldLoadDefaultCredentials())
 }
 
 func TestObjectStorageArgumentsString(t *testing.T) {
