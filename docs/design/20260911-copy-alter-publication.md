@@ -2,294 +2,219 @@
 
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
-- Revision: 3 (2026-09-16)
-- Status: implementation and acceptance-scope revision for maintainer
-  decision; the linked PR is currently Draft. The historical Ready wording is
-  superseded; this document is not itself an approval.
-- Target branch: `main`
+- Revision: 4 (2026-10-15)
+- Status: PROPOSED — explicit maintainer decision required before production repair.
+- Proposed decision owners: @cpegeric and @LeftHandCold, the current requested reviewers.
+- Inspected implementation head: `f7903a01aa528bb05b5662d6b2bdd859cf4212f5`.
+- Inspected target main: `8795f3699b40504376343fa1acda8b4619f0c76e`.
 
-This document is the versioned design artifact for the COPY ALTER lock
-shortening change. It is deliberately separate from the implementation
-summary. A maintainer design decision is still required before the PR is
-considered ready to merge.
+This revision supersedes revisions 1–3. Their late exclusive-publication
+protocol and proposed reduction to 1/2-worker acceptance are not the proposed
+implementation. The [previous document](https://github.com/matrixorigin/matrixone/blob/f7903a01aa528bb05b5662d6b2bdd859cf4212f5/docs/design/20260911-copy-alter-publication.md)
+remains an immutable historical record. This is a design-only phase in the
+existing Draft PR; it is not approval or an implementation-complete claim.
 
-## Problem and scope
+## Problem, evidence and minimal scope
 
-The COPY ALTER path used to acquire the global View/SNAPSHOT lifecycle
-protection before copying rows and building indexes. A COPY ALTER on table A
-therefore blocked an unrelated operation on table B. The B session retained
-its table protection while waiting for the global row, which amplified the
-delay into client timeouts and connection failures.
+The present PR admits ordinary pessimistic RC COPY through canonical broad
+C/G/D lifecycle admission before checking delayed-publication eligibility.
+That admission retains locks, so the old split path rejects the transaction.
+Existing sequential peer tests and green correctness checks do not prove
+independent-table preparation. Merely moving that eligibility check earlier
+would permit late global admission while holding source locks and can reverse
+the lock order used by DROP, restore and recovery.
 
-The optimization applies only when all of these conditions hold at admission:
+The proposed first optimization is ordinary permanent-table ADD/DROP PRIMARY
+KEY through the existing COPY algorithm. Both live source and planned target
+must satisfy main's scalar replacement shape: ordinary relation, no temporary
+or partitioned storage, secondary index, FK/ref-child, feature flag, parent or
+owned index table. Published physical/logical identity must be revalidated.
+The existing scalar protection checks must exclude Snapshot/PITR, branch
+membership/protection and reclaim descendants in actor and SYS scopes.
+Missing metadata or read errors are not evidence of absence.
 
-1. the front end owns an automatic-commit transaction;
-2. the transaction uses pessimistic read-committed semantics;
-3. no earlier user statement has left workspace history in the transaction;
-4. the operation is a supported permanent-table COPY ALTER and is not restore
-   or an internal caller with an existing transaction.
+Only a fresh, statement-owned pessimistic RC transaction is eligible, with no
+prior retained locks, workspace history or external transaction owner.
+An independent executor is eligible only if it owns the whole fresh transaction.
+Explicit transactions, SI, optimistic transactions, transaction-local tables,
+temporary/system/restore operations, unsupported alterations and complex tables
+retain the main safety path. Privilege checks, allocator state, publication
+restrictions and existing validation errors remain in force.
 
-Explicit transactions, snapshot isolation, optimistic transactions, restore,
-and callers that already own a transaction keep the existing consistency path.
-The change does not add SQL syntax, a user switch, a catalog column, a wire
-field, or a persistence-format version.
+Main's persistent View refresh layer is currently inactive. The narrow path
+requires that same layer to be disabled; enabled View refresh selects the broad
+path before narrow admission. There is no new unreliable scan asserting that
+legacy View dependencies do not exist, and no activation of that subsystem.
 
-## Contract and invariants
+## Lock protocol and lifecycle ownership
 
-The operation remains one transaction with one final commit. The replacement
-relation and its physical index tables are private to that transaction until
-the publication step succeeds.
+Reuse `admitScalarReplacementRC` and the existing root-scoped replacement
+receipt, rather than adding a distributed lock, catalog key or global fence.
+A COPY-specific pre-copy result must distinguish an unsupported candidate,
+successful narrow admission and a candidate that needs a fresh broad transaction.
+Do not change other scalar replacement callers' contracts incidentally.
 
-* The source table's directory/data locks protect the source identity while
-  preparation runs. The global View and SNAPSHOT lifecycle gates are not held
-  during row copy or synchronous index construction.
-* `T_data` is selected once after the source locks are held and is the fixed
-  source-data boundary. When lineage is created, the same value is the
-  lineage `cloneTS`.
-* `T_catalog` is the refreshed publication read boundary. It may be newer than
-  `T_data`; refreshing it never changes which source rows were copied.
-* Commit time is the visibility point of the new business relation. It is not
-  substituted for either `T_data` or `T_catalog`.
-* Publication acquires lifecycle gates in the single order **SNAPSHOT then
-  View**, matching the canonical order used by view-metadata recovery and
-  other lifecycle owners. The SNAPSHOT row keeps the existing `FOR UPDATE`/
-  no-op UPDATE write barrier used by optimistic validation and GC. Every
-  optimized entry point uses the normal wait policy for ordinary publication
-  contention, so a prepared relation is reused regardless of whether the
-  request came from ordinary SQL, text/binary prepared execution or an
-  independent executor. The View row retains its normal cancellation and
-  wait boundary. A private coordination error owned by this helper remains
-  the only path that can request the bounded complete-transaction retry.
-* Publication rechecks source table ID, logical ID, branch/history owners,
-  Snapshot/PITR coverage, View state, foreign-key/publication metadata and
-  final task identities after the gates are held. A preparation-time “no
-  owner” result is never authoritative.
-* Normal gate contention waits and rereads the publication directory while
-  reusing the prepared relation. It does not copy the source a second time.
-* A private coordination conflict may request at most one complete retry. The
-  failed transaction is rolled back and fully cleaned before a new transaction
-  and a new transaction ID begin; a commit with an uncertain result is never
-  replayed.
+| Order | Protection | Narrow mode | Lifetime |
+| --- | --- | --- | --- |
+| C | Physical catalog identity of feature registry | Shared | Through commit/rollback |
+| G | SNAPSHOT lifecycle row | Shared | Through commit/rollback |
+| D | Database name | Shared | Through commit/rollback |
+| K | Source relation catalog name | Exclusive | Through commit/rollback |
+| T | Source data/definition | Exclusive | Through commit/rollback |
 
-## State and ownership
+Use main's canonical acquisition, applied-logtail frontier and identity checks.
+After K/T, repeat shape, physical/logical/database identity and protection
+checks before workspace writes. The final negative protection result relies
+on that full admission, not on the preliminary unlocked probe.
 
-The COPY ALTER private context is bound to one transaction, attempt and target
-relation. Its lifecycle is:
+Expensive row copying runs outside the **global exclusive** critical section.
+Shared C/G/D protection remains held during copying. Different-table owners
+can share C/G/D and prepare independently; same-table owners wait at K/T.
+Lifecycle operations requiring C/G/D exclusion wait before touching the source.
+There is no late G acquisition, no G shared-to-exclusive upgrade while holding
+source locks, and no new reverse wait edge. Ordinary compatible contention
+waits under existing cancellation/deadline semantics without discarding copied data.
+
+The broad path retains main's complete C → exclusive G → D protocol, View
+ordering where enabled, and SNAPSHOT no-op UPDATE/write barrier. The proposed
+narrow path does not execute an UPDATE that would upgrade shared G. Approval
+must explicitly accept this omission for the certified scalar domain: main's
+narrow replacement admission is the precedent, not a claim that broad-path
+optimistic validation or GC barriers are generally unnecessary.
+
+## Copy, replacement and failure terminals
+
+The outer statement owns one receipt bound to the exact transaction, attempt,
+actor, source database/physical/logical identity and phase. Its authorized
+CREATE names contain only the exact source/final name and generated private
+replica name; broad wildcard authorization is prohibited. Nested CREATE/DROP
+borrow that receipt and existing locks, without late broad admission, snapshot
+advancement after writes, or publication of temporary View/task metadata.
+A mismatched, expired or foreign receipt is rejected, not treated as broad
+permission. End the binding on every success, error, rollback and cancellation.
 
 ```text
-Preparing -> Prepared -> AcquiringGates -> Publishing -> AwaitingCommit
-     |          |             |              |              |
-   abort      abort         retry/abort    abort          commit/abort
+Candidate -> NarrowAdmission -> Revalidated -> Copying -> Replacing -> Commit
+    |              |                |            |           |          |
+  Broad       RollbackBeforeCopy   abort        abort       abort    outcome
+                   |
+           FreshBroadAttempt (at most once)
 ```
 
-The context records the source and logical IDs, `T_data`, the prepared
-relation/index identities, deferred task descriptions, attempt generation and
-the selected admission mode. Every internal statement option carries the
-context reference only for this operation and validates transaction identity,
-phase and target relation. Session-wide reusable options are not changed, and
-the binding is cleared on success, rollback, compile failure or cancellation.
+`T_data` is the admitted, source-locked snapshot before preparation writes.
+Copy once, preserve the existing logical identity and allocator semantics,
+then atomically replace within the same transaction. No post-copy catalog
+snapshot advance or rewind is needed for this locked, protected-negative domain.
+Commit remains the visibility point; it is not the source-read timestamp.
+There are no secondary-index rebuilds or asynchronous index tasks in this fast
+path. Complex COPY uses main's complete index/task preparation and publication;
+the old split's mismatched `NewPluginIndexes` preparation predicate must not be
+activated. Remove orphaned split machinery only after inventorying consumers;
+retain independent fixture fixes and distinct correctness oracles.
 
-The outer executor owns the transaction when it is the automatic-commit front
-end. A caller-owned transaction remains caller-owned; the COPY ALTER path does
-not replace it or replay its preceding statements. An independent internal
-executor may use the same two phases only when it created and owns its whole
-transaction.
+- Unsupported preliminary candidate: choose broad admission before source locks.
+- Narrow admission discovers changed identity/shape/protection: request a typed,
+  transaction-generation-bound **pre-copy** fallback. Fully roll back and clean
+  the old transaction before at most one fresh broad attempt, under the original
+  deadline and prepared database/parameter binding. Never wait for G-X or copy
+  before returning that decision. The existing helper's late-upgrade retry is
+  not a substitute for this COPY contract.
+- Preparation/replacement failure or cancellation: roll back the whole operation;
+  the original relation remains usable and no private relation/task survives.
+- Once copying begins, no automatic whole-statement recopy. Normal lock
+  contention does not request fallback. Preserve original errors; report cleanup
+  failures separately. An uncertain commit result is never replayed.
+- Caller-owned transactions are never replaced or replayed by this mechanism.
 
-## Preparation phase
+No SQL, catalog, persistence, wire or user configuration interface is added.
+Reverting the optimization restores broad admission without a migration. Old
+CNs retain their own path and existing C/G compatibility; multi-CN and supported
+mixed-version interleavings remain an explicit validation obligation, not an
+unverified deployment claim. Existing privilege and tenant identity checks apply
+to every nested operation and to the actor/SYS protection probes.
 
-Preparation first resolves the source relation under the existing directory,
-data and required index locks, then records the source identity and selects
-`T_data` using the existing lock-held boundary algorithm. It performs privilege,
-type, primary-key and unsupported-operation checks before creating side effects.
+## Alternatives and expected cost
 
-In the same transaction workspace it then:
+1. Keep broad admission for every COPY: safest status quo, but unrelated tables
+   remain serialized during copying and the issue's optimization is undelivered.
+2. Copy first, acquire exclusive G later (old revisions): requires split data/
+   catalog snapshots and retry/task machinery; normal late waits can invert
+   current main's source/lifecycle order. Not selected.
+3. Introduce another publication fence or global coordination key: adds protocol
+   and mixed-version consumers without being necessary for the accepted narrow
+   workload. Not selected.
+4. Reuse main's scalar shared admission (proposed): narrower capability, one copy,
+   no new global synchronization primitive, and direct deterministic proof.
 
-1. creates the uncommitted replacement relation with the source logical ID and
-   relation kind;
-2. copies rows at `T_data`, including the source workspace overlay required by
-   the existing transaction semantics;
-3. prepares auto-increment state and copies unaffected indexes;
-4. synchronously rebuilds affected physical indexes when the algorithm
-   requires it; and
-5. records structured descriptions for tasks that will be attached to the
-   final relation.
+CPU/I/O remain proportional to rows copied; private storage is one replacement
+per in-flight operation. Added protection/identity reads use main's scoped
+queries, not a full catalog scan. Shared G can still delay exclusive lifecycle
+work for the duration of a copy; this is a deliberate tradeoff for decision.
+Cancellation, the request deadline, watchdog and exact-owner cleanup bound each
+run. No throughput benefit is claimed before the new-head measurements.
 
-The private preparation option is accepted only by the internal CREATE/DROP
-   calls owned by this context. It defers View/PITR/ISCP/idxcron lifecycle
-   publication for the temporary relation. It does not bypass normal
-   privileges, constraints, data writes, physical index construction or
-   failure cleanup. Index construction and task registration are separate
-   operations: an index may be built while no background task is registered.
+## Verification and delivery contract
 
-Preparation performs read-only history checks only. It does not compact the
-global lineage DAG or remove unrelated expired owners. The replacement and
-physical objects remain invisible outside the transaction.
+The [validation matrix](evidence/20260916-copy-alter-validation-matrix.md)
+and [runbook](evidence/20260916-copy-alter-performance-runbook.md) define the
+prepared execution contract. Every result must identify source, observer,
+binary/native/toolchain and workload revisions; absent observations remain
+`UNAVAILABLE`, never inferred zero or estimated physical copied bytes.
 
-Before entering `Prepared`, all local and remote preparation executors have
-finished and their results are readable from the same workspace. No callback
-may publish a temporary task or View dependency after the phase transition.
+1. Instrument the real entry path to prove narrow admission, one completed
+   copy, one transaction, shared G and zero attempted exclusive admission with
+   a complete observer. Before release, pause A and prove unrelated B prepares
+   and commits; separately rendezvous both preparations. Same-table B must wait.
+   Use bounded barriers with unconditional release/cleanup, not timing sleeps.
+2. Cover pre-copy fallback after identity/protection change, strict retry bound,
+   rollback/cancel/commit terminals, restore/GC and historical owner exclusion,
+   View-layer enablement fallback and wrong-receipt rejection. Preserve the
+   existing Snapshot/View correctness case separately from fast-path proof.
+3. Exercise query, text/binary prepared and owned executor entry points,
+   fallback transaction modes, affected package tests, BVT and multi-CN paths.
+   Each new/modified top-level race test must report at most **45.55 seconds**
+   in exact-head Ubuntu CI; a green aggregate job is insufficient.
+4. On personal Ubuntu, rebuild both frozen main and repaired head with required
+   Go 1.27.1 and matching native artifacts. Reuse the verified runner's lifecycle,
+   ext4, safe fixture-port range, metrics end acknowledgement and resource limits;
+   update old gate-position assertions for actual shared/exclusive admission.
+   Same-generation smoke precedes formal 1/2/4/8-worker paired runs: 8192 rows,
+   width 1024, 20 ADD/DROP rounds per worker, 30-second request deadlines,
+   B/H–H/B–B/H at each concurrency (24 arms), no client retry or selective rerun.
+   For each pair compute head/base TPS and latency ratios. Require the median
+   paired TPS ratio >=0.90 and P50 ratio <=1.10 at one worker; at each of 2/4/8
+   require median paired TPS >1 and P95 <1. Retain all individual ratios, failures,
+   lock/copy/commit timings, CPU/I/O and post-run data/schema/cleanup oracles.
+5. Run three serial equivalent nightly replays with the already accepted fixed
+   reconstruction: 100 tables, four seeded rows, 50 ADD plus 50 DROP users,
+   five minutes, only ADD 1068 / DROP 1091 allowed. Preserve pinned mo-load/JAR/
+   JDBC/JVM identity and 3CN/1TN/3Log/2Proxy topology; record effective timeout,
+   immutable image, rendered manifest, ownership and storage cleanup receipts.
+   Admission-gated TKE supplies that topology; personal Ubuntu does not replace
+   it. Label historical missing receipts honestly; reconstruction acceptance is
+   already given and does not need another user decision.
 
-## Publication phase
+Freeze the repaired implementation/test/runner subjects before acceptance;
+subsequent semantic changes invalidate affected evidence. Refresh main before
+merging, preserve its lifecycle/restore semantics and this Draft's history, and
+resolve conflicts only after this design is approved. Do not alter the primary
+working tree or restart the paused resource-wait automation. QA remains required.
 
-After preparation, the operation enters a short coordination section:
+## Requested maintainer decision
 
-1. acquire the SNAPSHOT lifecycle row with the existing `FOR UPDATE` and the
-   normal wait policy. Ordinary contention is deliberately independent of
-   transaction ownership or executor type, so all optimized entry points can
-   reuse the prepared relation;
-2. acquire the View lifecycle row with the original cancellation and wait
-   boundary;
-3. advance the workspace snapshot with `Workspace.AdvanceSnapshot` to a
-   value no earlier than the current transaction snapshot and the gate-lock
-   service time, then create fresh publication-read contexts;
-4. execute the existing SNAPSHOT no-op UPDATE write barrier; no proactive
-   snapshot advance occurs after that write;
-5. reread and validate the source, branch DAG, Snapshot/PITR owners, View
-   metadata, foreign keys, publications and task targets; and
-6. protect required old generations, atomically replace the source relation,
-   migrate final metadata and register tasks for the final relation only.
+Please approve **revision 4 as a complete protocol**, or identify the specific
+change required, including these coupled decisions:
 
-The operation does not restore the old transaction snapshot or move it
-backwards. `T_data` remains independent and continues to define copied data.
-The non-locking admission probe runs before private preparation. If it cannot
-observe both rows during bootstrap or a rolling upgrade, split publication is
-not selected and the old COPY ordering remains the safe fallback. If a split
-attempt later observes a missing row, it returns through the retry and normal
-cleanup path; a missing row is never treated as a successful lock.
+- ordinary unprotected key-only COPY scope and existing scalar shared C/G/D
+  protection held throughout copy, with source K/T exclusion;
+- omission of exclusive G/no-op SNAPSHOT write only in that admitted domain,
+  enabled View refresh and complex-table broad fallback;
+- at most one pre-copy fresh broad transaction, no ordinary-contention recopy,
+  and no replay after copy starts or commit becomes uncertain;
+- unchanged full 1/2/4/8-worker, per-test race, three-nightly and QA gates.
 
-Lineage cleanup is split at this boundary. Synchronous old-generation
-reference maintenance needed to make the replacement safe remains in the
-publication transaction. Catalog-wide compaction of unrelated history is left
-to the existing GC path and is never used to shorten this critical section.
-
-The final View update or invalidation is performed once for the business
-relation. Temporary relation names never become View dependencies or published
-background tasks. Task metadata is generated after the final table ID and name
-are known; arbitrary SQL string substitution is not used.
-
-## Concurrency and linearization
-
-* A different-table ALTER can copy and build indexes while A is paused in
-  preparation. Its only serialization point is the short publication section,
-  so B can acquire its own table and commit.
-* A same-table ALTER waits on the source table lock. Once the predecessor
-  commits, it rereads the current source identity and definition before using
-  or discarding its prepared result.
-* A Snapshot/PITR owner published after preparation is observed by the
-  publication reread. If it invalidates the planned replacement, the attempt
-  rolls back and the bounded retry starts from a fresh transaction.
-* A Snapshot/PITR owner published after the replacement commit resolves the
-  committed relation and its commit boundary through the normal catalog path.
-* Optimistic writers continue to use the existing SNAPSHOT write barrier and
-  validation. The optimization does not replace `FOR UPDATE` with a shared
-  read or remove the UPDATE.
-* View invalidation, owner protection and old-generation reclamation are
-  serialized by the same SNAPSHOT -> View order used by the shared lifecycle
-  helper, so no reverse lock edge is introduced.
-
-## Retry, prepared statements and cleanup
-
-Ordinary publication waiting is not a retry of COPY ALTER. A retry marker is
-created only by the COPY ALTER coordination helper and is bound to the current
-transaction and attempt generation. Other lock errors, business errors,
-cancellation, cleanup failures and commit errors retain their original result.
-
-For the single permitted complete retry, the executor stops and drains all
-preparation work, rolls back the whole transaction, verifies temporary relation,
-task, lineage and lock cleanup, restores session state, and reparses the
-statement in a new transaction. Text and binary prepared execution retain the
-captured AST binding, database remap, case mode, SQL mode and parameters; a
-prepared retry cannot compile against a newly selected default database before
-that binding is restored. Each attempt owns an independent plan and generation.
-
-No savepoint, nested statement transaction, partial replay or client-visible
-timeout extension is introduced. At most two complete attempts share the
-original request deadline.
-
-Failure injection and cancellation at relation creation, row copy, index
-build, each gate, directory refresh, history protection, old-table deletion,
-rename, task registration and commit must leave either the original committed
-relation or the complete committed replacement. A later ALTER must succeed;
-there may be no half-replaced catalog, temporary task, orphan index or lineage
-edge.
-
-## Alternatives and non-goals
-
-* Holding the global gates throughout preparation is rejected because it keeps
-  the reported serialization and timeout behavior.
-* Independently committing the replacement is rejected because it breaks one-
-  transaction atomicity and caller rollback semantics.
-* A generic savepoint or nested `StartStatement` is rejected because it would
-  change workspace write boundaries and obscure ownership of rollback.
-* Removing the SNAPSHOT UPDATE or changing it to `FOR SHARE` is rejected
-  because optimistic validation and GC depend on the existing write conflict.
-* Recopying on every directory version change is rejected because contention
-  could turn the latency improvement into unbounded duplicate work.
-* Explicit transactions, SI/optimistic modes, restore and the separate #28317
-  long-lived-lock behavior are not changed by this revision.
-
-## Validation and rollout gates
-
-The implementation must retain the production-entry regression in
-`pkg/tests/issues/issue_28319_test.go` and the distributed case
-`test/distributed/cases/ddl/alter_copy_publication.sql` with its `.result`.
-The distributed case uses the existing `ALTER TABLE ... ALGORITHM=COPY`
-syntax; no new SQL command is introduced. It asserts historical reads, View,
-auto-increment, foreign keys, ADD/DROP PRIMARY KEY and rollback behavior.
-
-Required evidence before merge:
-
-1. deterministic different-table and same-table barriers, including one-copy
-   publication reuse;
-2. Snapshot/PITR/lineage/View/GC interleavings and owner-scope coverage;
-3. prepared text and binary execution across database changes and a real
-   two-transaction retry;
-4. synchronous and asynchronous index/task paths, cancellation and every
-   publication failure boundary;
-5. explicit-transaction, SI, optimistic, multi-CN and rollback compatibility;
-6. affected package tests, race tests, BVT `.sql/.result` comparison, and the
-   original nightly ADD/DROP workload; and
-7. paired baseline/head measurements for 1/2/4/8 different-table workers,
-   including every failed attempt, lock/copy/index/commit timing, CPU and I/O.
-
-The hard performance criteria are: a paused A does not prevent B from
-committing; copy and synchronous index work are outside the global gate;
-ordinary contention does not increase copy count; single-worker median does
-not regress by more than 10%; concurrent throughput and P95 improve on the
-paired baseline; and no unexpected connection failure or timeout appears in
-three equivalent nightly runs. Missing remote or workload evidence remains a
-pending gate and cannot be replaced by a small local test.
-
-## Revision 2 protocol change record
-
-Revision 2 makes the publication wait contract uniform across the optimized
-frontends. The previous implementation selected FastFail from executor or
-transaction ownership, which made ordinary prepared contention depend on the
-entry point and could turn a reusable prepared relation into an unnecessary
-whole-transaction retry. The implementation now waits for ordinary gate
-contention in every optimized entry point and reserves the complete retry for
-the private coordination hook; the regression suite has separate assertions
-for one-copy ordinary waits and a real two-transaction injected retry. The
-conditional handoff in the companion review remains historical evidence, so a
-maintainer decision on this revision is still required.
-
-## Revision 3 acceptance-scope proposal (pending maintainer decision)
-
-The implementation and this design retain the original correctness contract. To
-make the performance gate proportional to the reported regression, the author
-proposes the following merge-before evidence set:
-
-1. deterministic different-table and same-table concurrency and consistency
-   regressions;
-2. the reconstructed 8192-row, two-worker, 80-ALTER counterexample;
-3. paired baseline/head measurements for one worker and a representative
-   two-worker workload; and
-4. three equivalent runs of the original nightly ADD/DROP workload with its
-   original error contract.
-
-The 4/8-worker cases, additional large data scales and the broader scalability
-matrix are proposed for follow-up QA. This is a request for a maintainer
-decision, not a unilateral change to the required gates. Until it is accepted,
-the full Revision 2 validation list remains applicable. Any missing original
-workload parameter or isolated environment is recorded as `BLOCKED_ENVIRONMENT`
-or `NOT_RUN`, rather than replaced by a smaller local workload.
+An authoritative approval must identify this revision or its immutable commit
+and have no unresolved conflicting protocol decision. Silence, existing review
+requests, historical conditional handoff, local smoke and this author's checks
+are not approval. After approval, repair production/conflicts, validate the
+exact new head, update each blocking thread and request implementation re-review.

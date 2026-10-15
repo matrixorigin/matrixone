@@ -1,55 +1,52 @@
-# COPY ALTER publication design review
+# COPY ALTER design decision record
 
-- Design: [COPY ALTER publication protocol](20260911-copy-alter-publication.md)
+- Design: [publication protocol](20260911-copy-alter-publication.md)
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
-- Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
-- Revision reviewed: 1 (2026-09-11; historical)
-- Current implementation/design revision: 3 (2026-09-16; pending review)
-- Review type: independent design handoff review
+- PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
+- Current proposed revision: **4 (2026-10-15)**.
+- Maintainer design decision: **PENDING**.
+- Requested decision owners: @cpegeric and @LeftHandCold.
+- Production repair, conflict integration and exact-new-head acceptance: **NOT_RUN**.
 
-## Decision
+## Decision required before implementation
 
-**Conditional pass for implementation handoff.** The design makes the
-preparation/publication boundary, time identities, lock order, deferred task
-ownership, retry generation, prepared-statement binding and rollback terminal
-states explicit. It is sufficiently concrete for a maintainer to review the
-implementation against one protocol rather than against an informal PR
-summary.
+This is the distinct design-first phase in the existing Draft PR. Revision 4
+reuses main's scalar replacement admission for ordinary ADD/DROP PRIMARY KEY
+COPY, retaining shared C/G/D and exclusive source K/T throughout the transaction.
+It proposes no late global lock upgrade and no post-copy snapshot refresh.
+The exact protocol, restricted SNAPSHOT-write-barrier omission, complex/View
+fallback and pre-copy-only retry require explicit maintainer acceptance.
+Full 1/2/4/8-worker, <=45.55s per-test race, three-nightly and QA gates remain.
 
-This is a separate design artifact and decision record. It is not a maintainer
-approval and does not waive the blocking design review requested on PR #28418.
+Record the approving maintainer, immutable reviewed document revision, decision
+URL, timestamp and any conditions here only after an actual decision. Conflicting
+conditions must be reconciled before implementation. Author review, a user
+request to obtain approval, an existing review request or a successful historical
+run is not that maintainer decision.
 
-The implementation subsequently changed the ordinary publication wait
-contract in revision 2: SNAPSHOT and View contention now wait for every
-optimized entry point, while only the private coordination hook can request a
-bounded complete retry. This record has not been reissued as approval for that
-revision; the maintainer decision and workload/QA gates remain open.
+## Existing blocking threads
 
-## Review checklist
+Each remains independently open; a single decision request links the related
+threads without resolving them or requesting implementation approval prematurely.
 
-| Invariant | Design location | Required implementation evidence |
+| Reviewer | Thread | Disposition and next evidence |
 | --- | --- | --- |
-| Source locks versus global gates | Contract; Preparation; Publication | Different-table barrier and lock-wait traces |
-| `T_data`, `T_catalog`, commit visibility | Contract; Publication | Snapshot/PITR interleavings and lineage clone timestamp |
-| SNAPSHOT -> View order and write barrier | Publication; Concurrency | Gate-order and optimistic-writer tests |
-| Temporary relation/task ownership | State and ownership; Preparation | No temporary View/task residue; final-ID task inspection |
-| Wait/reuse versus full retry | Contract; Retry | Copy count remains one for ordinary contention; two transaction IDs for retry |
-| Prepared AST/database/parameter ownership | Retry | PREPARE -> database change -> EXECUTE and binary retry tests |
-| Rollback/cancel/partial failure | Retry and cleanup | Failure injection at each listed phase and follow-up ALTER |
-| Compatibility and cost | Scope; Validation | SI/optimistic/explicit/multi-CN matrix and paired workload |
+| aptend | [r4001780128](https://github.com/matrixorigin/matrixone/pull/28418#discussion_r4001780128) | Design/acceptance blocker: revision-4 decision, exact-head workload and QA |
+| XuPeng-SH | [r4008474122](https://github.com/matrixorigin/matrixone/pull/28418#discussion_r4008474122) | Same design/acceptance obligation; retain separate response |
+| XuPeng-SH | [r4009643127](https://github.com/matrixorigin/matrixone/pull/28418#discussion_r4009643127) | Same design/acceptance obligation; retain separate response |
+| XuPeng-SH | [r4008474132](https://github.com/matrixorigin/matrixone/pull/28418#discussion_r4008474132) | Ubuntu race blocker: actual per-test <=45.55s and CI report on repaired head |
+| XuPeng-SH | [r4009643130](https://github.com/matrixorigin/matrixone/pull/28418#discussion_r4009643130) | Same race obligation; retain separate response |
 
-## Open approval and acceptance items
+## Superseded decisions and evidence
 
-The implementation PR must obtain a distinct maintainer design decision, then
-re-request the blocking reviewers. The original nightly ADD/DROP workload,
-paired performance comparison and QA evidence remain delivery gates even when
-unit, BVT and CI checks are green.
+The [revision-1 conditional handoff](https://github.com/matrixorigin/matrixone/blob/f7903a01aa528bb05b5662d6b2bdd859cf4212f5/docs/design/20260911-copy-alter-publication-review.md)
+was not maintainer approval. Revisions 2/3 also have no recorded maintainer
+approval. Revision 3's proposed move of 4/8 workers to follow-up is withdrawn;
+it never waived the original acceptance contract. Old one-copy late-publication
+oracles must not be transferred to revision 4's shared-admission protocol.
 
-## Pending scope decision
-
-Revision 3 proposes keeping deterministic correctness, the reconstructed
-8192-row/two-worker/80-ALTER counterexample, one-worker and representative
-two-worker paired measurements, and three original-nightly runs as merge-before
-evidence. The 4/8-worker cases, additional large scales and the broader
-scalability matrix may move to follow-up QA only after a maintainer explicitly
-accepts that scope. This proposal does not change the current required gates.
+Historical Ubuntu run `c105-20261015T081332Z-a9617d` compared base
+`8a4c84f4516d5098de9eef50b8afecc7524f37a2` with head
+`5be67e3694712bc208e42c8db4c6032a2d896f65`, not the present implementation.
+Its complete workload, live metrics and cleanup establish a reusable runner
+pattern, not revision-4 optimization, current race/CI, nightly or QA acceptance.
