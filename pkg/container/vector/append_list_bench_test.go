@@ -35,9 +35,10 @@ func BenchmarkAppendFixedListReuse(b *testing.B) {
 				mp := mpool.MustNewZero()
 				vec := NewVec(types.T_int64.ToType())
 				b.Cleanup(func() {
+					defer mpool.DeleteMPool(mp)
 					vec.Free(mp)
 					require.Zero(b, mp.CurrNB())
-					mpool.DeleteMPool(mp)
+					require.Zero(b, mp.OnHeapCurrNB())
 				})
 				values := make([]int64, size)
 				for i := range values {

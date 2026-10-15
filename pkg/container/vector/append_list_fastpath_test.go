@@ -30,6 +30,12 @@ func TestAppendFixedListFastPath(t *testing.T) {
 	for _, mask := range [][]bool{nil, make([]bool, len(values))} {
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.T_int64.ToType())
+		t.Cleanup(func() {
+			defer mpool.DeleteMPool(mp)
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+			require.Zero(t, mp.OnHeapCurrNB())
+		})
 		require.NoError(t, vec.PreExtend(len(values), mp))
 		require.NoError(t, AppendFixedList(vec, values, mask, mp))
 		require.Equal(t, values, MustFixedColWithTypeCheck[int64](vec))
@@ -38,9 +44,6 @@ func TestAppendFixedListFastPath(t *testing.T) {
 			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(i))
 			require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(i))
 		}
-		vec.Free(mp)
-		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	}
 }
 
@@ -62,9 +65,10 @@ func TestAppendFixedListFastPathAfterNullablePrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	require.NoError(t, AppendFixedList(vec, []int64{1, 2}, []bool{false, true}, mp))
 	values := make([]int64, 32)
@@ -87,9 +91,10 @@ func TestAppendFixedListShortMaskKeepsPartialPanic(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	values := make([]int64, 16)
 	for i := range values {
@@ -110,9 +115,10 @@ func checkAppendFixedListWidth[T any](t *testing.T, typ types.Type, values []T) 
 	mp := mpool.MustNewZero()
 	vec := NewVec(typ)
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	require.NoError(t, AppendFixedList(vec, values, nil, mp))
 	require.Equal(t, values, MustFixedColWithTypeCheck[T](vec))
@@ -122,9 +128,10 @@ func TestAppendFixedListAliasedInput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 
 	require.NoError(t, vec.PreExtend(17, mp))
@@ -145,9 +152,10 @@ func TestAppendFixedListAliasedInputAfterGrowth(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int64.ToType())
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 
 	values := make([]int64, 16)

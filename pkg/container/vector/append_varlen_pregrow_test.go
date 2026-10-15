@@ -66,11 +66,12 @@ func TestAppendVarlenListPregrow(t *testing.T) {
 			reference := NewVec(tc.oid.ToType())
 			decoded := NewVec(tc.oid.ToType())
 			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
 				vec.Free(mp)
 				reference.Free(mp)
 				decoded.Free(mp)
 				require.Zero(t, mp.CurrNB())
-				mpool.DeleteMPool(mp)
+				require.Zero(t, mp.OnHeapCurrNB())
 			})
 			require.NoError(t, tc.add(vec, mp))
 			require.Equal(t, len(values), vec.Length())
@@ -100,9 +101,10 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varbinary.ToType())
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	long := bytes.Repeat([]byte("x"), 64)
 	require.NoError(t, AppendBytesList(vec, [][]byte{long, long}, []bool{true, false}, mp))
@@ -113,7 +115,9 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 	require.Equal(t, long, vec.GetBytesAt(2))
 
 	nullState := newTestVectorAllocationAccount(t, 2048, 8)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, nullState) })
 	nullVec := newAccountedTestVector(t, types.T_varbinary.ToType(), nullState.selection)
+	t.Cleanup(func() { nullVec.Free(mp) })
 	deadPayload := bytes.Repeat([]byte("x"), 256)
 	nullValues := make([][]byte, 32)
 	nullMask := make([]bool, len(nullValues))
@@ -129,11 +133,11 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 		require.Equal(t, nullMask[i], nullVec.IsNull(uint64(i)))
 	}
 	require.Equal(t, []byte("ok"), nullVec.GetBytesAt(1))
-	nullVec.Free(mp)
-	finalizeTestVectorAllocationAccount(t, nullState)
 
 	state := newTestVectorAllocationAccount(t, 2048, 8)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 	unicode := newAccountedTestVector(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI), state.selection)
+	t.Cleanup(func() { unicode.Free(mp) })
 	invalid := string(append([]byte{0xff}, bytes.Repeat([]byte("x"), 127)...))
 	values := make([]string, 32)
 	for i := range values {
@@ -142,8 +146,6 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 	err := AppendStringList(unicode, values, nil, mp)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
 	require.Zero(t, unicode.Length())
-	unicode.Free(mp)
-	finalizeTestVectorAllocationAccount(t, state)
 }
 
 func TestAppendVarlenListPregrowBudgetRollback(t *testing.T) {
@@ -169,17 +171,20 @@ func TestAppendVarlenListPregrowBudgetRollback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 4096, 8)
+			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				require.Zero(t, mp.CurrNB())
+				require.Zero(t, mp.OnHeapCurrNB())
+			})
 			vec := newAccountedTestVector(t, tc.oid.ToType(), state.selection)
+			t.Cleanup(func() { vec.Free(mp) })
 			require.ErrorIs(t, tc.add(vec, mp), mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, vec.Length())
 			require.Zero(t, len(vec.area))
 			require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("ok")}, nil, mp))
 			require.Equal(t, []byte("ok"), vec.GetBytesAt(0))
-			vec.Free(mp)
-			finalizeTestVectorAllocationAccount(t, state)
-			require.Zero(t, mp.CurrNB())
-			mpool.DeleteMPool(mp)
 		})
 	}
 }

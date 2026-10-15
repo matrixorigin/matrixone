@@ -59,8 +59,9 @@ func BenchmarkAppendVarlenList(b *testing.B) {
 				b.Run(tc.name+"_"+mode+"_"+strconv.Itoa(size), func(b *testing.B) {
 					mp := mpool.MustNewZero()
 					b.Cleanup(func() {
+						defer mpool.DeleteMPool(mp)
 						require.Zero(b, mp.CurrNB())
-						mpool.DeleteMPool(mp)
+						require.Zero(b, mp.OnHeapCurrNB())
 					})
 					check := func(v *Vector) {
 						require.Equal(b, size, v.Length())
@@ -84,15 +85,18 @@ func BenchmarkAppendVarlenList(b *testing.B) {
 						b.StopTimer()
 						check(vec)
 					} else {
-						vec := NewVec(tc.oid.ToType())
-						require.NoError(b, tc.add(vec, mp))
-						check(vec)
-						vec.Free(mp)
+						func() {
+							vec := NewVec(tc.oid.ToType())
+							defer vec.Free(mp)
+							require.NoError(b, tc.add(vec, mp))
+							check(vec)
+						}()
 						b.ReportAllocs()
 						b.ResetTimer()
 						for range b.N {
 							vec := NewVec(tc.oid.ToType())
 							if err := tc.add(vec, mp); err != nil {
+								vec.Free(mp)
 								b.Fatal(err)
 							}
 							appendVarlenBenchSink += len(vec.GetBytesAt(size - 1))
