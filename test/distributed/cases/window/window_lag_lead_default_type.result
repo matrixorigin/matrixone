@@ -315,6 +315,84 @@ ld  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦
 select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
 ➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
 309  ¦  309  ¦  1  ¦  1
+create table wbit (d decimal(5,2), b bit(3), u bit(64));
+insert into wbit values (12.34, 7, 18446744073709551615);
+select d as original_value, lag(d,0) over () as control_value,
+lag(d,0,b) over () as lg, lead(d,0,b) over () as ld from wbit;
+➤ original_value[3,5,2]  ¦  control_value[3,5,2]  ¦  lg[3,5,2]  ¦  ld[3,5,2]  𝄀
+12.34  ¦  12.34  ¦  12.34  ¦  12.34
+select lag(d,1,b) over () as bit_default, lead(d,1,u) over () as uint64_default,
+lag(b,0,d) over () as bit_source, lead(u,0,d) over () as uint64_source from wbit;
+➤ bit_default[3,5,2]  ¦  uint64_default[3,22,2]  ¦  bit_source[3,5,2]  ¦  uint64_source[3,22,2]  𝄀
+7.00  ¦  18446744073709551615.00  ¦  7.00  ¦  18446744073709551615.00
+create table wbit_copy as select lag(d,0,b) over () as d, lead(b,0,d) over () as b,
+lag(u,0,d) over () as u from wbit;
+show create table wbit_copy;
+➤ Table[12,9,0]  ¦  Create Table[12,127,0]  𝄀
+wbit_copy  ¦  CREATE TABLE `wbit_copy` (
+  `d` decimal(5,2) DEFAULT NULL,
+  `b` decimal(5,2) DEFAULT NULL,
+  `u` decimal(22,2) DEFAULT NULL
+)
+select * from wbit_copy;
+➤ d[3,5,2]  ¦  b[3,5,2]  ¦  u[3,22,2]  𝄀
+12.34  ¦  7.00  ¦  18446744073709551615.00
+create view wbit_view as select lag(d,0,b) over () as d, lead(b,0,d) over () as b from wbit;
+show columns from wbit_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+d  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbit_view;
+➤ d[3,5,2]  ¦  b[3,5,2]  𝄀
+12.34  ¦  7.00
+create table wunicode (id int, v varchar(100), wide varchar(16383), t tinytext, b tinyblob);
+insert into wunicode values (1,repeat('汉',100),repeat('😀',16383),'x',x'78'),
+(2,repeat('😀',100),null,'x',x'78');
+select id, length(v) as original_length, length(lag(v,0) over (order by id)) as control_length,
+length(lag(v,0,t) over (order by id)) as lg, length(lead(v,0,t) over (order by id)) as ld,
+length(lag(v,0,b) over (order by id)) as blob_control,
+lag(v,0,t) over (order by id) = v as text_equal from wunicode order by id;
+➤ id[4,32,0]  ¦  original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  blob_control[-5,64,0]  ¦  text_equal[-7,1,0]  𝄀
+1  ¦  300  ¦  300  ¦  300  ¦  300  ¦  300  ¦  1  𝄀
+2  ¦  400  ¦  400  ¦  400  ¦  400  ¦  400  ¦  1
+select id, length(lag(t,2,v) over (order by id)) as text_default,
+length(lead(b,2,v) over (order by id)) as blob_default from wunicode order by id;
+➤ id[4,32,0]  ¦  text_default[-5,64,0]  ¦  blob_default[-5,64,0]  𝄀
+1  ¦  300  ¦  300  𝄀
+2  ¦  400  ¦  400
+set @wunicode_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wunicode_strict as select id, lag(v,0,t) over (order by id) as v,
+lead(v,0,b) over (order by id) as b, lag(wide,0,t) over (order by id) as wide from wunicode;
+show create table wunicode_strict;
+➤ Table[12,15,0]  ¦  Create Table[12,140,0]  𝄀
+wunicode_strict  ¦  CREATE TABLE `wunicode_strict` (
+  `id` int DEFAULT NULL,
+  `v` text DEFAULT NULL,
+  `b` longblob DEFAULT NULL,
+  `wide` text DEFAULT NULL
+)
+select id,length(v) as v_length,length(b) as b_length,length(wide) as wide_length from wunicode_strict order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  ¦  b_length[-5,64,0]  ¦  wide_length[-5,64,0]  𝄀
+1  ¦  300  ¦  300  ¦  65532  𝄀
+2  ¦  400  ¦  400  ¦  null
+set session sql_mode = '';
+create table wunicode_permissive as select id, lag(v,0,t) over (order by id) as v,
+lead(v,0,b) over (order by id) as b from wunicode;
+select id,length(v) as v_length,length(b) as b_length from wunicode_permissive order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  ¦  b_length[-5,64,0]  𝄀
+1  ¦  300  ¦  300  𝄀
+2  ¦  400  ¦  400
+create view wunicode_view as select id, lag(v,0,t) over (order by id) as v from wunicode;
+show columns from wunicode_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
+select id,length(v) as v_length from wunicode_view order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  𝄀
+1  ¦  300  𝄀
+2  ¦  400
+set session sql_mode = @wunicode_sql_mode;
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';

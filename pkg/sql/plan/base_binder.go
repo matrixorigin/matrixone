@@ -8131,9 +8131,22 @@ func bindFuncExprImplByPlanExpr(
 						if argsType[idx].Oid == types.T_text || argsType[idx].Oid == types.T_blob {
 							unbounded = unbounded || argsType[idx].Width == 0
 						}
-						if argsType[idx].Oid.IsMySQLString() {
-							commonType.Width = max(commonType.Width, argsType[idx].Width)
+					}
+					for _, idx := range []int{0, 2} {
+						if !argsType[idx].Oid.IsMySQLString() {
+							continue
 						}
+						width := int64(argsType[idx].Width)
+						if _, known := controlFlowStringWidth(args[idx], argsType[idx]); !known {
+							unbounded = true
+						}
+						// VARCHAR/CHAR widths count characters, LOB limits count
+						// bytes. Convert only when the final family is a LOB.
+						if (commonType.Oid == types.T_text || commonType.Oid == types.T_blob) &&
+							(argsType[idx].Oid == types.T_char || argsType[idx].Oid == types.T_varchar) {
+							width *= int64(controlFlowMaxBytesPerCharacter(argsType[idx].Charset))
+						}
+						commonType.Width = max(commonType.Width, int32(min(width, int64(types.MaxLongTextLen))))
 					}
 					if unbounded {
 						// Width zero casts are unbounded at runtime, but persist as
@@ -8143,6 +8156,19 @@ func bindFuncExprImplByPlanExpr(
 							commonType.Oid = types.T_text
 						}
 						commonType.Width = types.MaxLongTextLen
+					} else if commonType.Oid == types.T_text || commonType.Oid == types.T_blob {
+						// Use a real SQL subtype, never an arbitrary byte count
+						// which would be exported as a narrower ordinary TEXT/BLOB.
+						switch {
+						case commonType.Width <= types.MaxTinyTextLen:
+							commonType.Width = types.MaxTinyTextLen
+						case commonType.Width <= types.MaxStringSize:
+							commonType.Width = 0 // Proven to fit ordinary TEXT/BLOB.
+						case commonType.Width <= types.MaxMediumTextLen:
+							commonType.Width = types.MaxMediumTextLen
+						default:
+							commonType.Width = types.MaxLongTextLen
+						}
 					}
 				}
 				returnType = commonType
@@ -8326,9 +8352,22 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
-	if valueArg.Oid.IsDecimal() && defaultArg.Oid.IsInteger() {
+	if valueArg.Oid == types.T_bit && defaultArg.Oid.IsDecimal() {
+		// Align the decimal operand first. The original default expression
+		// is not the BIT source, so use its declared domain rather than its literal.
+		valueArg, defaultArg = defaultArg, valueArg
+		defaultExpr = nil
+	}
+	if valueArg.Oid.IsDecimal() && (defaultArg.Oid.IsInteger() || defaultArg.Oid == types.T_bit) {
 		// Zero fits even DECIMAL(M,M); it needs no extra integer digit.
-		digits, _ := decimalIntegerWidth(defaultExpr, defaultArg, true)
+		digits, known := decimalIntegerWidth(defaultExpr, defaultArg, true)
+		if defaultArg.Oid == types.T_bit && !known {
+			bits := defaultArg.Width
+			if bits <= 0 || bits > 64 {
+				bits = 64
+			}
+			digits = int32(len(strconv.FormatUint(math.MaxUint64>>uint(64-bits), 10)))
+		}
 		if lit := defaultExpr.GetLit(); lit != nil && lit.Isnull {
 			digits = 0
 		}
@@ -8339,6 +8378,14 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
+	}
+	// BIT's payload is an unsigned integer. Resolve other numeric mixtures
+	// using that domain instead of the physical BIT overload's cast costs.
+	if valueArg.Oid == types.T_bit && defaultArg.IsNumeric() {
+		valueArg = types.T_uint64.ToType()
+	}
+	if defaultArg.Oid == types.T_bit && valueArg.IsNumeric() {
+		defaultArg = types.T_uint64.ToType()
 	}
 	resolved, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{valueArg, defaultArg})
 	if err != nil {

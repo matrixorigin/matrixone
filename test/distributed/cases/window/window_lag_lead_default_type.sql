@@ -178,6 +178,46 @@ create view wjson_view as select lag(j,0,d255) over () as lg, lead(j,0,d255) ove
 show columns from wjson_view;
 select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
 
+-- BIT 是无符号整数域，不能令 DECIMAL 源值丢失小数；两方向均需覆盖。
+create table wbit (d decimal(5,2), b bit(3), u bit(64));
+insert into wbit values (12.34, 7, 18446744073709551615);
+select d as original_value, lag(d,0) over () as control_value,
+       lag(d,0,b) over () as lg, lead(d,0,b) over () as ld from wbit;
+select lag(d,1,b) over () as bit_default, lead(d,1,u) over () as uint64_default,
+       lag(b,0,d) over () as bit_source, lead(u,0,d) over () as uint64_source from wbit;
+create table wbit_copy as select lag(d,0,b) over () as d, lead(b,0,d) over () as b,
+       lag(u,0,d) over () as u from wbit;
+show create table wbit_copy;
+select * from wbit_copy;
+create view wbit_view as select lag(d,0,b) over () as d, lead(b,0,d) over () as b from wbit;
+show columns from wbit_view;
+select * from wbit_view;
+
+-- VARCHAR 容量以字符计，TEXT/BLOB 子类型以字节计；三字节及四字节字符都不能截断。
+create table wunicode (id int, v varchar(100), wide varchar(16383), t tinytext, b tinyblob);
+insert into wunicode values (1,repeat('汉',100),repeat('😀',16383),'x',x'78'),
+       (2,repeat('😀',100),null,'x',x'78');
+select id, length(v) as original_length, length(lag(v,0) over (order by id)) as control_length,
+       length(lag(v,0,t) over (order by id)) as lg, length(lead(v,0,t) over (order by id)) as ld,
+       length(lag(v,0,b) over (order by id)) as blob_control,
+       lag(v,0,t) over (order by id) = v as text_equal from wunicode order by id;
+select id, length(lag(t,2,v) over (order by id)) as text_default,
+       length(lead(b,2,v) over (order by id)) as blob_default from wunicode order by id;
+set @wunicode_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wunicode_strict as select id, lag(v,0,t) over (order by id) as v,
+       lead(v,0,b) over (order by id) as b, lag(wide,0,t) over (order by id) as wide from wunicode;
+show create table wunicode_strict;
+select id,length(v) as v_length,length(b) as b_length,length(wide) as wide_length from wunicode_strict order by id;
+set session sql_mode = '';
+create table wunicode_permissive as select id, lag(v,0,t) over (order by id) as v,
+       lead(v,0,b) over (order by id) as b from wunicode;
+select id,length(v) as v_length,length(b) as b_length from wunicode_permissive order by id;
+create view wunicode_view as select id, lag(v,0,t) over (order by id) as v from wunicode;
+show columns from wunicode_view;
+select id,length(v) as v_length from wunicode_view order by id;
+set session sql_mode = @wunicode_sql_mode;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';
