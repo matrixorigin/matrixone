@@ -63,7 +63,9 @@ func TestIssue29903RetryKeepsEarlierStatementLastInsertID(t *testing.T) {
 		}
 		exec(writer, "create database "+dbName)
 		defer func() {
-			_, _ = sqlDB.ExecContext(context.Background(), "drop database if exists "+dbName)
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			_, _ = sqlDB.ExecContext(dropCtx, "drop database if exists "+dbName)
 		}()
 		exec(writer, "use "+dbName)
 		exec(holder, "use "+dbName)
@@ -78,19 +80,41 @@ func TestIssue29903RetryKeepsEarlierStatementLastInsertID(t *testing.T) {
 
 		// conflict runs fn on writer while holder's uncommitted delete of t2 row
 		// 100 blocks statement 2; the commit makes statement 2 retry.
-		conflict := func(fn func() error) {
+		// On failure the holder rolls back and the writer is cancelled and drained.
+		conflict := func(fn func(context.Context) error) {
 			t.Helper()
 			exec(holder, "begin")
+			committed := false
+			defer func() {
+				if !committed {
+					rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer rollbackCancel()
+					_, _ = holder.ExecContext(rollbackCtx, "rollback")
+				}
+			}()
 			exec(holder, "delete from t2 where id = 100")
 			retriesBefore := testutil.ToFloat64(v2.TxnStatementRetryCounter)
+			writerCtx, writerCancel := context.WithCancel(ctx)
 			done := make(chan error, 1)
-			go func() { done <- fn() }()
+			go func() { done <- fn(writerCtx) }()
+			drained := false
+			defer func() {
+				writerCancel()
+				if !drained {
+					select {
+					case <-done:
+					case <-time.After(30 * time.Second):
+					}
+				}
+			}()
 			require.Eventually(t, func() bool {
 				return issue29903LockWaiters(c, t2ID) > 0
 			}, 30*time.Second, 10*time.Millisecond, "statement 2 never waited on the t2 row lock")
 			exec(holder, "commit")
+			committed = true
 			select {
 			case err := <-done:
+				drained = true
 				require.NoError(t, err)
 			case <-ctx.Done():
 				t.Fatal("multi-statement COM_QUERY did not finish")
@@ -100,7 +124,7 @@ func TestIssue29903RetryKeepsEarlierStatementLastInsertID(t *testing.T) {
 
 		// OK packets: statement 1 reports its id, the retried statement 2 reports 0.
 		var ids []int64
-		conflict(func() error {
+		conflict(func(ctx context.Context) error {
 			return writer.Raw(func(dc any) error {
 				res, err := dc.(driver.ExecerContext).ExecContext(ctx,
 					"insert into t(v) values (1); insert into t2 values (100, 2)", nil)
@@ -115,7 +139,7 @@ func TestIssue29903RetryKeepsEarlierStatementLastInsertID(t *testing.T) {
 
 		// LAST_INSERT_ID() in the same COM_QUERY, after the retried statement 2.
 		var lastInsertID int64
-		conflict(func() error {
+		conflict(func(ctx context.Context) error {
 			rows, err := writer.QueryContext(ctx,
 				"insert into t(v) values (2); insert into t2 values (100, 3); select last_insert_id()")
 			if err != nil {
