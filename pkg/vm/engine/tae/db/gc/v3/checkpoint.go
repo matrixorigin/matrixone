@@ -1433,6 +1433,11 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.String("metafile", metafile),
 			zap.Error(err))
 		v2.GCErrorIOErrorCounter.Inc()
+		// ExecuteGlobalCheckpointBasedGC prepared cleanup ownership for the
+		// newly written GC metadata. WAL publication did not complete, so the
+		// metadata is not adopted; release the in-memory active reservation
+		// while leaving the durable marker for replay.
+		scannedWindow.abandonPrepared()
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
@@ -2695,11 +2700,15 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
 	snapshotBefore := c.mutation.snapshotMeta.Clone()
+	preserveRecoveryFiles := false
 	defer func() {
 		if err == nil {
 			return
 		}
 		c.mutation.snapshotMeta.RestoreFrom(snapshotBefore)
+		if preserveRecoveryFiles {
+			return
+		}
 		for _, file := range newFiles {
 			if cleanupErr := c.fs.Delete(ctx, file); cleanupErr != nil {
 				err = errors.Join(err, cleanupErr)
@@ -2786,6 +2795,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		saveSnapshot,
 		memoryBuffer,
 	); err != nil {
+		preserveRecoveryFiles = gcWindow.metadataCleanupFailed
 		gcWindow.Close()
 		gcWindow = nil
 		return

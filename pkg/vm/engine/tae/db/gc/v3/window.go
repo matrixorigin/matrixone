@@ -113,12 +113,13 @@ type GCWindow struct {
 	mp  *mpool.MPool
 	fs  fileservice.FileService
 
-	retainUnpublished  func(context.Context, []string) error
-	prepareUnpublished func(context.Context, string, []string) error
-	finishUnpublished  func(context.Context, string) error
-	abandonUnpublished func(string)
-	rollbackScan       func()
-	prepared           map[string]struct{}
+	retainUnpublished     func(context.Context, []string) error
+	prepareUnpublished    func(context.Context, string, []string) error
+	finishUnpublished     func(context.Context, string) error
+	abandonUnpublished    func(string)
+	rollbackScan          func()
+	prepared              map[string]struct{}
+	metadataCleanupFailed bool
 
 	files []objectio.ObjectStats
 
@@ -316,6 +317,10 @@ func (w *GCWindow) ScanCheckpoints(
 			w.abandonPrepared()
 			metaCleanupErr := w.deleteMeta(ctx, metaFile)
 			if metaCleanupErr != nil {
+				// The metadata object may still be discoverable after an
+				// ambiguous delete. Its snapshot/account dependencies must stay
+				// available for restart recovery until that ownership is resolved.
+				w.metadataCleanupFailed = true
 				err = errors.Join(err, metaCleanupErr)
 				if w.retainUnpublished != nil {
 					persisted, _ := sinker.GetResult()
