@@ -359,6 +359,7 @@ func (b *preparedFieldTypeBinding) resolve(r *preparedFieldStringResolver, expr 
 		}
 		resolver := newPreparedFieldStringResolver(r.binder)
 		resolver.defaultMarker = r.defaultMarker
+		resolver.readOnly = r.readOnly
 		resolver.unresolvedParameters = b.actual == nil
 		resolver.parameterTypes = b.actual
 		domain := resolver.common(values)
@@ -367,31 +368,33 @@ func (b *preparedFieldTypeBinding) resolve(r *preparedFieldStringResolver, expr 
 		}
 		fact.result = fieldDomainType(domain, makeTypeByPlan2Expr(expr))
 		fact.inferredBinary = domain.inferredBinary
-		if b.actual == nil {
-			// The candidate's parameter map is private until result() is published.
-			if !b.dirty {
-				b.params = maps.Clone(b.params)
-			}
-			for _, value := range values {
-				b.collectParameters(value, fact.result)
-			}
-			if producer.ast.Expr == nil {
-				for _, when := range producer.ast.Whens {
-					if p, ok := unwrapParenExpr(when.Cond).(*tree.ParamExpr); ok {
-						b.params[int32(p.Offset-1)] = preparedFieldParameter{typ: types.T_text.ToType()}
+		if !r.readOnly {
+			if b.actual == nil {
+				// The candidate's parameter map is private until result() is published.
+				if !b.dirty {
+					b.params = maps.Clone(b.params)
+				}
+				for _, value := range values {
+					b.collectParameters(value, fact.result)
+				}
+				if producer.ast.Expr == nil {
+					for _, when := range producer.ast.Whens {
+						if p, ok := unwrapParenExpr(when.Cond).(*tree.ParamExpr); ok {
+							b.params[int32(p.Offset-1)] = preparedFieldParameter{typ: types.T_text.ToType()}
+						}
 					}
 				}
 			}
-		}
-		if !b.dirty {
-			next := &PreparedFieldTypes{revision: b.current.Revision() + 1, cases: make(map[int]preparedFieldCaseType), params: b.params}
-			if b.current != nil {
-				maps.Copy(next.cases, b.current.cases)
+			if !b.dirty {
+				next := &PreparedFieldTypes{revision: b.current.Revision() + 1, cases: make(map[int]preparedFieldCaseType), params: b.params}
+				if b.current != nil {
+					maps.Copy(next.cases, b.current.cases)
+				}
+				b.current = next
+				b.dirty = true
 			}
-			b.current = next
-			b.dirty = true
+			b.current.cases[producer.ordinal] = fact
 		}
-		b.current.cases[producer.ordinal] = fact
 	}
 	result := fieldStringStaticDomain(&Expr{Typ: makePlan2Type(&fact.result)})
 	if fact.result.Oid == types.T_any {

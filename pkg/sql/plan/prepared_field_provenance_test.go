@@ -239,6 +239,11 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 		{"least(elt(1,case when ? then lower(coalesce(?,null)) else null end),'z')", false, false, true, false},
 		{"concat_ws('',greatest(case when ? then lower(coalesce(?,null)) else null end,''))", false, false, true, false},
 		{"concat_ws('',least(case when ? then lower(coalesce(?,null)) else null end,'z'))", false, false, true, false},
+		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select '') d where x<>'' limit 1)", false, false, true, false},
+		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union select '') d where x<>'' limit 1)", false, false, true, false},
+		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select null) d where x<>'' limit 1)", false, true, true, false},
+		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select _binary '') d where x<>'' limit 1)", false, true, true, false},
+		{"(select x from (select case when ? then lower(coalesce(?,null)) else _binary '' end x union all select '') d where x<>'' limit 1)", false, true, false, false},
 	} {
 		for _, textCondition := range []bool{false, true} {
 			name := "/numeric"
@@ -295,6 +300,32 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 						require.Equal(t, tc.binary, types.StaticStringDomain(makeTypeByPlan2Expr(field.GetF().Args[0])) == types.StringDomainBinary)
 					}
 				}
+			})
+		}
+	}
+}
+
+func TestPreparedFieldStringConsumerWithoutHistory(t *testing.T) {
+	for _, expr := range []string{
+		"lower(case when ? then lower(coalesce(?,null)) else null end)",
+		"lower(case when ? then case when true then lower(coalesce(?,null)) else null end else null end)",
+	} {
+		for _, oid := range []types.T{types.T_any, types.T_varchar, types.T_blob} {
+			t.Run(expr+"/"+oid.String(), func(t *testing.T) {
+				ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+				ctx.SetContext(WithPreparedFieldTypes(context.Background(), nil))
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+expr, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: oid.ToType()}}
+				var value any = "a"
+				if oid == types.T_any {
+					value = nil
+				}
+				values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+				require.NoError(t, err)
+				require.Nil(t, bound.FieldTypes, "reading a string declaration must not acquire FIELD history")
 			})
 		}
 	}

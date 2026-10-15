@@ -4738,6 +4738,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	args, binarySourceErr := b.bindStringSourceDeclaration(name, args)
+	if binarySourceErr != nil {
+		return nil, binarySourceErr
+	}
 	if name == "field" {
 		var err error
 		args, err = b.bindFieldStringArguments(args)
@@ -6332,6 +6336,30 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 		ensurePreparedNumericMetadata(witness).StringDomainSource = DeepCopyExpr(declaration)
 	}
 	return witness, true
+}
+
+// Bind a string transformation against its real declaration, not an internal
+// TEXT representation. Merely relabeling the result loses binary semantics for
+// case conversion, byte offsets and reversal. Inferred BLOBs are not declarations.
+func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*Expr, error) {
+	pos := preparedStringDomainSourceIndex(name, len(args))
+	if pos < 0 || fieldStringStaticDomain(args[pos]).kind != fieldStringText {
+		return args, nil
+	}
+	resolver := newPreparedFieldStringResolver(b)
+	resolver.readOnly = true
+	domain := fieldStringArgumentDeclaration(resolver.expr(args[pos]))
+	if domain.kind != fieldStringBinary || domain.inferredBinary {
+		return args, nil
+	}
+	target := types.T_blob.ToType()
+	converted, err := makePlan2CastExpr(b.GetContext(), args[pos], makePlan2Type(&target))
+	if err != nil {
+		return nil, err
+	}
+	result := append([]*Expr(nil), args...)
+	result[pos] = converted
+	return result, nil
 }
 
 func preparedStringDomainSourceIndex(name string, arity int) int {

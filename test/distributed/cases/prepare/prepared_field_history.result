@@ -572,6 +572,57 @@ SELECT FIELD(LOWER(x),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d
 SELECT FIELD(CONCAT_WS('',LOWER(x)),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
 ➤ FIELD(CONCAT_WS(, LOWER(x)), A, a)[-5,64,0]  𝄀
 1
+SELECT FIELD(REVERSE(COALESCE(_binary 'a','')),'A','a'), HEX(REVERSE(COALESCE(_binary 'a','')));
+➤ FIELD(REVERSE(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(REVERSE(COALESCE(a, )))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(LOWER(COALESCE(_binary 'A','')),'A','a'), HEX(LOWER(COALESCE(_binary 'A','')));
+➤ FIELD(LOWER(COALESCE(A, )), A, a)[-5,64,0]  ¦  HEX(LOWER(COALESCE(A, )))[-1,16383,0]  𝄀
+1  ¦  41
+SELECT FIELD(UPPER(COALESCE(_binary 'a','')),'A','a'), HEX(UPPER(COALESCE(_binary 'a','')));
+➤ FIELD(UPPER(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(UPPER(COALESCE(a, )))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(SUBSTRING(COALESCE(_binary 'a',''),1,1),'A','a'), HEX(SUBSTRING(COALESCE(_binary 'a',''),1,1));
+➤ FIELD(SUBSTRING(COALESCE(a, ), 1, 1), A, a)[-5,64,0]  ¦  HEX(SUBSTRING(COALESCE(a, ), 1, 1))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(REPEAT(COALESCE(_binary 'a',''),1),'A','a'), HEX(REPEAT(COALESCE(_binary 'a',''),1));
+➤ FIELD(REPEAT(COALESCE(a, ), 1), A, a)[-5,64,0]  ¦  HEX(REPEAT(COALESCE(a, ), 1))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')),'A','a'), HEX(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')));
+➤ FIELD(TRIM(both   from COALESCE( a , )), A, a)[-5,64,0]  ¦  HEX(TRIM(both   from COALESCE( a , )))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)),'A','a'), HEX(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)));
+➤ FIELD(REVERSE(cast(COALESCE(a, ) as varchar)), A, a)[-5,64,0]  ¦  HEX(REVERSE(cast(COALESCE(a, ) as varchar)))[-1,16383,0]  𝄀
+1  ¦  61
+SELECT FIELD(LOWER(x),'A','a'), HEX(LOWER(x)) FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(LOWER(x), A, a)[-5,64,0]  ¦  HEX(LOWER(x))[-1,16383,0]  𝄀
+1  ¦  41
+PREPARE p_field_history FROM 'SELECT FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_text_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT NULL) d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_null_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT _binary '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_binary_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(x,''A'',''a'') FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>''''';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
