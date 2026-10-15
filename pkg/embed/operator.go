@@ -232,8 +232,6 @@ func (op *operator) Start() error {
 	if authErr != nil {
 		return authErr
 	}
-	if op.serviceType == metadata.ServiceType_CN {
-	}
 
 	if err := op.init(); err != nil {
 		return err

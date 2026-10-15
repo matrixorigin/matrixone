@@ -22,12 +22,10 @@ Both `serve` and `freeze` require `--gomaxprocs` in Go's runtime range
 records `config.gomaxprocs` and `config.native_host_block_bytes`. `run` validates
 the frozen profile before starting services and launches native and embedded
 routes with the same frozen budget, independently of its ambient environment.
-Historical captures retain their actual settings and controller identity;
-new runs require refrozen provenance. Read-only verification preserves the
-historical v2 configuration shape when both profile fields are absent; it neither
-adds defaults nor modifies archived provenance. If either field is present, both
-must be valid. New campaign construction and executor admission require both
-fields, and evidence with different profile shapes cannot be combined.
+Historical captures retain their actual settings and controller identity and use
+their recorded tool revision for inspection. Current verification, campaign
+construction and executor admission require both explicit profile fields. No
+missing historical profile is defaulted or accepted by the current tool.
 Runner/result schema version 2 is unchanged.
 
 The current-host qualification profile is 16 Go CPUs and 64 KiB host blocks.
