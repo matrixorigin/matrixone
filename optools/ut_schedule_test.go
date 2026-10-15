@@ -956,7 +956,7 @@ exec 9<> "$CASE_DIR/heartbeat-ready"
 trap 'stop_ut_heartbeat; exec 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
-    if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
+    if [[ "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ]]; then
         printf 'ready\n' >&9
     fi
 }
@@ -983,14 +983,18 @@ EOF
 cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
 EOF
+cat > "$G_WKSP/${G_TS}-embedded-batched-race-report.out.0" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/embedded","Test":"TestBatched"}
+EOF
 read -r -t 10 heartbeat_ready <&9 || exit 92
 stop_ut_heartbeat
 exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
-grep -q 'active_cases=2' "$CASE_DIR/ut.log"
+grep -q 'active_cases=3' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'TestBatched' "$CASE_DIR/ut.log"
 grep -q 'processes=9' "$CASE_DIR/ut.log"
 grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
 grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
