@@ -1,7 +1,19 @@
 # SQL file access validation record
 
-Issue #30185, PR #30212. Production revision: `7b2f25719998a08391f89ca5269b8d4bb5e1ba28`.
-Base: `bb2b725d0af4601d02ebf9cc68b1816a2b300022`.
+Issue #30185, PR #30212. Recorded validation snapshot:
+`9961057360d29b7afab0fb6d0afc7a1a92c32055`.
+Base: `461bc8e34920959e5fc141e3d1b37673a90894e1`.
+Each measurement below retains its actual source revision.
+
+## Latest rebase
+
+Current main: `8795f3699b4` (revert of fulltext planner change #30189).
+This restores the original planner API and implicit-sort behavior. The now
+obsolete test-call boolean amendment is removed; that test file again matches
+main. The results below describe their recorded revisions, including the
+then-current upstream failures. Tests and performance measurements were not
+rerun for this rebase-only update; restored main behavior is not claimed as a
+fresh runtime pass.
 
 ## Functional and static evidence
 
@@ -12,17 +24,21 @@ Base: `bb2b725d0af4601d02ebf9cc68b1816a2b300022`.
   rollback, local dump behavior, and actual two-CN pipeline execution.
 - Those runs used `75721c07211` on main `501c85ecdd6`. The later backup correction
   preserves ETL normalization by passing `forETL=true`: its admitted arguments
-  and behavior are equivalent. The latest main changes only shard-cache updates;
-  these scenarios use no sharded tables. Range-diff confirms unchanged patches.
-  The public evidence is explicitly reused, not presented as a fresh final-head run.
+  and behavior are equivalent. The rebase through `bb2b725d0af` changes only
+  shard-cache updates; these scenarios use no sharded tables. The final rebase
+  also includes fulltext ordering, JSON_KEYS and Starlark changes. A fresh final
+  production-revision run passes all three real SQL tests (95.257s), including
+  actual fulltext CDC/search and two-CN execution. Earlier public race evidence
+  is reused for the unchanged ownership/cancellation behavior; it is not
+  represented as a fresh final-head race run.
 - Normal owning checks cover admission, process, CRT, stage, planner/scalars,
   external read/write, backup, table functions, frontend and compilation.
   The 13-package race group has twelve passing packages; fileservice fails only
   the baseline sync-dir case below. Arrow/Parquet retain cancellation and
   allocation-release oracles. The final backup correction passes focused
   fileservice/backup normal and race checks, preserving each factory's HDFS mode.
-- Derived 22-package CPU vet, molint and incremental golangci-lint pass; the
-  subsequent three-package and final fileservice deltas pass those checks too.
+- Derived 22-package CPU vet, molint and incremental golangci-lint pass again
+  on the final base, including the test-call correction described below.
   `make err-check`, gofmt and diff checks pass. Molint exit success does not
   assert that all existing informational diagnostics disappeared.
 - Owned temporary files, fake credentials and intercepted requests independently
@@ -40,7 +56,26 @@ nil on Darwin. The exact race selection independently fails on clean main
 `501c85ecdd6` (3.191s). Latest main changes no fileservice/native inputs. Full
 fileservice suites are **not claimed green**; no assertion was weakened or skipped.
 
+Then-current main `461bc8e3492` also omitted the new `orderOverwritten` argument in one
+`tryApplyCoveredFulltext2` test call. Clean main fails to compile the planner
+tests. The earlier amendment supplied `false`, matching the original fixture behavior
+and the other direct calls; production fulltext code and assertions are unchanged.
+After that correction, full planner normal/race runs still failed
+`TestCoveredFulltext2ScoreLimitOnBoundSQL/score_alias` and `score_alias_offset`:
+the expected search candidate LIMIT is absent. A clean-main comparison with an
+overlay containing **only** the same compile-call correction reproduces both
+failures. The final upstream rewrite removes the inner implicit sort, while
+the existing LIMIT helper requires that sort. These are recorded upstream
+failures at that revision, not green planner suites; no expectation was removed to hide them.
+The four focused planner tests for async final binding, external-file admission,
+Hive admission before listing and the corrected equivalent-sort fixture pass
+both normal and race on that recorded base.
+
 ## Ordinary SQL performance
+
+[Per-run data](sql-file-access-performance.csv) includes all 34 reports, actual
+source/binary identities, dataset digests, errors and retained raw-log hashes.
+The A/A arms both identify the same main source and binary.
 
 Darwin ARM64, 10 logical CPUs, 16 GiB, Go 1.27.1, GOMAXPROCS=8, without race.
 Every run starts an independent real CN/TN/logservice cluster and a non-system
@@ -119,8 +154,9 @@ closures are reused; new implementation, test and document hunks are reviewed
 separately. Design records are pinned in `sql-file-access-review.md`. No blanket
 internal identity, missing-context trusted fallback, policy store, worker or CI
 change remains. The source-owner inventory supplements real runtime tests and
-is not a proof about arbitrary future Go code. No confirmed implementation
-blocker remains for PR update; performance claims retain the stated limits.
+is not a proof about arbitrary future Go code. No new confirmed implementation
+blocker remains for PR update; the reproduced baseline failures and performance
+limits remain explicit. This record does not assert merge readiness or green CI.
 
 GPU-native CAGRA/IVF-PQ compilation/runtime remains unverified under the user's
 explicit exception. ONNX and live cloud/HDFS deployment execution are not proved
