@@ -840,14 +840,13 @@ func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
 }
 
 // boundedSlidingRangeFrame recognizes a contiguous, finite RANGE frame whose
-// boundaries move monotonically and which always contains the current peer
-// group. Floating-point order keys stay on the ordinary evaluator because NaN
-// ordering is not suitable for inverse aggregation. TIMESTAMP stays there too:
-// session-civil frames can be disjoint across a daylight-saving-time fold.
+// boundaries move monotonically. NULL interval arithmetic can also produce
+// empty frames. Floating-point keys stay on the ordinary evaluator because NaN
+// ordering is not suitable for inverse aggregation. Non-NULL TIMESTAMP offsets
+// stay there too: civil frames can be disjoint across a daylight-saving fold.
 func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
 	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
 		frame.Start == nil || frame.End == nil ||
-		hasNullIntervalBound(frame) ||
 		len(orderVecs) != 1 || len(orderVecs[0].Vec) != 1 || orderVecs[0].Vec[0] == nil ||
 		!finiteRangeStart(frame.Start) || !finiteRangeEnd(frame.End) {
 		return false
@@ -860,6 +859,10 @@ func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprE
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime, types.T_time:
 		return true
+	case types.T_timestamp:
+		// NULL arithmetic produces peer-only or empty frames without civil
+		// time calculations, so these frames cannot cross a DST fold.
+		return hasNullIntervalBound(frame)
 	default:
 		return false
 	}
@@ -1100,11 +1103,14 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			}
 			left = max(left, partitionStart)
 			right = min(right, currentPartitionEnd)
-			if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+			if left < ctr.runningLeft || right < ctr.runningRight || left > right {
 				return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
 			}
 
-			for row := ctr.runningLeft; row < left; row++ {
+			// Empty frames and gaps contain no rows to add or remove. Only
+			// remove rows that belonged to the old interval, and add rows that
+			// belong to the new one; never apply an inverse to an unadded row.
+			for row := ctr.runningLeft; row < min(left, ctr.runningRight); row++ {
 				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}
@@ -1113,7 +1119,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 					return nil, err
 				}
 			}
-			for row := ctr.runningRight; row < right; row++ {
+			for row := max(ctr.runningRight, left); row < right; row++ {
 				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}

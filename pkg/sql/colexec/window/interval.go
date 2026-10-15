@@ -27,6 +27,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// ValidateIntervalFrameBounds checks execution-time arguments even when a
+// physical shortcut (such as LIMIT 0) omits the window operator. Validation
+// borrows the logical plan and discards normalized copies; Prepare still owns
+// the operator's runtime frames. Detached optimizer nodes are not executable.
+func ValidateIntervalFrameBounds(proc *process.Process, pn *plan.Plan) error {
+	query := pn.GetQuery()
+	if query == nil {
+		query = pn.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+	visited := make([]bool, len(query.Nodes))
+	pending := append([]int32(nil), query.Steps...)
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(query.Nodes) || visited[id] || query.Nodes[id] == nil {
+			continue
+		}
+		visited[id] = true
+		node := query.Nodes[id]
+		for _, expr := range node.WinSpecList {
+			frame := expr.GetW().GetFrame()
+			if frame == nil || frame.Type != plan.FrameClause_RANGE {
+				continue
+			}
+			for _, bound := range []*plan.FrameBound{frame.Start, frame.End} {
+				if bound == nil || bound.UnBounded || bound.Type == plan.FrameBound_CURRENT_ROW ||
+					bound.Val == nil || bound.Val.Typ.Id != int32(types.T_interval) {
+					continue
+				}
+				if _, err := materializeWindowInterval(proc, bound.Val); err != nil {
+					return err
+				}
+			}
+		}
+		pending = append(pending, node.Children...)
+	}
+	return nil
+}
+
 func materializeWindowInterval(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
 	list := expr.GetList()
 	invalid := func() (*plan.Expr, error) {

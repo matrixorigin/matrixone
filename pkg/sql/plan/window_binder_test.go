@@ -206,6 +206,7 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 	tests := []struct {
 		name    string
 		frame   string
+		orderBy string
 		wantErr string
 	}{
 		{name: "rows following preceding", frame: "rows between 1 following and 1 preceding", wantErr: orderError},
@@ -214,7 +215,8 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 		{name: "ordering before unbounded end", frame: "range between current row and unbounded preceding", wantErr: orderError},
 		{name: "unbounded start priority", frame: "rows between unbounded following and 1 preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING."},
 		{name: "unbounded end", frame: "rows between unbounded preceding and unbounded preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame end cannot be UNBOUNDED PRECEDING."},
-		{name: "negative interval", frame: "range between interval -1 day preceding and current row", wantErr: valueError},
+		// Keep the ordering domain valid so this case reaches value validation.
+		{name: "negative interval", frame: "range between interval -1 day preceding and current row", orderBy: "cast('2026-01-01' as datetime)", wantErr: valueError},
 		{name: "valid rows", frame: "rows between 1 preceding and current row"},
 		{name: "valid range", frame: "range between current row and 1 following"},
 		{name: "same direction preceding", frame: "rows between 2 preceding and 3 preceding"},
@@ -223,7 +225,11 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sql := "select sum(x) over (order by x " + tc.frame + ") from (select 1 x) t"
+			orderBy := tc.orderBy
+			if orderBy == "" {
+				orderBy = "x"
+			}
+			sql := "select sum(x) over (order by " + orderBy + " " + tc.frame + ") from (select 1 x) t"
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -475,7 +481,7 @@ func TestWindowIntervalFrameRequiresTemporalRange(t *testing.T) {
 		{"rows", "cast('2026-01-01' as datetime)", "INTERVAL can only be used with RANGE"},
 		{"range", "n_nationkey", "requires a temporal ORDER BY"},
 	} {
-		for _, value := range []string{"?", "1"} {
+		for _, value := range []string{"?", "1", "-1"} {
 			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL,
 				"select sum(n_nationkey) over (order by "+tc.order+" "+tc.frame+" interval "+value+" day preceding) from nation", 1)

@@ -128,9 +128,68 @@ func TestWindowTemporalIntervals(t *testing.T) {
 			execSQLRequire(t, ctx, db, "set @frame_offset=0")
 			require.Empty(t, query(t, "execute empty_frame using @frame_offset"))
 		})
+		t.Run("LIMIT zero still validates parameters", func(t *testing.T) {
+			for _, tc := range []struct {
+				name, sql string
+				dynamic   bool
+			}{
+				{"literal", frameQuery("? second") + " limit 0", false},
+				{"outer", "select * from (" + frameQuery("? second") + ") q limit 0", false},
+				{"CTE", "with q as (" + frameQuery("? second") + ") select * from q limit 0", false},
+				{"parameter", frameQuery("? second") + " limit ?", true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "prepare zero_frame from '"+tc.sql+"'")
+					defer execSQLRequire(t, ctx, db, "deallocate prepare zero_frame")
+					execSQLRequire(t, ctx, db, "set @frame_limit=0")
+					execute := "execute zero_frame using @frame_offset"
+					if tc.dynamic {
+						execute += ",@frame_limit"
+					}
+					for _, value := range []string{"0", "-1", "NULL", "9223372036854.775808", "1.5", "-1", "0"} {
+						execSQLRequire(t, ctx, db, "set @frame_offset="+value)
+						if value == "0" || value == "1.5" {
+							require.Empty(t, query(t, execute))
+						} else {
+							_, err := db.ExecContext(ctx, execute)
+							require.Error(t, err, value)
+						}
+					}
+					stmt, err := db.PrepareContext(ctx, tc.sql)
+					require.NoError(t, err)
+					defer stmt.Close()
+					for _, value := range []any{int64(0), int64(-1), nil, "9223372036854.775808", "1.5", int64(-1), int64(0)} {
+						func() {
+							args := []any{value}
+							if tc.dynamic {
+								args = append(args, int64(0))
+							}
+							rows, err := stmt.QueryContext(ctx, args...)
+							valid := value == int64(0) || value == "1.5"
+							if valid {
+								require.NoError(t, err)
+								require.Empty(t, readWindowNullRows(t, rows))
+							} else if err == nil {
+								defer rows.Close()
+								require.False(t, rows.Next())
+								require.Error(t, rows.Err(), "offset %v", value)
+							}
+						}()
+					}
+					if tc.dynamic {
+						execSQLRequire(t, ctx, db, "set @frame_limit=1")
+						require.Equal(t, zero[:1], query(t, execute))
+					}
+				})
+			}
+		})
 		t.Run("NULL interval keeps NULL order peers", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "insert into dt values (7,NULL,70),(8,NULL,80)")
 			require.Equal(t, []string{"1:NULL", "2:NULL", "3:NULL", "4:NULL", "5:NULL", "6:NULL", "7:150", "8:150"}, query(t, frameQuery("'00:01.5' minute_second")))
+			for _, direction := range []string{"asc", "desc"} {
+				q := "select id,count(*) over w,cast(avg(v) over w as decimal(10,1)) from dt window w as (order by at " + direction + " range between interval '00:01.5' minute_second preceding and current row) order by id"
+				require.Equal(t, []string{"1:0:NULL", "2:0:NULL", "3:0:NULL", "4:0:NULL", "5:0:NULL", "6:0:NULL", "7:2:75.0", "8:2:75.0"}, query(t, q))
+			}
 		})
 	})
 }
