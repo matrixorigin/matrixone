@@ -4890,6 +4890,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				builder.subtreeIsDeterministic(id, seen, false)
 		}
 	}
+	// A multirow boundary needs set equality after its own grouping/pagination.
+	// Reuse one effect-free arm, but keep every distinct floating member.
+	canReuseBoundaryUnion := canCollapseIdenticalUnion
+	if canReuseBoundaryUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canReuseBoundaryUnion = canReuseBoundaryUnion && builder.setArmHasReuseBoundary(id) &&
+				builder.subtreeIsDeterministic(id, seen, false)
+			for _, expr := range builder.qry.Nodes[id].ProjectList {
+				canReuseBoundaryUnion = canReuseBoundaryUnion && types.T(expr.Typ.Id) != types.T_any
+			}
+		}
+	}
 	if canCollapseIdenticalUnion {
 		seen := make(map[int32]bool)
 		for _, id := range nodes {
@@ -4927,6 +4940,27 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if err != nil {
 				return 0, err
 			}
+		}
+		if canReuseBoundaryUnion && nodeType == plan.Node_UNION {
+			// DISTINCT lowering removes its immediate PROJECT. Forward through a
+			// fresh, limit-free project so the arm's LIMIT/OFFSET stays below it.
+			forwardTag := builder.genNewBindTag()
+			forward := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{leftNodeID},
+				BindingTags: []int32{forwardTag}, ProjectList: projectList,
+			}, ctx)
+			child := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_DISTINCT, Children: []int32{forward},
+				PhysicalEqualityKeyList: keyList,
+			}, ctx)
+			outputs := make([]*plan.Expr, len(projectList))
+			for i, expr := range projectList {
+				outputs[i] = GetColExpr(expr.Typ, forwardTag, int32(i))
+			}
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{child},
+				BindingTags: []int32{thisTag}, ProjectList: outputs,
+			}, ctx), nil
 		}
 		if canCollapseIdenticalUnion && nodeType == plan.Node_UNION && len(keyList) == 0 {
 			child, err := builder.appendDistinctNode(ctx, leftNodeID)

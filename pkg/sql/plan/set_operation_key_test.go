@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -596,6 +597,8 @@ func TestSetArmSingletonBoundary(t *testing.T) {
 func TestPreparedSingletonUnionKeepsIndependentArms(t *testing.T) {
 	for _, sql := range []string{
 		"prepare p from (select cast(? as double) limit 1) union (select cast(? as double) limit 1)",
+		"prepare p from (select cast(? as double) limit 2) union (select cast(? as double) limit 2)",
+		"prepare p from select max(cast(? as double)) from NATION group by N_REGIONKEY union select max(cast(? as double)) from NATION group by N_REGIONKEY",
 		"prepare p from select max(cast(? as double)) from NATION union select max(cast(? as double)) from NATION",
 	} {
 		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
@@ -609,5 +612,56 @@ func TestPreparedSingletonUnionKeepsIndependentArms(t *testing.T) {
 			}
 		}
 		require.True(t, found, "identical syntax has independent parameter slots")
+	}
+}
+
+func TestIdenticalBoundaryUnionUsesPartitionedSetKeys(t *testing.T) {
+	for _, arm := range []string{
+		"select cast(i.N_NATIONKEY as double) from NATION i where cast(i.N_REGIONKEY as double)=cast(o.N_REGIONKEY as double) order by i.N_NATIONKEY limit 2 offset 1",
+		"select max(cast(i.N_NATIONKEY as double)) from NATION i where cast(i.N_REGIONKEY as double)=cast(o.N_REGIONKEY as double) group by i.N_NAME",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"select (("+arm+") union ("+arm+")) from NATION o")
+		require.NoError(t, err)
+		foundKeys, foundSingle, foundPagination := false, false, false
+		for _, node := range p.GetQuery().Nodes {
+			foundSingle = foundSingle || node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE
+			foundPagination = foundPagination || node.NodeType == planpb.Node_WINDOW
+			if node.NodeType != planpb.Node_AGG || len(node.GroupByHashKey) == 0 {
+				continue
+			}
+			key := node.GroupBy[node.GroupByHashKey[0]]
+			if key.GetF() == nil || key.GetF().Func.ObjName != "set_operation_float_key" {
+				continue
+			}
+			foundKeys = true
+			require.Len(t, node.GroupByHashKey, 2, "visible membership plus correlation partition")
+			identity := node.GroupBy[node.GroupByHashKey[1]]
+			require.Equal(t, int32(types.T_float64), identity.Typ.Id)
+			require.NotNil(t, identity.GetCol(), "hidden float identity retains scalar equality")
+		}
+		require.True(t, foundKeys, "deduplication uses set equality")
+		require.True(t, foundSingle, "multiple distinct members retain scalar cardinality checking")
+		if strings.Contains(arm, "limit") {
+			require.True(t, foundPagination, "per-partition pagination survives DISTINCT lowering")
+		}
+	}
+}
+
+func TestVolatileBoundaryUnionKeepsIndependentArms(t *testing.T) {
+	for _, arm := range []string{
+		"select rand() from NATION limit 2",
+		"select max(rand()) from NATION group by N_REGIONKEY",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "("+arm+") union ("+arm+")")
+		require.NoError(t, err)
+		found := false
+		for _, node := range p.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_UNION {
+				found = true
+				require.Len(t, node.Children, 2)
+			}
+		}
+		require.True(t, found, "volatile evaluations cannot be reused")
 	}
 }

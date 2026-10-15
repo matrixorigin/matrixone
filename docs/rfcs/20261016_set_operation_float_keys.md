@@ -1,6 +1,6 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 1
+- Revision: 2
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 
@@ -16,14 +16,26 @@ The internal `set_operation_float_key` registry identity is 599, with overloads
 0 (FLOAT) and 1 (DOUBLE). No wire field or user-visible column is added.
 
 Identical, nonprepared, effect-free UNION arms may reuse one evaluation when each
-arm has an ungrouped aggregate or a literal LIMIT of zero or one, through
-cardinality-preserving project/filter/sort wrappers. Such an arm needs no DISTINCT.
-This preserves signed-zero representatives and leaves aggregate empty-input rows,
+arm has an aggregate or a literal LIMIT, through project/filter/sort wrappers.
+An ungrouped aggregate or literal LIMIT of zero or one needs no DISTINCT. This
+preserves its signed-zero representative and leaves aggregate empty-input rows,
 COUNT zero reconstruction, and per-correlation pagination with the existing
-single-arm decorrelation owner. An unordered LIMIT proves a cardinality bound,
-not ordering: identical arms retain the established single-evaluation choice.
-Grouped or multirow arms, volatile expressions, parameters, and extra producer
-steps retain the typed set route and its scalar cardinality checks.
+single-arm decorrelation owner.
+
+Grouped or multirow boundary arms reuse one evaluation followed by set-specific
+DISTINCT. A fresh limit-free forwarding projection keeps the arm's original
+GROUP BY, ORDER BY, LIMIT and OFFSET below duplicate elimination. The existing
+DISTINCT-to-AGG owner hashes the hidden physical membership keys and returns the
+original visible values. Correlated pull-up appends raw identity keys to that
+physical key list, so distinct outer partitions cannot merge; floating identities
+retain scalar equality. Integer-only arms use the same boundary-preserving
+projection with ordinary DISTINCT, whose grouping already includes those
+identities. The final SINGLE owner still rejects multiple members.
+An unordered LIMIT retains the established single-evaluation choice, without
+claiming deterministic input ordering. Ordinary multirow arms (including the
+range-correlated scalar fallback), volatile expressions, parameters, and extra
+producer steps keep their existing typed set route. Existing non-equality grouped
+aggregate and pagination rejection boundaries remain in force.
 
 ## Compatibility and rollback
 
@@ -53,8 +65,11 @@ a rebase advances this candidate to fresh official-main latest + 1 when needed.
 
 - Public SQL: identical correlated MAX and LIMIT arms, empty input and real NULL,
   signed-zero representatives, ordered/unordered LIMIT, OFFSET, zero LIMIT, COUNT,
-  plus existing multirow signed-zero and scalar-cardinality controls.
-- Typed planning: singleton boundaries and their negative controls; prepared
+  grouped MAX and LIMIT 2, equal members across groups and correlation partitions,
+  opposite zeros and different finite members triggering 1242, plus OFFSET placement.
+- Typed planning: singleton boundaries and their negative controls; partitioned
+  set-specific DISTINCT keys, raw floating identity keys, preserved pagination and
+  SINGLE checking; volatile/prepared independent arms; prepared
   integer/float transitions and hidden key regeneration.
 - Compatibility: both registry overloads and nameless protobuf roundtrip; actual
   compiled INTERSECT ALL and UNION grouping stages; placement fallback; old,
@@ -64,8 +79,8 @@ a rebase advances this candidate to fresh official-main latest + 1 when needed.
 ## Alternatives and bounds
 
 Ordinary DISTINCT cannot represent signed-zero set equality. Unconditionally
-collapsing identical floating arms loses multirow membership. Sending a new
-registry identity under the unchanged 115 advertisement permits old workers to
+reusing multirow floating arms without set-specific duplicate elimination loses
+membership. Sending a new registry identity under the unchanged 115 advertisement permits old workers to
 attempt unknown-function execution. Explicit capability admission closes that
 boundary without changing the wire schema or implementing another set operator.
 Independent RFC approval remains external; no author approval is asserted here.
