@@ -105,6 +105,14 @@ func Sin(v float64) (float64, error) {
 
 func Sinh(v float64) (float64, error) {
 	r := math.Sinh(v)
+	if math.IsInf(r, 0) && !math.IsInf(v, 0) {
+		// Go's math.Sinh overflows once math.Exp(|v|) overflows (~709.78),
+		// but exact sinh values stay representable up to
+		// asinh(math.MaxFloat64) ~= 710.476. Rescale exp so finite results
+		// in that window are preserved (same trick as builtInCosh).
+		e := math.Exp(math.Abs(v) / 2)
+		r = math.Copysign(e/2, v) * e
+	}
 	if math.IsInf(r, 0) {
 		return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
 	}

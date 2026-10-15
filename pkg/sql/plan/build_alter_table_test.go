@@ -2335,6 +2335,181 @@ func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 	}
 }
 
+func TestVersionedIndexMutationClassification(t *testing.T) {
+	indexedColumn := func(attributes ...tree.ColumnAttribute) *tree.ColumnTableDef {
+		return &tree.ColumnTableDef{Attributes: attributes}
+	}
+
+	tests := []struct {
+		name    string
+		options []tree.AlterTableOption
+		want    bool
+	}{
+		{name: "no options", options: nil, want: false},
+		{
+			name:    "alter index state",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterIndex{}},
+			want:    true,
+		},
+		{
+			name:    "reindex",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterReIndex{}},
+			want:    true,
+		},
+		{
+			name: "drop index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex},
+			},
+			want: true,
+		},
+		{
+			name: "drop key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropPrimaryKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop indexed column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropColumn},
+			},
+			want: true,
+		},
+		{
+			name: "drop foreign key metadata",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropForeignKey},
+			},
+			want: false,
+		},
+		{
+			name: "add primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.PrimaryKeyIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add secondary index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.Index{}},
+			},
+			want: true,
+		},
+		{
+			name: "add unique index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.UniqueIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add fulltext index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.FullTextIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add plain column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn()},
+			},
+			want: false,
+		},
+		{
+			name: "add primary-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributePrimaryKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUnique())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "legacy add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterAddCol{Column: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "multi-column add contains unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAddColumnClause{
+					NewColumns: []*tree.ColumnTableDef{
+						indexedColumn(),
+						indexedColumn(tree.NewAttributeUnique()),
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "modify column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableModifyColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "change column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableChangeColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "rename column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableRenameColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "alter column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAlterColumnClause{},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, hasVersionedIndexMutation(tt.options))
+		})
+	}
+}
+
 // #28917: ALTER ... MODIFY/CHANGE copies rows without re-encoding vectors, so changing a vector
 // column's declared dimension would leave a mixed-dimension column. checkChangeTypeCompatible must
 // reject a dimension change (same element type, different Width) while leaving same-dimension and
