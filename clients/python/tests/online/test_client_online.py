@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from matrixone import Client
 from matrixone.exceptions import ConnectionError, QueryError
 
+from .test_config import online_config
+
 
 class TestClientOnline(unittest.TestCase):
     """Online tests for Client functionality"""
@@ -34,13 +36,7 @@ class TestClientOnline(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test database connection"""
-        cls.client = Client(
-            host=os.getenv('MATRIXONE_HOST', '127.0.0.1'),
-            port=int(os.getenv('MATRIXONE_PORT', '6001')),
-            user=os.getenv('MATRIXONE_USER', 'root'),
-            password=os.getenv('MATRIXONE_PASSWORD', '111'),
-            database=os.getenv('MATRIXONE_DATABASE', 'test'),
-        )
+        cls.client = Client(**online_config.get_connection_kwargs())
 
         # Create test database and table
         cls.test_db = "test_client_db"

@@ -185,7 +185,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
 		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
-			if err := tbl.db.RenameTableInTxn(
+			if err := tbl.db.replayRenameTable(
 				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true,
 			); err != nil {
 				logutil.Warn(schema.String())
@@ -539,7 +539,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		tbl.TableNode.schema.Store(schema)
 		if schema.Extra.OldName != "" {
 			logutil.Infof("replay rename %v from %v -> %v", tid, schema.Extra.OldName, schema.Name)
-			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
+			err := tbl.db.replayRenameTable(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
 				panic(err)

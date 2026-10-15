@@ -4,6 +4,7 @@
 from datetime import date
 from decimal import Decimal
 
+import numpy as np
 import pytest
 
 from matrixone._sql_literals import sql_literal, substitute_parameters
@@ -77,6 +78,35 @@ def test_safe_legacy_insert_rendering(value):
 )
 def test_typed_parameters(value, expected):
     assert sql_literal(value) == expected
+
+
+@pytest.mark.parametrize(
+    'value,expected',
+    [
+        (np.int8(-3), '-3'),
+        (np.int64(2**63 - 1), '9223372036854775807'),
+        (np.uint64(2**64 - 1), '18446744073709551615'),
+        (np.float16(1.25), '1.25'),
+        (np.float32(1.25), '1.25'),
+        (np.float64(1.25), '1.25'),
+        (np.bool_(True), '1'),
+        (np.bool_(False), '0'),
+    ],
+)
+def test_numpy_scalars_preserve_sql_types_across_builders(value, expected):
+    assert sql_literal(value) == expected
+    assert substitute_parameters('SELECT ?', (value,)) == 'SELECT ' + expected
+    builder = BaseMatrixOneClient()
+    expected_insert = 'INSERT INTO t (v) VALUES (' + expected + ')'
+    assert builder._build_insert_sql('t', {'v': value}) == expected_insert
+    assert builder._build_batch_insert_sql('t', [{'v': value}]) == expected_insert
+    assert _VectorManagerBase._build_insert_sql('t', {'v': value}) == expected_insert
+
+
+@pytest.mark.parametrize('value', [np.float16('nan'), np.float32('inf'), np.float64('-inf')])
+def test_nonfinite_numpy_scalars_rejected_before_write(value):
+    with pytest.raises(ValueError, match='Non-finite'):
+        sql_literal(value)
 
 
 @pytest.mark.parametrize('value', [float('nan'), float('inf'), Decimal('NaN'), object()])

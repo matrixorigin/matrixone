@@ -6,6 +6,7 @@ import uuid
 from decimal import Decimal
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 from matrixone import Client
@@ -31,12 +32,29 @@ def client():
 @pytest.mark.parametrize('mode', ['', 'NO_BACKSLASH_ESCAPES'])
 @pytest.mark.parametrize(
     'value',
-    ["O'Reilly", '中文😀', 'C:\\new\\path', "x\\' OR 1=1 --", '\x00data', '?:id%s', 'value:label', {'key': "O'Reilly"}],
+    [
+        "O'Reilly",
+        '中文😀',
+        'C:\\new\\path',
+        "x\\' OR 1=1 --",
+        '\x00data',
+        '?:id%s',
+        'value:label',
+        {'key': "O'Reilly"},
+        np.int64(7),
+        np.uint64(2**64 - 1),
+        np.float16(1.25),
+        np.float32(1.25),
+        np.bool_(True),
+        np.bool_(False),
+    ],
 )
 def test_native_session_parameter_roundtrip(client, mode, value):
     import json
 
     expected = json.dumps(value) if isinstance(value, dict) else value
+    if isinstance(value, np.generic):
+        expected = value.item()
     with client.session() as session:
         session.execute("SET sql_mode = ?", (mode,))
         result = session.execute("SELECT '?' AS marker, ? AS value", (value,)).fetchone()
@@ -56,5 +74,22 @@ def test_base_and_vector_insert_quote_roundtrip(client):
         client.execute(client._build_insert_sql(table, {'id': 1, 'value': "O'Reilly"}))
         client.vector_ops.insert(table, {'id': 2, 'value': 'C:\\new\\path'})
         assert client.execute('SELECT value FROM ' + table + ' ORDER BY id').rows == [("O'Reilly",), ('C:\\new\\path',)]
+    finally:
+        client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.parametrize('mode', ['client_insert', 'client_batch', 'vector_insert'])
+def test_native_numpy_scalar_insert_compatibility(client, mode):
+    table = 'sdk_numpy_' + uuid.uuid4().hex[:12]
+    client.execute('CREATE TABLE ' + table + '(id INT, value BIGINT, flag BOOLEAN, label VARCHAR(40))')
+    try:
+        row = {'id': np.uint32(1), 'value': np.int64(7), 'flag': np.bool_(True), 'label': np.float32(1.25)}
+        if mode == 'client_insert':
+            client.insert(table, row)
+        elif mode == 'client_batch':
+            client.batch_insert(table, [row])
+        else:
+            client.vector_ops.insert(table, row)
+        assert client.execute('SELECT value,flag,label FROM ' + table).rows == [(7, True, '1.25')]
     finally:
         client.execute('DROP TABLE ' + table)

@@ -13,6 +13,8 @@ import re
 from datetime import date, datetime, time
 from decimal import Decimal
 
+import numpy as np
+
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 
@@ -58,11 +60,13 @@ def sql_identifier(name, qualified=False):
 def sql_literal(value):
     if value is None:
         return 'NULL'
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         return '1' if value else '0'
-    if isinstance(value, (int, float, Decimal)):
-        if isinstance(value, (float, Decimal)) and not math.isfinite(value):
-            raise ValueError('Non-finite SQL numeric parameters are unsupported')
+    if isinstance(value, (int, float, Decimal, np.integer, np.floating)):
+        if isinstance(value, (float, Decimal, np.floating)):
+            finite = np.isfinite(value) if isinstance(value, np.floating) else math.isfinite(value)
+            if not finite:
+                raise ValueError('Non-finite SQL numeric parameters are unsupported')
         return str(value)
     if isinstance(value, (bytes, bytearray, memoryview)):
         return "X'%s'" % bytes(value).hex()

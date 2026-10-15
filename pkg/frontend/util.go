@@ -2098,6 +2098,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
 	}
+	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
+		setMysqlColumnTypeMetadata(col, typ)
+		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+		return nil
+	}
 	if typ.Oid == types.T_blob {
 		length := uint32(math.MaxUint32)
 		if typ.Width > 0 {
@@ -2444,6 +2451,22 @@ func hasSQLSourceTag(sql string) bool {
 	return strings.Contains(sql, cloudUserTag) || strings.Contains(sql, cloudNoUserTag) || strings.Contains(sql, saveResultTag)
 }
 
+// Source scans see ordinary comments, which are lexical space between a
+// qualification period and its identifier. Keep the previous significant token.
+func scanSQLSourceToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanWithCommentsAfterDot()
+	} else {
+		token, value = scanner.ScanWithComments()
+	}
+	if token != mysql.COMMENT {
+		*previousToken = token
+	}
+	return token, value
+}
+
 func statementSQLSource(sql, sqlMode string) string {
 	if !hasSQLSourceTag(sql) {
 		return constant.ExternSql
@@ -2451,8 +2474,9 @@ func statementSQLSource(sql, sqlMode string) string {
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	source := constant.ExternSql
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			source = sourceWithComment(source, comment)
 		}
@@ -2465,7 +2489,7 @@ func statementSQLSource(sql, sqlMode string) string {
 // sqlSourcesByFragment scans the whole lexical stream: a grammar fragment can
 // start inside a MySQL executable comment. Unfiltered fragments are ordered
 // trimmed slices of sql, so recovering their ends needs no second SQL parser.
-func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string, internalSource bool) ([]string, error) {
+func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []mysql.SQLFragment, internalSource bool) ([]string, error) {
 	scanSources := !internalSource && hasSQLSourceTag(sql)
 	var ends []int
 	if scanSources {
@@ -2478,13 +2502,10 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 		if internalSource {
 			sources[i] = constant.InternalSql
 		}
-		if fragment != "" {
-			offset := strings.Index(sql[cursor:], fragment)
-			if offset < 0 {
-				return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
-			}
-			cursor += offset + len(fragment)
+		if fragment.Start < cursor || !fragment.MatchesSource(sql) {
+			return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
 		}
+		cursor = fragment.End
 		if scanSources {
 			ends[i] = cursor
 		}
@@ -2495,8 +2516,9 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	i := 0
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			start := scanner.Pos - len(comment)
 			for i < len(ends) && start >= ends[i] {
@@ -2522,12 +2544,13 @@ func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	var records, sources []string
 	start := 0
 	source := constant.ExternSql
+	previousToken := 0
 	appendRecord := func(end int) {
 		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
 		sources = append(sources, source)
 	}
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		switch token {
 		case mysql.COMMENT:
 			source = sourceWithComment(source, comment)
