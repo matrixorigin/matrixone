@@ -107,6 +107,55 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 					}
 				})
 			}
+			t.Run("generated_columns", func(t *testing.T) {
+				for _, tc := range []struct {
+					name, sqlType, values, updated string
+					want                           [][]string
+					warnings                       int
+				}{
+					{"text", "varchar(16)", "(1,'3x'),(2,'2'),(3,null)", "3", [][]string{{"2"}, {"1"}, {"NULL"}}, 1},
+					{"numeric", "int", "(1,3),(2,2),(3,null)", "3", [][]string{{"2"}, {"1"}, {"NULL"}}, 0},
+					{"binary", "varbinary(16)", "(1,'3x'),(2,'2'),(3,null)", "5", [][]string{{"8"}, {"3"}, {"NULL"}}, 0},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						table := "generated_bit_count_" + tc.name
+						execSQLDB(t, ctx, db, "create table "+table+"(id int primary key, v "+tc.sqlType+", bits bigint unsigned generated always as (bit_count(v)) stored)")
+						execSQLDB(t, ctx, db, "insert into "+table+"(id,v) values"+tc.values)
+						warnings := queryStringRows(t, ctx, db, "show warnings")
+						require.Len(t, warnings, tc.warnings)
+						if tc.warnings != 0 {
+							require.Equal(t, []string{"Warning", "1292", "Truncated incorrect INTEGER value: '3x'"}, warnings[0])
+						}
+						require.Equal(t, tc.want, queryStringRows(t, ctx, db, "select bits from "+table+" order by id"))
+						execSQLDB(t, ctx, db, "update "+table+" set v='7' where id=1")
+						require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+						require.Equal(t, [][]string{{tc.updated}}, queryStringRows(t, ctx, db, "select bits from "+table+" where id=1"))
+					})
+				}
+			})
+			t.Run("returning", func(t *testing.T) {
+				for _, tc := range []struct {
+					name, expression, want string
+					warnings               int
+				}{
+					{"numeric", "bit_count(id)", "1", 0},
+					{"binary", "bit_count(cast(n as binary))", "5", 0},
+					{"text", "bit_count(n)", "3", 0},
+					{"malformed_literal", "bit_count('3x')", "2", 1},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						// Each case must perform the same real mutation rather than
+						// inheriting the previous case's already-updated value.
+						execSQLDB(t, ctx, db, "update inputs set n='3' where id=1")
+						require.Equal(t, [][]string{{tc.want}}, queryStringRows(t, ctx, db, "update inputs set n='7' where id=1 returning "+tc.expression))
+						warnings := queryStringRows(t, ctx, db, "show warnings")
+						require.Len(t, warnings, tc.warnings)
+						if tc.warnings != 0 {
+							require.Equal(t, []string{"Warning", "1292", "Truncated incorrect INTEGER value: '3x'"}, warnings[0])
+						}
+					})
+				}
+			})
 		})
 		t.Run("prepared_reuse", func(t *testing.T) {
 			for _, prepared := range []struct{ expression, want string }{

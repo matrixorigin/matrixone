@@ -297,6 +297,10 @@ func TestBitCountTypeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(BIT_COUNT), get.fid)
 	require.Equal(t, int32(13), get.overloadId)
+	overload, err := GetFunctionById(ctx, get.GetEncodedOverloadID())
+	require.NoError(t, err)
+	require.False(t, overload.IsVolatile(), "text diagnostics do not make the result nondeterministic")
+	require.True(t, overload.CannotFold(), "folding must preserve row diagnostics")
 
 	get, err = GetFunctionByName(ctx, "bit_count", []types.Type{types.T_any.ToType()})
 	require.NoError(t, err)
@@ -360,5 +364,28 @@ func TestBitCountStringWarnings(t *testing.T) {
 				require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
 			}
 		})
+	}
+}
+
+func TestBitCountDirectDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("3x"), 3, proc.Mp())
+	require.NoError(t, err)
+	defer input.Free(proc.Mp())
+	for _, length := range []int{3, 0} {
+		session.warnings = nil
+		func() {
+			result, err := RunFunctionDirectly(proc, EncodeOverloadID(BIT_COUNT, 13), []*vector.Vector{input}, length)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, length, result.Length())
+			require.Len(t, session.warnings, length)
+			for row := 0; row < length; row++ {
+				require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+				require.Equal(t, numericWarning{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}, session.warnings[row])
+			}
+		}()
 	}
 }

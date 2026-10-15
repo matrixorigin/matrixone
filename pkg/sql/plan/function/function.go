@@ -108,7 +108,7 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		return false
 	}
 	for _, ov := range allSupportedFunctions[fid].Overloads {
-		if ov.CannotFold() || ov.IsRealTimeRelated() {
+		if ov.IsVolatile() || ov.IsRealTimeRelated() {
 			return true
 		}
 	}
@@ -273,7 +273,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
-	if f.Overloads[oIndex].volatile {
+	if f.Overloads[oIndex].CannotFold() {
 		return false, nil
 	}
 	return f.testFlag(plan.Function_ZONEMAPPABLE), nil
@@ -911,14 +911,25 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// if true, overload cannot be folded
+	// Volatile overloads can return different values for the same inputs.
 	volatile bool
+	// Deterministic values may still emit diagnostics once per evaluated row.
+	// Folding or changing their evaluation count would lose those effects.
+	rowScopedDiagnostics bool
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
 }
 
-func (ov *overload) CannotFold() bool {
+// IsVolatile reports value instability, independently of diagnostic effects.
+// Use this for deterministic-expression admission, such as generated columns.
+func (ov *overload) IsVolatile() bool {
 	return ov.volatile
+}
+
+// CannotFold also protects deterministic functions whose diagnostics are
+// observable per row. Optimizers and evaluators must preserve those effects.
+func (ov *overload) CannotFold() bool {
+	return ov.volatile || ov.rowScopedDiagnostics
 }
 
 func (ov *overload) IsRealTimeRelated() bool {
