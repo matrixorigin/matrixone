@@ -376,9 +376,7 @@ func (d *DiskCache) runAsyncUpdates() {
 						job.finalize.file,
 						d.claimAsyncPublication,
 					)
-					if isDiskFull(job.finalize.err) {
-						d.cache.ForceEvict(d.async.ctx, d.capacityFunc()/10)
-					}
+					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
 					written, _ := d.writeEntry(
 						d.async.ctx,

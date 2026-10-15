@@ -2,13 +2,13 @@
 
 ## 0. 修订、范围与审查状态
 
-- 修订：**r1，2026-10-14，待独立设计审查**。
+- 修订：**r2，2026-10-15，协议重分配与性能资格补件，待独立复审**。
 - 问题：[#28238](https://github.com/matrixorigin/matrixone/issues/28238)；实现系列：[PR #30107](https://github.com/matrixorigin/matrixone/pull/30107)，承接已合并的 #28349。
-- 实现对照：`6bbac783645040a2ee97e017b196240d83755b9c`；该实现的 main 基线：`a53390c57de48ac280249ff0e88831e502e20fb0`。本文不描述尚未合并的后续 main 行为。
+- r1 实现对照：`6bbac783645040a2ee97e017b196240d83755b9c` / main `a53390c57de48ac280249ff0e88831e502e20fb0`。r2 合并 main `17a6200f59e764729e5544908fffd5480ae88279`，保留上游 DECIMAL 聚合 ABI 元数据并将本功能能力顺延至 114。性能对照必须使用同一 main 基线，不能把上游变化归因于本 PR。
 - 本文是对缺失设计门禁的补件，**不声称设计先于已有实现获批**。设计修订以 Git commit 固定，PR 正文必须链接该精确版本；修订变化重新审查受影响决策。
 - 完整范围是跨 allocator、PRE_INSERT、行仲裁、FK 存储读取、最终键锁及 wire 的所有权/协议重构，满足规模和复杂度门禁，不能因 PR 类型为 BUG 而豁免。
 - [旧 IGNORE 设计](20260908-auto-increment-boundaries.md)只提出后续 acceptance cursor；[#23371 设计](CLAUDE_AUTO_INCREMENT_23371.md)明确排除本问题。其批准、实现 APPROVE、CI 成功均不构成本文的设计批准。
-- 当前审查记录：`设计 r1 / 尚无独立 PASS / 实现批准保持阻塞`。不得提前 resolve 设计门禁线程。独立审查应记录设计 commit、决定、阻塞项及接受的权衡，不要求额外 human-approval 标签或 RFC 转换。
+- 当前审查记录：`设计 r2 / 受影响决策待独立复审`。不得提前 resolve 设计门禁线程。独立审查应记录设计 commit、决定、阻塞项及接受的权衡，不要求额外 human-approval 标签或 RFC 转换。
 
 ## 1. 问题、依据与成功条件
 
@@ -116,7 +116,7 @@ generated PK 的旧输入为 NULL，不能沿用旧键锁。arbiter 完成最终
 
 ## 6. 精确 wire 契约与版本兼容
 
-最低能力为 **MORPC 113**；112 已归 signed WEEK/DAYOFYEAR，不能复用。当前 schema 对既有 messages 是 **7 个字段**，不是 PR 早期正文中的六个；另有两个新 messages。
+最低能力为 **MORPC 114**；112 已归 signed WEEK/DAYOFYEAR，113 已归 DECIMAL variance/stddev 的 DOUBLE 结果 ABI，不能复用。当前 schema 对既有 messages 是 **7 个字段**，不是 PR 早期正文中的六个；另有两个新 messages。
 
 | producer / 字段号 | 内容与 consumer |
 |---|---|
@@ -128,7 +128,7 @@ generated PK 的旧输入为 NULL，不能沿用旧键锁。arbiter 完成最终
 
 `OrderedAutoIncrement` 字段 1–5：ref、table_def、column_index、values_rows、foreign_keys；`OrderedForeignKey` 字段 1–6：ref、table_def、child_columns、parent_columns、predicate、self_parent_columns。child/self positions 是最终物理输入位置；parent positions 是 parent TableDef ordinals，predicate relation 1 为待绑定 child tuple slot。Deepcopy、引用收集、pruning/remapping、encode/decode 必须同改；不能只追加 protobuf。
 
-发送 encoding 及 receiver instruction admission 用 `validateRemoteInsertIgnoreEligibilityProtocol`；发送前递归 pipeline 校验再通过 `validateRemoteInsertIgnoreEligibilityDestination` 查实际 Node.Id/Addr。任一 metadata 存在即要求 113；未知/缺失能力或低版本拒绝，不能因为本机 latest=113 就推断 worker 也支持。缺失 metadata 的普通旧路径保持既有契约；格式错误由 operator validation/运行列界检查失败。
+发送 encoding 及 receiver instruction admission 用 `validateRemoteInsertIgnoreEligibilityProtocol`；发送前递归 pipeline 校验再通过 `validateRemoteInsertIgnoreEligibilityDestination` 查实际 Node.Id/Addr。任一 metadata 存在即要求 114；未知/缺失能力或低版本拒绝，不能因为本机 latest=114 就推断 worker 也支持。缺失 metadata 的普通旧路径保持既有契约；格式错误由 operator validation/运行列界检查失败。
 
 不新增 WAL/catalog/storage schema。这些字段是执行计划/临时 operator 数据，不能在旧 CN 上丢字段后继续执行，也不跨重启恢复 Runs/maps/prepared execution。降级不转换在途计划。
 
@@ -155,7 +155,7 @@ ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点
 
 ## 8. 上线、回退、恢复与观测
 
-- 无新配置开关，planner 的 eligibility 与 113 capability 是准入。先升级执行相关 CN，再放行命中该路径的 workload；旧 direct CN 仍有旧语义，不承诺升级期间任意入口一致。可以先停止旧入口/定向到升级入口；不能仅改本机 latest 值冒充全量升级。
+- 无新配置开关，planner 的 eligibility 与 114 capability 是准入。先升级执行相关 CN，再放行命中该路径的 workload；旧 direct CN 仍有旧语义，不承诺升级期间任意入口一致。可以先停止旧入口/定向到升级入口；不能仅改本机 latest 值冒充全量升级。
 - 先运行本文矩阵、协议 rejection 和真实多 CN 功能检查，再对有 ordered FK 的代表性 workload 观察 allocator 请求数、reader rows/bytes、native/Go 峰值、锁等待/取消尾部。锁/读取代价超过既有资源预算时暂停该 workload 的扩大，不取消约束或降级成丢 metadata 路径。
 - 启用后没有 rollback migration：停写并 drain 新执行/txn，结束 prepared contexts 后可回旧 binary；持久 allocator 高水位不回退。旧版本重新运行将恢复原 compatibility gap，必须明确是功能回退，不宣称同一结果。
 - restart/backup/restore 只沿用已有数据和 allocator 持久高水位；未用 leased slots 和私有 maps 丢弃，允许洞。禁止把 transient stream 纳入备份或恢复后复用。无新的 schema/WAL format，但现有 AUTO_ID_CACHE/epoch 等独立版本要求仍适用。
@@ -172,7 +172,7 @@ ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点
 | FK reader 与 residual | `TestOrderedForeignKeyProbe`；返回行不匹配、NULL、read/range/build/eval error、reader Close |
 | current self / accepted parent | `TestOrderedForeignKeyCurrentRow`、`TestOrderedSelfReferenceCompositeTuple`；完整 tuple、当前行、自根/后继、拒绝 parent、未投机发布 |
 | logical→physical 与消费者 | plan owning UT、deepcopy/remapping、最终 LOCK_OP ordinal 与 indexes，共用接受行而非临时 ID |
-| protocol | `TestInsertIgnoreEligibilityRemoteProtocol`：encode/decode、112 拒绝/113 接受、实际旧 destination、递归和独立 metadata |
+| protocol | `TestInsertIgnoreEligibilityRemoteProtocol`：encode/decode、113 拒绝/114 接受、实际旧 destination、递归和独立 metadata |
 | LOAD/prepared策略 | explicit JSON、两 binder TIME rebind/profile UT，既有 prepared/FK setting 失效矩阵；普通与 LOCAL/IGNORE 相邻控制 |
 | SQL 行/事务/索引 | mo-tester `insert_ignore_constraints.sql`、`insert_ignore_reservations.sql`、`issue_25366.sql`、`external_time_assignment.sql`；准确值、错误/零提交、cleanup、同实例第二轮 |
 
@@ -202,6 +202,6 @@ ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点
 | 有序 FK 完整 residual + 当前/已接受 self 可见性 | 不依赖 pruning 的假阳性；只缓存固定最后值与实际接受 parent |
 | pessimistic shared parent table locks | 用既有并发保护换取写争用；不宣称更细粒度或绝无 deadlock |
 | 最终输出后 PK lock + lease TS 检查 | 不锁临时 NULL、不制造未验证号码；失败使用既有 txn retry |
-| 113 三向拒绝而非降级丢字段 | 混版不能 silent orphan/错误 ID 映射；没有新的存储 migration |
+| 114 三向拒绝而非降级丢字段 | 混版不能 silent orphan/错误 ID 映射；没有新的存储 migration |
 
-设计级阻塞：**本文精确修订尚待独立设计审查/PASS**。功能代码不能因补了一份文档就自动获批。benchmark/旧 binary 演练的证据缺口由 PR 作者与实现 reviewer 在 rollout 决策前处理；它们不是本文暗中承诺的成功结果。审查对所有权、性能预算或兼容提出新阻塞时，更新 r2 并重审，而不是沿用 r1 的批准。
+设计级阻塞：**本文精确修订尚待独立设计审查/PASS**。功能代码不能因补了一份文档就自动获批。benchmark/旧 binary 演练的证据缺口由 PR 作者与实现 reviewer 在 rollout 决策前处理；它们不是本文暗中承诺的成功结果。r2 的协议号重分配与性能预算须独立复审，不能沿用 r1 的任何认可替代新决策审查。
