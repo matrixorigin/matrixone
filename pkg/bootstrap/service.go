@@ -479,6 +479,19 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 			return err
 		}
 		err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			// Publish the v114 TABLES consumer only after admission, atomically
+			// with the derived-schema completion views. A retry after an uncertain
+			// commit can safely reconcile both definitions again.
+			for _, sql := range []string{
+				"DROP VIEW IF EXISTS information_schema.TABLES",
+				sysview.InformationSchemaTablesV114DDL,
+			} {
+				result, err := txn.Exec(sql, executor.StatementOption{})
+				result.Close()
+				if err != nil {
+					return err
+				}
+			}
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {

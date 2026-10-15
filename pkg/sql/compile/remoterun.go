@@ -2300,6 +2300,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
+		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 114")
+	}
 	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
 		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
 	}

@@ -279,3 +279,11 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - 同域表达式原样保留；换域只重定向根字符串cast_strict赋值owner，绝不剥离作者plain CAST。若原来没有赋值owner则增加一层，之后复用该owner；往返转换不线性堆积持久化CAST。COPY重建阶段必须证明目标表达式与这一精确typed变换相等，才允许replay；改变的表达式或不兼容依赖不会被SQL文本等价误判。
 - 保留MODIFY原有类型、FK、索引、生成列环检测、约束、nullability和严格赋值检查，以及COPY的事务、索引重建、发布与失败清理。新状态只包含当前调用内的schema/表达式副本，不增加生产缓存、goroutine、锁、等待或重试。
 - 公共SQL正反例检查已有行和之后插入行，并保留未改会话、普通COPY控制；typed检查同域/legacy/native域、DEFAULT/ON UPDATE、作者CAST、schema不可变及多次往返深度。正常合并两个冲突；pipeline/parser由owner生成两次一致，完整pipeline descriptor与main相同，plan descriptor仅含批准的defaults增量。最终资格见验证文档，历史证据不扩张。
+
+## 2026-10-15 新增P2：函数598表达式兼容性闭包（冻结main bb2b725d0a）
+
+- `internal_table_collation` 的执行身份598纳入共享表达式feature walk及Any，统一要求114：持久化authoring/加载、worker选择、发送目标与接收前验证。按编码ID判断，不依赖可伪造显示名；596/597及main113统计合同不变，不新增protobuf字段或函数编号。
+- 普通/预编译视图在113拒绝且不发布目录行，114允许并写入最低版本marker；reader重申114，下限不足时marked/unmarked定义均拒绝。旧普通视图仍可在113创建读取。实际RPC模拟能力边界不冒充真实旧二进制混部资格。
+- 新门禁揭示fresh bootstrap尚未admit时不能创建598消费者。复用既有阶段：prerequisite事务先安装legacy TABLES；catalog admission达到114后，在原derived事务中DROP/CREATE新版TABLES并创建四个trace completion views，再开ingress。完整旧集群仍走skip，不因本轮重写系统视图；普通tenant初始化保持原114模板。
+- 新Exec结果逐次Close，既有事务独占commit/rollback；失败、取消与不确定提交沿原框架处理，无新等待循环/worker/cache。实际SQL证明先成功DROP再被CREATE门禁拒绝时原rel_id不变，114重新初始化成功。新增开销仅每expr常量比较和缺失derived schema初始化的两条DDL，不改COPY/恢复/索引等既有所有权。
+- 任务启动时正常合并官方bb2的只读cache不可变性修复并验证其normal/race。验证期间main前进到461bc8e349，未追逐其无关24文件；当前PR差分与证据基于bb2，前进main合并树无文本冲突。准确资格及历史限制见验证文档。

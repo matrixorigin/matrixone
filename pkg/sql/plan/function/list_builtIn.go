@@ -14921,7 +14921,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// Protocol 110 metadata consumer for the persistent table-default pair.
+	// Protocol 114 metadata consumer for the persistent table-default pair.
 	{
 		functionId: INTERNAL_TABLE_COLLATION,
 		class:      plan.Function_STRICT,

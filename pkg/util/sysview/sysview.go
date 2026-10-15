@@ -183,6 +183,12 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 
 	begin := time.Now()
 	for _, sql := range InitInformationSchemaSysTables {
+		// Prerequisites commit before persisted-expression admission. The
+		// function-598 definition is installed with the other derived views
+		// after the v114 catalog barrier, before opening ingress.
+		if sql == InformationSchemaTablesV114DDL {
+			sql = InformationSchemaTablesDDL
+		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}
