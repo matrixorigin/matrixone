@@ -521,6 +521,50 @@ func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
 	}
 }
 
+func TestConstantFoldDefersExplicitCastRangeWarnings(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		for _, tc := range []struct {
+			target            types.Type
+			overflow, control string
+		}{
+			{types.T_int64.ToType(), "9223372036854775808", "9223372036854775807"},
+			{types.T_uint64.ToType(), "-1", "18446744073709551615"},
+			{types.New(types.T_decimal64, 5, 2), "999.995", "999.994"},
+			{types.New(types.T_decimal128, 20, 2), "999999999999999999.995", "999999999999999999.994"},
+			{types.New(types.T_decimal256, 40, 2), "99999999999999999999999999999999999999.995", "99999999999999999999999999999999999999.994"},
+		} {
+			for _, value := range []string{tc.overflow, tc.control} {
+				t.Run(fmt.Sprintf("%v/%s/%s", prepared, tc.target, value), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					sink := &foldTestWarnings{}
+					proc.WarningSink = sink
+					expr := makeConstantCastExpr(t, "cast", types.T_varchar.ToType(), tc.target, value)
+					expr.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
+					got := NewConstantFold(prepared).constantFold(expr, proc)
+					require.Zero(t, sink.count, "speculative diagnostics must not reach the real session")
+					if value == tc.overflow {
+						require.NotNil(t, got.GetF(), "warning cast must remain executable")
+					} else if tc.target.Oid != types.T_decimal256 {
+						require.NotNil(t, got.GetLit(), "silent boundary control remains foldable")
+					}
+					if tc.target.Oid == types.T_decimal256 {
+						// The plan has no Decimal256 literal payload, so even
+						// a silent value stays a cast. Check its probe directly.
+						vec, free, warned, err := EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
+						if free != nil {
+							t.Cleanup(free)
+						}
+						require.NoError(t, err)
+						require.NotNil(t, vec)
+						require.Equal(t, value == tc.overflow, warned)
+						require.Zero(t, sink.count)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestEvaluateConstantExpressionKernelFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name string
