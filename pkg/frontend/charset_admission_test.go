@@ -264,6 +264,16 @@ func TestSetNamesImplicitCollation(t *testing.T) {
 	}
 }
 
+func TestResolveImplicitSetNamesCollationRejectsInvalidRequests(t *testing.T) {
+	ses := &Session{}
+
+	_, err := resolveImplicitSetNamesCollation(ses, 123)
+	require.ErrorContains(t, err, "character set must be a string")
+
+	_, err = resolveImplicitSetNamesCollation(ses, "latin1")
+	require.ErrorContains(t, err, "unsupported character set")
+}
+
 func TestCharsetAdmissionHandshake(t *testing.T) {
 	for _, id := range []byte{8, 47, 65, 192, 224, 33, 45, 46, 63, 83, 255} {
 		capabilities := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION)
