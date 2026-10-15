@@ -7225,12 +7225,10 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
-		if bitmap, ok := storedSetBitmapExpr(args[0]); ok {
-			// SET's display wrapper is a VARCHAR presentation of a stored uint64
-			// bitmap. Bitwise aggregates are numeric consumers: use that bitmap
-			// directly so it retains the native uint64 aggregate path instead of
-			// routing an unsupported uint64 input through the numeric CAST4 helper.
-			args[0] = bitmap
+		if storage, ok := storedMySQLSpecialTypeExpr(args[0]); ok {
+			// ENUM/SET display labels must not enter the string conversion.
+			// Resolve their ordinals/bitmaps through the existing integer domains.
+			args[0] = storage
 		} else {
 			argType := makeTypeByPlan2Expr(args[0])
 			if isBitwiseAggregateConversionInput(argType) {
@@ -7534,7 +7532,11 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
-	lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	// MOD literal refinement is metadata-only; its existing casts must retain
+	// the integer's full storage domain.
+	if name != "mod" && name != "%" {
+		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		if state := preparedBindingState(ctx); state != nil {
@@ -7600,6 +7602,10 @@ func bindFuncExprImplByPlanExpr(
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
+	if name == "mod" || name == "%" {
+		metadataTypes := refineDecimalArithmeticLiteralLookupTypes(name, args, argsType)
+		returnType = function.DecimalModReturnType(metadataTypes, returnType)
+	}
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 	// Literal-domain refinement participates in overload lookup, so the
 	// physical arguments must honor a refined OID even when the selected
@@ -10054,7 +10060,7 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 // synthetic DECIMAL(38,s) bound would make a weak literal such as 0.5 force an
 // otherwise narrow prepared expression into Decimal256.
 func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs []types.Type) []types.Type {
-	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
+	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*" && name != "mod" && name != "%") {
 		return inputs
 	}
 	hasDecimalInput := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal()
@@ -10083,13 +10089,14 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication because the
+		// Integer literal precision matters for multiplication and MOD because the
 		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the product.  Addition and subtraction already derive
+		// spuriously widen the result. MOD uses this bound only for metadata.
+		// Addition and subtraction already derive
 		// their safe result precision from the integer domain; retaining their
 		// established Decimal128 coercion also avoids changing outer-join decimal
 		// expression execution paths.
-		if name == "*" && hasDecimalInput && inputs[i].IsIntOrUint() {
+		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue
@@ -11088,9 +11095,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
-	// labels. Resolve storage before the generic string-numeric conversion.
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	// Numeric aggregates consume ENUM ordinals and SET bitmaps. Resolve
+	// storage before the generic string-numeric conversion.
+	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11122,6 +11129,18 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 		}
 	}
 	return result
+}
+
+func usesMySQLSpecialNumericAggregateInput(name string, argCount int) bool {
+	if argCount != 1 {
+		return false
+	}
+	switch name {
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor":
+		return true
+	default:
+		return false
+	}
 }
 
 // An IN list is represented as a plan.ExprList and is not assigned one scalar
