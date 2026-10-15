@@ -4555,6 +4555,20 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
 		}
 
+	case plan.Node_DISTINCT:
+		if len(node.PhysicalEqualityKeyList) > 0 && len(node.Children) == 1 {
+			child := builder.qry.Nodes[node.Children[0]]
+			// Pull-up adds correlation outputs to the forwarding PROJECT. They
+			// partition membership per outer key and must participate in hashing.
+			// Use scalar equality for identities, even when an identity is FLOAT.
+			if child.NodeType == plan.Node_PROJECT {
+				for len(node.PhysicalEqualityKeyList) < len(child.ProjectList) {
+					pos := len(node.PhysicalEqualityKeyList)
+					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(child.ProjectList[pos]))
+				}
+			}
+		}
+
 	case plan.Node_WINDOW:
 		// A mixed equality cannot define an inner partition for an outer
 		// correlation value. Skipping key extraction would still move its

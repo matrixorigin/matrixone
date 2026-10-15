@@ -144,6 +144,10 @@ func TestSetOperationSignedZero(t *testing.T) {
 				{"float-identities", "select id,(select 1 from zeros i where i.d=o.d union select 1 from zeros i where i.d=o.d) from zeros o where id<=4 order by id", []string{"1:1", "2:1", "3:1", "4:1"}},
 				{"float-members", "select id,cast((select d from zeros i where i.id=o.id union select d from zeros i where i.id=o.id) as varchar) from zeros o where id<=4 order by id", []string{"1:-0", "2:0", "3:-0", "4:0"}},
 				{"float-aggregate-boundary", "select id,cast((select max(d) from zeros i where i.id=o.id and i.id<=3 union select max(d) from zeros i where i.id=o.id and i.id<=3) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
+				{"integer-limit-two-boundary", "select id,((select ie from ci_inner i where i.oref=o.oref and ie is not null limit 2) union (select ie from ci_inner i where i.oref=o.oref and ie is not null limit 2)) from ci_outer o order by id", []string{"1:1", "2:3", "3:4", "4:NULL", "5:3"}},
+				{"integer-grouped-boundary", "select id,(select max(ie) from ci_inner i where i.oref=o.oref and ie is not null group by grp union select max(ie) from ci_inner i where i.oref=o.oref and ie is not null group by grp) from ci_outer o order by id", []string{"1:1", "2:3", "3:4", "4:NULL", "5:3"}},
+				{"float-grouped-boundary", "select id,cast((select max(d) from zeros i where i.id=o.id and i.id<=3 group by i.id union select max(d) from zeros i where i.id=o.id and i.id<=3 group by i.id) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
+				{"float-limit-two-boundary", "select id,cast(((select d from zeros i where i.id=o.id and i.id<=3 limit 2) union (select d from zeros i where i.id=o.id and i.id<=3 limit 2)) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
 				{"float-pagination-boundary", "select id,cast(((select d from zeros i where i.id=o.id and i.id<=3 limit 1) union (select d from zeros i where i.id=o.id and i.id<=3 limit 1)) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
 				{"float-ordered-pagination", "select id,cast(((select d from zeros i where i.id=o.id and i.id<=3 order by id limit 1) union (select d from zeros i where i.id=o.id and i.id<=3 order by id limit 1)) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
 				{"float-offset-pagination", "select id,cast(((select cast(ie as double) from ci_inner i where i.oref=o.oref and ie is not null order by ie limit 1 offset 1) union (select cast(ie as double) from ci_inner i where i.oref=o.oref and ie is not null order by ie limit 1 offset 1)) as varchar) from ci_outer o order by id", []string{"1:1", "2:NULL", "3:NULL", "4:NULL", "5:NULL"}},
@@ -157,6 +161,54 @@ func TestSetOperationSignedZero(t *testing.T) {
 					require.Equal(t, tc.want, readWindowNullRows(t, rows), tc.query)
 				})
 			}
+
+			t.Run("multirow-boundary-membership", func(t *testing.T) {
+				for _, q := range []string{
+					"create table boundary_inner(k int,g int,d double)",
+					"insert into boundary_inner values(1,10,-0e0),(1,20,-0e0),(1,30,-0e0),(2,10,-0e0),(2,20,-0e0),(3,10,NULL),(3,20,NULL),(5,10,-0e0),(5,20,0e0),(6,10,1e0),(6,20,2e0)",
+				} {
+					_, err := conn.ExecContext(ctx, q)
+					require.NoError(t, err, q)
+				}
+				for _, tc := range []struct{ name, arm string }{
+					{"limit-two", "select d from boundary_inner i where i.k=o.id order by g limit 2"},
+					{"grouped", "select max(d) from boundary_inner i where i.k=o.id group by g"},
+					{"offset", "select d from boundary_inner i where i.k=o.id order by g limit 2 offset 1"},
+					{"float-identity", "select d from boundary_inner i where cast(i.k as double)=cast(o.id as double) order by g limit 2"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						q := "select id,cast(((" + tc.arm + ") union (" + tc.arm + ")) as varchar) from ci_outer o where id<=4 order by id"
+						rows, err := conn.QueryContext(ctx, q)
+						require.NoError(t, err, q)
+						require.Equal(t, []string{"1:-0", "2:-0", "3:NULL", "4:NULL"}, readWindowNullRows(t, rows), "duplicate members collapse within, but never across, correlation partitions")
+					})
+				}
+				for _, arm := range []string{
+					"select d from boundary_inner i where i.k=o.id order by g limit 2",
+					"select max(d) from boundary_inner i where i.k=o.id group by g",
+				} {
+					for _, key := range []int{5, 6} {
+						q := fmt.Sprintf("select ((%s) union (%s)) from (select %d id) o", arm, arm, key)
+						var value sql.NullFloat64
+						err := conn.QueryRowContext(ctx, q).Scan(&value)
+						require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row", q)
+					}
+				}
+				// OFFSET belongs to the arm, before UNION membership. Moving or
+				// dropping it changes the scalar result or its cardinality.
+				for _, tc := range []struct {
+					key, offset int
+					want        []string
+				}{
+					{5, 1, []string{"0"}}, {5, 2, []string{"NULL"}}, {6, 1, []string{"2"}},
+				} {
+					arm := fmt.Sprintf("select d from boundary_inner i where i.k=o.id order by g limit 2 offset %d", tc.offset)
+					q := fmt.Sprintf("select cast(((%s) union (%s)) as varchar) from (select %d id) o", arm, arm, tc.key)
+					rows, err := conn.QueryContext(ctx, q)
+					require.NoError(t, err, q)
+					require.Equal(t, tc.want, readWindowNullRows(t, rows), q)
+				}
+			})
 
 			t.Run("retained-correlation-shapes", func(t *testing.T) {
 				for _, tc := range []struct {
