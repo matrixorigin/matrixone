@@ -694,6 +694,26 @@ func TestSelectSharedLockParse(t *testing.T) {
 	}
 }
 
+func TestSelectLockContextualNoWait(t *testing.T) {
+	for _, mode := range []string{"UPDATE", "SHARE"} {
+		for _, word := range []string{"nowait", "nOwAiT"} {
+			sql := "SELECT id FROM t FOR " + mode + " /* option */ " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			require.Equal(t, "select id from t for "+strings.ToLower(mode)+" nowait", tree.String(stmt, dialect.MYSQL))
+			stmt.Free()
+		}
+		for _, word := range []string{"other", "nowaits", "`nowait`", "'nowait'"} {
+			sql := "SELECT id FROM t FOR " + mode + " " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if stmt != nil {
+				stmt.Free()
+			}
+			require.Error(t, err, sql)
+		}
+	}
+}
+
 func TestSelectLockModifiersRemainUsableAsIdentifiers(t *testing.T) {
 	stmt, err := ParseOne(context.Background(), "SELECT nowait, locked FROM t", 1)
 	require.NoError(t, err)

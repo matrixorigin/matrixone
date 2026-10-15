@@ -179,7 +179,7 @@ func TestCoveredFulltext2ScoreLimitOnlyForEquivalentSort(t *testing.T) {
 			builder.sqlCalcFoundRows = tc.foundRows
 			handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
 				[]int32{0}, []*plan.IndexDef{idxdef}, []int32{1}, nil,
-				map[int32]int32{0: 0}, makePlan2Uint64ConstExprWithType(200), nil)
+				map[int32]int32{0: 0}, makePlan2Uint64ConstExprWithType(200), nil, false)
 			require.NoError(t, err)
 			require.True(t, handled)
 			search := findCoveredFulltext2Scan(t, builder)

@@ -378,7 +378,6 @@ func init() {
 		"names":                      NAMES,
 		"namespace":                  NAMESPACE,
 		"namespaces":                 NAMESPACES,
-		"nowait":                     NOWAIT,
 		"natural":                    NATURAL,
 		"nchar":                      NCHAR,
 		"next":                       NEXT,
