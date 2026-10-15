@@ -905,6 +905,19 @@ func (proc *Process) EnsureUserVariableAssignmentRows(name string, rowCount int)
 		proc.Base.userVariableAssignmentBatchRows = rowCount
 	}
 	effectiveRows := proc.Base.userVariableAssignmentBatchRows
+	for variableName, rows := range proc.Base.userVariableAssignmentRows {
+		if len(rows) != effectiveRows {
+			grown := make([]UserVariableAssignment, effectiveRows)
+			copy(grown, rows)
+			proc.Base.userVariableAssignmentRows[variableName] = grown
+		}
+		valid := proc.Base.userVariableAssignmentRowValid[variableName]
+		if len(valid) != effectiveRows {
+			grown := make([]bool, effectiveRows)
+			copy(grown, valid)
+			proc.Base.userVariableAssignmentRowValid[variableName] = grown
+		}
+	}
 	rows := proc.Base.userVariableAssignmentRows[name]
 	valid := proc.Base.userVariableAssignmentRowValid[name]
 	if len(rows) != effectiveRows {

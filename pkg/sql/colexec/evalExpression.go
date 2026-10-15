@@ -1281,13 +1281,14 @@ func snapshotSkippedUserVariableAssignments(
 		return nil
 	}
 	currentRow := proc.GetUserVariableAssignmentCurrentRow()
-	seen := make(map[ExpressionExecutor]bool)
+	visiting := make(map[ExpressionExecutor]bool)
 	var visit func(ExpressionExecutor) error
 	visit = func(current ExpressionExecutor) error {
-		if current == nil || seen[current] {
+		if current == nil || visiting[current] {
 			return nil
 		}
-		seen[current] = true
+		visiting[current] = true
+		defer delete(visiting, current)
 		switch current := current.(type) {
 		case *UserVarAssignmentExpressionExecutor:
 			for row := 0; row < rowCount; row++ {
