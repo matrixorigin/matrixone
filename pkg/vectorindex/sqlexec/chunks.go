@@ -92,10 +92,10 @@ func (w *ChunkInserter) WriteRange(src io.ReaderAt, offset, length int64, indexI
 			if err == nil || err == io.EOF {
 				err = io.ErrUnexpectedEOF
 			}
-			return next, w.fail(fmt.Errorf("read index artifact: %w", err))
+			return next, w.fail(err)
 		}
 		if err != nil && err != io.EOF {
-			return next, w.fail(fmt.Errorf("read index artifact: %w", err))
+			return next, w.fail(err)
 		}
 		// Copy before reusing scratch; execution/retry retains immutable values.
 		w.params = append(w.params, indexID, string(buf))

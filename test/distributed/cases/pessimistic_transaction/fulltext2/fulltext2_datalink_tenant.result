@@ -9,7 +9,7 @@ insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chin
 select load_text(fpath) from dl;
 internal error: only the sys account moadmin role can access SQL file paths
 create fulltext2 index ftidx on dl(fpath);
-internal error: only the sys account moadmin role can access SQL file paths
+not supported: asynchronous indexes require remote Datalink sources; read local documents into a TEXT column with load_text before indexing
 select count(*) as source_rows from dl;
 ➤ source_rows[-5,64,0]  𝄀
 2

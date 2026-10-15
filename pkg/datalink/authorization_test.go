@@ -320,3 +320,26 @@ func TestDatalinkStageReuseRechecksServerAuthority(t *testing.T) {
 	_, err = dl.NewWriter(proc)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 }
+
+func TestDatalinkAsyncSourceProviderAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    fileservice.Path
+		allowed bool
+	}{
+		{"local", fileservice.Path{File: "owned.txt"}, false},
+		{"configured", fileservice.Path{Service: "SHARED", File: "owned.txt"}, false},
+		{"disk", fileservice.Path{Service: "s3-opts", ServiceArguments: []string{"endpoint=disk", "bucket=owned"}, File: "owned.txt"}, false},
+		{"remote", fileservice.Path{Service: "s3-opts", ServiceArguments: []string{"endpoint=http://127.0.0.1:1", "bucket=owned"}, File: "owned.txt"}, true},
+		{"malformed", fileservice.Path{Service: "s3", ServiceArguments: []string{"missing"}, File: "owned.txt"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (Datalink{path: tc.path, MoPath: tc.path.File}).validateAsyncSource()
+			if tc.allowed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}

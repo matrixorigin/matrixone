@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -281,7 +282,7 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 // run first; Cleanup remains with the outer owner until commit/rollback returns.
 func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkID, buildTS int64) (int64, error) {
 	if t.curFile != nil || t.cur != nil || len(t.delBatch) != 0 {
-		return startChunkID, fmt.Errorf("tail builder must finish before persistence")
+		return startChunkID, moerr.NewInternalErrorNoCtx("tail builder must finish before persistence")
 	}
 	next := startChunkID
 	metadata := tailFrameMetaSqls(sqlproc, cfg, startChunkID, t.frames, buildTS)

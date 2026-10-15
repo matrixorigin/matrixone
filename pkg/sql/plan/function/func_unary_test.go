@@ -13854,3 +13854,21 @@ func TestAppendGeometryStandardWKBErrorAtomicity(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckAsyncDatalinkSourceEligibility(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened", "://invalid", ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false, true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil), CheckAsyncDatalinkSource)
+	defer fc.Free()
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+	denied := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened"}, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, nil, nil), CheckAsyncDatalinkSource)
+	defer denied.Free()
+	require.NoError(t, denied.result.PreExtendAndReset(denied.fnLength))
+	require.ErrorContains(t, denied.fn(denied.parameters, denied.result, proc, denied.fnLength, nil), "asynchronous indexes require remote Datalink sources")
+}

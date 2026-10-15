@@ -21,6 +21,7 @@ select the local `disk` provider.
 | Local path, configured named service, dynamic local-disk service | The current execution must carry `sys` / `moadmin` authority. |
 | Remote argumented provider or remote stage | Existing provider credentials, stage status and tenant catalog rules remain applicable. |
 | `LOAD DATA LOCAL`, INLINE | Client data: no CN filesystem authority is acquired. |
+| Asynchronous indexed Datalink sources | Only argumented remote providers and remote stages are supported. Server-owned source references are rejected before installing the lifecycle or committing new indexed values, even for administrators. |
 | Generated index storage files | The storage owner reads its own artifacts natively and supplies binary chunk values to ordinary SQL in the existing transaction. No SQL identity is elevated. |
 | Saved result scan | Existing result metadata/privilege owner admits an engine-generated location; user SQL does not supply its raw path. |
 | Backup | Existing system-admin statement owner controls backup execution. |
@@ -57,7 +58,57 @@ expressions, source Datalinks, metadata views, provenance probes and deletes.
 Index maintenance cannot change that identity. Fulltext2 CREATE, compaction and
 CDC, HNSW CREATE and CDC, and GPU artifact persistence pass native chunk data to
 the existing SQL executor. Tenant CDC resolves source Datalinks with source
-authority. Background local-stage source reads follow the foreground rule.
+authority. Asynchronous indexed Datalinks follow the remote-only source contract
+below; background work never reconstructs a foreground administrator grant.
+
+### Asynchronous Datalink source lifecycle
+
+An asynchronous consumer receives committed row values and source-tenant catalog
+scope, not the authenticated role of the statement that wrote each row. Therefore
+source account zero, table ownership, successful administrator CREATE, stored URLs,
+or stage ownership cannot authorize future server-file reads. Installing an index
+must not succeed on a known source that its normal CDC consumer cannot read.
+
+Fulltext2 and asynchronous ordinary fulltext accept remote Datalink inputs only.
+One shared provider classifier admits the resolved remote provider without opening
+it. Index installation/rebuild validates existing values; final-value DML admission
+validates the indexed Datalink values that will actually be written. This includes
+empty-table CREATE followed by INSERT, UPDATE, defaults, typed INSERT SELECT,
+REPLACE, duplicate-key paths, prepared execution and LOAD. Unsupported local,
+configured-service or dynamic-disk inputs fail the foreground statement and roll
+back its database effects. NULL and unselected rows do not cause source access.
+
+The existing final-row planning owner and plugin async metadata determine which
+columns need this check. Column names are collected before index definitions are
+stripped and bound to the final row image. A nonfoldable runtime check in a barrier
+filter validates only eligible rows, without reevaluating their source expressions.
+There is no new catalog privilege, persisted policy, worker or wire field. Unrelated columns and non-indexed ordinary SQL do not perform provider
+or stage resolution. Synchronous ordinary fulltext retains its foreground caller
+identity and local-file admission behavior.
+
+Administrators can index local document contents by explicitly materializing them
+into a TEXT column with foreground load_text, then using the normal committed TEXT
+CDC lifecycle. The database stores actual document text, rather than asking a later
+consumer to reconstruct historical file authority. Existing local-Datalink async
+indexes require moving inputs to supported remote sources and rebuilding, or
+materializing into TEXT under administrator authority. Retry/restart never invents
+missing authority for old URLs.
+
+External resources remain mutable. Deliberately dropping/retargeting a stage,
+removing an object, changing credentials or losing storage/network can invalidate
+a previously admissible remote source after commit. This retains the existing
+observable failure/retry contract: acquisition rechecks the actual provider, a
+failure does not publish partial index state or advance its watermark, and an
+operator must restore a supported readable source before retry can progress.
+Admission does not promise immortal external resources. There is no catalog/history
+dependency scanner or new locking protocol to prevent all external invalidation.
+Changing a source to a server-owned provider never grants background file authority.
+
+Acceptance must exercise actual post-CREATE INSERT/UPDATE and durable CDC-tail and
+search changes, including old-term removal. FORCE_SYNC REINDEX is a separate build
+oracle and cannot substitute for CDC. Controls cover remote-stage source-tenant
+resolution, synchronous denial of unsupported inputs, foreground local-to-TEXT
+CDC, blank-identity background denial and repair/retry after source failure.
 
 ### Index artifact persistence
 
@@ -147,14 +198,16 @@ release owned resources. Named services remain borrowed.
 Local file access from public/custom/tenant-admin roles is intentionally
 rejected, including previously stored local stages and external-table paths.
 Such workloads must use a remote tenant stage or an explicitly trusted system
-operation. This is a behavior correction, without a temporary permissive mode.
+operation. Asynchronous local-Datalink sources are unsupported even for an
+administrator; use foreground materialization into TEXT for that lifecycle. This is a behavior correction, without a temporary permissive mode.
 
 No catalog migration or new wire field is introduced. Older CNs do not enforce
 this contract: the deployment must update all SQL-serving CNs before considering
 the fix effective. Rolling back restores the old behavior.
 
 Acceptance requires real SQL denial before filesystem side effects, administrator
-success, remote-stage foreground/CDC success, client LOCAL import success,
+foreground success, remote-stage foreground/CDC success, local-to-TEXT CDC
+success and unsupported async-source rejection before commit, client LOCAL import success,
 prepared role/source re-admission, write error/completion/cancellation evidence,
 normal and race evidence for affected owners, and bounded-cost measurements.
 Performance microbenchmarks establish admission/reader cost only; they do not

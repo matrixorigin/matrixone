@@ -266,6 +266,7 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		defer server.Close()
 		mustExec(t, tenant, fmt.Sprintf("create stage sql_file_access_stage URL='s3://bucket/' CREDENTIALS={'AWS_KEY_ID'='id','AWS_SECRET_KEY'='secret','AWS_REGION'='us-east-1','PROVIDER'='amazon','ENDPOINT'='%s'}", server.URL))
 		defer func() { _, _ = tenant.Exec("drop stage if exists sql_file_access_stage") }()
+		t.Run("async source admission and local TEXT CDC", func(t *testing.T) { testAsyncDatalinkSourceAdmission(t, c, admin, server.URL, dir) })
 
 		t.Run("file TVF and Hive planning admission", func(t *testing.T) {
 			remote := fileservice.JoinPath("s3-opts,endpoint="+server.URL+",bucket=bucket,region=us-east-1,key=id,secret=secret", "content.txt")

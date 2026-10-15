@@ -42,6 +42,30 @@ type Datalink struct {
 }
 
 func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
+	d, err := parseDatalink(aurl, proc)
+	if err != nil {
+		return Datalink{}, err
+	}
+	if err = process.AuthorizeSQLFileAccessPath(proc, d.path); err != nil {
+		return Datalink{}, err
+	}
+	return d, nil
+}
+
+// NewAsyncDatalink admits only sources readable without a historical caller role.
+// Parsing and stage resolution are shared with ordinary Datalinks; no I/O occurs.
+func NewAsyncDatalink(aurl string, proc *process.Process) (Datalink, error) {
+	d, err := parseDatalink(aurl, proc)
+	if err != nil {
+		return Datalink{}, err
+	}
+	if err = d.validateAsyncSource(); err != nil {
+		return Datalink{}, err
+	}
+	return d, nil
+}
+
+func parseDatalink(aurl string, proc *process.Process) (Datalink, error) {
 
 	u, err := url.Parse(aurl)
 	if err != nil {
@@ -56,9 +80,6 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	if err != nil {
 		return Datalink{}, err
 	}
-	if err := process.AuthorizeSQLFileAccessPath(proc, path); err != nil {
-		return Datalink{}, err
-	}
 	return Datalink{
 		Url:    u,
 		Offset: int64(offsetSize[0]),
@@ -66,6 +87,24 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 		MoPath: moUrl,
 		path:   path,
 	}, nil
+}
+
+// validateAsyncSource admits a source that a role-less CDC consumer can read.
+// It classifies the resolved provider without constructing it or reading data.
+// Call it on the same Datalink used for acquisition during an initial build.
+func (d Datalink) validateAsyncSource() error {
+	path, err := d.parsedPath()
+	if err != nil {
+		return err
+	}
+	local, err := fileservice.PathUsesLocalETLBackend(path)
+	if err != nil {
+		return err
+	}
+	if path.Service == "" || len(path.ServiceArguments) == 0 || local {
+		return moerr.NewNotSupportedNoCtx("asynchronous indexes require remote Datalink sources; read local documents into a TEXT column with load_text before indexing")
+	}
+	return nil
 }
 
 func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {

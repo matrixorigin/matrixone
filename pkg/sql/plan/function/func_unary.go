@@ -14148,3 +14148,27 @@ func GroupingFunc(parameters []*vector.Vector,
 	}
 	return nil
 }
+
+// CheckAsyncDatalinkSource validates only final rows eligible for a database write.
+// NULLs and inactive targets pass without resolving stage metadata or opening I/O.
+func CheckAsyncDatalinkSource(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[bool](result)
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	eligible := vector.GenerateFunctionFixedTypeParameter[bool](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		active, inactive := eligible.GetValue(i)
+		if !selectList.Contains(i) && !inactive && active {
+			value, null := values.GetStrValue(i)
+			if !null {
+				_, err := datalink.NewAsyncDatalink(string(value), proc)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if err := rs.Append(true, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
