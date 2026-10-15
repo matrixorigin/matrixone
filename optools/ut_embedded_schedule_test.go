@@ -1057,6 +1057,7 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
 	for _, tc := range []struct {
 		name, scope, mode, ordinaryStatus, batchStatus, consumeStatus, want string
+		parallel, goParallel                                                string
 		retainOwner                                                         bool
 		status                                                              int
 	}{
@@ -1071,15 +1072,25 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
 		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:2:2:cleanup-only\nconsume\n"},
 		{name: "neither", scope: "example/a", mode: "4", want: "ordinary:example/a\n"},
+		{name: "ordinary-pool", scope: "example/a\nexample/b", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:example/a example/b\n"},
+		{name: "unknown-stays-serial", scope: "github.com/matrixorigin/matrixone/pkg/newcluster\nexample/a", mode: "4", parallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/newcluster example/a\n"},
+		{name: "high-footprint-rollback-stays-serial", scope: embed + "\nexample/a", mode: "1", parallel: "2", want: "ordinary:" + embed + " example/a\n"},
+		{name: "measured-multicn-pool", scope: "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn\nexample/a", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn example/a\n"},
 		{name: "empty", mode: "4"},
-		{name: "ordinary-failure-continues", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
+		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
 		{name: "batch-failure-continues", scope: dml + "\n" + sql, mode: "4", batchStatus: "7", want: batches, status: 1},
-		{name: "ordinary-undrained-stops", scope: "example/a\n" + dml, mode: "4", ordinaryStatus: "125", want: "ordinary:example/a\n", status: 125},
+		{name: "ordinary-undrained-stops", parallel: "2", goParallel: "2", scope: "example/a\n" + dml, mode: "4", ordinaryStatus: "125", want: "ordinary:example/a\n", status: 125},
 		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:2:2:independent\n", status: 125},
 		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
 		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.parallel == "" {
+				tc.parallel = "1"
+			}
+			if tc.goParallel == "" {
+				tc.goParallel = "1"
+			}
 			script := `source ./run_ut.sh UT
 function logger() { :; }
 : > "$CASE_DIR/calls"
@@ -1089,6 +1100,12 @@ function run_ut_command() {
  shift 2
  if [[ "$1" == run_race_test_batches ]]; then "$@"; return $?; fi
  [[ -z "$PREBUILT_RACE_REPORT" && -z "$PREBUILT_RACE_TEST_BINARY" ]] || return 91
+ [[ " $* " == *" -p $EXPECTED_GO_PARALLEL "* ]] || return 100
+ if [[ "$EXPECTED_GO_PARALLEL" == 2 ]]; then
+  [[ " $* " == *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
+ else
+  [[ " $* " != *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* ]] || return 102
+ fi
  local package scope=""
  for package in "$@"; do
   case "$package" in example/*|github.com/matrixorigin/matrixone/pkg/*) scope="${scope:+$scope }$package" ;; esac
@@ -1125,6 +1142,7 @@ cat "$CASE_DIR/calls"
 `
 			out, err := scheduleHarnessWithMock(t, script, "#!/bin/bash\nexit 0\n",
 				"UT_EMBEDDED_BATCHES="+tc.mode, "SCOPE="+tc.scope,
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+tc.parallel, "EXPECTED_GO_PARALLEL="+tc.goParallel,
 				"ORDINARY_STATUS="+tc.ordinaryStatus, "BATCH_STATUS="+tc.batchStatus,
 				"CONSUME_STATUS="+tc.consumeStatus, fmt.Sprintf("EXPECTED_STATUS=%d", tc.status), fmt.Sprintf("RETAIN_OWNER=%t", tc.retainOwner))
 			if err != nil || string(out) != tc.want {

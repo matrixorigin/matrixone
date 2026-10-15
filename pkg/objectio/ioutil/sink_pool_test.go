@@ -335,42 +335,61 @@ func TestSinkPool_SubmitContextCancelled(t *testing.T) {
 // ---------- Sink worker skips job on error ----------
 
 func TestSinkPool_WorkerSkipsOnError(t *testing.T) {
-	pool := NewSinkPool(1, 1)
-	defer pool.Close()
-
-	mp, err := mpool.NewMPool("test_skip_err", 0, mpool.NoFixed)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	r := &pipelineResult{ctx: ctx, cancel: cancel}
-
-	// first job sets error
-	typs := []types.Type{types.T_int32.ToType()}
-
-	bat1 := containers.MockBatch(typs, 10, 0, nil)
-	cnBat1 := containers.ToCNBatch(bat1)
-	err = pool.Submit(&poolSinkJob{
-		data:    []*batch.Batch{cnBat1},
-		factory: mockFactory(fmt.Errorf("fail"), nil),
-		mp:      mp,
-		fs:      nil,
-		result:  r,
-	})
-	require.NoError(t, err)
-	r.pending.Wait()
-
-	// second job should be skipped because result has error
-	bat2 := containers.MockBatch(typs, 10, 0, nil)
-	cnBat2 := containers.ToCNBatch(bat2)
-	err = pool.Submit(&poolSinkJob{
-		data:    []*batch.Batch{cnBat2},
-		factory: mockFactory(nil, nil),
-		mp:      mp,
-		fs:      nil,
-		result:  r,
-	})
-	// Submit returns pre-existing error directly
-	require.Error(t, err)
+	for _, queued := range []bool{false, true} {
+		t.Run(map[bool]string{false: "failed_before_submit", true: "failed_while_queued"}[queued], func(t *testing.T) {
+			pool := NewSinkPool(1, 1)
+			defer pool.Close()
+			mp, err := mpool.NewMPool("test_skip_err", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			r := &pipelineResult{ctx: ctx, cancel: cancel}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
+			defer releaseWorker() // Unblock the worker before pool.Close on FailNow.
+			wantErr := fmt.Errorf("sink failure")
+			first := &mockFileSinker{sinkErr: wantErr}
+			makeBatch := func() *batch.Batch {
+				return containers.ToCNBatch(containers.MockBatch([]types.Type{types.T_int32.ToType()}, 1, 0, nil))
+			}
+			require.NoError(t, pool.Submit(&poolSinkJob{
+				data: []*batch.Batch{makeBatch()}, mp: mp, result: r,
+				factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+					close(entered)
+					<-release
+					return first
+				},
+			}))
+			select {
+			case <-entered:
+			case <-t.Context().Done():
+				t.Fatal("sink worker did not start")
+			}
+			if !queued {
+				releaseWorker()
+				r.pending.Wait()
+			}
+			var secondCreated atomic.Bool
+			err = pool.Submit(&poolSinkJob{
+				data: []*batch.Batch{makeBatch()}, mp: mp, result: r,
+				factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+					secondCreated.Store(true)
+					return &mockFileSinker{}
+				},
+			})
+			if queued {
+				require.NoError(t, err, "the second job must be accepted before the first fails")
+			} else {
+				require.ErrorIs(t, err, wantErr)
+			}
+			releaseWorker()
+			r.pending.Wait()
+			require.ErrorIs(t, r.getError(), wantErr)
+			require.False(t, secondCreated.Load(), "failed work must not construct another sinker")
+			require.True(t, first.closed.Load())
+		})
+	}
 }
 
 // ---------- SyncWorker skips on error ----------
@@ -383,21 +402,24 @@ func TestSinkPool_SyncWorkerSkipsOnError(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	r := &pipelineResult{ctx: ctx, cancel: cancel}
 
 	typs := []types.Type{types.T_int32.ToType()}
 	syncStart := make(chan struct{})
 	syncBlock := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSync := func() { releaseOnce.Do(func() { close(syncBlock) }) }
+	defer releaseSync()
+	wantErr := fmt.Errorf("sync error")
+	first := &mockFileSinker{syncErr: wantErr, syncStart: syncStart, syncBlock: syncBlock}
+	second := &mockFileSinker{syncStart: make(chan struct{})}
 	var factoryCount atomic.Int32
 	factory := func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
 		if factoryCount.Add(1) == 1 {
-			return &mockFileSinker{
-				syncErr:   fmt.Errorf("sync error"),
-				syncStart: syncStart,
-				syncBlock: syncBlock,
-			}
+			return first
 		}
-		return &mockFileSinker{}
+		return second
 	}
 
 	// Submit 2 jobs: first has sync error, second should be skipped in sync worker
@@ -423,10 +445,26 @@ func TestSinkPool_SyncWorkerSkipsOnError(t *testing.T) {
 		result:  r,
 	})
 	require.NoError(t, err)
-	close(syncBlock)
-
+	// The first Sync is blocked, so only the test can receive the second job.
+	// Return that same ownership token to the queue before releasing failure.
+	var queued *poolSyncJob
+	select {
+	case queued = <-pool.syncChan:
+	case <-t.Context().Done():
+		t.Fatal("second sink job did not reach the sync queue")
+	}
+	pool.syncChan <- queued
+	require.Same(t, second, queued.fSinker)
+	releaseSync()
 	r.pending.Wait()
-	require.Error(t, r.getError())
+	require.ErrorIs(t, r.getError(), wantErr)
+	require.True(t, first.closed.Load())
+	require.True(t, second.closed.Load(), "queued sinker must close even when its Sync is skipped")
+	select {
+	case <-second.syncStart:
+		t.Fatal("a failed pipeline must not start another Sync")
+	default:
+	}
 }
 
 // ---------- Concurrent stress test ----------
