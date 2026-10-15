@@ -587,7 +587,7 @@ and L2 (the square root) are not provided.
 
 The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
 `20260929-low-precision-scalar-floats.md`): there is no fallback, a statement that would hand
-an older binary something it cannot decode is refused below MORPC protocol version 113, and
+an older binary something it cannot decode is refused below MORPC protocol version 114, and
 the upgrade is one-way. Here they cover:
 
 - **Types.** `vecf8` (`T_array_float8`, 230) and `vecf4` (`T_array_float4`, 231): column
@@ -597,13 +597,13 @@ the upgrade is one-way. Here they cover:
 - **Functions.** `VECTOR_MATMUL`, `VECBLOCK_JSON` and `VECBLOCK_BINARY` (598-600), and the
   overload slots this design appends to existing functions (`IN`, `NOT IN`, `COALESCE`,
   `VECTOR_DIMS`, `NORMALIZE_L2`): a pipeline that contains one is refused for a destination
-  below 113, and a persisted expression that contains one requires persisted-expression
-  protocol 113.
+  below 114, and a persisted expression that contains one requires persisted-expression
+  protocol 114.
 - **Aggregate state.** The `vector_matmul` partial state (`AggIdOfVectorMatmul`) moves only
-  between pipelines of binaries at 113 or later: a pipeline that would ship it to an older
+  between pipelines of binaries at 114 or later: a pipeline that would ship it to an older
   destination is refused by the function rule above. Its own version byte versions the state
   among those binaries.
-- **Tests.** Every refusal point has a test below 113 (refused) and one at 113 (runs).
+- **Tests.** Every refusal point has a test below 114 (refused) and one at 114 (runs).
 
 ## Phasing
 

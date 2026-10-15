@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -353,7 +354,10 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			continue
 		}
 
-		val := fmt.Sprint(valN)
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		if err != nil {
+			return nil, err
+		}
 		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: val == JsonNull}
 	}
 	return res, nil
@@ -416,7 +420,10 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			continue
 		}
 
-		val := fmt.Sprint(valN)
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		if err != nil {
+			return nil, err
+		}
 		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
@@ -436,6 +443,30 @@ func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
 		return "", false, err
 	}
 	return bj.String(), true, nil
+}
+
+// jsonLineScalarText preserves numeric array boundaries for vector columns.
+// Node.String uses Go slice formatting, whose spaces are removed by the vector
+// parser. Keep the original numeric lexemes to avoid intermediate rounding.
+func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
+	group, ok := node.V.(*bytejson.Group)
+	if !typ.IsArrayRelate() || !ok || group.Obj {
+		return fmt.Sprint(node), nil
+	}
+	var text strings.Builder
+	text.WriteByte('[')
+	for i, child := range group.Values {
+		number, ok := child.V.(json.Number)
+		if !ok {
+			return "", moerr.NewInvalidInput(ctx, "JSON vector array elements must be numbers")
+		}
+		if i > 0 {
+			text.WriteByte(',')
+		}
+		text.WriteString(number.String())
+	}
+	text.WriteByte(']')
+	return text.String(), nil
 }
 
 // isExternalErrorAttr reports whether an attribute is one of the synthesized

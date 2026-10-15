@@ -4029,7 +4029,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceNumber[uint64]
@@ -4039,7 +4039,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceNumber[int64]
@@ -4049,7 +4049,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal64
@@ -4059,7 +4059,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal128
@@ -4069,7 +4069,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal256

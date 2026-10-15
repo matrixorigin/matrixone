@@ -405,6 +405,7 @@ func getFunctionByName(
 	}
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
+		r.applyDecimalModMetadata(args)
 	}
 
 	return r, err
@@ -432,6 +433,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.retType = f.Overloads[r.overloadId].retType(args)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
+		r.applyDecimalModMetadata(args)
 		return r, true
 
 	case succeedWithCast:
@@ -441,6 +443,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
+		r.applyDecimalModMetadata(args)
 		return r, true
 
 	default:
@@ -479,6 +482,7 @@ func GetFunctionByNameWithOverload(
 	r.retType = f.Overloads[overloadID].retType(args)
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	r.applyDivPrecisionIncrement(ctx, originalArgs)
+	r.applyDecimalModMetadata(originalArgs)
 	return r, nil
 }
 

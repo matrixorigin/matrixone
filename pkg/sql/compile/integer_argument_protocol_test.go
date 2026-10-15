@@ -266,23 +266,27 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatIntegerArguments)
 			require.True(t, features.Any())
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion113))
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion114))
+			}
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion113, required)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+			require.Equal(t, defines.MORPCVersion114, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 			op := projection.NewArgument()
 			defer op.Release()
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-			client.version = defines.MORPCVersion112
-			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "remote destination")
-			client.version = defines.MORPCVersion113
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113} {
+				client.version = old
+				_, err = encodeRemoteScope(scope, c.proc)
+				require.ErrorContains(t, err, "remote destination")
+			}
+			client.version = defines.MORPCVersion114
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 		})

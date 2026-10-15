@@ -132,26 +132,26 @@ upgrade, or after a rollback.
 There is no fallback. No path converts these types to a type an older binary knows, and
 no statement is rerouted, rewritten or run elsewhere to avoid an older service. A
 statement that would hand these types to an older binary is refused; once every service
-runs MORPC protocol version 113 or later, the same statement runs.
+runs MORPC protocol version 114 or later, the same statement runs.
 
-- **Version.** `MORPCVersion113`. The deployment state is `MOProtocolVersion`, the lowest
+- **Version.** `MORPCVersion114`. The deployment state is `MOProtocolVersion`, the lowest
   version of the live services, together with the HAKeeper persisted-expression authoring
   floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
 - **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`
   included) and `ALTER TABLE ... ADD`, `MODIFY` and `CHANGE COLUMN` whose column type is one
-  of these types are refused below 113. While an older service is live no table with these
+  of these types are refused below 114. While an older service is live no table with these
   types exists, so no older binary reads one from the catalog, the log or object storage.
 - **Remote execution.** A pipeline whose expressions carry one of these types (a literal,
   a column reference, a function argument or result, a CAST source or target) is refused
-  for a destination below 113. The private integer CAST 5..8 sources are one case of this
+  for a destination below 114. The private integer CAST 5..8 sources are one case of this
   rule.
 - **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
   constraint whose expression carries one of these types requires persisted-expression
-  protocol 113.
+  protocol 114.
 - **Downgrade.** The upgrade is one-way. Once a table with these types exists, running
-  any service below 113 is unsupported: an older binary does not read the data.
-- **Tests.** Every refusal point has a test below 113 (refused, nothing created or sent)
-  and one at 113 (runs).
+  any service below 114 is unsupported: an older binary does not read the data.
+- **Tests.** Every refusal point has a test below 114 (refused, nothing created or sent)
+  and one at 114 (runs).
 
 ## Out of scope (separate work)
 
