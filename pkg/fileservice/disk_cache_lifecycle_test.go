@@ -372,6 +372,7 @@ func TestDiskCacheEvictionTransfersToCleanupOwner(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	ctx := context.Background()
 	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.MkdirAll(filepath.Dir(diskPath), 0o755))
 	require.NoError(t, os.WriteFile(diskPath, []byte("payload"), 0o644))
 	cache.cache.Set(ctx, diskPath, struct{}{}, int64(len("payload")))
 
@@ -411,6 +412,7 @@ func TestDiskCacheEvictionTransfersToPlainPathOwner(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	ctx := context.Background()
 	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.MkdirAll(filepath.Dir(diskPath), 0o755))
 	require.NoError(t, os.WriteFile(diskPath, []byte("payload"), 0o644))
 	cache.cache.Set(ctx, diskPath, struct{}{}, int64(len("payload")))
 
@@ -505,6 +507,7 @@ func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	ctx := context.Background()
 	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.MkdirAll(filepath.Dir(diskPath), 0o755))
 	require.NoError(t, os.WriteFile(diskPath, []byte("ab"), 0o644))
 	require.False(t, cache.cache.Contains(diskPath))
 
@@ -1046,7 +1049,7 @@ func TestDiskCacheCloseOwnsAsyncLoaderGeneration(t *testing.T) {
 
 func TestDiskCacheLoadCacheKeepsForegroundDirectory(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
-	foregroundDir := filepath.Dir(cache.pathForFile("foo/bar"))
+	foregroundDir := filepath.Dir(cache.pathForFile("foo"))
 
 	writerReachedTempFileCreate := make(chan struct{})
 	releaseWriter := make(chan struct{})
@@ -1229,7 +1232,8 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 	// resources in temp -> update -> reservation order, matching the successful
 	// finalizer path.
 	t.Cleanup(func() { _ = finishUpdate() })
-	tempFile, err := os.CreateTemp(cache.path, "claimed-*"+cacheFileTempSuffix)
+	require.NoError(t, os.MkdirAll(filepath.Dir(diskPath), 0o755))
+	tempFile, err := os.CreateTemp(filepath.Dir(diskPath), "claimed-*"+cacheFileTempSuffix)
 	require.NoError(t, err)
 	var cleanupTempOnce sync.Once
 	var cleanupTempErr error

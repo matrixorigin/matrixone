@@ -92,7 +92,7 @@ func (s *service) forwardLock(
 		result := resp.Lock.Result
 		if !opts.NoWait ||
 			!validNoWaitLockOptions(opts) ||
-			!supportsLockProtocolV113(s.cfg.ServiceID) ||
+			!supportsLockProtocolV114(s.cfg.ServiceID) ||
 			!resp.Lock.TxnWaitingListOnLockTableSupported ||
 			!resp.Lock.BatchUnlockSupported ||
 			!result.LockedOn.Valid ||

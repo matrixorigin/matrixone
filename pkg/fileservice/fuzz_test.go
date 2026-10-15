@@ -102,6 +102,7 @@ func fuzzFS(
 			},
 			Policy: policies[int(i)%len(policies)],
 		}
+		defer vec.Release()
 		if err := fs.Read(ctx, vec); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 				// ignore
@@ -110,14 +111,14 @@ func fuzzFS(
 			t.Fatal(err)
 		}
 
-		if !bytes.Equal(vec.Entries[0].Data, info.Content[offset:]) {
-			t.Fatal()
+		// ToCacheData makes CachedData authoritative; raw Data may be released.
+		cached := vec.Entries[0].CachedData
+		if cached == nil {
+			t.Fatalf("read %s at offset %d: missing CachedData", info.Path, offset)
 		}
-		if !bytes.Equal(vec.Entries[0].CachedData.Bytes(), info.Content[offset:]) {
-			t.Fatal()
+		if !bytes.Equal(cached.Bytes(), info.Content[offset:]) {
+			t.Fatalf("read %s at offset %d: got %q, want %q", info.Path, offset, cached.Bytes(), info.Content[offset:])
 		}
-
-		vec.Release()
 	}
 
 	var ops []func(*testing.T, uint64)
@@ -185,12 +186,14 @@ func FuzzDiskS3(f *testing.F) {
 }
 
 func TestFuzzingDiskS3(t *testing.T) {
+	var diskCache *DiskCache
 	fuzzFS(
 		func(counterSet *perfcounter.CounterSet) FileService {
 			fs, err := newDiskS3ForTesting(t.TempDir(), t.TempDir(), counterSet)
 			if err != nil {
 				t.Fatal(err)
 			}
+			diskCache = fs.(*S3FS).diskCache
 			return fs
 		},
 		func(
@@ -202,8 +205,21 @@ func TestFuzzingDiskS3(t *testing.T) {
 				operationSeed = uint64(1)
 			)
 
-			// Guarantee a readable object before concurrent operations begin.
-			op(t, 0)
+			// A full async queue must not turn a successful storage write into
+			// a failed read. Skip the seed's disk fill, then read it cold before
+			// concurrent operations: ToCacheData permits the raw Data to be nil.
+			func() {
+				for i := 0; i < cap(diskCache.async.slots); i++ {
+					diskCache.async.slots <- struct{}{}
+				}
+				defer func() {
+					for i := 0; i < cap(diskCache.async.slots); i++ {
+						<-diskCache.async.slots
+					}
+				}()
+				op(t, 0)
+			}()
+			op(t, 1)
 
 			start := make(chan struct{})
 			var wg sync.WaitGroup
