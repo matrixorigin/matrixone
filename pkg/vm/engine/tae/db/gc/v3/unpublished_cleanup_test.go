@@ -118,8 +118,9 @@ func (fs *controllableUnpublishedCleanupFS) Write(
 		return errors.New("injected marker write failure")
 	}
 	err := fs.FileService.Write(ctx, vector)
-	if err == nil && strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
-		fs.ambiguousMarkerWrites.Load() {
+	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
+		fs.ambiguousMarkerWrites.Load() &&
+		(err == nil || moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists)) {
 		return errors.New("injected post-persist marker write failure")
 	}
 	return err
@@ -372,6 +373,48 @@ func TestCheckpointCleanerAcceptsMarkerOnlyAfterAmbiguousWriteIsVisible(t *testi
 	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
 	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
 	require.Contains(t, cleaner.unpublishedCleanupOwnership.markers, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerBalancesRepeatedAmbiguousMarkerAdmission(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	file := objectio.MockObjectName().String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, file)
+	require.NoError(t, err)
+	cleaner.AbandonUnpublishedObject(file)
+
+	// Re-admission produces the same content-addressed marker. Make both the
+	// marker write and its visibility check ambiguous to exercise the retry path.
+	markerFS.ambiguousMarkerWrites.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, file)
+	require.ErrorContains(t, err, "post-persist marker write failure")
+	require.ErrorContains(t, err, "marker stat failure")
+
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.uncertain, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	markerFS.ambiguousMarkerWrites.Store(false)
+	markerFS.rejectMarkerStats.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
 	cleaner.unpublishedCleanupOwnership.Unlock()
 }
 

@@ -1947,13 +1947,14 @@ func (c *checkpointCleaner) prepareUnpublishedObject(
 		// No object write follows this error. Retain the reservation because
 		// the marker's existence is ambiguous and schedule bounded replay.
 		c.unpublishedCleanupOwnership.Lock()
-		if c.unpublishedCleanupOwnership.markers == nil {
-			c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
-		}
+		// The marker is content-addressed, so a repeated admission can refer to
+		// the same durable owner. Balance the in-memory reservation before
+		// recording the ambiguous marker; otherwise each retry increments
+		// pending while cleanup can release the marker only once.
+		c.retainUnpublishedObjectMarkerLocked(marker)
 		if c.unpublishedCleanupOwnership.uncertain == nil {
 			c.unpublishedCleanupOwnership.uncertain = make(map[string]string)
 		}
-		c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
 		c.unpublishedCleanupOwnership.uncertain[marker] = file
 		c.unpublishedCleanupOwnership.Unlock()
 		c.unpublishedCleanupGeneration.Add(1)
@@ -1966,6 +1967,10 @@ func (c *checkpointCleaner) prepareUnpublishedObject(
 func (c *checkpointCleaner) retainUnpublishedObjectMarker(marker string) {
 	c.unpublishedCleanupOwnership.Lock()
 	defer c.unpublishedCleanupOwnership.Unlock()
+	c.retainUnpublishedObjectMarkerLocked(marker)
+}
+
+func (c *checkpointCleaner) retainUnpublishedObjectMarkerLocked(marker string) {
 	if c.unpublishedCleanupOwnership.markers == nil {
 		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
 	}
