@@ -3146,8 +3146,10 @@ func testSkipLockedRetryBeforeTargetConflict(t *testing.T, definitionChange bool
 			proc.SetPlanSnapshotTS(statementSnapshot)
 		}
 		fence := statementSnapshot.Next()
-		testingContext.SetAdjustLockResultFunc(func(key []byte, tableID uint64, result *lock.Result) {
-			if tableID == firstTableID && bytes.Equal(key, rowOneKey) {
+		adjusted := false
+		testingContext.SetAdjustLockResultFunc(func(_ []byte, tableID uint64, result *lock.Result) {
+			if tableID == firstTableID {
+				adjusted = true
 				// Preserve the real Shared grant while reporting a newer row or definition.
 				result.NewLockAdd = true
 				result.HasConflict = false
@@ -3206,6 +3208,7 @@ func testSkipLockedRetryBeforeTargetConflict(t *testing.T, definitionChange bool
 			operator = limit
 		}
 		result, err := vm.Exec(operator, proc)
+		require.True(t, adjusted, "the first-target retry injection must actually run")
 		require.Error(t, err)
 		if definitionChange {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
