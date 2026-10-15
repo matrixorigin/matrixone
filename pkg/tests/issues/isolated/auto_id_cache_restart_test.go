@@ -44,7 +44,7 @@ func TestAutoIDCacheRestartAndDisabledNode(t *testing.T) {
 	}
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	connect := func() *sql.DB {
@@ -68,9 +68,14 @@ func TestAutoIDCacheRestartAndDisabledNode(t *testing.T) {
 	restart := func(enabled bool) {
 		t.Helper()
 		require.NoError(t, db.Close())
+		cancel()
 		require.NoError(t, c.Close())
 		cn.Adjust(func(cfg *embed.ServiceConfig) { cfg.CN.AutoIncrement.EnableAutoIDCache = enabled })
 		require.NoError(t, c.Start())
+		// Restart admission can queue behind other test clusters. Give SQL on
+		// each running generation its own budget, as after the initial Start.
+		ctx, cancel = context.WithTimeout(t.Context(), 3*time.Minute)
+		t.Cleanup(cancel)
 		db = connect()
 	}
 	restart(false)
