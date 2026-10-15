@@ -1443,6 +1443,53 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 	if !ok || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
 		return
 	}
+	// A covered rewrite can leave the explicit score sort directly above the
+	// search scan. In that shape the projection that originally sat between
+	// the sort and scan has already been bypassed, so the chained-shape check
+	// below cannot see the equivalent score key. The direct shape is safe only
+	// when the sort key is the search scan's score column and the scan has no
+	// competing pagination or residual filter.
+	if len(sortNode.Children) == 1 {
+		search := builder.qry.Nodes[sortNode.Children[0]]
+		if search.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+			search.IndexSearchScan != nil &&
+			search.IndexSearchScan.GetIndex() != nil &&
+			catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
+			search.IndexSearchScan.CandidateLimit == nil &&
+			search.Limit == nil && search.Offset == nil &&
+			len(search.FilterList) == 0 {
+			keyCol := sortNode.OrderBy[0].Expr.GetCol()
+			if keyCol != nil && keyCol.ColPos == 1 {
+				search.IndexSearchScan.CandidateLimit = bound
+				return
+			}
+		}
+	}
+	// During the post-order index walk the parent SORT can still point at the
+	// rewritten PROJECT while that PROJECT already points directly at the
+	// covered search scan. This is the same safe score-only shape with one
+	// projection node left in between.
+	if len(sortNode.Children) == 1 {
+		project := builder.qry.Nodes[sortNode.Children[0]]
+		if project.NodeType == plan.Node_PROJECT &&
+			len(project.Children) == 1 && len(project.FilterList) == 0 &&
+			project.Limit == nil && project.Offset == nil && project.RankOption == nil {
+			search := builder.qry.Nodes[project.Children[0]]
+			if search.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+				search.IndexSearchScan != nil &&
+				search.IndexSearchScan.GetIndex() != nil &&
+				catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
+				search.IndexSearchScan.CandidateLimit == nil &&
+				search.Limit == nil && search.Offset == nil &&
+				len(search.FilterList) == 0 {
+				keyCol := sortNode.OrderBy[0].Expr.GetCol()
+				if keyCol != nil && keyCol.ColPos == 1 {
+					search.IndexSearchScan.CandidateLimit = bound
+					return
+				}
+			}
+		}
+	}
 	keyCol := sortNode.OrderBy[0].Expr.GetCol()
 	project := builder.qry.Nodes[sortNode.Children[0]]
 	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
