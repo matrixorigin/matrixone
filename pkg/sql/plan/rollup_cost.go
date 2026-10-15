@@ -55,10 +55,12 @@ const (
 	// Every completed grouping prefix is flushed, freed, and recreated by the
 	// streaming executor, regardless of the number of keys. Charge the same
 	// conservative lifecycle cost whenever any prefix has multiple groups.
+	// Include allocation/GC headroom: a serially competitive boundary can
+	// regress when independent queries recreate aggregates concurrently.
 	// All-singleton prefixes keep the EOF-only baseline; low-NDV input can
 	// still amortize the repeated completion cost.
 	rollupSortGroupFinalizeBaseCost = 2.0
-	rollupSortGroupFinalizeCost     = 16.0
+	rollupSortGroupFinalizeCost     = 32.0
 	rollupSortStartupCost           = 16.0
 	rollupHashBranchStartupCost     = 100.0
 	rollupHashWorkWeight            = 0.70

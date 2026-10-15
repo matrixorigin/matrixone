@@ -228,7 +228,7 @@ aggregate state, and recreating the single-group executor. The runtime performs
 this lifecycle for every completed prefix even when input order is already
 proven, so ordered high-NDV input must pay `F(G,L) * G * A` rather than being
 modeled as boundary checks alone. The conservative calibration uses a constant
-`F = 16` per completed prefix whenever any prefix has more than one estimated
+`F = 32` per completed prefix whenever any prefix has more than one estimated
 group, for every number of grouping keys. Rollups whose prefixes are all
 singletons retain `F = 2`: their state closes only once at EOF, without
 repeated recreation during input.
@@ -248,17 +248,61 @@ NDVs `(1,25000)`, SORT measured 72.9 ms versus shared HASH's 20.5 ms, with
 inputs and derived ORDER BY work, and independent 25,002-row result oracles.
 The previous key-depth exemption was therefore not a valid performance bound.
 
-Applying the former ramp ceiling to every non-singleton ROLLUP removes both
-the underpriced intermediate portion and the shallow-rollup exemption. The
-new charge is never below the previous non-singleton charge, so it cannot
-introduce a new automatic SORT admission. All-singleton controls keep their
+The [concurrent boundary review](https://github.com/matrixorigin/matrixone/pull/28987#pullrequestreview-5525939756)
+then showed that a charge of 16 still admitted `(1,1,5800)` at 100,000 INT
+rows. Four-query cohorts with `GOMAXPROCS=4` measured SORT at 33.01 ms versus
+shared HASH at 27.33 ms, with 165.96 MB versus 31.47 MB allocated and 3.00
+versus 0.74 GCs per cohort. Both paths paid the same child ORDER BY and complete
+finalization; the low-NDV cohort retained the SORT benefit. These measurements
+make serial competitiveness insufficient evidence for automatic admission.
+
+A charge of 32 adds conservative allocation/GC headroom to completed-group
+work across all key counts. It never reduces the previous non-singleton charge,
+so it cannot introduce a new automatic SORT admission. All-singleton controls keep their
 baseline. Public planner tests cover INT and BIGINT with one, two, and three
 keys: low-NDV COUNT/AVG retain SORT; two-key 10,000/25,000-value COUNT and
 10,000-value AVG controls retain shared HASH. The three-key
-10,000/25,000/50,000-value controls also retain HASH; 5,000-value COUNT remains
-admitted, while the heavier AVG control conservatively retains HASH.
+10,000/25,000/50,000-value controls also retain HASH. Three-key COUNT with 2,500 late-prefix values remains an admitted
+neighboring control; 5,000 and 5,800 values conservatively retain HASH, as does
+the heavier 5,000-value AVG control.
 
-This is conservative admission, not a claim that 16 is a platform-independent
+The concurrent benchmark retains three paired controls: four queries with
+NDVs `(1,1,4)`, `(1,1,2500)`, and `(1,1,5800)`. It creates independent
+processes/pools, joins every worker before cleanup/error reporting, and checks
+an independent key/GROUPING/COUNT oracle before timing. Unused legacy-branch
+batches and oracle scratch are reclaimed before measurements. Each operation
+includes four complete queries, both with the same child ORDER BY.
+
+A local Darwin/arm64, Go 1.27.1, `GOMAXPROCS=4` run executed one warm-up round
+and three measured rounds, each with ten cohorts per algorithm/shape:
+
+```bash
+# Build with the repository mo-cgo-test wrapper, then run the same test binary:
+GOMAXPROCS=4 "$benchmark_binary" -test.run='^$' \
+  -test.bench='^BenchmarkRollupConcurrentAlgorithms$' \
+  -test.benchtime=10x -test.count=1   # warm-up; excluded from results
+GOMAXPROCS=4 "$benchmark_binary" -test.run='^$' \
+  -test.bench='^BenchmarkRollupConcurrentAlgorithms$' \
+  -test.benchtime=10x -test.count=3   # measured rounds
+```
+
+Median values per four-query cohort (allocated MB use decimal units):
+
+| Late-prefix NDV | SORT ms | Shared HASH ms | SORT / HASH allocated MB | SORT / HASH GCs |
+|---|---:|---:|---:|---:|
+| 4 | 11.375 | 25.552 | 18.465 / 31.456 | 0.5 / 1.0 |
+| 2,500 | 27.351 | 42.258 | 81.982 / 31.464 | 2.0 / 1.0 |
+| 5,800 | 35.071 | 36.632 | 165.958 / 31.475 | 3.8 / 1.0 |
+
+These samples retain the low-NDV and admitted-neighbor benefit. The 5,800-value
+case is marginally faster on this host, unlike the cited Linux review, but
+still allocates over five times as many bytes and causes substantially more
+GC. The tighter automatic admission accounts conservatively for that observed
+sensitivity instead of treating one host's serial or concurrent timing as a
+universal threshold. The host was also under capacity pressure; these timings
+are a local control, not a production throughput or capacity claim.
+
+This is conservative admission, not a claim that 32 is a platform-independent
 elapsed-time coefficient or that every intermediate shape has been measured.
 The cited timings measure operators, not SQL-service latency or peak resident
 memory. Forced SORT remains available for experiments; aggregate-state reuse
