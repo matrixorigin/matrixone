@@ -123,22 +123,15 @@ func TestCorrelatedUnionExportsIdentity(t *testing.T) {
 			q := p.GetQuery()
 			found := false
 			for _, n := range q.Nodes {
-				if n.NodeType != planpb.Node_UNION {
+				if n.NodeType != planpb.Node_UNION_ALL {
 					continue
 				}
 				found = true
-				require.Len(t, n.ProjectList, 2)
+				require.Len(t, n.ProjectList, 1, "unused existential payload is pruned; identity must remain")
 				for _, child := range n.Children {
-					require.Len(t, q.Nodes[child].ProjectList, 2)
+					require.Len(t, q.Nodes[child].ProjectList, len(n.ProjectList))
 				}
-				if tc.name == "float-output" {
-					require.Len(t, n.PhysicalEqualityKeyList, 2)
-					require.Equal(t, "set_operation_float_key", n.PhysicalEqualityKeyList[0].GetF().Func.ObjName)
-					identity := n.PhysicalEqualityKeyList[1].GetCol()
-					require.NotNil(t, identity)
-					require.Equal(t, n.ProjectList[1].GetCol().RelPos, identity.RelPos)
-					require.Equal(t, n.ProjectList[1].GetCol().ColPos, identity.ColPos)
-				}
+				require.Empty(t, n.PhysicalEqualityKeyList, "existence must retain all candidates")
 			}
 			require.Equal(t, tc.name == "float-output" || tc.name == "different-arms", found)
 			assertReachablePlanHasNoCorrelatedExpr(t, q)
@@ -230,21 +223,16 @@ func TestRetainedUnionCorrelationShapes(t *testing.T) {
 		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 		found := false
 		for _, n := range p.GetQuery().Nodes {
-			if n.NodeType != planpb.Node_UNION {
+			if n.NodeType != planpb.Node_UNION_ALL {
 				continue
 			}
 			found = true
 			if predicate == "i.N_NATIONKEY>o.N_NATIONKEY" {
-				require.Len(t, n.ProjectList, 2)
+				require.Len(t, n.ProjectList, 1)
 			} else {
-				require.Len(t, n.ProjectList, 3)
+				require.Len(t, n.ProjectList, 2)
 			}
-			for i := 1; i < len(n.ProjectList); i++ {
-				require.NotNil(t, n.PhysicalEqualityKeyList[i].GetCol())
-				require.Equal(t, n.ProjectList[i].GetCol().RelPos, n.PhysicalEqualityKeyList[i].GetCol().RelPos)
-				require.Equal(t, n.ProjectList[i].GetCol().ColPos, n.PhysicalEqualityKeyList[i].GetCol().ColPos)
-			}
-			require.Len(t, n.PhysicalEqualityKeyList, len(n.ProjectList))
+			require.Empty(t, n.PhysicalEqualityKeyList)
 			for _, child := range n.Children {
 				require.Len(t, p.GetQuery().Nodes[child].ProjectList, len(n.ProjectList))
 			}
@@ -309,4 +297,113 @@ func TestSetKeyInvarianceRejectsInvalidSlots(t *testing.T) {
 	require.False(t, setFilterPreservesEquality(filter, node), "a key for another slot is not equality proof")
 	node.PhysicalEqualityKeyList = nil
 	require.False(t, setFilterPreservesEquality(filter, node), "a missing key is not equality proof")
+}
+
+func TestExistentialUnionPredicateTemplates(t *testing.T) {
+	for _, predicate := range []string{
+		"i.N_NATIONKEY=o.N_NATIONKEY OR i.N_REGIONKEY=o.N_REGIONKEY",
+		"i.N_NATIONKEY=o.N_NATIONKEY AND o.N_REGIONKEY>0",
+		"o.N_REGIONKEY>0",
+		"i.N_NATIONKEY<=>o.N_NATIONKEY",
+		"CAST(i.N_REGIONKEY AS DOUBLE)>CAST(o.N_REGIONKEY AS DOUBLE)",
+	} {
+		arm := "SELECT CAST(i.N_REGIONKEY AS DOUBLE) FROM NATION i WHERE " + predicate
+		query := "SELECT 1 FROM NATION o WHERE EXISTS (" + arm + " UNION " + arm + ")"
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+		require.NoError(t, err, query)
+		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+		found := false
+		for _, node := range p.GetQuery().Nodes {
+			require.NotEqual(t, planpb.Node_UNION, node.NodeType, "existential UNION island must retain every candidate")
+			if node.NodeType == planpb.Node_UNION_ALL {
+				found = true
+				require.Empty(t, node.PhysicalEqualityKeyList)
+				for _, child := range node.Children {
+					require.Len(t, p.GetQuery().Nodes[child].ProjectList, len(node.ProjectList))
+				}
+			}
+		}
+		require.True(t, found)
+
+	}
+}
+
+func TestExistentialUnionStopsAtObservableConsumers(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		kind             planpb.Node_NodeType
+		limited, demoted bool
+	}{
+		{"project", planpb.Node_PROJECT, false, true},
+		{"sort", planpb.Node_SORT, false, true},
+		{"aggregate", planpb.Node_AGG, false, false},
+		{"filter", planpb.Node_FILTER, false, false},
+		{"window", planpb.Node_WINDOW, false, false},
+		{"pagination", planpb.Node_PROJECT, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler := NewMockCompilerContext(true, newPlanTestProcess(t))
+			builder := NewQueryBuilder(planpb.Query_SELECT, compiler, false, false)
+			typ := planpb.Type{Id: int32(types.T_float64)}
+			set := &planpb.Node{NodeType: planpb.Node_UNION, Children: []int32{1, 3}, BindingTags: []int32{30}, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}, PhysicalEqualityKeyList: []*planpb.Expr{GetColExpr(typ, 10, 0)}}
+			root := &planpb.Node{NodeType: tc.kind, Children: []int32{4}, BindingTags: []int32{40}, ProjectList: []*planpb.Expr{GetColExpr(typ, 30, 0)}}
+			if tc.limited {
+				root.Limit = makePlan2Uint64ConstExprWithType(1)
+			}
+			if tc.kind == planpb.Node_FILTER {
+				root.FilterList = []*planpb.Expr{makePlan2BoolConstExprWithType(true)}
+			}
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeType: planpb.Node_VALUE_SCAN, BindingTags: []int32{1}, ProjectList: []*planpb.Expr{GetColExpr(typ, 1, 0)}},
+				{NodeType: planpb.Node_PROJECT, Children: []int32{0}, BindingTags: []int32{10}, ProjectList: []*planpb.Expr{GetColExpr(typ, 1, 0)}},
+				{NodeType: planpb.Node_VALUE_SCAN, BindingTags: []int32{2}, ProjectList: []*planpb.Expr{GetColExpr(typ, 2, 0)}},
+				{NodeType: planpb.Node_PROJECT, Children: []int32{2}, BindingTags: []int32{20}, ProjectList: []*planpb.Expr{GetColExpr(typ, 2, 0)}},
+				set, root,
+			}
+			crossed := false
+			_, _, err := builder.pullupCorrelatedPredicates(5, NewBindContext(builder, nil), planpb.SubqueryRef_EXISTS, true, true, &crossed)
+			require.NoError(t, err)
+			if tc.demoted {
+				require.Equal(t, planpb.Node_UNION_ALL, set.NodeType)
+				require.Empty(t, set.PhysicalEqualityKeyList)
+			} else {
+				require.Equal(t, planpb.Node_UNION, set.NodeType)
+				require.Len(t, set.PhysicalEqualityKeyList, 1)
+			}
+		})
+	}
+}
+
+func TestExistentialUnionKeepsBranchLocalVolatileProducers(t *testing.T) {
+	arm := "SELECT CAST(-0e0 AS DOUBLE) FROM NATION i WHERE i.N_NATIONKEY+rand()>o.N_NATIONKEY"
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT 1 FROM NATION o WHERE EXISTS ("+arm+" UNION "+arm+")")
+	require.NoError(t, err)
+	visited := make(map[int32]bool)
+	randomCalls := 0
+	var visit func(int32)
+	visit = func(id int32) {
+		if visited[id] {
+			return
+		}
+		visited[id] = true
+		node := p.GetQuery().Nodes[id]
+		for _, exprs := range [][]*planpb.Expr{node.ProjectList, node.FilterList, node.OnList} {
+			for _, expr := range exprs {
+				require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+					if f := e.GetF(); f != nil && f.Func.ObjName == "rand" {
+						randomCalls++
+					}
+					return nil
+				}))
+			}
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, step := range p.GetQuery().Steps {
+		visit(step)
+	}
+	require.Equal(t, 2, randomCalls, "independent branch-local evaluations must remain; no canonical deduplication or template sharing")
+
 }

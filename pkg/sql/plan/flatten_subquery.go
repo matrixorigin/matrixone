@@ -588,7 +588,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// decorrelation. An independent aggregate elsewhere in the subquery must
 	// not turn a previously supported scalar expression into NYI.
 	var crossedAggregate bool
-	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, &crossedAggregate)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, subquery.Typ == plan.SubqueryRef_EXISTS || subquery.Typ == plan.SubqueryRef_NOT_EXISTS, &crossedAggregate)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -4331,14 +4331,63 @@ func correlatedSetIdentityPredicate(expr *plan.Expr, childTag, setTag, pos int32
 	return out, true
 }
 
+// rebindExistentialSetPredicates matches complete branch predicates rather
+// than assuming one hidden column per conjunct. UNION ALL retains every
+// candidate, so no hidden representation is normalized before the predicate.
+func rebindExistentialSetPredicates(preds []*plan.Expr, childTag, setTag int32, visible, width int) ([]*plan.Expr, bool) {
+	out := DeepCopyExprList(preds)
+	valid := true
+	for _, pred := range out {
+		// Branch-local computed values stay in their original producers.
+		// Reject volatile evaluations that would move past concatenation.
+		if ContainsVolatileFunction(pred) {
+			return nil, false
+		}
+		_ = plan.VisitExprTree(pred, func(expr *plan.Expr) error {
+			expr.Ndv, expr.Selectivity = 0, 0
+			expr.Typ.Table = ""
+			if col := expr.GetCol(); col != nil {
+				if col.RelPos != childTag || int(col.ColPos) < visible || int(col.ColPos) >= visible+width {
+					valid = false
+				} else {
+					expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: setTag, ColPos: col.ColPos}}
+				}
+			}
+			if corr := expr.GetCorr(); corr != nil && corr.Depth != 1 {
+				valid = false
+			}
+			if expr.GetSub() != nil || expr.GetW() != nil {
+				valid = false
+			}
+			return nil
+		})
+	}
+	return out, valid
+}
+
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
 	subqueryType plan.SubqueryRef_Type,
 	isSubqueryRoot bool,
+	existenceOnly bool,
 	crossedAggregate *bool,
 ) (int32, []*plan.Expr, error) {
 	node := builder.qry.Nodes[nodeID]
+	originalNodeType := node.NodeType
+	// Existence ignores duplicate elimination only through transparent
+	// consumers. Keep pagination's isSubqueryRoot proof separate: aggregates,
+	// filters and other consumers can observe row multiplicity or boundaries.
+	existenceOnly = existenceOnly && node.Limit == nil && node.Offset == nil
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_SORT, plan.Node_UNION, plan.Node_UNION_ALL:
+	default:
+		existenceOnly = false
+	}
+	if existenceOnly && node.NodeType == plan.Node_UNION {
+		node.NodeType = plan.Node_UNION_ALL
+		node.PhysicalEqualityKeyList = nil
+	}
 
 	var preds []*plan.Expr
 	var err error
@@ -4350,7 +4399,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			node.Limit == nil && node.Offset == nil &&
 			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
 		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(
-			childID, ctx, subqueryType, childIsSubqueryRoot, crossedAggregate)
+			childID, ctx, subqueryType, childIsSubqueryRoot, existenceOnly, crossedAggregate)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -4404,7 +4453,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 
 	case plan.Node_UNION, plan.Node_UNION_ALL:
 		errPrefix := "correlated UNION"
-		if node.NodeType == plan.Node_UNION_ALL {
+		if originalNodeType == plan.Node_UNION_ALL {
 			errPrefix = "correlated local CTE: UNION ALL"
 		}
 		if len(node.Children) != 2 || len(node.BindingTags) != 1 {
@@ -4412,6 +4461,32 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 		left, right := builder.qry.Nodes[node.Children[0]], builder.qry.Nodes[node.Children[1]]
 		pos := len(node.ProjectList)
+		if existenceOnly {
+			width := len(left.ProjectList) - pos
+			if width < 0 || len(right.ProjectList) != pos+width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching branch schemas")
+			}
+			for i := range width {
+				if !isSameColumnType(left.ProjectList[pos+i].Typ, right.ProjectList[pos+i].Typ) {
+					return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identity types differ")
+				}
+			}
+			lp, lok := rebindExistentialSetPredicates(childPreds[0], left.BindingTags[0], node.BindingTags[0], pos, width)
+			rp, rok := rebindExistentialSetPredicates(childPreds[1], right.BindingTags[0], node.BindingTags[0], pos, width)
+			if !lok || !rok || len(lp) != len(rp) {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch predicates differ")
+			}
+			for i := range lp {
+				if !proto.Equal(lp[i], rp[i]) {
+					return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch predicates differ")
+				}
+			}
+			for i := range width {
+				node.ProjectList = append(node.ProjectList, GetColExpr(left.ProjectList[pos+i].Typ, left.BindingTags[0], int32(pos+i)))
+			}
+			preds = lp
+			break
+		}
 		if len(left.ProjectList) == pos && len(right.ProjectList) == pos {
 			break
 		}
