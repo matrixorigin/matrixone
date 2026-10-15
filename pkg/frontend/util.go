@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -800,17 +801,17 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
-		return vector.GetArrayAt[float32](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[float32](vec, 0)), nil
 	case types.T_array_float64:
-		return vector.GetArrayAt[float64](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[float64](vec, 0)), nil
 	case types.T_array_bf16:
-		return vector.GetArrayAt[types.BF16](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[types.BF16](vec, 0)), nil
 	case types.T_array_float16:
-		return vector.GetArrayAt[types.Float16](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[types.Float16](vec, 0)), nil
 	case types.T_array_int8:
-		return vector.GetArrayAt[int8](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[int8](vec, 0)), nil
 	case types.T_array_uint8:
-		return vector.GetArrayAt[uint8](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[uint8](vec, 0)), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
