@@ -267,6 +267,17 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 		name, definition, clause, index string
 		primary, ambiguous              bool
 	}{
+		{"source unique cannot be hidden by future column drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop constraint u,drop column a", "", false, true},
+		{"inline unique cannot be hidden by future column drop", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop constraint w,drop column w", "", false, true},
+		{"source unique cannot be hidden by future index drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop constraint u,drop index u", "", false, true},
+		{"inline unique cannot be hidden by future index drop", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop constraint w,drop index w", "", false, true},
+		{"earlier source column drop removes unique ambiguity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop column a,drop constraint u", "", false, false},
+		{"partial unique survives future final column drop", "id int primary key,a int,b int,v int,unique key u(a,b),constraint u check(v>0)", "drop column a,drop constraint u,drop column b", "", false, true},
+		{"complete earlier unique column removal clears ambiguity", "id int primary key,a int,b int,v int,unique key u(a,b),constraint u check(v>0)", "drop column a,drop column b,drop constraint u", "", false, false},
+		{"renamed unique survives future column drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,drop constraint u,drop column x", "", false, true},
+		{"changed unique survives future column drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "change column a x int,drop constraint u,drop column x", "", false, true},
+		{"earlier renamed unique column removal clears ambiguity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,drop column x,drop constraint u", "", false, false},
+		{"earlier changed unique column removal clears ambiguity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "change column a x int,drop column x,drop constraint u", "", false, false},
 		{"inline unique", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop constraint w", "", false, true},
 		{"modify unique", "id int primary key,v int,w int,constraint w check(v>0)", "modify column w int unique,drop constraint w", "", false, true},
 		{"change unique", "id int primary key,v int,x int,constraint w check(v>0)", "change column x w int unique,drop constraint w", "", false, true},
@@ -330,6 +341,40 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 			}
 		})
 	}
+	// Ordinary COPY DROP INDEX remains unsupported. Resolution must still
+	// select the right constraint before the COPY owner rejects execution.
+	for _, test := range []struct {
+		name, definition, clause string
+		want                     tree.AlterTableDropType
+	}{
+		{"earlier source index drop removes ambiguity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop index u,drop constraint u", tree.AlterTableDropCheck},
+		{"earlier inline index drop removes ambiguity", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop index w,drop constraint w", tree.AlterTableDropCheck},
+		{"unique drop precedes future column removal", "id int primary key,a int,v int,unique key u(a)", "drop constraint u,drop column a", tree.AlterTableDropIndex},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t("+test.definition+")")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table check_t "+test.clause, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			astBefore := tree.String(stmt, dialect.MYSQL)
+			for range 2 {
+				options, err := resolveAlterConstraintOptions(&mock.ctxt, source, stmt.(*tree.AlterTable).Options)
+				require.NoError(t, err)
+				for i, option := range stmt.(*tree.AlterTable).Options {
+					if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropConstraint {
+						require.Equal(t, test.want, options[i].(*tree.AlterOptionDrop).Typ)
+					}
+				}
+				_, err = BuildPlan(&mock.ctxt, stmt, false)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.ErrorContains(t, err, "combined COPY DROP INDEX requires a functional index")
+				require.Equal(t, before, source)
+				require.Equal(t, astBefore, tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
 	t.Run("dropped primary no longer conflicts with check", func(t *testing.T) {
 		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,w int,constraint `PRIMARY` check(w>0))")
 		p, err := runOneStmt(mock, t, "alter table check_t drop column id,drop constraint `PRIMARY`")
@@ -385,4 +430,52 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 		require.Equal(t, "w", indexes[0].IndexName)
 		require.Equal(t, "w_2", indexes[1].IndexName)
 	})
+}
+
+// Generic and explicit spellings must reach the same physical-key admission.
+func TestAlterConstraintUsesResolvedIndexAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name, collation, clause string
+		reject, copy            bool
+	}{
+		{"native explicit index", "utf8mb4_unicode_ci", "drop index u", true, false},
+		{"native explicit key", "utf8mb4_unicode_ci", "drop key u", true, false},
+		{"native generic unique", "utf8mb4_unicode_ci", "drop constraint u", true, false},
+		{"native explicit primary", "utf8mb4_unicode_ci", "drop primary key", true, false},
+		{"native generic primary", "utf8mb4_unicode_ci", "drop constraint `PRIMARY`", true, false},
+		{"native generic check", "utf8mb4_unicode_ci", "drop constraint ck", false, true},
+		{"legacy generic unique", "utf8mb4_bin", "drop constraint u", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v varchar(8) collate "+test.collation+",n int,unique key u(v),constraint ck check(n>0))")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table check_t "+test.clause, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			astBefore := tree.String(stmt, dialect.MYSQL)
+			for range 2 {
+				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.ErrorContains(t, err, "index mutation on native Unicode unique tables")
+				} else {
+					require.NoError(t, err)
+					alter := p.GetDdl().GetAlterTable()
+					if test.copy {
+						require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+						require.Empty(t, alter.CopyTableDef.Checks)
+						require.Len(t, alter.CopyTableDef.Indexes, 1)
+						require.Equal(t, source.KeyFormat, alter.CopyTableDef.KeyFormat)
+					} else {
+						require.Equal(t, planpb.AlterTable_INPLACE, alter.AlgorithmType)
+						require.Equal(t, planpb.AlterTableDrop_INDEX, alter.Actions[0].GetDrop().Typ)
+						require.Equal(t, "u", alter.Actions[0].GetDrop().Name)
+					}
+				}
+				require.Equal(t, before, source)
+				require.Equal(t, astBefore, tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
 }

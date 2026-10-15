@@ -217,4 +217,47 @@ select * from primary_order_inline order by id;
 select column_name from information_schema.key_column_usage
     where table_schema=database() and table_name='primary_order_inline' and constraint_name='PRIMARY';
 
+-- Future UNIQUE removals must not hide ambiguity at an earlier generic DROP.
+create table unique_order_source(id int primary key,a int,v int,unique key u(a),constraint u check(v>0));
+insert into unique_order_source values (1,1,1);
+alter table unique_order_source drop constraint u,drop column a;
+alter table unique_order_source drop constraint u,drop index u;
+select * from unique_order_source order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='unique_order_source' and constraint_type='CHECK';
+insert into unique_order_source values (2,2,-1);
+-- Removing the unique column first makes the generic CHECK drop unambiguous.
+alter table unique_order_source drop column a,drop constraint u;
+insert into unique_order_source values (2,-1);
+select * from unique_order_source order by id;
+select count(*) from information_schema.statistics
+    where table_schema=database() and table_name='unique_order_source' and index_name='u';
+
+create table unique_order_inline(id int primary key,v int,constraint w check(v>0));
+insert into unique_order_inline values (1,1);
+alter table unique_order_inline add column w int unique,drop constraint w,drop column w;
+alter table unique_order_inline add column w int unique,drop constraint w,drop index w;
+select * from unique_order_inline order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='unique_order_inline' and constraint_type='CHECK';
+insert into unique_order_inline values (2,-1);
+alter table unique_order_inline add column w int unique,drop column w,drop constraint w;
+insert into unique_order_inline values (2,-1);
+select * from unique_order_inline order by id;
+
+-- Generic DROP cannot bypass native Unicode physical-key admission.
+create table unicode_drop_admission(id int primary key,v varchar(8) collate utf8mb4_unicode_ci,n int,unique key u(v),constraint ck check(n>0));
+insert into unicode_drop_admission values (1,'a',1);
+alter table unicode_drop_admission drop index u;
+alter table unicode_drop_admission drop constraint u;
+alter table unicode_drop_admission drop constraint `PRIMARY`;
+select index_name,non_unique from information_schema.statistics
+    where table_schema=database() and table_name='unicode_drop_admission' order by index_name;
+insert into unicode_drop_admission values (2,'b',1);
+insert into unicode_drop_admission values (3,'c',-1);
+-- A CHECK-only drop remains supported and retains the versioned UNIQUE key.
+alter table unicode_drop_admission drop constraint ck;
+insert into unicode_drop_admission values (3,'c',-1);
+select * from unicode_drop_admission order by id;
+
 drop database alter_check_constraints;

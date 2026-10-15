@@ -75,6 +75,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	copyNames := namingAlgorithm == planpb.AlterTable_COPY
 	inlineIndexes := make(map[tree.AlterTableOption][]*IndexDef)
 	inlinePrimary := make(map[tree.AlterTableOption]string)
+	droppedUnique := make(map[tree.AlterTableOption][]string)
 	if copyNames {
 		// COPY builds inline column constraints immediately and table-level
 		// indexes after column changes. Retain inline producers separately so
@@ -120,8 +121,16 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				}
 				if opt.Typ == tree.AlterTableDropColumn {
 					if original := columnOrigins[name]; original != "" {
+						before := slices.Clone(current.Indexes)
 						if err := handleDropColumnWithIndex(ctx.GetContext(), original, current); err != nil {
 							return nil, err
+						}
+						// Reuse COPY's removal decision, but expose it to
+						// generic DROP only when this column clause is reached.
+						for _, index := range before {
+							if index.Unique && !slices.Contains(current.Indexes, index) {
+								droppedUnique[option] = append(droppedUnique[option], indexNameKey(index.IndexName))
+							}
 						}
 					}
 					delete(columnOrigins, name)
@@ -157,12 +166,14 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 		fkeys[fk.Name] = true
 	}
 	unique := make(map[string]bool)
+	for _, index := range source.Indexes {
+		if index.Unique {
+			unique[indexNameKey(index.IndexName)] = true
+		}
+	}
 	indexNames := make(map[string]bool, len(current.Indexes))
 	for _, index := range current.Indexes {
 		indexNames[indexNameKey(index.IndexName)] = true
-		if index.Unique && !inlineUniqueNames[indexNameKey(index.IndexName)] {
-			unique[indexNameKey(index.IndexName)] = true
-		}
 	}
 	if copyNames {
 		for _, option := range options {
@@ -199,9 +210,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	}
 	applyInlineConstraints := func(option tree.AlterTableOption) {
 		for _, index := range inlineIndexes[option] {
-			if slices.Contains(current.Indexes, index) {
-				unique[indexNameKey(index.IndexName)] = true
-			}
+			unique[indexNameKey(index.IndexName)] = true
 		}
 		if name := inlinePrimary[option]; name != "" {
 			clear(primaryColumns)
@@ -334,6 +343,11 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				clear(primaryColumns)
 			case tree.AlterTableDropColumn:
 				delete(primaryColumns, name)
+				for _, key := range droppedUnique[option] {
+					if !pendingUniqueNames[key] {
+						delete(unique, key)
+					}
+				}
 			}
 		}
 	}
