@@ -1167,7 +1167,7 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 	remap := make(map[[2]int32]*plan.Expr)
 	rewritten := make(map[int32]struct{})
-	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, false, remap, rewritten)
 	if len(rewritten) == 0 {
 		return nodeID
 	}
@@ -1180,11 +1180,13 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	nodeID int32,
 	limitDemand bool,
+	rollupCountGuard bool,
 	remap map[[2]int32]*plan.Expr,
 	rewritten map[int32]struct{},
 ) {
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
+	childRollupCountGuard := false
 	if len(node.Children) == 1 {
 		boundedDemand := limitDemand || node.Limit != nil
 		switch node.NodeType {
@@ -1195,6 +1197,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			// boundary and accidentally rewrite an unrelated aggregate.
 			childLimitDemand = boundedDemand
 		case plan.Node_FILTER:
+			childRollupCountGuard = builder.isSingletonRollupCountGuard(node, builder.qry.Nodes[node.Children[0]])
 			// A HAVING Filter is above Aggregate on the first rewrite pass. If
 			// Aggregate is removed, filter pushdown can move that predicate onto
 			// the scan before the second pass. Carry demand through only when the
@@ -1207,7 +1210,18 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, childRollupCountGuard, remap, rewritten)
+		}
+	}
+	if childRollupCountGuard {
+		if _, singleton := rewritten[node.Children[0]]; singleton &&
+			builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_PROJECT {
+			// All uniqueness, active-key and expression proofs succeeded for
+			// this direct child. COUNT(*) is one on every surviving row, so
+			// its sole guard is true. Remove it before normal filter/projection
+			// cleanup, which can also discard an otherwise unused hidden count.
+			node.FilterList = nil
+			node.RollupFilter = false
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
@@ -1236,10 +1250,10 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		// that every logical key is active in this grouping-set branch.
 		return
 	}
-	if len(node.AggList) > 0 && !limitDemand {
-		// Aggregate-bearing rewrites are a limit-aware optimization, not a
-		// general plan-shape canonicalization.  Requiring a bounded demand
-		// keeps unlimited queries on their established physical path.
+	if len(node.AggList) > 0 && !limitDemand && !rollupCountGuard {
+		// Ordinary aggregate-bearing rewrites require bounded demand. The
+		// singleton ROLLUP count guard has a separate row-equivalence proof;
+		// other unlimited queries keep their established physical path.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
@@ -1295,7 +1309,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if !containsCompleteUniqueKey {
 		return
 	}
-	if limitDemand {
+	if limitDemand || rollupCountGuard {
 		for _, expr := range node.GroupBy {
 			if !isTruncationSafeRowExpr(expr) {
 				return
@@ -1376,6 +1390,41 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.GroupByHashKey = nil
 	node.SpillMem = 0
 	rewritten[nodeID] = struct{}{}
+}
+
+// A ROLLUP detail group proven unique below has exactly one input row. Its
+// COUNT(*) guard is therefore row-equivalent even without bounded demand.
+// Recognize only that guard; do not carry LIMIT through a grouping-set UNION
+// or relax the established gate for ordinary unbounded aggregates.
+func (builder *QueryBuilder) isSingletonRollupCountGuard(filter, agg *plan.Node) bool {
+	if !filter.RollupFilter || filter.IsEnd || filter.FilterIsBarrier ||
+		filter.Limit != nil || filter.Offset != nil || filter.RankOption != nil ||
+		len(filter.FilterList) != 1 || agg.NodeType != plan.Node_AGG ||
+		len(agg.FilterList) != 0 || len(agg.GroupingFlag) == 0 || len(agg.AggList) != 1 ||
+		!groupingSetPositiveCountFilter(filter.FilterList[0], agg) ||
+		!areTruncationSafePredicates(filter.FilterList) {
+		return false
+	}
+	predicate := filter.FilterList[0]
+	fn := predicate.GetF()
+	rebound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", DeepCopyExprList(fn.Args))
+	if err != nil || rebound == nil || rebound.GetF() == nil || rebound.GetF().Func == nil ||
+		rebound.GetF().Func.Obj != fn.Func.Obj ||
+		!isSameColumnType(rebound.Typ, predicate.Typ) || rebound.Typ.NotNullable != predicate.Typ.NotNullable {
+		return false
+	}
+	count := agg.AggList[0].GetF()
+	if len(count.Args) != 1 || count.Args[0] == nil || count.Args[0].GetLit() == nil ||
+		types.T(count.Args[0].Typ.Id) != types.T_int64 {
+		return false
+	}
+	one := count.Args[0].GetLit()
+	value, ok := one.Value.(*plan.Literal_I64Val)
+	if one.Isnull || !ok || value.I64Val != 1 {
+		return false
+	}
+	_, valid := builder.singleRowAggregateExpr(agg.AggList[0])
+	return valid
 }
 
 // removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
