@@ -53,4 +53,21 @@ select v is null as rejected, __mo_file_line as line,
 __mo_error_message like '%not int8 type%' as conversion_error from csv_overflow;
 ➤ rejected[-7,1,0]  ¦  line[-5,64,0]  ¦  conversion_error[-7,1,0]  𝄀
 1  ¦  1  ¦  1
+create external table json_lines(a int, s varchar(8))
+infile{'filepath'='$resources/external_table_file/jsonline_whitespace_records.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select a, s, __mo_file_line as line from json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  ¦  line[-5,64,0]  𝄀
+1  ¦  alpha  ¦  1  𝄀
+2  ¦  beta  ¦  3
+select a, s, __mo_file_line as line, __mo_error_message is null as valid_record
+from json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  ¦  line[-5,64,0]  ¦  valid_record[-7,1,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  1  𝄀
+2  ¦  beta  ¦  3  ¦  1
+create table loaded_json_lines(a int, s varchar(8));
+load data infile{'filepath'='$resources/external_table_file/jsonline_whitespace_records.jsonl', 'format'='jsonline', 'jsondata'='object'} into table loaded_json_lines;
+select a, s from loaded_json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
 drop database csv_value_assignment;
