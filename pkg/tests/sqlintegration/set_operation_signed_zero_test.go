@@ -188,7 +188,7 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, []string{"1:1", "2:0", "3:0", "4:0", "5:0"}, readWindowNullRows(t, rows))
 				var rejected float64
 				err = conn.QueryRowContext(ctx, "select (select cast(ie as double) from ci_inner i where i.oref>o.oref union select cast(ie as double) from ci_inner i where i.oref>o.oref) from ci_outer o").Scan(&rejected)
-				require.ErrorContains(t, err, "correlated UNION")
+				require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
 				q := "select id from ci_outer o where not exists (select cast(ie as double) from ci_inner i where i.oref>o.oref union select cast(ie as double) from ci_inner i where i.oref>o.oref) order by id"
 				rows, err = conn.QueryContext(ctx, q)
 				require.NoError(t, err, q)
@@ -226,6 +226,53 @@ func TestSetOperationSignedZero(t *testing.T) {
 					{"float-range", "i.f>o.f", []string{"1", "2"}},
 				} {
 					t.Run(tc.name, func(t *testing.T) {
+						t.Run("membership", func(t *testing.T) {
+							wants := map[string][]string{
+								"or":             {"1:1", "2:1", "3:1", "4:NULL", "5:0"},
+								"outer-conjunct": {"1:0", "2:1", "3:1", "4:0", "5:0"},
+								"outer-only":     {"1:0", "2:1", "3:1", "4:NULL", "5:NULL"},
+								"null-safe":      {"1:1", "2:1", "3:1", "4:NULL", "5:0"},
+								"float-range":    {"1:0", "2:0", "3:0", "4:0", "5:0"},
+							}
+							arm := "select f from predicate_inner i where (" + tc.predicate + ")"
+							q := "select id,f in (" + arm + " union " + arm + ") from predicate_outer o order by id"
+							rows, err := conn.QueryContext(ctx, q)
+							require.NoError(t, err, q)
+							require.Equal(t, wants[tc.name], readWindowNullRows(t, rows))
+							q = "select id,f not in (" + arm + " union " + arm + ") from predicate_outer o order by id"
+							rows, err = conn.QueryContext(ctx, q)
+							require.NoError(t, err, q)
+							notWant := append([]string(nil), wants[tc.name]...)
+							for i, want := range notWant {
+								if want[len(want)-1] == '0' {
+									notWant[i] = want[:len(want)-1] + "1"
+								}
+								if want[len(want)-1] == '1' {
+									notWant[i] = want[:len(want)-1] + "0"
+								}
+							}
+							require.Equal(t, notWant, readWindowNullRows(t, rows))
+
+						})
+						t.Run("scalar", func(t *testing.T) {
+							if tc.name == "outer-only" {
+								var value sql.NullFloat64
+								err := conn.QueryRowContext(ctx, "select (select f from predicate_inner i where o.b>10 union select f from predicate_inner i where o.b>10) from predicate_outer o where id=2").Scan(&value)
+								require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
+								return
+							}
+							wants := map[string][]string{
+								"or":             {"1:-0", "2:0", "3:1", "4:NULL", "5:NULL"},
+								"outer-conjunct": {"1:NULL", "2:0", "3:1", "4:NULL", "5:NULL"},
+								"null-safe":      {"1:-0", "2:0", "3:1", "4:NULL", "5:NULL"},
+								"float-range":    {"1:1", "2:1", "3:NULL", "4:NULL", "5:NULL"},
+							}
+							arm := "select f from predicate_inner i where (" + tc.predicate + ")"
+							q := "select id,cast((" + arm + " union " + arm + ") as varchar) from predicate_outer o order by id"
+							rows, err := conn.QueryContext(ctx, q)
+							require.NoError(t, err, q)
+							require.Equal(t, wants[tc.name], readWindowNullRows(t, rows))
+						})
 						arm := "select f from predicate_inner i where (" + tc.predicate + ")"
 						q := "select id from predicate_outer o where exists (" + arm + " union " + arm + ") order by id"
 						rows, err := conn.QueryContext(ctx, q)
@@ -265,6 +312,42 @@ func TestSetOperationSignedZero(t *testing.T) {
 						}
 					})
 				}
+				t.Run("scalar-set-boundaries", func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "insert into predicate_inner values(4,50,-0e0)")
+					require.NoError(t, err)
+					q := "select cast((select f from predicate_inner i where i.a=1 or i.a=o.a+3 union select f from predicate_inner i where i.a=1 or i.a=o.a+3) as varchar) from predicate_outer o where id=1"
+					var value string
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&value))
+					require.Equal(t, "-0", value, "different hidden identities must collapse to one visible member")
+					var scalar sql.NullInt64
+					err = conn.QueryRowContext(ctx, "select (select 1 from predicate_inner i where i.a>o.a union select 2 from predicate_inner i where i.a>o.a) from predicate_outer o where id=1").Scan(&scalar)
+					require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row", "different constant arms still require scalar cardinality checking")
+					for _, predicate := range []string{"i.a<3 and o.a=1", "i.a is null or i.a=o.a"} {
+						q = "select (select f from predicate_inner i where " + predicate + " union select f from predicate_inner i where " + predicate + ") from predicate_outer o where id=1"
+						var result sql.NullFloat64
+						err := conn.QueryRowContext(ctx, q).Scan(&result)
+						require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row", q)
+					}
+					_, err = conn.ExecContext(ctx, "insert into predicate_outer values(1,1,10,-0e0)")
+					require.NoError(t, err)
+					q = "select id,cast((select f from predicate_inner i where i.a=o.a or i.b=o.b union select f from predicate_inner i where i.a=o.a or i.b=o.b) as varchar) from predicate_outer o where id=1"
+					rows, err := conn.QueryContext(ctx, q)
+					require.NoError(t, err)
+					require.Equal(t, []string{"1:-0", "1:-0"}, readWindowNullRows(t, rows))
+				})
+				t.Run("prepared-scalar-set-domains", func(t *testing.T) {
+					q := "select (select ? from predicate_inner i where i.a=o.a or i.b=o.b union select ? from predicate_inner i where i.a=o.a or i.b=o.b) from predicate_outer o where id=1"
+					stmt, err := conn.PrepareContext(ctx, q)
+					require.NoError(t, err)
+					defer stmt.Close()
+					var value sql.NullFloat64
+					require.NoError(t, stmt.QueryRowContext(ctx, int64(0), int64(0)).Scan(&value))
+					require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, value)
+					err = stmt.QueryRowContext(ctx, math.Copysign(0, -1), float64(0)).Scan(&value)
+					require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
+					require.NoError(t, stmt.QueryRowContext(ctx, int64(0), int64(0)).Scan(&value))
+					require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, value)
+				})
 				q := "select id from predicate_outer o where not exists (select f from predicate_inner i where i.f>o.f union select f from predicate_inner i where i.f>o.f) order by id"
 				rows, err := conn.QueryContext(ctx, q)
 				require.NoError(t, err, q)
