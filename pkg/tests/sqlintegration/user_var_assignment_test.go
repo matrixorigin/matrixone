@@ -139,3 +139,93 @@ func TestUserVariableAssignmentWhereReadBeforeWriteIsRejected(t *testing.T) {
 		}
 	})
 }
+
+func TestUserVariableAssignmentCaseConditionHistory(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		schema := "user_var_assignment_case_29909"
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		db.SetMaxOpenConns(1)
+		defer db.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+
+		require.NoError(t, db.PingContext(ctx))
+		_, err = db.ExecContext(ctx, "drop database if exists "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create database "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "use "+schema)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create table src (id int)")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "insert into src values (1), (2), (3)")
+		require.NoError(t, err)
+
+		for _, tc := range []struct {
+			name      string
+			query     string
+			want      [][3]int64
+			finalWant [3]int64
+		}{
+			{
+				name: "skip before first write",
+				query: `select @a := case
+					when @a = 0 then 1
+					when (@b := 1) = 1 then 2
+					else 3
+				end, @b, @c from src`,
+				want:      [][3]int64{{1, 0, 0}, {2, 1, 0}, {2, 1, 0}},
+				finalWant: [3]int64{2, 1, 0},
+			},
+			{
+				name: "skip after write",
+				query: `select @a := case
+					when id = 2 then 2
+					when (@b := 1) = 1 then 1
+					else 3
+				end, @b, @c from src`,
+				want:      [][3]int64{{1, 1, 0}, {2, 1, 0}, {1, 1, 0}},
+				finalWant: [3]int64{1, 1, 0},
+			},
+			{
+				name: "wrapped nested target",
+				query: `select @a := case
+					when id = 1 then 2
+					when abs(@b := @c := 1) = 1 then 1
+					else 3
+				end, @b, @c from src`,
+				want:      [][3]int64{{2, 0, 0}, {1, 1, 1}, {1, 1, 1}},
+				finalWant: [3]int64{1, 1, 1},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err = db.ExecContext(ctx, "set @a = 0, @b = 0, @c = 0")
+				require.NoError(t, err)
+				rows, err := db.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				for row, expected := range tc.want {
+					require.True(t, rows.Next(), "missing result row %d", row)
+					var a, b, c int64
+					require.NoError(t, rows.Scan(&a, &b, &c))
+					require.Equal(t, expected[0], a, "row %d", row)
+					require.Equal(t, expected[1], b, "row %d", row)
+					require.Equal(t, expected[2], c, "row %d", row)
+				}
+				require.False(t, rows.Next(), "unexpected extra result row")
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+
+				var a, b, c int64
+				require.NoError(t, db.QueryRowContext(ctx, "select @a, @b, @c").Scan(&a, &b, &c))
+				require.Equal(t, tc.finalWant[0], a)
+				require.Equal(t, tc.finalWant[1], b)
+				require.Equal(t, tc.finalWant[2], c)
+			})
+		}
+	})
+}
