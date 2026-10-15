@@ -1891,9 +1891,11 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 
 // parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
 // unquoted external CSV decimal text uses exact assignment rounding.
+// An initial integer overflow can precede an exponent that scales into range;
+// validate the complete decimal value before enforcing the destination width.
 func parseCSVInt(field csvparser.Field, bits int, round bool) (int64, error) {
 	value, err := strconv.ParseInt(field.Val, 10, bits)
-	if err == nil || !round || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+	if err == nil || !round || field.HasStringQuote {
 		return value, err
 	}
 	integer, err := function.ParseDecimalInteger(field.Val)
@@ -1905,7 +1907,7 @@ func parseCSVInt(field csvparser.Field, bits int, round bool) (int64, error) {
 
 func parseCSVUint(field csvparser.Field, bits int, round bool) (uint64, error) {
 	value, err := strconv.ParseUint(field.Val, 10, bits)
-	if err == nil || !round || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+	if err == nil || !round || field.HasStringQuote {
 		return value, err
 	}
 	integer, err := function.ParseDecimalInteger(field.Val)

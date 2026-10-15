@@ -207,9 +207,9 @@ func TestCSVErrorModeTolerates(t *testing.T) {
 		param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
 		// Materialize the string column first so a numeric failure must roll it back.
 		param.Attrs[0], param.Attrs[1] = param.Attrs[1], param.Attrs[0]
-		require.NoError(t, readAllText(t, param, proc, bat, "1,alpha\n2147483647.5,beta\n2.5,gamma\n"))
+		require.NoError(t, readAllText(t, param, proc, bat, "42949672960e-10,alpha\n2147483647.5,beta\n25000000000e-10,gamma\n"))
 		requireRows(t, bat, []wantRow{
-			{a: 1, s: "alpha", line: 1},
+			{a: 4, s: "alpha", line: 1},
 			{line: 2, message: "is not int32 type", text: "2147483647.5,beta"},
 			{a: 3, s: "gamma", line: 3},
 		})
