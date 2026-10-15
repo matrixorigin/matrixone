@@ -721,6 +721,102 @@ func TestRecordLine(t *testing.T) {
 		}
 	})
 
+	// Each skip path must move the candidate record start forward, while a
+	// multi-line quoted record must keep the line where its first field began.
+	for _, tc := range []struct {
+		name       string
+		input      string
+		comment    string
+		startingBy string
+		lines      []int64
+		rows       [][]string
+	}{
+		{
+			name:  "comments before and between records",
+			input: "#h\na,1\n#c\nb,2\n", comment: "#",
+			lines: []int64{2, 4}, rows: [][]string{{"a", "1"}, {"b", "2"}},
+		},
+		{
+			name:  "consecutive comments and unterminated trailing comment",
+			input: "REMh\nREMh2\na,1\nREMtail", comment: "REM",
+			lines: []int64{3}, rows: [][]string{{"a", "1"}},
+		},
+		{
+			name:  "starting by skips nonmatching lines",
+			input: "junk1\njunk2\nxxxa,1\njunk3\nxxxb,2", startingBy: "xxx",
+			lines: []int64{3, 5}, rows: [][]string{{"a", "1"}, {"b", "2"}},
+		},
+		{
+			name:  "comments and blanks before multiline record",
+			input: "#h\n\n   \n#c\na,\"x\ny\"\n#d\nb,2", comment: "#",
+			lines: []int64{5, 8}, rows: [][]string{{"a", "x\ny"}, {"b", "2"}},
+		},
+		{
+			name:    "comments and starting by before multiline record",
+			input:   "#h\njunk\nxxxa,\"x\n#inside\"\n#c\njunk2\nxxxb,2\njunk tail",
+			comment: "#", startingBy: "xxx",
+			lines: []int64{3, 7}, rows: [][]string{{"a", "x\n#inside"}, {"b", "2"}},
+		},
+		{
+			name:  "CRLF comments and starting by",
+			input: "#h\r\njunk\r\nxxxa,1\r\n#c\r\nxxxb,2\r\n", comment: "#", startingBy: "xxx",
+			lines: []int64{3, 5}, rows: [][]string{{"a", "1"}, {"b", "2"}},
+		},
+		{
+			name:  "quoted comment marker is data",
+			input: "#h\n\"#data\",1\nb,2\n", comment: "#",
+			lines: []int64{2, 3}, rows: [][]string{{"#data", "1"}, {"b", "2"}},
+		},
+		{
+			name:  "all input skipped",
+			input: "#h\njunk\n#tail", comment: "#", startingBy: "xxx",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, blockSize := range []int64{4, ReadBlockSize} {
+				t.Run(fmt.Sprintf("block=%d", blockSize), func(t *testing.T) {
+					skipCfg := cfg
+					skipCfg.Comment = tc.comment
+					skipCfg.LinesStartingBy = tc.startingBy
+					skipCfg.LinesTerminatedBy = "\n"
+					parser, err := NewCSVParser(&skipCfg, NewStringReader(tc.input), blockSize, false)
+					require.NoError(t, err)
+					for i, want := range tc.lines {
+						row, err := parser.Read(nil)
+						require.NoError(t, err)
+						require.Equal(t, want, parser.RecordLine())
+						require.Len(t, row, len(tc.rows[i]))
+						for j, value := range tc.rows[i] {
+							require.Equal(t, value, row[j].Val)
+						}
+					}
+					_, err = parser.Read(nil)
+					require.ErrorIs(t, err, io.EOF)
+				})
+			}
+		})
+	}
+
+	t.Run("reset after skipped input", func(t *testing.T) {
+		skipCfg := cfg
+		skipCfg.Comment = "#"
+		skipCfg.LinesStartingBy = "xxx"
+		skipCfg.LinesTerminatedBy = "\n"
+		parser, err := NewCSVParser(&skipCfg, NewStringReader("#h\njunk\nxxxa,1\n"), 4, false)
+		require.NoError(t, err)
+		_, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), parser.RecordLine())
+
+		parser.Reset(NewStringReader("xxxb,2\n"))
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), parser.RecordLine())
+		require.Equal(t, []Field{newStringField("b", false, false), newStringField("2", false, false)}, row)
+		_, err = parser.Read(nil)
+		require.ErrorIs(t, err, io.EOF)
+	})
+
 	t.Run("counter is exact across a small read block", func(t *testing.T) {
 		// a tiny block size forces the refill paths (readUntil's loop) that
 		// advance position in bulk rather than byte by byte
