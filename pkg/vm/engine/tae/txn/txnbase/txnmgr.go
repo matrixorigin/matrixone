@@ -812,6 +812,11 @@ func (mgr *TxnManager) ResetHeartbeat() {
 		"TxnManager-HB",
 		time.Millisecond*2,
 		func(ctx context.Context) {
+			// Replay/readonly modes must not fill the commit pipeline with
+			// local heartbeats that cannot advance the committed frontier.
+			if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) {
+				return
+			}
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
 			if err := mgr.OnOpTxn(op); err != nil {

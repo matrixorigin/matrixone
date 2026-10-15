@@ -5521,6 +5521,14 @@ func bindFuncExprAndConstFoldInternal(
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "ntile":
+		// The bucket count is execution configuration. Keep prepared parameters
+		// intact, but reject expressions whose value can vary with the input row.
+		args := retExpr.GetF().Args
+		if len(args) != 1 || !function.IsRuntimeConstant(args[0]) {
+			return nil, moerr.NewWrongArguments(ctx, "ntile")
+		}
+
 	case "nth_value":
 		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err
