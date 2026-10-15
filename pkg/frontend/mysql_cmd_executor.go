@@ -3688,16 +3688,8 @@ func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 }
 
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
-	var err error
-	//true: kill a connection
-	//false: kill a query in a connection
-	idThatKill := uint64(ses.GetConnectionID())
-	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
-	} else {
-		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
-	}
-	return err
+	killConnection := !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection
+	return killSession(execCtx.reqCtx, ses, k.ConnectionId, killConnection, k.StmtOption.StatementId)
 }
 
 // handleKill kill a connection or query
@@ -4746,6 +4738,19 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
 	if proc == nil || proc.Base == nil {
 		return
+	}
+	// One COM_QUERY can change role before a later statement reads processlist.
+	// Refresh the authenticated snapshot at every statement boundary, including
+	// EXECUTE, rather than retaining the authority from the start of the request.
+	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.User, proc.Base.SessionInfo.Role = "", "", ""
+	if ses != nil {
+		if tenant := ses.GetTenantInfo(); tenant != nil {
+			tenant.mu.Lock()
+			proc.Base.SessionInfo.Account = tenant.Tenant
+			proc.Base.SessionInfo.User = tenant.User
+			proc.Base.SessionInfo.Role = tenant.DefaultRole
+			tenant.mu.Unlock()
+		}
 	}
 	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
 	if !ok {
