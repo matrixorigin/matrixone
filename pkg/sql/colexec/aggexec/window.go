@@ -505,7 +505,7 @@ func (exec *ntileWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		}
 
 		if bucketCount <= 0 {
-			return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+			return moerr.NewInvalidInputNoCtx("ntile bucket count must be positive")
 		}
 		exec.bucketCounts[groupIndex] = bucketCount
 	}

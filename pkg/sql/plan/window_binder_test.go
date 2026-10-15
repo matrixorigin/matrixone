@@ -200,6 +200,47 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 	}
 }
 
+func TestWindowFrameOrderingDiagnostics(t *testing.T) {
+	const orderError = "SQL parser error: Window '<unnamed window>': frame start cannot be after frame end."
+	const valueError = "SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type"
+	tests := []struct {
+		name    string
+		frame   string
+		wantErr string
+	}{
+		{name: "rows following preceding", frame: "rows between 1 following and 1 preceding", wantErr: orderError},
+		{name: "rows following current", frame: "rows between 1 following and current row", wantErr: orderError},
+		{name: "range current preceding", frame: "range between current row and 1 preceding", wantErr: orderError},
+		{name: "ordering before unbounded end", frame: "range between current row and unbounded preceding", wantErr: orderError},
+		{name: "unbounded start priority", frame: "rows between unbounded following and 1 preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING."},
+		{name: "unbounded end", frame: "rows between unbounded preceding and unbounded preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame end cannot be UNBOUNDED PRECEDING."},
+		{name: "negative interval", frame: "range between interval -1 day preceding and current row", wantErr: valueError},
+		{name: "valid rows", frame: "rows between 1 preceding and current row"},
+		{name: "valid range", frame: "range between current row and 1 following"},
+		{name: "same direction preceding", frame: "rows between 2 preceding and 3 preceding"},
+		{name: "same direction following", frame: "rows between 3 following and 2 following"},
+	}
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := "select sum(x) over (order by x " + tc.frame + ") from (select 1 x) t"
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.wantErr)
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, moerr.ER_PARSE_ERROR, moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+		})
+	}
+}
+
 func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []struct {
@@ -1064,6 +1105,7 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 		sql       string
 		wantErr   string
 		mysqlCode uint16
+		sqlState  string
 	}{
 		{
 			name:      "unknown",
@@ -1118,6 +1160,13 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 			wantErr: "cannot use the window function",
 		},
 		{
+			name:      "unused inverted frame",
+			sql:       "select 1 from nation window w as (rows between 1 following and 1 preceding)",
+			wantErr:   "frame start cannot be after frame end.",
+			mysqlCode: moerr.ER_PARSE_ERROR,
+			sqlState:  "42000",
+		},
+		{
 			name:    "unused illegal frame",
 			sql:     "select 1 from nation window w as (rows between unbounded following and current row)",
 			wantErr: "frame start cannot be UNBOUNDED FOLLOWING",
@@ -1131,7 +1180,11 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 			if test.mysqlCode != 0 {
 				moErr := err.(*moerr.Error)
 				require.Equal(t, test.mysqlCode, moErr.MySQLCode())
-				require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+				sqlState := test.sqlState
+				if sqlState == "" {
+					sqlState = moerr.MySQLDefaultSqlState
+				}
+				require.Equal(t, sqlState, moErr.SqlState())
 			}
 		})
 	}
@@ -1972,5 +2025,33 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		require.NoError(t, err)
 		_, err = BuildPlan(ctx, stmts[0], false)
 		require.NoError(t, err, sql)
+	}
+}
+
+func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		invalid bool
+	}{
+		{"column", "select ntile(n_nationkey) over (order by n_nationkey) from nation", true},
+		{"expression", "select ntile(n_nationkey + 1) over (order by n_nationkey) from nation", true},
+		{"partitioned", "select ntile(n_nationkey) over (partition by n_regionkey order by n_nationkey) from nation", true},
+		{"empty input", "select ntile(n_nationkey) over (order by n_nationkey) from nation where false", true},
+		{"volatile", "select ntile(cast(rand() * 3 + 1 as signed)) over (order by n_nationkey) from nation", true},
+		{"subquery", "select ntile((select max(n_regionkey) from nation)) over (order by n_nationkey) from nation", true},
+		{"literal", "select ntile(2) over (order by n_nationkey) from nation", false},
+		{"constant expression", "select ntile(1 + 1) over (order by n_nationkey) from nation", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			_, err := runOneStmt(mock, t, tc.sql)
+			if tc.invalid {
+				require.EqualError(t, err, "Incorrect arguments to ntile")
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }
