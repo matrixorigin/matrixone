@@ -55,14 +55,13 @@ func (expr *UserVarAssignmentExpressionExecutor) Eval(
 	if noRowsSelected(selectList, rowCount) {
 		if nested {
 			// A skipped CASE/IF arm still represents the value visible before
-			// this row. Record that snapshot so a later projection can read a
-			// complete row history instead of falling back to the final scalar.
-			proc.BeginUserVariableAssignment(expr.name, rowCount)
-			value, err := expr.currentUserVariableAssignment(proc)
-			if err != nil {
+			// this row. Walk the complete assignment subtree so nested targets
+			// are also recorded; evaluating the subtree would execute side
+			// effects, especially when a wrapper function surrounds it.
+			if err := snapshotSkippedUserVariableAssignments(
+				proc, expr, rowCount, selectList); err != nil {
 				return nil, err
 			}
-			proc.SnapshotUserVariableAssignmentRow(value, previousRow)
 		}
 		if expr.maskedNull == nil {
 			var err error

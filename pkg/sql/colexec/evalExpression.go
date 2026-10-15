@@ -1231,6 +1231,9 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	}
 
 	if hasSelectedRows(trueBranch) {
+		if err = snapshotSkippedUserVariableAssignments(proc, expr.parameterExecutor[1], rowCount, trueBranch); err != nil {
+			return err
+		}
 		expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
 		if err != nil {
 			return err
@@ -1238,13 +1241,11 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
 		// A skipped branch normally needs no execution. User-variable
-		// assignments are the exception: their row history must record the
-		// value visible on this row even when IF/CASE does not select the arm.
-		if containsUserVariableAssignmentExecutor(expr.parameterExecutor[1]) {
-			noRows := make([]bool, rowCount)
-			if _, err = expr.parameterExecutor[1].Eval(proc, batches, noRows); err != nil {
-				return err
-			}
+		// assignments are the exception: record their visible values without
+		// evaluating a wrapper or RHS side effect.
+		noRows := make([]bool, rowCount)
+		if err = snapshotSkippedUserVariableAssignments(proc, expr.parameterExecutor[1], rowCount, noRows); err != nil {
+			return err
 		}
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
@@ -1252,6 +1253,9 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		}
 	}
 	if hasSelectedRows(falseBranch) {
+		if err = snapshotSkippedUserVariableAssignments(proc, expr.parameterExecutor[2], rowCount, falseBranch); err != nil {
+			return err
+		}
 		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
 		if err != nil {
 			return err
@@ -1259,38 +1263,75 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
-	if containsUserVariableAssignmentExecutor(expr.parameterExecutor[2]) {
-		noRows := make([]bool, rowCount)
-		if _, err = expr.parameterExecutor[2].Eval(proc, batches, noRows); err != nil {
-			return err
-		}
+	noRows := make([]bool, rowCount)
+	if err = snapshotSkippedUserVariableAssignments(proc, expr.parameterExecutor[2], rowCount, noRows); err != nil {
+		return err
 	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
 	return err
 }
 
-func containsUserVariableAssignmentExecutor(executor ExpressionExecutor) bool {
-	switch e := executor.(type) {
-	case *UserVarAssignmentExpressionExecutor:
-		return true
-	case *FunctionExpressionExecutor:
-		for _, child := range e.parameterExecutor {
-			if containsUserVariableAssignmentExecutor(child) {
-				return true
-			}
-		}
-	case *ListExpressionExecutor:
-		for _, child := range e.parameterExecutor {
-			if containsUserVariableAssignmentExecutor(child) {
-				return true
-			}
-		}
-	case *memoExpressionExecutor:
-		return e.state != nil && containsUserVariableAssignmentExecutor(e.state.executor)
-	case *memoRootExpressionExecutor:
-		return containsUserVariableAssignmentExecutor(e.executor)
+// snapshotSkippedUserVariableAssignments records the pre-branch value for
+// every assignment target below executor. It intentionally never calls Eval:
+// wrappers such as ABS/CAST return early for an all-false mask, and invoking a
+// nested assignment would execute an RHS that the conditional arm skipped.
+func snapshotSkippedUserVariableAssignments(
+	proc *process.Process,
+	executor ExpressionExecutor,
+	rowCount int,
+	selected []bool,
+) error {
+	if proc == nil || executor == nil {
+		return nil
 	}
-	return false
+	currentRow := proc.GetUserVariableAssignmentCurrentRow()
+	seen := make(map[ExpressionExecutor]bool)
+	var visit func(ExpressionExecutor) error
+	visit = func(current ExpressionExecutor) error {
+		if current == nil || seen[current] {
+			return nil
+		}
+		seen[current] = true
+		switch current := current.(type) {
+		case *UserVarAssignmentExpressionExecutor:
+			for row := 0; row < rowCount; row++ {
+				if row < len(selected) && selected[row] {
+					continue
+				}
+				logicalRow := row
+				if currentRow >= 0 && rowCount == 1 {
+					logicalRow = currentRow
+				}
+				proc.EnsureUserVariableAssignmentRows(current.name, rowCount)
+				value, err := current.currentUserVariableAssignment(proc)
+				if err != nil {
+					return err
+				}
+				proc.SnapshotUserVariableAssignmentRow(value, logicalRow)
+			}
+			return visit(current.child)
+		case *FunctionExpressionExecutor:
+			for _, child := range current.parameterExecutor {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		case *ListExpressionExecutor:
+			for _, child := range current.parameterExecutor {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		case *memoExpressionExecutor:
+			if current.state != nil {
+				return visit(current.state.executor)
+			}
+		case *memoRootExpressionExecutor:
+			return visit(current.executor)
+		}
+		return nil
+	}
+	return visit(executor)
 }
 
 func hasSelectedRows(selectList []bool) bool {
@@ -1643,6 +1684,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 					selectedBranch[j] = false
 				}
 			}
+			if err = snapshotSkippedUserVariableAssignments(
+				proc, expr.parameterExecutor[i+1], rowCount, selectedBranch); err != nil {
+				return err
+			}
 			expr.parameterResults[i+1], err = expr.parameterExecutor[i+1].Eval(proc, batches, selectedBranch)
 			if err != nil {
 				return err
@@ -1650,6 +1695,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i+1], expr.parameterExecutor[i+1], selectedBranch)
 		} else {
+			if err = snapshotSkippedUserVariableAssignments(
+				proc, expr.parameterExecutor[i], rowCount, remaining); err != nil {
+				return err
+			}
 			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		}
@@ -1675,6 +1724,10 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 	}
 
 	for i := range expr.parameterExecutor {
+		if err = snapshotSkippedUserVariableAssignments(
+			proc, expr.parameterExecutor[i], rowCount, remaining); err != nil {
+			return err
+		}
 		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, remaining)
 		if err != nil {
 			return err

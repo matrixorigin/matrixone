@@ -891,6 +891,48 @@ func (proc *Process) BeginUserVariableAssignment(name string, rowCount int) {
 	proc.Base.userVariableAssignmentActive = true
 }
 
+// EnsureUserVariableAssignmentRows prepares row-history storage for name
+// without resetting an already active statement overlay. Conditional
+// expression executors use this when an assignment target is in a skipped
+// subtree: the subtree must record the value visible for each row, but its
+// side effects must not be evaluated or published.
+func (proc *Process) EnsureUserVariableAssignmentRows(name string, rowCount int) {
+	name = canonicalUserVariableAssignmentName(name)
+	if rowCount < 0 {
+		rowCount = 0
+	}
+	proc.Base.userVariableAssignmentMu.Lock()
+	defer proc.Base.userVariableAssignmentMu.Unlock()
+	if proc.Base.userVariableAssignmentRows == nil {
+		proc.Base.userVariableAssignmentRows = make(map[string][]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRowValid == nil {
+		proc.Base.userVariableAssignmentRowValid = make(map[string][]bool)
+	}
+	if !proc.Base.userVariableAssignmentActive {
+		proc.Base.userVariableAssignmentCurrentRow = -1
+		proc.Base.userVariableAssignmentBatchRows = rowCount
+		proc.Base.userVariableAssignmentActive = true
+	} else if proc.Base.userVariableAssignmentBatchRows < rowCount {
+		proc.Base.userVariableAssignmentBatchRows = rowCount
+	}
+	effectiveRows := proc.Base.userVariableAssignmentBatchRows
+	rows := proc.Base.userVariableAssignmentRows[name]
+	valid := proc.Base.userVariableAssignmentRowValid[name]
+	if len(rows) != effectiveRows {
+		grown := make([]UserVariableAssignment, effectiveRows)
+		copy(grown, rows)
+		rows = grown
+	}
+	if len(valid) != effectiveRows {
+		grown := make([]bool, effectiveRows)
+		copy(grown, valid)
+		valid = grown
+	}
+	proc.Base.userVariableAssignmentRows[name] = rows
+	proc.Base.userVariableAssignmentRowValid[name] = valid
+}
+
 // SetUserVariableAssignmentCurrentRow selects the row whose staged value is
 // visible to a row-wise assignment evaluation. A negative value disables the
 // row-specific view and makes a later variable read materialize the whole
