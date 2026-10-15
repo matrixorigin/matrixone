@@ -1,5 +1,16 @@
 # #28998：C03 验证与交付记录
 
+## 当前维护资格：新增inline及后续parser冲突（2026-10-15）
+
+- **范围**：原head170a5d1aa83d，正常合并main `501c85ecdd6eee0195172743c6d8aaf125cb252d`；交付前远端main核验仍相同。新增review5527576615两个inline基于旧f5a7，分别是生成表达式精度及main113错误准入，均已由170a实现修复，本轮核对实现/负控不重复改产品。当前main仍仅占用113，C03保持114、4.0.15、defaults18、函数598/END599。
+- **冲突/交互**：唯一冲突是生成mysql_sql.go，合并grammar通过owner make -B两次生成、SHA一致，无手改。保留main的POINT→ST_POINT alias、表达式CHAR CHARACTER SET/二进制不填充/空charset拒绝、CREATE INDEX后缀USING及选项合并、UT批次范围；完整非生成增量和C03交互hunk已审查。没有本轮新增生产状态、goroutine、锁或持久化格式。
+- **当前owner**：Go1.27.1/Darwin/native wrapper/vet启用，重新运行parser/facade/tree/plan/function/compile/frontend/explain/sysview共**9完整owner、38008 PASS事件**，各非空终态/exit0/完整atomic profile。migration和PB相关源及语义输入未变，复用170a本轮之前已核对的两个完整owner（7/186 PASS事件），明确不是11个新鲜重跑；当前覆盖使用9新鲜＋2可复用profile，不混入红/不完整profile。
+- **实际SQL**：完整sqlintegration **45 top/310 PASS/177.504秒、exit0**，含原生成表达式SQL入口四组控制；另由完整plan owner覆盖9个typed表达式/域子例。当前严格非生成AST可执行token **687/852=80.63%**，辅助802/920=87.17%，缺采集/无映射仍计未覆盖。**16适用包vet/lint exit0**，96非生成C03 Go文件gofmt匹配；不是全仓静态或UT。
+- **27完整public原比较双轮**：在原24脚本上增加main已有func_cast_character_set、geo_stpoint、secondary_index_create，不重新生成任何oracle。原run.sh -g -n、同一真实native-linked实例，两轮均 **2998 total/2997 success/0 failed/1原ignore/0 abnormal**，Java57秒/57秒，driver **164.83秒PASS/exit0**。54个源及54个mirror逐SHA一致、每报告28行、errors为0bytes；两轮fixture与映射DB/account/snapshot闭包均0，服务/admission/port teardown ready。保留**2803条service ERROR**，panic/fatal/data-race签名0，不声称零ERROR；上游secondary_index脚本默认test库表由tester默认fixture重建管理，不将其夸称自清理。
+- **调度证据及明确限制**：新增调度合同TestEmbeddedAuditedBatchScopeAndFailure独立执行 **1 top/19 PASS、package4.615秒**。完整optools尝试没有通过：serial控制返回100（日志同时提示Darwin orphan discovery不可用），HUP mock的/bin/bash不支持read -t 0.01，随后整包180秒预算在Make配置子例到期；原始失败/stack完整保留，不改生产来掩盖、不声称该包全绿。optools和Makefile与main501逐字一致；本轮新增批次映射正负控制已覆盖。这是本地harness环境/整包资格限制，不据此新建产品故障或冒称Linux成功。
+- **资格边界/交付**：170a的race/多CN/restart/upgrade保持原输入/模式范围，本轮未重跑或扩张；本次无新并发/恢复/协议格式变化，以当前parser/binder、完整SQL及public消费者证明合并交互。正常merge/push原ready PR，已修inline按权限resolve并请求复审，不擅自评论或持续监控CI。仅DESIGN/VALIDATION两个既有CLAUDE文档交付，私有TODO/driver/cache/profile/log不提交；仅经pins/mtime/SHA/open-handles保护清理再生Go archive，保留源码、模块、数据库、原生、证据、worktree及无关进程。远端Linux CI及外部复审仍待其独立终态。
+
+
 ## 历史状态快照（f09；当前资格见末节）
 
 以下原始验收记录对应历史交付 `1511bb6b9499bb354418d34d1e863bfd7a27703f`，不代表远端 CI 已通过。实际 run `38076256462` 的可复现UT/BVT失败及上游冲突已修复；维护提交为 `7a462de0f3c53ce3fcff88c1ae4f7e3198467850`。前三次pure merge冻结 `5f94c8f88a469e0e5053668bfca89770481a9595` / checkpoint `bb6d76360811a51a34566a9922a39118ffe975e8`，该范围完整owner/消费者/race/54完整public两轮/覆盖/static/正常生成均通过。最新冻结上游为 `f09d4788fd4d1aa30aae0e2f49d014589e7566c0`，独立第四次pure merge为 `a660a0fd7b353c50dbf65ce270795a4e4ec72401`：完成相关增量重验与明确资格复用，不将旧证据无条件换标签。当前严格覆盖率84.73%，没有未解决的本地审查/执行阻塞；实际提交与PR head以交付后核验为准。Darwin/embed成功不等于Linux CI green。
@@ -252,7 +263,7 @@ P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch
 - 构建期间按既有16GiB保留/>17GiB准入边界回收确认闲置的Go archive缓存：记录哈希、mtime、open handles、当前response/importcfg及活动build-root pins；保留源码/WIP/模块/原生产物/诊断/worktree和无关进程。逻辑回收字节不等于APFS物理回收量。
 - 仍保留原始Linux失败、截断输出、初始API转义拒绝、baseline与候选测量。最终本地PASS不能证明新提交远端Linux绿色；以推送后确切head终态为准。
 
-## 当前维护资格：生成表达式评审与main冲突（2026-10-15）
+## 上一轮维护资格：生成表达式评审与main冲突（2026-10-15，170a）
 
 - **冻结输入及分配**：从f5a7继续正常合并main `17a6200f59e764729e5544908fffd5480ae88279`，交付前远端main核验仍相同。保留main DECIMAL variance/stddev DOUBLE协议113；未发布C03迁114，113成为旧peer负控。迁移4.0.15/min4.0.14/offset4、CreateTable.defaults18、函数598/END599不变。两个冲突逐项解决，pipeline与parser按owner正常双次生成一致；完整pipeline descriptor等于main，plan仅批准defaults增量，所有其余字段/reserved/options/enum保留。
 - **评审反例及修复**：review5523469825要求修复CONVERT在会话div_precision_increment从10改0后把已有生成值0.333333333333重算为0.33。有效RED_R2用旧三个owner的overlay在合并内核复现同域/换域失败，而未改会话及普通COPY控制通过。转换专用typed replay只保留输入域未变的持久化计算；适配目的赋值并保留作者CAST，原始/可见位置只重映射一次，多次换域不增长。普通MODIFY及真正受影响的输入仍按原绑定路径执行；不改COPY事务/索引/约束/清理所有权。

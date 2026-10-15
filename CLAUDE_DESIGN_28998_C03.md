@@ -4,9 +4,15 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-15，冻结main `17a6200f59`）：保留main有符号WEEK/DAYOFYEAR协议 **112**、DECIMAL variance/stddev DOUBLE协议 **113**，C03协议能力顺延 **114**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
+当前维护编号（2026-10-15，冻结main `501c85ecdd`）：保留main有符号WEEK/DAYOFYEAR协议 **112**、DECIMAL variance/stddev DOUBLE协议 **113**，C03协议能力顺延 **114**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
+
+## 2026-10-15 后续评审与语法合并协调
+
+- 新评审5527576615的两个inline针对旧f5a7：生成表达式会话精度及main113不具备C03。二者已由170a5d1aa83d修复，当前typed replay、114准入及113负控保持；不是未解决的新生产缺陷。
+- 后续正常合并main501c85ecdd，包括POINT别名、表达式CHAR CHARACTER SET及CREATE INDEX后缀USING、UT调度。保留上游语法/绑定/错误/结果，POINT复用ST_POINT既有ID，不占用598。表达式字符域CAST继续由CONVERT USING及显式宽度owner执行，不误用DDL二进制填充规则；C03作者CAST/目的赋值边界不变。
+- 唯一文本冲突在生成parser；从合并grammar执行owner强制双次生成一致，不手改生成源码。该维护不增加C03功能范围或新状态/锁/持久化格式；验证按受影响parser/binder及真实SQL消费者重采集，未变历史资格不无条件扩张。
 
 ## 1. 问题、事实与不变量
 
