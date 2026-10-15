@@ -8242,11 +8242,12 @@ func bindFuncExprImplByPlanExpr(
 						return nil, err
 					}
 				}
-				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
-				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
-				// unsigned value instead when the comparison target is text.
-				if (name == "least" || name == "greatest") && argsType[idx].Oid == types.T_bit &&
-					(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text) {
+				// BIT 到字符串的直接转换保留位载荷字节；这些函数把 BIT
+				// 视为无符号数值，因此先转 UINT64，再生成完整十进制字符串。
+				if argsType[idx].Oid == types.T_bit &&
+					(((name == "least" || name == "greatest") &&
+						(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text)) ||
+						((name == "lag" || name == "lead") && castType.Oid.IsMySQLString())) {
 					uint64Type := types.T_uint64.ToType()
 					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&uint64Type))
 					if err != nil {
@@ -8434,6 +8435,17 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 	}
 	if ret.Oid == types.T_any {
 		return types.Type{}, false, nil
+	}
+	// COALESCE 按转换成本选择的数值/布尔/时间重载会丢失字符串内容。
+	// 窗口必须保留两个分支的值域，不能因未使用的默认值改写源值。
+	// 先选未知容量的字符串域，再由调用方统一推导容量及 SQL LOB 子类型。
+	if !ret.Oid.IsMySQLString() && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
+		if valueArg.Oid == types.T_blob || defaultArg.Oid == types.T_blob ||
+			valueArg.Oid == types.T_binary || defaultArg.Oid == types.T_binary ||
+			valueArg.Oid == types.T_varbinary || defaultArg.Oid == types.T_varbinary {
+			return types.New(types.T_blob, 0, 0), true, nil
+		}
+		return types.New(types.T_varchar, 0, 0), true, nil
 	}
 	if ret.Oid.IsDecimal() && ret.Width > 65 {
 		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")

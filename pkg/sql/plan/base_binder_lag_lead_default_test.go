@@ -138,6 +138,34 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 	}
 }
 
+func TestBindLagLeadDefaultStringDomain(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		for _, stringOID := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary} {
+			for _, scalarOID := range []types.T{types.T_bit, types.T_bool, types.T_date, types.T_datetime, types.T_time, types.T_timestamp} {
+				for _, reverse := range []bool{false, true} {
+					t.Run(name+"/"+stringOID.String()+"/"+scalarOID.String()+map[bool]string{false: "/source", true: "/default"}[reverse], func(t *testing.T) {
+						value := &planpb.Expr{Typ: planpb.Type{Id: int32(stringOID), Width: 100}}
+						def := &planpb.Expr{Typ: planpb.Type{Id: int32(scalarOID)}}
+						if reverse {
+							value, def = def, value
+						}
+						expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{value, makePlan2Int64ConstExprWithType(0), def})
+						require.NoError(t, err)
+						oid := types.T(expr.Typ.Id)
+						require.True(t, oid.IsMySQLString(), "string domain lost: %v", oid)
+						if stringOID == types.T_blob {
+							require.Equal(t, types.T_blob, oid)
+						}
+						for _, idx := range []int{0, 2} {
+							require.Equal(t, expr.Typ.Id, expr.GetF().Args[idx].Typ.Id)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 	for _, name := range []string{"lag", "lead"} {
 		for _, tc := range []struct {
@@ -150,6 +178,10 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 			{"mediumtext", "cast('{}' as json)", types.T_text, types.MaxLongTextLen, 0},
 			{"varchar(100)", "cast('x' as tinytext)", types.T_text, 0, 0},
 			{"decimal(5,2)", "cast(7 as bit(3))", types.T_decimal64, 5, 2},
+			{"varchar(20)", "cast(7 as bit(3))", types.T_text, types.MaxLongTextLen, 0},
+			{"text", "true", types.T_text, types.MaxLongTextLen, 0},
+			{"blob", "false", types.T_blob, types.MaxLongTextLen, 0},
+			{"text", "cast('2024-01-01' as date)", types.T_text, types.MaxLongTextLen, 0},
 		} {
 			t.Run(name+tc.sourceType+tc.defaultSQL, func(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))

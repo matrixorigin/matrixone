@@ -218,6 +218,29 @@ show columns from wunicode_view;
 select id,length(v) as v_length from wunicode_view order by id;
 set session sql_mode = @wunicode_sql_mode;
 
+-- 字符串域不能被 BIT、BOOL 或时间重载改写；源值及实际默认都需保留。
+create table wstring (v varchar(20), t text, b blob, ts text, bitval bit(64), flag bool, d date);
+insert into wstring values ('00123','123',x'610062FF','2024-01-02 03:04:05',18446744073709551615,true,'2024-01-01');
+select v, lag(v,0) over () as control_value, lag(v,0,bitval) over () as lg, lead(v,0,bitval) over () as ld from wstring;
+select t, lag(t,0,true) over () as lg, lead(t,0,false) over () as ld,
+       hex(b) as original_blob, hex(lag(b,0,flag) over ()) as lg_blob, hex(lead(b,0,flag) over ()) as ld_blob from wstring;
+select ts, lag(ts,0,d) over () as lg, lead(ts,0,d) over () as ld from wstring;
+select lag(v,1,bitval) over () as bit_default, lead(bitval,0,v) over () as bit_source,
+       lag(bitval,1,v) over () as string_default, lead(flag,1,t) over () as text_default,
+       hex(lag(flag,1,b) over ()) as blob_default, lead(d,1,ts) over () as temporal_text_default from wstring;
+select lag(t,1,flag) over () as bool_default, lead(flag,0,t) over () as bool_source,
+       lag(ts,1,d) over () as date_default, lead(d,0,ts) over () as date_source,
+       hex(lag(b,1,flag) over ()) as blob_bool_default,
+       lead(b,1,bitval) over () as blob_bit_default from wstring;
+create table wstring_copy as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+       lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show create table wstring_copy;
+select v, t, hex(b) as b, ts from wstring_copy;
+create view wstring_view as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+       lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show columns from wstring_view;
+select v, t, hex(b) as b, ts from wstring_view;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';

@@ -393,6 +393,53 @@ select id,length(v) as v_length from wunicode_view order by id;
 1  ¦  300  𝄀
 2  ¦  400
 set session sql_mode = @wunicode_sql_mode;
+create table wstring (v varchar(20), t text, b blob, ts text, bitval bit(64), flag bool, d date);
+insert into wstring values ('00123','123',x'610062FF','2024-01-02 03:04:05',18446744073709551615,true,'2024-01-01');
+select v, lag(v,0) over () as control_value, lag(v,0,bitval) over () as lg, lead(v,0,bitval) over () as ld from wstring;
+➤ v[12,20,0]  ¦  control_value[12,20,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
+00123  ¦  00123  ¦  00123  ¦  00123
+select t, lag(t,0,true) over () as lg, lead(t,0,false) over () as ld,
+hex(b) as original_blob, hex(lag(b,0,flag) over ()) as lg_blob, hex(lead(b,0,flag) over ()) as ld_blob from wstring;
+➤ t[-1,16383,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  ¦  original_blob[-1,16383,0]  ¦  lg_blob[-1,16383,0]  ¦  ld_blob[-1,16383,0]  𝄀
+123  ¦  123  ¦  123  ¦  610062FF  ¦  610062FF  ¦  610062FF
+select ts, lag(ts,0,d) over () as lg, lead(ts,0,d) over () as ld from wstring;
+➤ ts[-1,16383,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
+2024-01-02 03:04:05  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05
+select lag(v,1,bitval) over () as bit_default, lead(bitval,0,v) over () as bit_source,
+lag(bitval,1,v) over () as string_default, lead(flag,1,t) over () as text_default,
+hex(lag(flag,1,b) over ()) as blob_default, lead(d,1,ts) over () as temporal_text_default from wstring;
+➤ bit_default[-1,536870911,0]  ¦  bit_source[-1,536870911,0]  ¦  string_default[-1,536870911,0]  ¦  text_default[-1,536870911,0]  ¦  blob_default[-1,16383,0]  ¦  temporal_text_default[-1,536870911,0]  𝄀
+18446744073709551615  ¦  18446744073709551615  ¦  00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+select lag(t,1,flag) over () as bool_default, lead(flag,0,t) over () as bool_source,
+lag(ts,1,d) over () as date_default, lead(d,0,ts) over () as date_source,
+hex(lag(b,1,flag) over ()) as blob_bool_default,
+lead(b,1,bitval) over () as blob_bit_default from wstring;
+➤ bool_default[-1,536870911,0]  ¦  bool_source[-1,536870911,0]  ¦  date_default[-1,536870911,0]  ¦  date_source[-1,536870911,0]  ¦  blob_bool_default[-1,16383,0]  ¦  blob_bit_default[-4,2147483647,0]  𝄀
+1  ¦  1  ¦  2024-01-01  ¦  2024-01-01  ¦  31  ¦  18446744073709551615
+create table wstring_copy as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show create table wstring_copy;
+➤ Table[12,12,0]  ¦  Create Table[12,147,0]  𝄀
+wstring_copy  ¦  CREATE TABLE `wstring_copy` (
+  `v` longtext DEFAULT NULL,
+  `t` longtext DEFAULT NULL,
+  `b` longblob DEFAULT NULL,
+  `ts` longtext DEFAULT NULL
+)
+select v, t, hex(b) as b, ts from wstring_copy;
+➤ v[-1,536870911,0]  ¦  t[-1,536870911,0]  ¦  b[-1,16383,0]  ¦  ts[-1,536870911,0]  𝄀
+00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+create view wstring_view as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show columns from wstring_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+t  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  longblob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ts  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v, t, hex(b) as b, ts from wstring_view;
+➤ v[-1,536870911,0]  ¦  t[-1,536870911,0]  ¦  b[-1,16383,0]  ¦  ts[-1,536870911,0]  𝄀
+00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';
