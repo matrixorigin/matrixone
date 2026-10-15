@@ -323,7 +323,8 @@ func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCo
 			// Preserve the duration's declared precision through the text cast
 			// so the result scale and operand parser retain fractional seconds.
 			r.finalType[1].Scale = inputs[1].Scale
-		case types.T_float32, types.T_float64:
+		case types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 			// FLOAT has no declared decimal scale, but its duration can carry
 			// microseconds. The implicit text cast must not force FSP 0.
 			r.finalType[1].Scale = 6
