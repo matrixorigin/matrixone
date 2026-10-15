@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -7667,7 +7668,65 @@ func TestIndexTableSerialFunctionsSeparateStorageFromComparison(t *testing.T) {
 		Parts:  []string{"status"},
 		Unique: false,
 	}))
+	assert.Equal(t, "physical_serial", indexTableStoredKeySerialFunc(&planpb.IndexDef{
+		KeyFormat: collation.KeyFormatV1,
+		Parts:     []string{"status", "due"},
+	}))
+	assert.Equal(t, "serial", indexTableStoredKeySerialFunc(nil))
+	assert.True(t, indexTableStoresSerializedKey(&planpb.IndexDef{
+		Parts: []string{"status", "due"},
+	}))
+	assert.False(t, indexTableStoresSerializedKey(&planpb.IndexDef{
+		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		Parts:     []string{"status", "due"},
+	}))
+	assert.Equal(t, catalog.IndexTablePrimaryColName, indexLookupColumnName(&planpb.IndexDef{
+		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+	}))
+	assert.Equal(t, catalog.IndexTableIndexColName, indexLookupColumnName(nil))
+	assert.Equal(t, "", indexPrimaryPartName(nil))
+	assert.Equal(t, "status", indexPrimaryPartName(&planpb.IndexDef{
+		Parts: []string{catalog.CreateAlias("status")},
+	}))
 	assert.Equal(t, "serial", indexTableComparisonSerialFunc())
+}
+
+func TestBindIndexKeyExprVariants(t *testing.T) {
+	ctx := context.Background()
+	native := &planpb.Expr{Typ: planpb.Type{
+		Id:               int32(types.T_varchar),
+		Charset:          uint32(types.CharsetUTF8MB4UnicodeCI),
+		CollationVersion: uint32(collation.RevisionV1),
+	}}
+	legacy := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}
+	nonnative := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}}
+
+	got, err := bindIndexKeyExpr(ctx, &planpb.IndexDef{KeyFormat: collation.KeyFormatV1}, []*planpb.Expr{native})
+	require.NoError(t, err)
+	require.Equal(t, "physical_collation_key", got.GetF().Func.ObjName)
+
+	got, err = bindIndexKeyExpr(ctx, &planpb.IndexDef{KeyFormat: collation.KeyFormatV1}, []*planpb.Expr{native, legacy})
+	require.NoError(t, err)
+	require.Equal(t, "physical_serial", got.GetF().Func.ObjName)
+
+	got, err = bindIndexKeyExpr(ctx, &planpb.IndexDef{KeyFormat: collation.KeyFormatV1}, []*planpb.Expr{nonnative})
+	require.NoError(t, err)
+	require.Same(t, nonnative, got)
+
+	got, err = bindIndexKeyExpr(ctx, &planpb.IndexDef{Parts: []string{"a", "b"}, Unique: true}, []*planpb.Expr{legacy, legacy})
+	require.NoError(t, err)
+	require.Equal(t, "serial", got.GetF().Func.ObjName)
+
+	got, err = bindIndexKeyExpr(ctx, &planpb.IndexDef{Parts: []string{"a", "b"}}, []*planpb.Expr{legacy, legacy})
+	require.NoError(t, err)
+	require.Equal(t, "serial_full", got.GetF().Func.ObjName)
+
+	got, err = bindIndexKeyExpr(ctx, nil, []*planpb.Expr{legacy})
+	require.NoError(t, err)
+	require.Same(t, legacy, got)
+	got, err = bindIndexKeyExpr(ctx, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }
 
 func TestRegularIndexPrefixMetadataUsable(t *testing.T) {

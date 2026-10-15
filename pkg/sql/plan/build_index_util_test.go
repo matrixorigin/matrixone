@@ -278,6 +278,7 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		}
 		unicodeCol := &ColDef{Name: "c", Typ: typ}
 		require.Error(t, checkIndexColumnSupportability(ctx, unicodeCol, keyPart, "unique"))
+		require.NoError(t, checkIndexColumnSupportabilityWithKeyFormat(ctx, unicodeCol, keyPart, "unique", collation.KeyFormatV1))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), keyPart, "unique"))
 	})
 
