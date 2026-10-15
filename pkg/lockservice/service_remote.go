@@ -453,59 +453,24 @@ func (s *service) handleRemoteTryLock(
 }
 
 func validNoWaitLockOptions(options pb.LockOptions) bool {
-	return validNoWaitLockOptionFields(
-		options.NoWait,
-		options.Policy,
-		options.Granularity,
-		options.Mode,
-	)
+	return options.NoWait && options.Policy == pb.WaitPolicy_FastFail &&
+		options.Granularity == pb.Granularity_Row &&
+		(options.Mode == pb.LockMode_Shared || options.Mode == pb.LockMode_Exclusive)
 }
 
-// noWaitLockContract contains only scalar fields needed after the request
-// handler returns. The RPC server recycles pb.Request immediately after an
-// async handler hands completion to its callback, so callbacks must not retain
-// the request or any nested mutable protobuf storage.
+// Snapshot only scalar admission facts: the async callback outlives the pooled
+// request and must not retain its mutable protobuf storage.
 type noWaitLockContract struct {
-	method      pb.Method
-	granularity pb.Granularity
-	mode        pb.LockMode
-	policy      pb.WaitPolicy
-	noWait      bool
+	method       pb.Method
+	validOptions bool
 }
 
 func snapshotNoWaitLockContract(req *pb.Request) noWaitLockContract {
-	options := req.Lock.Options
-	return noWaitLockContract{
-		method:      req.Method,
-		granularity: options.Granularity,
-		mode:        options.Mode,
-		policy:      options.Policy,
-		noWait:      options.NoWait,
-	}
-}
-
-func validNoWaitLockOptionFields(
-	noWait bool,
-	policy pb.WaitPolicy,
-	granularity pb.Granularity,
-	mode pb.LockMode,
-) bool {
-	return noWait && policy == pb.WaitPolicy_FastFail &&
-		granularity == pb.Granularity_Row &&
-		(mode == pb.LockMode_Shared || mode == pb.LockMode_Exclusive)
-}
-
-func (c noWaitLockContract) isTryLock() bool {
-	return c.method == pb.Method_TryLock || c.method == pb.Method_ForwardTryLock
+	return noWaitLockContract{method: req.Method, validOptions: validNoWaitLockOptions(req.Lock.Options)}
 }
 
 func (c noWaitLockContract) valid() bool {
-	return c.isTryLock() && validNoWaitLockOptionFields(
-		c.noWait,
-		c.policy,
-		c.granularity,
-		c.mode,
-	)
+	return c.validOptions && (c.method == pb.Method_TryLock || c.method == pb.Method_ForwardTryLock)
 }
 
 func (s *service) setNoWaitConflictResponse(
