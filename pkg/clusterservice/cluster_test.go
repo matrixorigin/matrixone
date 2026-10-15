@@ -320,6 +320,34 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 		})
 }
 
+func TestCluster_DebugUpdateCNLabelWithContext(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addCN("cn0")
+			wantDeadline := time.Now().Add(time.Minute)
+			ctx, cancel := context.WithDeadline(context.Background(), wantDeadline)
+			defer cancel()
+
+			require.NoError(t, c.DebugUpdateCNLabelWithContext(ctx, "cn0", map[string][]string{"k1": {"v1"}}))
+			hc.RLock()
+			gotDeadline := hc.updateCNLabelDeadline
+			calls := hc.updateCNLabelCalls
+			hc.RUnlock()
+			require.True(t, gotDeadline.Equal(wantDeadline), "caller deadline must reach HAKeeper unchanged")
+			require.Equal(t, 1, calls)
+
+			err := c.DebugUpdateCNLabelWithContext(context.Background(), "cn0", map[string][]string{})
+			require.ErrorContains(t, err, "context deadline not set")
+			hc.RLock()
+			callsAfterInvalidContext := hc.updateCNLabelCalls
+			hc.RUnlock()
+			require.Equal(t, calls, callsAfterInvalidContext,
+				"unbounded label updates must be rejected before contacting HAKeeper")
+		},
+	)
+}
+
 func TestCluster_DebugUpdateCNWorkState(t *testing.T) {
 	runClusterTest(
 		time.Hour,
@@ -410,6 +438,8 @@ type testHAKeeperClient struct {
 	err                       error
 	updateCNWorkStateCalls    int
 	updateCNWorkStateDeadline time.Time
+	updateCNLabelCalls        int
+	updateCNLabelDeadline     time.Time
 }
 
 func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
@@ -466,6 +496,8 @@ func (c *testHAKeeperClient) GetCNState(ctx context.Context) (logpb.CNState, err
 func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNStoreLabel) error {
 	c.Lock()
 	defer c.Unlock()
+	c.updateCNLabelCalls++
+	c.updateCNLabelDeadline, _ = ctx.Deadline()
 	for i, cn := range c.value.CNStores {
 		if cn.UUID == label.UUID {
 			c.value.CNStores[i].Labels = label.Labels
