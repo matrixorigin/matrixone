@@ -1180,8 +1180,15 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// Restrict real daemon claiming to B. An expired heartbeat alone lets
 			// A reclaim the row, which cannot prove cross-CN takeover.
 			clusterView := clusterservice.GetMOCluster(cnA.ServiceID())
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
-			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
+			labelUpdater, ok := clusterView.(clusterservice.CNLabelUpdaterWithContext)
+			require.True(t, ok, "cluster must support caller-bounded CN label updates")
+			updateCNLabel := func(uuid string, kvs map[string][]string) error {
+				labelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				return labelUpdater.DebugUpdateCNLabelWithContext(labelCtx, uuid, kvs)
+			}
+			require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
 
 			// Move the live daemon claim to CN B in the real task table and make
 			// A's heartbeat stale. This is the deterministic equivalent of a newer
@@ -1314,9 +1321,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}); ok {
 				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 2)
 			}
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
-			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
-			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{}))
+			require.NoError(t, updateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, updateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
+			require.NoError(t, updateCNLabel(cnB.ServiceID(), map[string][]string{}))
 			sqlExec = testutils.GetSQLExecutor(cnC)
 			cleanupCN = cnC
 			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))
