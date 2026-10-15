@@ -1149,8 +1149,18 @@ func resultColumnExpressionIsComputed(
 	expr *plan.Expr,
 	visited map[[3]int32]bool,
 ) bool {
-	if expr == nil || expr.GetCol() == nil {
-		return expr != nil
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() == nil {
+		// A window expression is owned by the WINDOW node rather than by the
+		// projection slot that happens to carry its result.  Preserve the
+		// distinction between a window over a stored BOOLEAN and a window over
+		// a computed predicate; both are represented by a synthetic output slot.
+		if expr.GetW() != nil {
+			return resultColumnWindowExpressionIsComputed(query, nodeID, expr.GetW(), visited)
+		}
+		return true
 	}
 	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 		return false
@@ -1196,6 +1206,20 @@ func resultColumnExpressionIsComputed(
 		if projected.GetCol() == nil {
 			return true
 		}
+		if node.NodeType == plan.Node_WINDOW && projectIndex >= 0 {
+			// WINDOW keeps the child projection first and appends one synthetic
+			// slot for each WinSpecList entry.  The synthetic slot's ColRef is
+			// deliberately not enough to identify the expression that produced
+			// it, so resolve it through the owning window specification instead
+			// of following the same ordinal in the child projection.
+			inputProjectCount := len(node.ProjectList) - len(node.WinSpecList)
+			windowIndex := projectIndex - inputProjectCount
+			if inputProjectCount >= 0 && windowIndex >= 0 && windowIndex < len(node.WinSpecList) {
+				return resultColumnWindowExpressionIsComputed(
+					query, nodeID, node.WinSpecList[windowIndex].GetW(), visited,
+				)
+			}
+		}
 		ref = projected.GetCol()
 	}
 
@@ -1211,7 +1235,18 @@ func resultColumnExpressionIsComputed(
 	for _, childID := range node.Children {
 		childExpr := projected
 		child := query.Nodes[childID]
-		if child != nil && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
+		resolvedByIdentity := false
+		if child != nil && child.NodeType == plan.Node_WINDOW {
+			// Keep the referenced child slot's identity when descending through
+			// a projection.  Falling back to the parent ordinal can select a
+			// stored sibling (for example the input BOOLEAN at slot 0) instead
+			// of the synthetic WINDOW result at slot 1.
+			if childProjected, _ := resultColumnProjectionWithIndex(child, ref); childProjected != nil {
+				childExpr = childProjected
+				resolvedByIdentity = true
+			}
+		}
+		if child != nil && !resolvedByIdentity && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
 			childExpr = child.ProjectList[projectIndex]
 		}
 		if childExpr == nil {
@@ -1222,6 +1257,73 @@ func resultColumnExpressionIsComputed(
 		}
 	}
 	return false
+}
+
+// resultColumnWindowExpressionIsComputed classifies the value produced by a
+// WINDOW node's own WindowSpec.  A value-preserving window over a direct column
+// retains the source column's native metadata, while an aggregate, predicate,
+// or any other expression widens BOOLEAN to the numeric wire representation
+// used for computed results.
+func resultColumnWindowExpressionIsComputed(
+	query *plan.Query,
+	nodeID int32,
+	spec *plan.WindowSpec,
+	visited map[[3]int32]bool,
+) bool {
+	if spec == nil || spec.WindowFunc == nil {
+		return true
+	}
+	if ref := spec.WindowFunc.GetCol(); ref != nil {
+		if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+			return false
+		}
+		for _, childID := range query.Nodes[nodeID].Children {
+			if resultColumnExpressionIsComputed(query, childID, spec.WindowFunc, cloneVisitedResultColumnExpressions(visited)) {
+				return true
+			}
+		}
+		return false
+	}
+	fn := spec.WindowFunc.GetF()
+	if fn == nil {
+		return true
+	}
+	if len(fn.Args) == 0 {
+		return true
+	}
+	// Only value-preserving window functions may retain the native metadata of
+	// a direct BOOLEAN input.  Aggregate windows such as MIN/MAX still compute
+	// a new value even when their argument is a stored column.
+	fnName := ""
+	if fn.Func != nil {
+		fnName = strings.ToLower(fn.Func.GetObjName())
+	}
+	switch fnName {
+	case "first_value", "last_value", "nth_value", "lag", "lead":
+	default:
+		return true
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return true
+	}
+	arg := fn.Args[0]
+	if arg == nil || arg.GetCol() == nil {
+		return true
+	}
+	for _, childID := range query.Nodes[nodeID].Children {
+		if resultColumnExpressionIsComputed(query, childID, arg, cloneVisitedResultColumnExpressions(visited)) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneVisitedResultColumnExpressions(visited map[[3]int32]bool) map[[3]int32]bool {
+	clone := make(map[[3]int32]bool, len(visited)+1)
+	for key, seen := range visited {
+		clone[key] = seen
+	}
+	return clone
 }
 
 func resultColumnProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.Expr, int) {

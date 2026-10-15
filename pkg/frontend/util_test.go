@@ -2532,6 +2532,48 @@ func TestAggregateBooleanResultUsesNumericWireMetadata(t *testing.T) {
 	}
 }
 
+func TestWindowBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{
+			name:   "computed predicate window",
+			sql:    "select max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "aggregate over native boolean window",
+			sql:    "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "native boolean window",
+			sql:    "select first_value(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+			length: boolColumnLength,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, tc.kind, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, tc.length, column.Length())
+		})
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string

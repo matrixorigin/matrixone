@@ -228,6 +228,11 @@ func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
 		{name: "distinct computed", sql: "select distinct n_nationkey is null as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "aggregate min computed", sql: "select min(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "aggregate max computed", sql: "select max(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "window max computed", sql: "select max(n_nationkey is null) over () as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "window min computed", sql: "select min(n_nationkey is null) over () as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "window max native input computed", sql: "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "window first computed", sql: "select first_value(n_nationkey is null) over (order by n_nationkey) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "window first native", sql: "select first_value(with_grant_option) over () as p from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "union native", sql: "select with_grant_option from mo_catalog.mo_role_privs union all select with_grant_option from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "derived native", sql: "select x from (select with_grant_option x from mo_catalog.mo_role_privs) u", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED},
 		{name: "computed", sql: "select with_grant_option = 1 from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
@@ -241,4 +246,16 @@ func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
 			require.Equal(t, tc.kind, cols[0].ResultColumnKind)
 		})
 	}
+}
+
+func TestGetResultColumnsFromPlanPreservesStoredBooleanBesideWindowResult(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"select with_grant_option, max(with_grant_option is null) over () as p from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(p)
+	require.Len(t, columns, 2)
+	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED, columns[0].ResultColumnKind)
+	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[1].ResultColumnKind)
 }
