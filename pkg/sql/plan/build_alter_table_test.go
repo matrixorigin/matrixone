@@ -231,7 +231,21 @@ func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
 	)
 	statements, err := mysql.Parse(context.Background(), sql, 1)
 	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
 	require.Len(t, statements, 1)
+
+	// A replacement column reads its default expression, not a source column.
+	// One entry also exercises the first SELECT item independently of map order.
+	alterCtx.alterColMap["target`column"] = selectExpr{sexprType: exprConstValue, sexprStr: "42"}
+	sql, err = buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT 42 FROM `db``name`.`source``table`", sql)
 }
 
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
