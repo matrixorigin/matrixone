@@ -1033,6 +1033,9 @@ func resultColumnKind(query *plan.Query, nodeID int32, expr *plan.Expr) plan.Res
 	if expr.GetCol() == nil {
 		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
 	}
+	if resultColumnIndexSearchScore(query, nodeID, expr) {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
 	if findResultColumnSource(query, nodeID, expr) != nil {
 		return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
 	}
@@ -1040,6 +1043,43 @@ func resultColumnKind(query *plan.Query, nodeID int32, expr *plan.Expr) plan.Res
 		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
 	}
 	return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+}
+
+// resultColumnIndexSearchScore identifies the synthetic distance column emitted
+// by an index-search scan.  It is computed by the search operator even though
+// it is represented as a column reference in the projection, so retry metadata
+// must not treat it as an ordinary stored column.
+func resultColumnIndexSearchScore(query *plan.Query, nodeID int32, expr *plan.Expr) bool {
+	if query == nil || expr == nil || expr.GetCol() == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		ref := expr.GetCol()
+		if projected, _ := resultColumnProjectionWithIndex(node, ref); projected != nil && projected.GetCol() != nil {
+			ref = projected.GetCol()
+		}
+		return ref.ColPos >= 0 && int(ref.ColPos) < len(node.TableDef.GetCols()) &&
+			node.TableDef.GetCols()[ref.ColPos] != nil &&
+			strings.EqualFold(node.TableDef.GetCols()[ref.ColPos].Name, "score")
+	}
+	if len(node.Children) == 0 {
+		return false
+	}
+	projected, projectIndex := resultColumnProjectionWithIndex(node, expr.GetCol())
+	for _, childID := range node.Children {
+		childExpr := projected
+		if child := query.Nodes[childID]; childExpr == nil && child != nil && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
+			childExpr = child.ProjectList[projectIndex]
+		}
+		if childExpr != nil && resultColumnIndexSearchScore(query, childID, childExpr) {
+			return true
+		}
+	}
+	return false
 }
 
 // resultColumnExpressionIsComputed follows output projections through the
