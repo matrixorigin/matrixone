@@ -143,6 +143,13 @@ func TestSetOperationSignedZero(t *testing.T) {
 				{"scalar-identities", "select id,(select 1 from ci_inner i where i.oref=o.oref union select 1 from ci_inner i where i.oref=o.oref) from ci_outer o order by id", []string{"1:1", "2:1", "3:1", "4:NULL", "5:1"}},
 				{"float-identities", "select id,(select 1 from zeros i where i.d=o.d union select 1 from zeros i where i.d=o.d) from zeros o where id<=4 order by id", []string{"1:1", "2:1", "3:1", "4:1"}},
 				{"float-members", "select id,cast((select d from zeros i where i.id=o.id union select d from zeros i where i.id=o.id) as varchar) from zeros o where id<=4 order by id", []string{"1:-0", "2:0", "3:-0", "4:0"}},
+				{"float-aggregate-boundary", "select id,cast((select max(d) from zeros i where i.id=o.id and i.id<=3 union select max(d) from zeros i where i.id=o.id and i.id<=3) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
+				{"float-pagination-boundary", "select id,cast(((select d from zeros i where i.id=o.id and i.id<=3 limit 1) union (select d from zeros i where i.id=o.id and i.id<=3 limit 1)) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
+				{"float-ordered-pagination", "select id,cast(((select d from zeros i where i.id=o.id and i.id<=3 order by id limit 1) union (select d from zeros i where i.id=o.id and i.id<=3 order by id limit 1)) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:NULL", "5:NULL"}},
+				{"float-offset-pagination", "select id,cast(((select cast(ie as double) from ci_inner i where i.oref=o.oref and ie is not null order by ie limit 1 offset 1) union (select cast(ie as double) from ci_inner i where i.oref=o.oref and ie is not null order by ie limit 1 offset 1)) as varchar) from ci_outer o order by id", []string{"1:1", "2:NULL", "3:NULL", "4:NULL", "5:NULL"}},
+				{"float-zero-limit", "select id,cast(((select d from zeros i where i.id=o.id limit 0) union (select d from zeros i where i.id=o.id limit 0)) as varchar) from ci_outer o order by id", []string{"1:NULL", "2:NULL", "3:NULL", "4:NULL", "5:NULL"}},
+				{"float-real-null", "select id,cast((select max(d) from zeros i where i.id=o.id union select max(d) from zeros i where i.id=o.id) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:0", "5:NULL"}},
+				{"float-count-empty", "select id,cast((select cast(count(*) as double) from zeros i where i.id=o.id and i.id<=3 union select cast(count(*) as double) from zeros i where i.id=o.id and i.id<=3) as varchar) from ci_outer o order by id", []string{"1:1", "2:1", "3:1", "4:0", "5:0"}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					rows, err := conn.QueryContext(ctx, tc.query)

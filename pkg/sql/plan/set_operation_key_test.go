@@ -17,8 +17,11 @@ package plan
 import (
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,9 +61,12 @@ func TestPreparedSetOperationFloatKeysFollowOutputDomain(t *testing.T) {
 	for _, kind := range []planpb.Node_NodeType{planpb.Node_UNION, planpb.Node_INTERSECT, planpb.Node_INTERSECT_ALL, planpb.Node_MINUS, planpb.Node_MINUS_ALL} {
 		t.Run(kind.String(), func(t *testing.T) {
 			node := &planpb.Node{NodeType: kind}
-			for _, oid := range []types.T{types.T_float64, types.T_int64, types.T_float32, types.T_varchar, types.T_float64} {
+			for _, oid := range []types.T{types.T_int64, types.T_float64, types.T_int64, types.T_float32, types.T_varchar} {
 				node.ProjectList = []*planpb.Expr{GetColExpr(planpb.Type{Id: int32(oid), Scale: 2}, 0, 0)}
 				require.NoError(t, refreshPreparedSetOperationPhysicalKeys(t.Context(), node, nil))
+				features, err := planpb.RequiredRemoteExpressionFeatures(node)
+				require.NoError(t, err)
+				require.Equal(t, oid == types.T_float32 || oid == types.T_float64, features.SetOperationFloatKeys)
 				if oid != types.T_float32 && oid != types.T_float64 {
 					require.Empty(t, node.PhysicalEqualityKeyList)
 					continue
@@ -169,6 +175,8 @@ func TestIdenticalVolatileUnionKeepsBothArms(t *testing.T) {
 	for _, query := range []string{
 		"select cast(rand() as int) union select cast(rand() as int)",
 		"select 1 where rand()>0.5 union select 1 where rand()>0.5",
+		"(select rand() limit 1) union (select rand() limit 1)",
+		"select max(rand()) from NATION union select max(rand()) from NATION",
 	} {
 		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.NoError(t, err)
@@ -196,6 +204,9 @@ func TestPreparedUnionKeepsScalarFloatIdentity(t *testing.T) {
 			}
 			for range 2 {
 				require.NoError(t, refreshPreparedSetOperationPhysicalKeys(t.Context(), node, nil))
+				features, err := planpb.RequiredRemoteExpressionFeatures(node)
+				require.NoError(t, err)
+				require.Equal(t, oid == types.T_float32 || oid == types.T_float64, features.SetOperationFloatKeys)
 				require.Len(t, node.PhysicalEqualityKeyList, 2)
 				require.Equal(t, "set_operation_float_key", node.PhysicalEqualityKeyList[0].GetF().Func.ObjName,
 					"visible ANY specializing to float must retain signed-zero set membership")
@@ -205,6 +216,9 @@ func TestPreparedUnionKeepsScalarFloatIdentity(t *testing.T) {
 			}
 			node.PhysicalEqualityKeyList[0] = GetColExpr(outputType, 0, 1)
 			require.NoError(t, refreshPreparedSetOperationPhysicalKeys(t.Context(), node, nil))
+			features, err := planpb.RequiredRemoteExpressionFeatures(node)
+			require.NoError(t, err)
+			require.Equal(t, oid == types.T_float32 || oid == types.T_float64, features.SetOperationFloatKeys)
 			require.NotNil(t, node.PhysicalEqualityKeyList[0].GetF(), "a different slot is not an identity marker")
 		})
 	}
@@ -520,4 +534,80 @@ func TestScalarSetCompositionRetainsOuterProducer(t *testing.T) {
 	require.Equal(t, 2, identities)
 	require.Equal(t, 2, cardinalityChecks)
 	require.Equal(t, 1, producers, "each scalar must consume the same outer producer without duplicating volatile evaluation")
+}
+
+func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "set_operation_float_key", []*planpb.Expr{GetColExpr(types.T_float64.ToType().PlanType(), 0, 0)})
+	require.NoError(t, err)
+	owner := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}}
+	floor, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion116, floor)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		original, present := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if present {
+				rt.SetGlobalVariables(key, original)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	for _, version := range []int64{defines.MORPCVersion115, defines.MORPCVersion116} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+		readErr := RequirePersistedExpressionProtocol(proc.Ctx, proc, owner)
+		writeErr := RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner)
+		if version == defines.MORPCVersion115 {
+			require.ErrorContains(t, readErr, "116")
+			require.ErrorContains(t, writeErr, "116")
+		} else {
+			require.NoError(t, readErr)
+			require.NoError(t, writeErr)
+		}
+	}
+}
+
+func TestSetArmSingletonBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		nodes []*planpb.Node
+		want  bool
+	}{
+		{"ungrouped aggregate", []*planpb.Node{{NodeType: planpb.Node_AGG, AggList: []*planpb.Expr{MakePlan2Int64ConstExprWithType(1)}}}, true},
+		{"grouped aggregate", []*planpb.Node{{NodeType: planpb.Node_AGG, GroupBy: []*planpb.Expr{MakePlan2Int64ConstExprWithType(1)}}}, false},
+		{"transparent project", []*planpb.Node{{NodeType: planpb.Node_PROJECT, Children: []int32{1}}, {NodeType: planpb.Node_AGG, AggList: []*planpb.Expr{MakePlan2Int64ConstExprWithType(1)}}}, true},
+		{"one row limit", []*planpb.Node{{NodeType: planpb.Node_PROJECT, Limit: MakePlan2Uint64ConstExprWithType(1)}}, true},
+		{"zero limit", []*planpb.Node{{NodeType: planpb.Node_PROJECT, Limit: MakePlan2Uint64ConstExprWithType(0)}}, true},
+		{"multirow limit", []*planpb.Node{{NodeType: planpb.Node_PROJECT, Limit: MakePlan2Uint64ConstExprWithType(2)}}, false},
+		{"parameter limit", []*planpb.Node{{NodeType: planpb.Node_PROJECT, Limit: &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}}}, false},
+		{"join can multiply singleton", []*planpb.Node{{NodeType: planpb.Node_JOIN, Children: []int32{1, 1}}, {NodeType: planpb.Node_PROJECT, Limit: MakePlan2Uint64ConstExprWithType(1)}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &planpb.Query{Nodes: tc.nodes}}
+			require.Equal(t, tc.want, builder.setArmHasSingletonBoundary(0))
+		})
+	}
+}
+
+func TestPreparedSingletonUnionKeepsIndependentArms(t *testing.T) {
+	for _, sql := range []string{
+		"prepare p from (select cast(? as double) limit 1) union (select cast(? as double) limit 1)",
+		"prepare p from select max(cast(? as double)) from NATION union select max(cast(? as double)) from NATION",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err)
+		q := p.GetDcl().GetPrepare().GetPlan().GetQuery()
+		found := false
+		for _, node := range q.Nodes {
+			if node.NodeType == planpb.Node_UNION {
+				found = true
+				require.Len(t, node.Children, 2)
+			}
+		}
+		require.True(t, found, "identical syntax has independent parameter slots")
+	}
 }

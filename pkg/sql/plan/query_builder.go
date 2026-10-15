@@ -5025,6 +5025,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// Identical SQL text does not imply identical parameter slots, even when
 	// parameters appear only in WHERE and the visible type remains fixed.
 	canCollapseIdenticalUnion := identicalUnion && !builder.isReusablePlan() && len(builder.qry.Steps) == initialStepCount
+	// Preserve the established single evaluation of identical bounded arms.
+	// A singleton needs no duplicate elimination, including for floating values:
+	// retain its representative and let its aggregate/pagination owner decorrelate
+	// it directly. Unordered LIMIT chooses one legal row, as on the old path;
+	// this is arm reuse, not a claim that its input ordering is deterministic.
+	canReuseSingletonUnion := canCollapseIdenticalUnion
+	if canReuseSingletonUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canReuseSingletonUnion = canReuseSingletonUnion && builder.setArmHasSingletonBoundary(id) &&
+				builder.subtreeIsDeterministic(id, seen, false)
+		}
+	}
 	if canCollapseIdenticalUnion {
 		seen := make(map[int32]bool)
 		for _, id := range nodes {
@@ -5048,6 +5061,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		tag, thisTag int32,
 	) (int32, error) {
 		projectList := getProjectList(nodeType, leftNodeID, rightNodeID, tag, thisTag)
+		if canReuseSingletonUnion && nodeType == plan.Node_UNION {
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{leftNodeID},
+				BindingTags: []int32{thisTag}, ProjectList: projectList,
+			}, ctx), nil
+		}
 		var keyList []*plan.Expr
 		var err error
 		switch nodeType {
