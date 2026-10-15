@@ -790,6 +790,95 @@ func TestAdvanceAlterDataBranchLineageSnapshotUsesWorkspace(t *testing.T) {
 	require.Equal(t, int64(2000), cloneTS)
 }
 
+// TestAlterCopyRetainsWorkspaceAdvancedSnapshotOnEveryReturn pins the ownership
+// contract of databranchutils.AdvanceLineageSnapshot inside ALTER COPY: once
+// the workspace has advanced (relocating transaction-local tombstones to their
+// post-flush row locations), every ALTER COPY return path must retain that
+// workspace-owned snapshot. Rewinding only the transaction timestamp leaves the
+// workspace and the snapshot in different generations and resurrects relocated
+// deletes, the defect removed from main by #29539.
+func TestAlterCopyRetainsWorkspaceAdvancedSnapshotOnEveryReturn(t *testing.T) {
+	const initialSnapshot = int64(1000)
+	advanceErr := errors.New("workspace advance failed")
+	copyErr := errors.New("stop after physical ALTER COPY")
+	for _, tc := range []struct {
+		name string
+		// advanceFails returns before any physical work; otherwise the physical
+		// row copy fails, exercising the post-advancement error return.
+		advanceFails bool
+	}{
+		{name: "advance failure", advanceFails: true},
+		{name: "physical copy failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			exec := &alterCopyInsertSpyExecutor{
+				createSQL: "create table dept_copy",
+				insertSQL: "insert into dept_copy select * from dept",
+				insertErr: copyErr,
+			}
+			stubAlterCopySourceLocks(t, nil)
+			scope, compile := newAlterCopyGateConcurrencyFixture(
+				t, ctrl, exec, "rc-snapshot-retain", initialSnapshot,
+			)
+
+			current := timestamp.Timestamp{PhysicalTime: initialSnapshot}
+			advances := 0
+			ws := &Ws{advanceSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+				if tc.advanceFails {
+					return advanceErr
+				}
+				// The workspace owns the transfer: relocated tombstones and the
+				// operator snapshot move to the advanced generation together.
+				current = timestamp.Timestamp{PhysicalTime: ts.PhysicalTime + 1}
+				advances++
+				return nil
+			}}
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode:      txn.TxnMode_Pessimistic,
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().DoAndReturn(
+				func() timestamp.Timestamp { return current },
+			).AnyTimes()
+			txnOperator.EXPECT().SetSnapshotTS(gomock.Any()).DoAndReturn(
+				func(ts timestamp.Timestamp) {
+					t.Errorf(
+						"ALTER COPY rewound the transaction snapshot to %d after the workspace owned the advancement",
+						ts.PhysicalTime,
+					)
+				},
+			).AnyTimes()
+			txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).
+				Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
+			compile.proc.Base.TxnOperator = txnOperator
+
+			err := scope.AlterTableCopy(compile)
+			if tc.advanceFails {
+				require.ErrorIs(t, err, advanceErr)
+				require.Equal(t, initialSnapshot, current.PhysicalTime)
+			} else {
+				require.ErrorIs(t, err, copyErr)
+				require.Greater(t, advances, 0,
+					"the pre-copy workspace advancement must run before physical work")
+				require.Greater(t, current.PhysicalTime, initialSnapshot,
+					"ALTER COPY must retain the workspace-owned advanced snapshot after returning")
+			}
+		})
+	}
+}
+
 func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
 	indexDef := &plan2.IndexDef{
 		IndexName:       "idx_vec",
