@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"path"
 	"reflect"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -14304,10 +14305,13 @@ func Test_RWDB3(t *testing.T) {
 }
 
 func Test_RWDB4(t *testing.T) {
+	// Two apply workers expose heartbeat queue growth under the existing
+	// commit-delay fault; a large host must exercise the same replay boundary.
+	previousProcs := goruntime.GOMAXPROCS(2)
+	defer goruntime.GOMAXPROCS(previousProcs)
 	ctx := context.Background()
 	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
 	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
-	// defer wTae.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.Extra.BlockMaxRows = 5
@@ -14315,7 +14319,6 @@ func Test_RWDB4(t *testing.T) {
 	bat := catalog.MockBatch(schema, 5)
 	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 	filter := handle.NewEQFilter(pkv)
-	var wg sync.WaitGroup
 
 	wTae.BindSchema(schema)
 	defer bat.Close()
@@ -14329,11 +14332,11 @@ func Test_RWDB4(t *testing.T) {
 		assert.NoError(t, txn.Commit(ctx))
 	}
 
-	// maxLSN := wTae.DB.Wal.GetLSNWatermark()
 	wTae.Close()
 
 	rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
 	rTae1 := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+	defer rTae1.Close()
 
 	fault.Enable()
 	defer fault.Disable()
@@ -14406,9 +14409,6 @@ func Test_RWDB4(t *testing.T) {
 	}
 
 	checkName(rTae1)
-	wg.Wait()
-
-	rTae1.Close()
 }
 
 func Test_ReplayGlobalCheckpoint(t *testing.T) {

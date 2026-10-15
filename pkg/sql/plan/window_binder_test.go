@@ -2027,3 +2027,31 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		require.NoError(t, err, sql)
 	}
 }
+
+func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		invalid bool
+	}{
+		{"column", "select ntile(n_nationkey) over (order by n_nationkey) from nation", true},
+		{"expression", "select ntile(n_nationkey + 1) over (order by n_nationkey) from nation", true},
+		{"partitioned", "select ntile(n_nationkey) over (partition by n_regionkey order by n_nationkey) from nation", true},
+		{"empty input", "select ntile(n_nationkey) over (order by n_nationkey) from nation where false", true},
+		{"volatile", "select ntile(cast(rand() * 3 + 1 as signed)) over (order by n_nationkey) from nation", true},
+		{"subquery", "select ntile((select max(n_regionkey) from nation)) over (order by n_nationkey) from nation", true},
+		{"literal", "select ntile(2) over (order by n_nationkey) from nation", false},
+		{"constant expression", "select ntile(1 + 1) over (order by n_nationkey) from nation", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			_, err := runOneStmt(mock, t, tc.sql)
+			if tc.invalid {
+				require.EqualError(t, err, "Incorrect arguments to ntile")
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

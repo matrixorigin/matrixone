@@ -1301,7 +1301,7 @@ func (ctr *container) ntileBucketCount(idx int) (int64, error) {
 		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
 	}
 	if bucketCount <= 0 {
-		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count must be positive")
 	}
 	return bucketCount, nil
 }
