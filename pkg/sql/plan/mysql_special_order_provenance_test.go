@@ -380,7 +380,8 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 					require.NotNil(t, fn)
 					require.Len(t, fn.GetF().Args, 1)
 					typ := fn.GetF().Args[0].Typ
-					require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, typ.Id)
+					require.Equal(t, int32(types.T_float64), typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
 					require.Empty(t, typ.Enumvalues)
 					require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
 					require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
@@ -395,8 +396,9 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(s) from (select distinct s from set_empty_member_t) d",
 		"select s, sum(s), avg(s) from set_empty_member_t group by s",
 	} {
-		_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 		require.NoError(t, err, sql)
+		require.Equal(t, int32(types.T_float64), sumAvgTestExpression(t, p, "sum").Typ.Id)
 	}
 	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select s + 0 from set_empty_member_t group by s")
 	require.ErrorContains(t, err, "without retained storage identity")
@@ -430,7 +432,20 @@ func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 			for _, name := range []string{"sum", "avg"} {
 				fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, name)
 				require.NotNil(t, fn)
-				require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+			}
+			prepared := p.GetDcl().GetPrepare()
+			if len(prepared.ParamTypes) > 0 {
+				for _, value := range []int64{1, 2} {
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(t.Context(), prepared.Plan, []any{value})
+					require.NoError(t, err)
+					for _, name := range []string{"sum", "avg"} {
+						fn := sumAvgTestExpression(t, filled, name)
+						require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+						require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+					}
+				}
 			}
 		})
 	}
@@ -552,6 +567,36 @@ func TestStatisticalAggregateNumericDomains(t *testing.T) {
 				require.Len(t, aggregate.GetF().Args, 1)
 				require.Equal(t, int32(operand.want), aggregate.GetF().Args[0].Typ.Id)
 			})
+		}
+	}
+}
+
+func TestMySQLSpecialAggregateDoubleDomainBoundaries(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, operand := range []string{"e", "s"} {
+			for _, sql := range []string{
+				"select " + name + "(" + operand + ") from enum_order_t group by id",
+				"select " + name + "(" + operand + ") over () from enum_order_t",
+				"with c as (select e,s from enum_order_t) select " + name + "(" + operand + ") from c",
+			} {
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				})
+			}
+			for _, expression := range []string{operand + "+0", "cast(" + operand + " as unsigned)", "cast(" + operand + " as decimal(20,0))"} {
+				sql := "select " + name + "(" + expression + ") from enum_order_t"
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.NotEqual(t, int32(types.T_float64), fn.Typ.Id,
+						"explicit numeric expressions establish their own aggregate domain")
+				})
+			}
 		}
 	}
 }

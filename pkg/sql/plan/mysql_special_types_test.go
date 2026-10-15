@@ -206,6 +206,49 @@ func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSumAvgRawSetBindingUsesDoubleDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"sum", "avg"} {
+		for _, members := range []string{"z,a,m", ""} {
+			label := "raw SET"
+			if members == "" {
+				label = "ordinary UINT64"
+			}
+			t.Run(name+"/"+label, func(t *testing.T) {
+				source := &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: members},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				original := DeepCopyExpr(source)
+				args, err := (*baseBinder)(nil).useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+					ctx, name, []*plan.Expr{source})
+				require.NoError(t, err)
+				require.Len(t, args, 1)
+				require.True(t, proto.Equal(original, source), "binding must not mutate caller-owned SET identity")
+				bitmap := args[0]
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bitmap.Typ.Id)
+					require.True(t, isCastOverload(bitmap, 0))
+					bitmap = bitmap.GetF().Args[0]
+					require.NotSame(t, source, bitmap)
+				} else {
+					require.Same(t, source, bitmap)
+				}
+				require.Equal(t, int32(types.T_uint64), bitmap.Typ.Id)
+				require.Empty(t, bitmap.Typ.Enumvalues)
+				require.Equal(t, source.GetCol(), bitmap.GetCol())
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				require.NoError(t, err)
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bound.Typ.Id)
+				} else {
+					require.NotEqual(t, int32(types.T_float64), bound.Typ.Id)
+				}
+			})
+		}
+	}
+}
+
 func TestBitwiseAggregateBindingUsesStoredValues(t *testing.T) {
 	ctx := context.Background()
 	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
