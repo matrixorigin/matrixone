@@ -462,7 +462,7 @@ func TestUserVariableAssignmentNestedSelfReferenceWithoutSourceRows(t *testing.T
 	}
 }
 
-func TestUserVariableAssignmentNestedSkippedRowsResetBetweenBatches(t *testing.T) {
+func TestUserVariableAssignmentNestedSkippedRowsKeepHistoryBetweenBatches(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
 	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
@@ -518,8 +518,71 @@ func TestUserVariableAssignmentNestedSkippedRowsResetBetweenBatches(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](activeResult, 0))
 	proc.SetUserVariableAssignmentCurrentRow(-1)
-	_, _, ok := proc.GetUserVariableAssignmentRows("b", 2)
-	require.False(t, ok, "skipped nested row must not make the new batch look complete")
+	rows, valid, ok := proc.GetUserVariableAssignmentRows("b", 2)
+	require.True(t, ok, "skipped nested row must retain the value visible before the branch")
+	require.Equal(t, []bool{true, true}, valid)
+	require.Equal(t, int64(3), rows[0].Value)
+	require.Equal(t, int64(4), rows[1].Value)
+}
+
+func TestUserVariableAssignmentSnapshotsWrappedSkippedSubtree(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.False(t, system)
+		require.False(t, global)
+		switch name {
+		case "b", "c":
+			return int64(0), nil
+		default:
+			return nil, errors.New("unexpected variable " + name)
+		}
+	})
+
+	int64Type := types.T_int64.ToType().PlanType()
+	boolType := types.T_bool.ToType().PlanType()
+	condition := &plan.Expr{Typ: boolType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}
+	one := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 1},
+	}}}
+	two := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 2},
+	}}}
+	inner := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "c", Value: one},
+	}}
+	outerSkipped := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "b", Value: inner},
+	}}
+	wrapped := bindTestFunction(t, proc, "abs", outerSkipped)
+	conditional := bindTestFunction(t, proc, "if", condition, two, wrapped)
+	assignment := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "a", Value: conditional},
+	}}
+	executor, err := NewExpressionExecutor(proc, assignment)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	input.SetRowCount(3)
+	for _, conditionValue := range []bool{true, false, true} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], conditionValue, false, proc.Mp()))
+	}
+	defer input.Clean(proc.Mp())
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result))
+
+	for _, name := range []string{"b", "c"} {
+		rows, valid, ok := proc.GetUserVariableAssignmentRows(name, 3)
+		require.True(t, ok, name)
+		require.Equal(t, []bool{true, true, true}, valid, name)
+		for row, value := range []int64{0, 1, 1} {
+			require.Equal(t, value, rows[row].Value, name)
+		}
+	}
 }
 
 func TestUserVariableAssignmentSkippedNestedRowDoesNotPublish(t *testing.T) {
