@@ -28,6 +28,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,8 +63,35 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(combined)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion117, floor)
-	expressions := []*planpb.Expr{expr, combined}
+	// The upstream SELECT-division policy is execution-only and must compose
+	// with both temporal contracts without lowering their persisted floor.
+	c.proc.SetStmtProfile(&process.StmtProfile{})
+	c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	c.proc.SetResolveVariableFunc(nil)
+	division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
+		{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		plan2.MakePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	divisionFeatures, err := planpb.RequiredRemoteExpressionFeatures(division)
+	require.NoError(t, err)
+	require.True(t, divisionFeatures.ScalarDivision)
+	require.Equal(t, defines.MORPCVersion116, executionRemoteExpressionProtocolVersion(c.proc, divisionFeatures))
+	floor, err = plan2.RequiredPersistedExpressionProtocolVersion(division)
+	require.NoError(t, err)
+	require.Zero(t, floor)
+	expressions := []*planpb.Expr{expr, combined, division}
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
+	features, err = planpb.RequiredRemoteExpressionFeatures(qry)
+	require.NoError(t, err)
+	require.True(t, features.ScalarDivision)
+	require.True(t, features.IncompleteTemporalStrings)
+	require.True(t, features.CalendarIntervalNormalization)
+	require.Equal(t, defines.MORPCVersion117, executionRemoteExpressionProtocolVersion(c.proc, features))
+	c.proc.GetSessionInfo().SqlMode = ""
+	require.Equal(t, defines.MORPCVersion117, executionRemoteExpressionProtocolVersion(c.proc, features))
+	c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = expressions
@@ -93,7 +121,8 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 117")
+	// An unknown peer can fail the earlier independent division gate first.
+	require.ErrorContains(t, err, "remote destination")
 	require.Equal(t, client.calls, client.releases)
 	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{{ProjectList: expressions}}}}}
 	data, err := p.Marshal()
@@ -106,7 +135,7 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 			if version == defines.MORPCVersion116 {
 				require.ErrorContains(t, decodeErr, "version 117")
 			} else {
-				// Unknown floors may fail the earlier calendar-v115 gate first.
+				// Unknown floors may fail an earlier independent gate first.
 				require.ErrorContains(t, decodeErr, "protocol version")
 			}
 			require.Nil(t, decoded)
