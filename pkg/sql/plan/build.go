@@ -1184,12 +1184,29 @@ func resultColumnExpressionIsComputed(
 	// defines each slot lives in GroupBy. Follow that definition before using
 	// the child projection; otherwise a computed grouping expression such as
 	// `flag IS NULL` is mistaken for the stored column it reads.
-	if node.NodeType == plan.Node_AGG && ref.RelPos < 0 && ref.ColPos >= 0 &&
+	if node.NodeType == plan.Node_AGG && ref.RelPos == -1 && ref.ColPos >= 0 &&
 		int(ref.ColPos) < len(node.GroupBy) {
 		groupExpr := node.GroupBy[ref.ColPos]
-		if groupExpr != nil && groupExpr.GetCol() == nil {
+		if groupExpr == nil {
+			return false
+		}
+		if groupExpr.GetCol() == nil {
 			return true
 		}
+		// A grouping expression can itself be a reference to a synthetic
+		// WINDOW output (for example DISTINCT MAX(...) OVER (...)).  Resolve
+		// that reference through the child plan before falling back to the
+		// aggregate's input projection.  The latter would select the stored
+		// BOOLEAN argument and lose the computed-window provenance.
+		for _, childID := range node.Children {
+			if resultColumnExpressionIsComputed(
+				query, childID, groupExpr,
+				cloneVisitedResultColumnExpressions(visited),
+			) {
+				return true
+			}
+		}
+		return false
 	}
 	// Aggregate output slots use a different negative relation position
 	// (RelPos == -2) and are defined by AggList rather than the child
@@ -1205,6 +1222,14 @@ func resultColumnExpressionIsComputed(
 	}
 
 	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
+	if node.NodeType == plan.Node_WINDOW {
+		// A reference received from a parent PROJECT addresses this node's
+		// output slot.  Prefer that local ordinal over matching the defining
+		// source ColRef: stacked WINDOW nodes can expose an earlier passthrough
+		// expression with the same source identity as a later synthetic result.
+		// Using identity first would route MAX(predicate) to that stored sibling.
+		projected, projectIndex = resultColumnWindowProjectionWithIndex(node, ref)
+	}
 	if projected != nil {
 		if projected.GetCol() == nil {
 			return true
@@ -1238,18 +1263,17 @@ func resultColumnExpressionIsComputed(
 	for _, childID := range node.Children {
 		childExpr := projected
 		child := query.Nodes[childID]
-		resolvedByIdentity := false
+		resolvedByWindowSlot := false
 		if child != nil && child.NodeType == plan.Node_WINDOW {
-			// Keep the referenced child slot's identity when descending through
-			// a projection.  Falling back to the parent ordinal can select a
-			// stored sibling (for example the input BOOLEAN at slot 0) instead
-			// of the synthetic WINDOW result at slot 1.
-			if childProjected, _ := resultColumnProjectionWithIndex(child, ref); childProjected != nil {
+			// A WINDOW child is addressed by its local output slot.  Resolving
+			// by the source identity first can select an earlier stored sibling
+			// that happens to carry the same ColRef as a later synthetic result.
+			if childProjected, _ := resultColumnWindowProjectionWithIndex(child, ref); childProjected != nil {
 				childExpr = childProjected
-				resolvedByIdentity = true
+				resolvedByWindowSlot = true
 			}
 		}
-		if child != nil && !resolvedByIdentity && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
+		if child != nil && !resolvedByWindowSlot && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
 			childExpr = child.ProjectList[projectIndex]
 		}
 		if childExpr == nil {
@@ -1345,6 +1369,21 @@ func resultColumnProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.E
 		return node.ProjectList[ref.ColPos], int(ref.ColPos)
 	}
 	return nil, -1
+}
+
+// resultColumnWindowProjectionWithIndex resolves a reference received while
+// descending into a WINDOW node.  At that boundary ColPos is the child's
+// output slot; it must not be treated as the source-column identity embedded
+// in one of the child's passthrough expressions.  Identity/name matching is
+// retained only for plans that do not carry a valid local slot.
+func resultColumnWindowProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.Expr, int) {
+	if node == nil || ref == nil {
+		return nil, -1
+	}
+	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		return node.ProjectList[ref.ColPos], int(ref.ColPos)
+	}
+	return resultColumnProjectionWithIndex(node, ref)
 }
 
 type resultColumnSource struct {

@@ -229,6 +229,7 @@ func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
 		{name: "aggregate min computed", sql: "select min(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "aggregate max computed", sql: "select max(n_nationkey is null) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "window max computed", sql: "select max(n_nationkey is null) over () as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
+		{name: "distinct window max computed", sql: "select distinct max(n_nationkey is null) over () as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "window min computed", sql: "select min(n_nationkey is null) over () as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "window max native input computed", sql: "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
 		{name: "window first computed", sql: "select first_value(n_nationkey is null) over (order by n_nationkey) as p from nation", kind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED},
@@ -258,6 +259,63 @@ func TestGetResultColumnsFromPlanPreservesStoredBooleanBesideWindowResult(t *tes
 	require.Len(t, columns, 2)
 	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED, columns[0].ResultColumnKind)
 	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[1].ResultColumnKind)
+}
+
+func TestGetResultColumnsFromPlanPreservesComputedStackedWindowResult(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"select first_value(with_grant_option) over (order by role_id), "+
+			"max(with_grant_option is null) over (), "+
+			"first_value(with_grant_option is null) over (order by role_id desc) "+
+			"from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(p)
+	require.Len(t, columns, 3)
+	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED, columns[0].ResultColumnKind)
+	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[1].ResultColumnKind)
+	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[2].ResultColumnKind)
+}
+
+func TestResultColumnWindowProjectionUsesOutputSlot(t *testing.T) {
+	boolType := planpb.Type{Id: int32(types.T_bool)}
+	stored := func(col int32, name string) *planpb.Expr {
+		return &planpb.Expr{Typ: boolType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0, ColPos: col, Name: name,
+		}}}
+	}
+	computedWindow := &planpb.Expr{Typ: boolType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+		RelPos: -1, ColPos: 2, Name: "MAX(t.flag IS NULL) OVER ()",
+	}}}
+	query := &planpb.Query{Nodes: []*planpb.Node{
+		{
+			NodeType:    planpb.Node_TABLE_SCAN,
+			ProjectList: []*planpb.Expr{stored(0, "t.flag")},
+		},
+		{
+			NodeType:    planpb.Node_WINDOW,
+			Children:    []int32{0},
+			ProjectList: []*planpb.Expr{stored(0, "t.flag"), stored(2, "FIRST_VALUE(t.flag) OVER ()"), computedWindow},
+			WinSpecList: []*planpb.Expr{{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+				WindowFunc: &planpb.Expr{Typ: boolType, Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "max"},
+					Args: []*planpb.Expr{{Typ: boolType, Expr: &planpb.Expr_F{F: &planpb.Function{
+						Func: &planpb.ObjectRef{ObjName: "isnull"}, Args: []*planpb.Expr{stored(0, "t.flag")},
+					}}}},
+				}}},
+			}}}},
+		},
+		{
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{1},
+			ProjectList: []*planpb.Expr{stored(2, "MAX(t.flag IS NULL) OVER ()")},
+		},
+	}}
+
+	// The parent reference is a local output slot.  The earlier passthrough
+	// expression deliberately carries the same source identity as that slot;
+	// resolving by identity first would select it and report STORED.
+	require.True(t, resultColumnExpressionIsComputed(query, 2, query.Nodes[2].ProjectList[0], nil))
 }
 
 func TestResultColumnWindowExpressionProvenanceGuards(t *testing.T) {

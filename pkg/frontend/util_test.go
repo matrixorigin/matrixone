@@ -2547,6 +2547,12 @@ func TestWindowBooleanResultUsesNumericWireMetadata(t *testing.T) {
 			length: 8,
 		},
 		{
+			name:   "computed predicate window under distinct",
+			sql:    "select distinct max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
 			name:   "computed min predicate window",
 			sql:    "select min(n_nationkey is null) over () as p from nation",
 			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
@@ -2603,6 +2609,33 @@ func TestWindowBooleanResultKeepsStoredBooleanSiblingWireMetadata(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
 	require.Equal(t, uint32(8), computed.Length())
+}
+
+func TestStackedWindowBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select first_value(with_grant_option) over (order by role_id), "+
+			"max(with_grant_option is null) over (), "+
+			"first_value(with_grant_option is null) over (order by role_id desc) "+
+			"from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 3)
+
+	for i, want := range []struct {
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+	} {
+		require.Equal(t, want.kind, columns[i].ResultColumnKind)
+		column, err := colDef2MysqlColumn(context.Background(), columns[i])
+		require.NoError(t, err)
+		require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+		require.Equal(t, want.length, column.Length())
+	}
 }
 
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
