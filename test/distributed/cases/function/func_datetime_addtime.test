@@ -45,3 +45,34 @@ DROP TABLE t1;
 SELECT ADDTIME(CAST('0000-00-00 00:00:00' AS DATETIME), '00:00:01') AS zero_datetime;
 SELECT ADDTIME(CAST('0000-00-00 00:00:00' AS TIMESTAMP), '00:00:01') AS zero_timestamp;
 SELECT ADDTIME('0000-00-00 00:00:00', '00:00:01') AS zero_datetime_string;
+
+# Typed TIME precision must survive DATE arithmetic (#30238).
+SELECT ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123456' AS TIME(6))) AS fractional_date,
+       MICROSECOND(ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123456' AS TIME(6)))) AS micros;
+SELECT ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.999999' AS TIME(6))) AS below_next_second,
+       MICROSECOND(ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.999999' AS TIME(6)))) AS micros;
+SELECT ADDTIME(CAST('2024-02-29' AS DATETIME(6)), CAST('00:00:00.123456' AS TIME(6))) AS datetime_control,
+       ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123' AS TIME(3))) AS milliseconds;
+SELECT ADDTIME(CAST(NULL AS DATE), CAST('00:00:00.123456' AS TIME(6))) IS NULL AS null_date,
+       ADDTIME(CAST('2024-02-29' AS DATE), CAST(NULL AS TIME(6))) IS NULL AS null_time,
+       ADDTIME(CAST('2024-02-29' AS DATE), 'invalid') IS NULL AS invalid_duration;
+
+DROP TABLE IF EXISTS addtime_date_fsp, addtime_date_fsp_result;
+CREATE TABLE addtime_date_fsp(id INT, d DATE, t TIME(6));
+INSERT INTO addtime_date_fsp VALUES
+    (1, '2024-02-29', '00:00:00.123456'),
+    (2, '2024-02-29', '00:00:00.999999'),
+    (3, '2024-02-29', '-00:00:00.000001'),
+    (4, NULL, '00:00:00.123456'),
+    (5, '2024-02-29', NULL);
+SELECT id, ADDTIME(d, t) AS added, MICROSECOND(ADDTIME(d, t)) AS micros,
+       SUBTIME(d, t) AS subtracted FROM addtime_date_fsp ORDER BY id;
+
+# Inferred materialization must retain both the values and their precision.
+CREATE TABLE addtime_date_fsp_result AS
+    SELECT id, ADDTIME(d, t) AS added, SUBTIME(d, t) AS subtracted FROM addtime_date_fsp;
+SELECT column_name, data_type, datetime_precision FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'addtime_date_fsp_result'
+      AND column_name IN ('added', 'subtracted') ORDER BY ordinal_position;
+SELECT id, added, MICROSECOND(added) AS micros, subtracted FROM addtime_date_fsp_result ORDER BY id;
+DROP TABLE addtime_date_fsp_result, addtime_date_fsp;
