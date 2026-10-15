@@ -1775,7 +1775,7 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
 	require.False(t, ok)
 
-	state.addHavingAliasExprs(clause.Exprs)
+	state.addBranchAliasExprs(clause.Exprs)
 	require.Len(t, state.innerExprs, 7)
 	require.Equal(t, "flag", state.innerExprs[4].As.Origin())
 	require.Equal(t, "status", state.innerExprs[5].As.Origin())
@@ -4835,6 +4835,50 @@ func TestModernMultiTargetGeneratedColumnChainBuildsCompleteContexts(t *testing.
 	}), "the generated-column chain must feed the physical MULTI_UPDATE")
 }
 
+func TestDeleteCascadeIndexPreservesActionRows(t *testing.T) {
+	for _, parts := range [][]string{{"deptno"}, {"deptno", "ename"}} {
+		t.Run(strings.Join(parts, "_"), func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_RESTRICT)
+			emp := mock.ctxt.tables["emp"]
+			index := emp.Indexes[1]
+			index.Parts = append(slices.Clone(parts), catalog.CreateAlias("empno"))
+			emp.Indexes = []*plan.IndexDef{index}
+
+			logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 1")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			lookups := 0
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_JOIN || len(node.Children) != 2 {
+					continue
+				}
+				for side, childID := range node.Children {
+					child := query.Nodes[childID]
+					if child.NodeType != plan.Node_TABLE_SCAN || child.TableDef.Name != index.IndexTableName {
+						continue
+					}
+					lookups++
+					// An empty action source has no hidden rows to delete. This
+					// post-createQuery branch must use local input positions.
+					require.Equal(t, plan.Node_INNER, node.JoinType)
+					require.Equal(t, 0, side)
+					require.False(t, node.IsRightJoin)
+					require.Empty(t, child.BindingTags)
+					require.Empty(t, child.RuntimeFilterProbeList)
+					require.Empty(t, node.RuntimeFilterBuildList)
+					require.NotEmpty(t, node.ProjectList)
+					for _, expr := range node.ProjectList {
+						require.NotNil(t, expr.GetCol())
+						require.Contains(t, []int32{0, 1}, expr.GetCol().RelPos)
+					}
+				}
+			}
+			require.Equal(t, 1, lookups)
+		})
+	}
+}
+
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	t.Run("ordinary child update marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
@@ -6137,12 +6181,42 @@ func TestReplaceSelfRefFKTable(t *testing.T) {
 }
 
 func TestReplaceSelfRefFKCascade(t *testing.T) {
-	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	// REPLACE on self-referencing FK table with CASCADE should NOT produce assert checks
-	sqls := []string{
-		"REPLACE INTO self_ref_cascade VALUES (1, NULL)",
+	for _, indexKind := range []string{"no_index", "secondary", "unique"} {
+		t.Run(indexKind, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			table := mock.ctxt.tables["self_ref_cascade"]
+			var index *plan.IndexDef
+			if indexKind != "no_index" {
+				// Reuse the fixture's integer index table: both the FK and PK
+				// have the same physical types as single_idx_t.
+				index = &plan.IndexDef{
+					IndexName:      "idx_parent",
+					Parts:          []string{"parent_id"},
+					Unique:         indexKind == "unique",
+					IndexTableName: mock.ctxt.tables["single_idx_t"].Indexes[0].IndexTableName,
+					TableExist:     true,
+				}
+				if !index.Unique {
+					index.Parts = append(index.Parts, catalog.CreateAlias("id"))
+				}
+				table.Indexes = []*plan.IndexDef{index}
+			}
+
+			logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref_cascade VALUES (1, NULL)")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE))
+			require.True(t, queryDeletesTable(query, table.Name))
+			for _, sql := range query.DetectSqls {
+				require.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+					"CASCADE must use the descendant action rather than a RESTRICT check")
+			}
+			if index != nil {
+				require.True(t, queryDeletesTable(query, index.IndexTableName),
+					"the recursive delete must also maintain the hidden index")
+			}
+		})
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestReplacePlanStructure(t *testing.T) {

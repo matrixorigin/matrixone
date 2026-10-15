@@ -144,6 +144,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["collation_server"] = "utf8mb4_general_ci"
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
+	vars[windowPartitionAlgorithmVariable] = "SORT"
 	vars["lower_case_table_names"] = int64(1)
 
 	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra

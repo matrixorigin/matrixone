@@ -914,35 +914,224 @@ func (b *sqlJSONPlanBuilder) sqlJSONUpdateAssignments(node *plan.Node, update *p
 	return assignments, nil
 }
 
-// resolveUpdateColumnExpr handles the positional references that survive plan
-// column pruning on a MULTI_UPDATE.  DML consumers read the row image from
-// their immediate child, whose output is a local relation (RelPos == 0), so
-// the final UpdateCtx references no longer carry the binding tag of the
-// projection that originally produced them.  Keep the binding-tag lookup as a
-// fallback for plans that retain that logical relation.
+// resolveUpdateColumnExpr follows row-image references through passthrough
+// projections in the context of each producer. Named source columns terminate
+// expansion; only anonymous output references need another lookup.
 func (b *sqlJSONPlanBuilder) resolveUpdateColumnExpr(node *plan.Node, ref *plan.ColRef) (*plan.Expr, bool) {
-	if ref == nil || ref.ColPos < 0 {
-		return nil, false
-	}
-	if node != nil && ref.RelPos == 0 && len(node.Children) > 0 {
-		child := b.resolveChild(node.Children[0])
-		if child != nil && int(ref.ColPos) < len(child.ProjectList) {
-			return child.ProjectList[ref.ColPos], true
-		}
-	}
-	return b.resolveColumnExpr(ref)
+	active := make(map[sqlJSONUpdateExprKey]bool)
+	return b.resolveUpdateRef(node, ref, active)
 }
 
-func (b *sqlJSONPlanBuilder) resolveColumnExpr(ref *plan.ColRef) (*plan.Expr, bool) {
+type sqlJSONUpdateExprKey struct {
+	node *plan.Node
+	expr *plan.Expr
+}
+
+func (b *sqlJSONPlanBuilder) resolveUpdateRef(node *plan.Node, ref *plan.ColRef, active map[sqlJSONUpdateExprKey]bool) (*plan.Expr, bool) {
 	if ref == nil || ref.ColPos < 0 {
 		return nil, false
 	}
-	for _, node := range b.bindings[ref.RelPos] {
-		if int(ref.ColPos) < len(node.ProjectList) {
-			return node.ProjectList[ref.ColPos], true
+	if node != nil {
+		switch node.NodeType {
+		case plan.Node_JOIN:
+			if node.JoinType == plan.Node_MARK && ref.RelPos == -1 {
+				if ref.ColPos != 0 || len(node.Children) != 2 ||
+					b.resolveChild(node.Children[0]) == nil || b.resolveChild(node.Children[1]) == nil {
+					return nil, false
+				}
+				predicates, ok := b.resolveUpdateExprList(node, node.OnList, active)
+				if !ok {
+					return nil, false
+				}
+				conditions := make([]string, len(predicates))
+				for i, predicate := range predicates {
+					value, err := sqlJSONExpr(b.ctx, predicate, &b.textOpts)
+					if err != nil {
+						return nil, false
+					}
+					conditions[i] = value
+				}
+				condition := "TRUE"
+				if len(conditions) > 0 {
+					condition = strings.Join(conditions, " AND ")
+				}
+				// This is the generated three-valued marker over the right input,
+				// not a scalar predicate or EXISTS. Keep outer IS TRUE/NOT wrappers.
+				return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					Name: "MARK[on: " + condition + "]",
+				}}}, true
+			}
+		case plan.Node_SINK_SCAN:
+			// Scan projections address the output of a source step, not a child.
+			if ref.RelPos == 0 {
+				if b.query == nil || len(node.SourceStep) != 1 {
+					return nil, false
+				}
+				step := node.SourceStep[0]
+				if step < 0 || int(step) >= len(b.query.Steps) {
+					return nil, false
+				}
+				source := b.resolveRoot(b.query.Steps[step])
+				if source == nil || source.NodeType != plan.Node_SINK || int(ref.ColPos) >= len(source.ProjectList) {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(source, source.ProjectList[ref.ColPos], active)
+			}
+		case plan.Node_AGG:
+			// Aggregate output slots concatenate grouping and aggregate expressions.
+			// Positional DML aggregates can use -2 for grouping slots as well.
+			if ref.RelPos == -1 || ref.RelPos == -2 {
+				pos := int(ref.ColPos)
+				if pos < len(node.GroupBy) {
+					return b.resolveUpdateExpr(node, node.GroupBy[pos], active)
+				}
+				pos -= len(node.GroupBy)
+				if pos >= len(node.AggList) {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(node, node.AggList[pos], active)
+			}
+		case plan.Node_WINDOW:
+			if ref.RelPos == -1 {
+				if len(node.Children) != 1 {
+					return nil, false
+				}
+				child := b.resolveChild(node.Children[0])
+				if child == nil {
+					return nil, false
+				}
+				if int(ref.ColPos) != len(child.ProjectList) || len(node.WinSpecList) != 1 {
+					return nil, false
+				}
+				return b.resolveUpdateExpr(node, node.WinSpecList[0], active)
+			}
+		case plan.Node_UNION, plan.Node_UNION_ALL:
+			if ref.RelPos == 0 {
+				if len(node.Children) != 2 {
+					return nil, false
+				}
+				branches := make([]string, len(node.Children))
+				for i, childID := range node.Children {
+					child := b.resolveChild(childID)
+					if child == nil || int(ref.ColPos) >= len(child.ProjectList) {
+						return nil, false
+					}
+					expr, ok := b.resolveUpdateExpr(child, child.ProjectList[ref.ColPos], active)
+					if !ok {
+						return nil, false
+					}
+					value, err := sqlJSONExpr(b.ctx, expr, &b.textOpts)
+					if err != nil {
+						return nil, false
+					}
+					branches[i] = "branch " + strconv.Itoa(i+1) + ": " + value
+				}
+				// A set output can come from either input. This named expression is
+				// display-only lineage, never substituted into the execution plan.
+				return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					Name: node.NodeType.String() + "[" + strings.Join(branches, "; ") + "]",
+				}}}, true
+			}
+		}
+	}
+	if node != nil && ref.RelPos >= 0 && int(ref.RelPos) < len(node.Children) {
+		child := b.resolveChild(node.Children[ref.RelPos])
+		if child == nil || int(ref.ColPos) >= len(child.ProjectList) {
+			return nil, false
+		}
+		return b.resolveUpdateExpr(child, child.ProjectList[ref.ColPos], active)
+	}
+	// Unpruned plans retain logical binding tags instead of local input indexes.
+	for _, producer := range b.bindings[ref.RelPos] {
+		if int(ref.ColPos) < len(producer.ProjectList) {
+			return b.resolveUpdateExpr(producer, producer.ProjectList[ref.ColPos], active)
 		}
 	}
 	return nil, false
+}
+
+func (b *sqlJSONPlanBuilder) resolveUpdateExpr(node *plan.Node, expr *plan.Expr, active map[sqlJSONUpdateExprKey]bool) (*plan.Expr, bool) {
+	key := sqlJSONUpdateExprKey{node: node, expr: expr}
+	if expr == nil || active[key] || b.ctx.Err() != nil {
+		return nil, false
+	}
+	active[key] = true
+	defer delete(active, key)
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col == nil {
+			return nil, false
+		}
+		if impl.Col.Name == "" {
+			return b.resolveUpdateRef(node, impl.Col, active)
+		}
+	case *plan.Expr_F:
+		if impl.F == nil {
+			return nil, false
+		}
+		args, ok := b.resolveUpdateExprList(node, impl.F.Args, active)
+		if !ok {
+			return nil, false
+		}
+		resolved, function := *expr, *impl.F
+		function.Args = args
+		resolved.Expr = &plan.Expr_F{F: &function}
+		return &resolved, true
+	case *plan.Expr_List:
+		if impl.List == nil {
+			return nil, false
+		}
+		args, ok := b.resolveUpdateExprList(node, impl.List.List, active)
+		if !ok {
+			return nil, false
+		}
+		resolved, list := *expr, *impl.List
+		list.List = args
+		resolved.Expr = &plan.Expr_List{List: &list}
+		return &resolved, true
+	case *plan.Expr_W:
+		if impl.W == nil || impl.W.WindowFunc == nil {
+			return nil, false
+		}
+		function, ok := b.resolveUpdateExpr(node, impl.W.WindowFunc, active)
+		if !ok {
+			return nil, false
+		}
+		partition, ok := b.resolveUpdateExprList(node, impl.W.PartitionBy, active)
+		if !ok {
+			return nil, false
+		}
+		resolved, window := *expr, *impl.W
+		window.WindowFunc, window.PartitionBy = function, partition
+		window.OrderBy = make([]*plan.OrderBySpec, len(impl.W.OrderBy))
+		for i, order := range impl.W.OrderBy {
+			if order == nil {
+				return nil, false
+			}
+			value, ok := b.resolveUpdateExpr(node, order.Expr, active)
+			if !ok {
+				return nil, false
+			}
+			copyOrder := *order
+			copyOrder.Expr = value
+			window.OrderBy[i] = &copyOrder
+		}
+		resolved.Expr = &plan.Expr_W{W: &window}
+		return &resolved, true
+	}
+	return expr, true
+}
+
+func (b *sqlJSONPlanBuilder) resolveUpdateExprList(node *plan.Node, list []*plan.Expr, active map[sqlJSONUpdateExprKey]bool) ([]*plan.Expr, bool) {
+	resolved := make([]*plan.Expr, len(list))
+	for i, expr := range list {
+		var ok bool
+		resolved[i], ok = b.resolveUpdateExpr(node, expr, active)
+		if !ok {
+			return nil, false
+		}
+	}
+	return resolved, true
 }
 
 func sqlJSONExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions) (value string, err error) {

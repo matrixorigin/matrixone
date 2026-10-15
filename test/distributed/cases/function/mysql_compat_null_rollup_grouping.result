@@ -45,4 +45,32 @@ NULL    0    ROLLUP    1    2    2    30
 west    0    tea    0    1    1    3
 west    0    ROLLUP    1    1    1    3
 ROLLUP    1    ROLLUP    1    6    5    45
+select r, p, gr, gp, c, s
+from (
+select region as r, product as p, grouping(region) as gr,
+grouping(product) as gp, count(*) as c, sum(amount) as s
+from t_rollup
+group by r, p with rollup
+) q
+order by gr, r, gp, p;
+r    p    gr    gp    c    s
+null    tea    0    0    2    30
+null    null    0    1    2    30
+east    null    0    0    1    5
+east    coffee    0    0    1    7
+east    tea    0    0    1    null
+east    null    0    1    3    12
+west    tea    0    0    1    3
+west    null    0    1    1    3
+null    null    1    1    6    45
+select region as r, sum(amount) as s,
+row_number() over (order by sum(amount) desc) as rn
+from t_rollup
+group by r with rollup
+order by s desc;
+r    s    rn
+null    45    1
+null    30    2
+east    12    3
+west    3    4
 drop database mysql_compat_null_rollup_grouping;

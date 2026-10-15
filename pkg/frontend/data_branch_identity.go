@@ -70,8 +70,8 @@ func prepareLogicalRestoreDatabase(
 	definition logicalRestoreDatabaseDefinition,
 	protocolVersion int64,
 ) (context.Context, error) {
-	if definition.defaults != nil && definition.defaults.Version != 0 && protocolVersion < defines.MORPCVersion113 {
-		return nil, moerr.NewNotSupportedf(ctx, "restoring database defaults for '%s' requires MORPC protocol version %d", dbName, defines.MORPCVersion113)
+	if definition.defaults != nil && definition.defaults.Version != 0 && protocolVersion < defines.MORPCVersion114 {
+		return nil, moerr.NewNotSupportedf(ctx, "restoring database defaults for '%s' requires MORPC protocol version %d", dbName, defines.MORPCVersion114)
 	}
 
 	if definition.databaseType != catalog.SystemDBTypeDataBranch {

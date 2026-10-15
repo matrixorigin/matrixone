@@ -105,6 +105,33 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 	if !ok {
 		return moerr.NewInternalError(ctx.GetContext(), "invalid character set conversion schema")
 	}
+	// Select replay against the complete destination schema, not a partially
+	// converted prefix. Only expressions whose inputs keep their value domain
+	// may retain their persisted binding.
+	source := DeepCopyTableDef(alter.CopyTableDef, true)
+	target := DeepCopyTableDef(source, true)
+	for _, definition := range create.Defs {
+		column, ok := definition.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		old := FindColumn(target.Cols, column.Name.ColName())
+		if old == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "missing character set conversion column")
+		}
+		switch types.T(old.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			column.Attributes = append(column.Attributes,
+				tree.NewAttributeCharset(conversion.CharacterSet),
+				tree.NewAttributeCollate(conversion.Collation))
+			old.Typ, err = getColumnTypeFromAst(ctx.GetContext(), column, target.DefaultCharset, nil)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	replay := ddlReplayForTable(WithPersistedDDLReplay(ctx.GetContext(), alter.CopyTableDef, target), target.Name)
+	conversionCtx := &charsetConversionCompilerContext{CompilerContext: ctx, replay: replay, source: source}
 	for _, definition := range create.Defs {
 		column, ok := definition.(*tree.ColumnTableDef)
 		if !ok {
@@ -121,10 +148,7 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 			continue
 		}
 		oldID := old.ColId
-		column.Attributes = append(column.Attributes,
-			tree.NewAttributeCharset(conversion.CharacterSet),
-			tree.NewAttributeCollate(conversion.Collation))
-		if _, err = ModifyColumn(ctx, alter, &tree.AlterTableModifyColumnClause{NewColumn: column}, state); err != nil {
+		if _, err = ModifyColumn(conversionCtx, alter, &tree.AlterTableModifyColumnClause{NewColumn: column}, state); err != nil {
 			return err
 		}
 		if _, exists := state.changColDefMap[oldID]; exists {

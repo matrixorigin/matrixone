@@ -1,0 +1,25 @@
+drop table if exists li_p1;
+create table li_p1(pk int primary key, `__mo_fake_pk_col` bigint unsigned auto_increment unique key);
+insert into li_p1(pk) values(10);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select pk, `__mo_fake_pk_col` from li_p1 order by pk;
+➤ pk[4,32,0]  ¦  __mo_fake_pk_col[-5,64,0]  𝄀
+10  ¦  1
+drop table if exists li_p2;
+create table li_p2(id bigint auto_increment, v int, unique key uk(id));
+insert into li_p2(v) values(1);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+insert into li_p2(id,v) values(100,2);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select id, v from li_p2 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+100  ¦  2
+drop table if exists li_p1;
+drop table if exists li_p2;

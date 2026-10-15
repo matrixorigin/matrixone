@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-14，冻结main `fcad62a8ff`）：保留main有符号WEEK/DAYOFYEAR协议 **112**，C03协议能力顺延 **113**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
+当前维护编号（2026-10-15，冻结main `17a6200f59`）：保留main有符号WEEK/DAYOFYEAR协议 **112**、DECIMAL variance/stddev DOUBLE协议 **113**，C03协议能力顺延 **114**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -264,3 +264,12 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - PB/parser均正常生成。普通make因时间戳跳过parser的本地编译红证据保留；最终仓库make -B强制双次生成并核对一致哈希及无冲突标记。完整descriptor对比新main只增加批准DatabaseDefaults与5/3/18，上游RankOption.nprobe2与全部其余类型/编号/reserved/options/enum原样保留。
 - 逐项协调main的live-source COPY宽度/replay、view admission、LOAD NULLIF重绑定、共享CTE/set-operation ordinal/effect保护、OP_TYPE引用及procedure gate、subscription标识符/ADD列表/RESTORE拒绝规则。复用既有owner，不新增本轮生产state/cache/worker/锁序/retry；原C03严格赋值、生成列内层CAST、默认版本新鲜度与恢复身份边界不变。
 - 新鲜11 owner、10实际SQL、14包静态、严格609/756=80.56%、23完整public同实例双轮通过；历史race/restart/upgrade/GPU范围不扩张，精确成功与失败见验证文档。本地通过不推断远端Linux CI绿色。
+
+## 2026-10-15 生成表达式评审修复与main协议协调（冻结17a6200f59）
+
+- main已占用113作为DECIMAL variance/stddev DOUBLE合同。保持该合同及全部消费者，未发布C03顺延至114：初始化、DDL authoring/loader、逻辑恢复和4.0.15升级门禁同步迁移；新增main113前驱拒绝及114/113混部写入前拒绝。独立迁移版本、最小版本/偏移、PB字段18和函数598不变。
+- 评审反例：精度10创建DECIMAL除法→VARCHAR STORED，插入后把会话精度改为0，再同域CONVERT，旧值从0.333333333333变成0.33。变化原因是MODIFY重新绑定持久化表达式，不是字符域转换本身；不允许用该次会话设置重新创作未受影响的计算。
+- CONVERT先构建完整目的类型骨架，再复用既有typed replay的输入域兼容性判定。可保留的DEFAULT、ON UPDATE和生成表达式从原始列位置快照复制；不是从重建SQL或可变会话推导。转换专用CompilerContext只在同步规划调用内存活，并转发已有内部SQL executor；普通显式MODIFY仍按其声明和当前会话绑定，输入域确实变化的表达式仍走原绑定路径。
+- 同域表达式原样保留；换域只重定向根字符串cast_strict赋值owner，绝不剥离作者plain CAST。若原来没有赋值owner则增加一层，之后复用该owner；往返转换不线性堆积持久化CAST。COPY重建阶段必须证明目标表达式与这一精确typed变换相等，才允许replay；改变的表达式或不兼容依赖不会被SQL文本等价误判。
+- 保留MODIFY原有类型、FK、索引、生成列环检测、约束、nullability和严格赋值检查，以及COPY的事务、索引重建、发布与失败清理。新状态只包含当前调用内的schema/表达式副本，不增加生产缓存、goroutine、锁、等待或重试。
+- 公共SQL正反例检查已有行和之后插入行，并保留未改会话、普通COPY控制；typed检查同域/legacy/native域、DEFAULT/ON UPDATE、作者CAST、schema不可变及多次往返深度。正常合并两个冲突；pipeline/parser由owner生成两次一致，完整pipeline descriptor与main相同，plan descriptor仅含批准的defaults增量。最终资格见验证文档，历史证据不扩张。

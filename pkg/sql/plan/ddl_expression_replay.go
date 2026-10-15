@@ -153,6 +153,27 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		return copy
 	}
+	// CONVERT may add a destination assignment around an otherwise unchanged
+	// typed expression. Prove that exact transformation before preserving it;
+	// changed dependencies or newly authored SQL still take the ordinary binder.
+	copyAssignment := func(source, target *planpb.Expr, typ planpb.Type) *planpb.Expr {
+		raw := copyExpr(source, rawPositions)
+		if raw == nil {
+			return nil
+		}
+		if proto.Equal(raw, target) {
+			return copyExpr(source, visiblePositions)
+		}
+		converted, err := convertedPersistedAssignment(ctx, raw, typ)
+		if err != nil || !proto.Equal(converted, target) {
+			return nil
+		}
+		visible, err := convertedPersistedAssignment(ctx, copyExpr(source, visiblePositions), typ)
+		if err != nil {
+			return nil
+		}
+		return visible
+	}
 	for _, oldCol := range original.Cols {
 		if oldCol == nil {
 			continue
@@ -166,24 +187,24 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
 		if oldCol.Default != nil && newCol.Default != nil {
-			expr := copyExpr(oldCol.Default.Expr, rawPositions)
+			expr := copyAssignment(oldCol.Default.Expr, newCol.Default.Expr, newCol.Typ)
 			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&
 				proto.Equal(&oldCol.Typ, &newCol.Typ) && proto.Equal(oldCol.Default, newCol.Default)
-			if unchangedAbsentDefault || expr != nil && proto.Equal(expr, newCol.Default.Expr) {
+			if unchangedAbsentDefault || expr != nil {
 				entry.defaultExpr = proto.Clone(newCol.Default).(*planpb.Default)
-				entry.defaultExpr.Expr = copyExpr(oldCol.Default.Expr, visiblePositions)
+				entry.defaultExpr.Expr = expr
 			}
 		}
 		if oldCol.OnUpdate != nil && oldCol.OnUpdate.Expr != nil && newCol.OnUpdate != nil {
-			if expr := copyExpr(oldCol.OnUpdate.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.OnUpdate.Expr) {
+			if expr := copyAssignment(oldCol.OnUpdate.Expr, newCol.OnUpdate.Expr, newCol.Typ); expr != nil {
 				entry.onUpdate = proto.Clone(newCol.OnUpdate).(*planpb.OnUpdate)
-				entry.onUpdate.Expr = copyExpr(oldCol.OnUpdate.Expr, visiblePositions)
+				entry.onUpdate.Expr = expr
 			}
 		}
 		if oldCol.GeneratedCol != nil && oldCol.GeneratedCol.Expr != nil && newCol.GeneratedCol != nil {
-			if expr := copyExpr(oldCol.GeneratedCol.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.GeneratedCol.Expr) {
+			if expr := copyAssignment(oldCol.GeneratedCol.Expr, newCol.GeneratedCol.Expr, newCol.Typ); expr != nil {
 				entry.generated = proto.Clone(newCol.GeneratedCol).(*planpb.GeneratedCol)
-				entry.generated.Expr = copyExpr(oldCol.GeneratedCol.Expr, visiblePositions)
+				entry.generated.Expr = expr
 			}
 		}
 		replay.columns[strings.ToLower(newCol.Name)] = entry
