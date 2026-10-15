@@ -726,3 +726,103 @@ func TestBitOpsBlobPreflightValidation(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkBitOpsAccountedPreflight measures steady-state batches with an
+// initialized destination, where preflight should not reserve more capacity.
+func BenchmarkBitOpsAccountedPreflight(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		width int
+	}{
+		{"binary-1", types.New(types.T_binary, 1, 0), 1},
+		{"binary-64", types.New(types.T_binary, 64, 0), 64},
+		{"binary-511", types.New(types.T_binary, 511, 0), 511},
+		{"varbinary-64", types.New(types.T_varbinary, 64, 0), 64},
+		{"blob-64", types.T_blob.ToType(), 64},
+		{"uint64", types.T_uint64.ToType(), 0},
+	} {
+		for _, merge := range []bool{false, true} {
+			path := "fill"
+			if merge {
+				path = "merge"
+			}
+			b.Run(tc.name+"/"+path, func(b *testing.B) {
+				const rows = 256
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
+				registry, account, allocation := newTestAggregateAllocation(b)
+				b.Cleanup(func() { finishTestAggregateAllocation(b, registry, account) })
+				input := vector.NewVec(tc.typ)
+				b.Cleanup(func() { input.Free(mp) })
+				value := bytes.Repeat([]byte{0xA5}, tc.width)
+				groups := make([]uint64, rows)
+				sourceGroups := make([]uint64, rows)
+				for row := range groups {
+					groups[row] = 1
+					sourceGroups[row] = uint64(row + 1)
+					if tc.width == 0 {
+						require.NoError(b, vector.AppendFixed(input, uint64(0xA5), false, mp))
+					} else {
+						require.NoError(b, vector.AppendBytes(input, value, false, mp))
+					}
+				}
+				vectors := []*vector.Vector{input}
+				newExec := func(groupCount int) AggFuncExec {
+					exec := makeBitAggExec(mp, AggIdOfBitOr, tc.typ)
+					owner := exec.(AllocationAccountOwner)
+					require.NoError(b, owner.SetAllocationAccount(allocation))
+					b.Cleanup(func() {
+						exec.Free()
+						require.NoError(b, owner.ClearAllocationAccount(allocation))
+					})
+					require.NoError(b, exec.GroupGrow(groupCount))
+					return exec
+				}
+				target := newExec(1)
+				preflight := target.(BatchCapacityPreflight)
+				require.NoError(b, preflight.PreflightBatchFill(0, groups, vectors))
+				require.NoError(b, target.BatchFill(0, groups, vectors))
+				var source AggFuncExec
+				if merge {
+					source = newExec(rows)
+					require.NoError(b, source.(BatchCapacityPreflight).PreflightBatchFill(0, sourceGroups, vectors))
+					require.NoError(b, source.BatchFill(0, sourceGroups, vectors))
+				}
+				used := account.Snapshot().Used
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if merge {
+						if err := preflight.PreflightBatchMerge(source, 0, groups); err != nil {
+							b.Fatal(err)
+						}
+						if err := target.BatchMerge(source, 0, groups); err != nil {
+							b.Fatal(err)
+						}
+					} else {
+						if err := preflight.PreflightBatchFill(0, groups, vectors); err != nil {
+							b.Fatal(err)
+						}
+						if err := target.BatchFill(0, groups, vectors); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				b.StopTimer()
+				require.Equal(b, used, account.Snapshot().Used)
+				result, err := target.Flush()
+				require.NoError(b, err)
+				for _, vec := range result {
+					b.Cleanup(func() { vec.Free(mp) })
+				}
+				require.Len(b, result, 1)
+				if tc.width == 0 {
+					require.Equal(b, uint64(0xA5), vector.MustFixedColNoTypeCheck[uint64](result[0])[0])
+				} else {
+					require.Equal(b, value, result[0].GetBytesAt(0))
+				}
+			})
+		}
+	}
+}
