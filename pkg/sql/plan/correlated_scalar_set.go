@@ -69,27 +69,20 @@ func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
 	fail := func() (int32, *plan.Expr, error) {
 		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated scalar UNION requires preserved outer row identity")
 	}
-	if len(ctx.bindings) != 1 || len(subCtx.results) != 1 || subquery.Child != nil {
+	if len(subCtx.results) != 1 || subquery.Child != nil {
 		return fail()
 	}
-	binding := ctx.bindings[0]
-	rowID := builder.findPreservedOuterRowIDColRef(outerID)
-	if rowID == nil || rowID.GetCol() == nil || rowID.GetCol().RelPos != binding.tag {
-		return fail()
-	}
-	outputs, ok := builder.collectScalarOuterOutputs(outerID, binding.tag, int32(len(binding.cols)), ctx)
+	// Collect only the current stream's output boundary. A derived relation or
+	// a join need not expose a base Row_ID, and one base Row_ID need not identify
+	// every occurrence in a join or UNION ALL result.
+	outputs, ok := builder.collectScalarOuterOutputs(outerID, -1, 0, ctx)
 	if !ok {
 		return fail()
 	}
-	outerGroups := make([]*plan.Expr, len(binding.cols))
-	for i := range binding.cols {
-		outerGroups[i] = GetColExpr(*binding.types[i], binding.tag, int32(i))
-	}
+	groupTag := builder.genNewBindTag()
+	outerGroups := make([]*plan.Expr, 0, len(outputs)+1)
 	var aliases []scalarReaggAlias
 	for _, output := range outputs {
-		if output.ref[0] == binding.tag && output.ref[1] < int32(len(binding.cols)) {
-			continue
-		}
 		pos := int32(len(outerGroups))
 		outerGroups = append(outerGroups, GetColExpr(output.typ, output.ref[0], output.ref[1]))
 		aliases = append(aliases, scalarReaggAlias{ref: output.ref, groupPos: pos})
@@ -97,6 +90,24 @@ func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
 			aliases = append(aliases, scalarReaggAlias{ref: ref, groupPos: pos})
 		}
 	}
+	// An unpartitioned WINDOW merges its input scopes and numbers the complete
+	// current stream once. Number after DISTINCT/JOIN/projection, before the
+	// candidate join, so equal outer values and join-expanded rows stay separate.
+	rowNumber, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	identityTag := builder.genNewBindTag()
+	identity := &plan.Expr{Typ: rowNumber.Typ, Expr: &plan.Expr_W{W: &plan.WindowSpec{
+		WindowFunc: rowNumber, Name: "row_number",
+		Frame: &plan.FrameClause{Type: plan.FrameClause_ROWS,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+			End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true}},
+	}}}
+	outerID = builder.appendNode(&plan.Node{NodeType: plan.Node_WINDOW, Children: []int32{outerID},
+		BindingTags: []int32{identityTag}, WinSpecList: []*plan.Expr{identity}, SpillMem: builder.sortSpillMem}, ctx)
+	identityPos := int32(len(outerGroups))
+	outerGroups = append(outerGroups, GetColExpr(rowNumber.Typ, identityTag, 0))
 	// A separate marker distinguishes an empty match from one real NULL member.
 	root := builder.qry.Nodes[subID]
 	if len(root.BindingTags) != 1 || len(root.ProjectList) == 0 {
@@ -141,23 +152,23 @@ func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
 	// Only identity, match presence and the visible set key determine membership.
 	// Hidden correlation slots never become set keys. Other group columns retain
 	// their original representatives, including the visible negative-zero bits.
-	first := builder.appendNode(&plan.Node{NodeType: plan.Node_AGG, Children: []int32{joined}, BindingTags: []int32{binding.tag, builder.genNewBindTag()}, GroupBy: groups,
-		GroupByHashKey: []int32{rowID.GetCol().ColPos, memberMarker, memberKey}, SpillMem: builder.aggSpillMem}, ctx)
-	count, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "count", []*plan.Expr{GetColExpr(marker.Typ, binding.tag, memberMarker)})
+	first := builder.appendNode(&plan.Node{NodeType: plan.Node_AGG, Children: []int32{joined}, BindingTags: []int32{groupTag, builder.genNewBindTag()}, GroupBy: groups,
+		GroupByHashKey: []int32{identityPos, memberMarker, memberKey}, SpillMem: builder.aggSpillMem}, ctx)
+	count, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "count", []*plan.Expr{GetColExpr(marker.Typ, groupTag, memberMarker)})
 	if err != nil {
 		return 0, nil, err
 	}
-	representative, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*plan.Expr{GetColExpr(value.Typ, binding.tag, memberValue)})
+	representative, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*plan.Expr{GetColExpr(value.Typ, groupTag, memberValue)})
 	if err != nil {
 		return 0, nil, err
 	}
 	aggTag := builder.genNewBindTag()
 	secondGroups := make([]*plan.Expr, len(outerGroups))
 	for i, expr := range outerGroups {
-		secondGroups[i] = GetColExpr(expr.Typ, binding.tag, int32(i))
+		secondGroups[i] = GetColExpr(expr.Typ, groupTag, int32(i))
 	}
-	second := builder.appendNode(&plan.Node{NodeType: plan.Node_AGG, Children: []int32{first}, BindingTags: []int32{binding.tag, aggTag}, GroupBy: secondGroups,
-		GroupByHashKey: []int32{rowID.GetCol().ColPos}, AggList: []*plan.Expr{count, representative}, SpillMem: builder.aggSpillMem}, ctx)
+	second := builder.appendNode(&plan.Node{NodeType: plan.Node_AGG, Children: []int32{first}, BindingTags: []int32{groupTag, aggTag}, GroupBy: secondGroups,
+		GroupByHashKey: []int32{identityPos}, AggList: []*plan.Expr{count, representative}, SpillMem: builder.aggSpillMem}, ctx)
 	if builder.scalarReaggAliases == nil {
 		builder.scalarReaggAliases = make(map[int32][]scalarReaggAlias)
 	}

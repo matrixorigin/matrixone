@@ -176,6 +176,30 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	replaceColumnsForNode(node, projMap)
+	// Synthetic reaggregations expose original logical output identities as
+	// aliases. Projection removal rewrites their consumers too; retain the
+	// corresponding column alias so demand/pruning sees the same identity.
+	if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+		// Consecutive synthetic AGGs may initially share their alias list.
+		// Each node's rewritten aliases must own its appended storage.
+		aliases = append([]scalarReaggAlias(nil), aliases...)
+		seen := make(map[scalarReaggAlias]bool, len(aliases))
+		for _, alias := range aliases {
+			seen[alias] = true
+		}
+		for _, alias := range aliases {
+			if expr := projMap[alias.ref]; expr != nil && expr.GetCol() != nil {
+				col := expr.GetCol()
+				next := scalarReaggAlias{ref: [2]int32{col.RelPos, col.ColPos}, groupPos: alias.groupPos}
+				if !seen[next] {
+					aliases = append(aliases, next)
+					seen[next] = true
+				}
+			}
+		}
+		builder.scalarReaggAliases[nodeID] = aliases
+	}
+
 	if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
 		// Correlated function arguments consume the left sibling's output,
 		// rather than the function node's own children.

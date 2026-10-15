@@ -3487,7 +3487,26 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 				return false
 			}
 			groupCount := len(node.GroupBy)
-			if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic {
+			if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic && outerTag < 0 {
+				// The scalar set path gives each stream a fresh identity. Preserve
+				// actual group outputs and their logical aliases without assuming
+				// that a base-table binding owns the first group columns.
+				for i, expr := range node.GroupBy {
+					var refs [][2]int32
+					for _, alias := range aliases {
+						if alias.groupPos == int32(i) {
+							refs = append(refs, alias.ref)
+						}
+					}
+					ref := [2]int32{node.BindingTags[0], int32(i)}
+					if len(refs) > 0 {
+						// JOIN/WINDOW forward the selected logical alias. Use that
+						// same identity when a later scalar consumes this output.
+						ref, refs = refs[0], append(refs[1:], ref)
+					}
+					add(ref, expr.Typ, refs...)
+				}
+			} else if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic {
 				if node.BindingTags[0] != outerTag || groupCount < int(baseCols) {
 					return false
 				}
@@ -3517,6 +3536,8 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 			switch node.JoinType {
 			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_INNER:
 				return visit(node.Children[1])
+			case plan.Node_RIGHT, plan.Node_OUTER:
+				return outerTag < 0 && visit(node.Children[1])
 			case plan.Node_SEMI, plan.Node_ANTI:
 				return true
 			case plan.Node_MARK:
@@ -3531,6 +3552,24 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 			default:
 				return false
 			}
+		case plan.Node_WINDOW:
+			if outerTag >= 0 || len(node.Children) != 1 || len(node.BindingTags) != 1 || !visit(node.Children[0]) {
+				return false
+			}
+			for i, expr := range node.WinSpecList {
+				add([2]int32{node.BindingTags[0], node.WindowIdx + int32(i)}, expr.Typ)
+			}
+			return true
+		case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
+			if outerTag >= 0 || len(node.BindingTags) != 1 {
+				return false
+			}
+			for i, expr := range node.ProjectList {
+				add([2]int32{node.BindingTags[0], int32(i)}, expr.Typ)
+			}
+			return true
+		case plan.Node_DISTINCT, plan.Node_PARTITION:
+			return outerTag < 0 && len(node.Children) == 1 && visit(node.Children[0])
 		case plan.Node_FILTER, plan.Node_SORT:
 			return len(node.Children) == 1 && visit(node.Children[0])
 		default:
