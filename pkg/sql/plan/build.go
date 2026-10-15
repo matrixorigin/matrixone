@@ -1166,6 +1166,19 @@ func resultColumnExpressionIsComputed(
 		return false
 	}
 
+	// DISTINCT is represented by an AGG node. Its output projection contains
+	// grouping-slot references (RelPos == -1), while the expression that
+	// defines each slot lives in GroupBy. Follow that definition before using
+	// the child projection; otherwise a computed grouping expression such as
+	// `flag IS NULL` is mistaken for the stored column it reads.
+	if node.NodeType == plan.Node_AGG && ref.RelPos < 0 && ref.ColPos >= 0 &&
+		int(ref.ColPos) < len(node.GroupBy) {
+		groupExpr := node.GroupBy[ref.ColPos]
+		if groupExpr != nil && groupExpr.GetCol() == nil {
+			return true
+		}
+	}
+
 	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
 	if projected != nil {
 		if projected.GetCol() == nil {
