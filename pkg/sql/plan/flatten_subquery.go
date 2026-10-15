@@ -4464,7 +4464,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		if existenceOnly {
 			width := len(left.ProjectList) - pos
 			if width < 0 || len(right.ProjectList) != pos+width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
-				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching branch schemas")
+				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
 			}
 			for i := range width {
 				if !isSameColumnType(left.ProjectList[pos+i].Typ, right.ProjectList[pos+i].Typ) {

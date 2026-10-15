@@ -195,6 +195,12 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, []string{"3", "4"}, readWindowNullRows(t, rows))
 			})
 
+			t.Run("missing-arm-identity-diagnostic", func(t *testing.T) {
+				q := "select o.id from ci_outer o where exists (with q(n) as (select o.oref) select n from q union all select 7) and o.id=2"
+				_, err := conn.ExecContext(ctx, q)
+				require.EqualError(t, err, "Error 20102 (HY000): correlated local CTE: UNION ALL without matching row identities is not yet implemented")
+			})
+
 			t.Run("existential-predicate-templates", func(t *testing.T) {
 				for _, q := range []string{
 					"create table predicate_inner(a int,b int,f double)",
