@@ -15,7 +15,9 @@
 package group
 
 import (
+	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -148,6 +150,237 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 	}
 }
 
+// Each operation is a cohort of four independent queries. Both alternatives
+// include the same derived ORDER BY and drain all finalized groups. Validate
+// their results before timing; no wall-clock threshold belongs in a unit test.
+func BenchmarkRollupConcurrentAlgorithms(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		ndv  int
+	}{
+		{name: "low_ndv", ndv: 4},
+		{name: "admitted_edge", ndv: 2500},
+		{name: "concurrent_regression", ndv: 5800},
+	} {
+		for _, algorithm := range []struct {
+			name string
+			run  func(*rollupBenchmarkRunner) (int64, error)
+		}{
+			{name: "hash-shared", run: (*rollupBenchmarkRunner).runHashShared},
+			{name: "sort", run: (*rollupBenchmarkRunner).runSort},
+		} {
+			b.Run(tc.name+"/"+algorithm.name, func(b *testing.B) {
+				runners, err := newRollupBenchmarkCohort(b, 100000, tc.ndv)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := checkRollupBenchmarkCohort(runners, algorithm.run); err != nil {
+					b.Fatal(err)
+				}
+				// Exclude discarded oracle scratch from measured GC pressure.
+				runtime.GC()
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := runRollupBenchmarkCohort(runners, algorithm.run); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				runtime.ReadMemStats(&after)
+				b.ReportMetric(4, "queries/cohort")
+				b.ReportMetric(float64(after.NumGC-before.NumGC)/float64(b.N), "GCs/cohort")
+			})
+		}
+	}
+}
+
+func newRollupBenchmarkCohort(t testing.TB, rows, ndv int) ([]*rollupBenchmarkRunner, error) {
+	runners := make([]*rollupBenchmarkRunner, 0, 4)
+	for i := 0; i < 4; i++ {
+		runner, err := newRollupBenchmarkRunner(t, rows, ndv, []int{1, 1, ndv}, 3, false, true, "count")
+		if err != nil {
+			return nil, err
+		}
+		// Registered after the process owners, so bases are freed before their
+		// pools on success, partial construction failure, or Fatal.
+		t.Cleanup(runner.free)
+		// This cohort uses only the one-scan alternatives. Drop the unused
+		// legacy branch batches so they do not inflate the live GC heap.
+		for _, input := range runner.inputs[1:] {
+			input.base.Clean(input.proc.Mp())
+			input.base = nil
+		}
+		runners = append(runners, runner)
+	}
+	return runners, nil
+}
+
+func runRollupBenchmarkCohort(
+	runners []*rollupBenchmarkRunner,
+	run func(*rollupBenchmarkRunner) (int64, error),
+) error {
+	start := make(chan struct{})
+	errs := make([]error, len(runners))
+	var ready, done sync.WaitGroup
+	ready.Add(len(runners))
+	done.Add(len(runners))
+	for i, runner := range runners {
+		go func(i int, runner *rollupBenchmarkRunner) {
+			defer done.Done()
+			ready.Done()
+			<-start
+			_, errs[i] = run(runner)
+		}(i, runner)
+	}
+	ready.Wait()
+	close(start)
+	done.Wait() // Join all owners before reporting an error or reclaiming bases.
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type rollupBenchmarkCountKey struct {
+	prefix int
+	keys   [3]int32
+}
+
+// Build expectations directly from source rows and SQL prefix semantics,
+// independently of either aggregate implementation and its grouping codec.
+func rollupBenchmarkCountOracle(base *batch.Batch) (func(*batch.Batch) error, func() error) {
+	expected := make(map[rollupBenchmarkCountKey]int64)
+	var values [3][]int32
+	for i := range values {
+		values[i] = vector.MustFixedColWithTypeCheck[int32](base.Vecs[i])
+	}
+	for row := 0; row < base.RowCount(); row++ {
+		for prefix := 0; prefix <= 3; prefix++ {
+			key := rollupBenchmarkCountKey{prefix: prefix}
+			for i := 0; i < prefix; i++ {
+				key.keys[i] = values[i][row]
+			}
+			expected[key]++
+		}
+	}
+	seen := make(map[rollupBenchmarkCountKey]bool, len(expected))
+	observe := func(out *batch.Batch) error {
+		if len(out.Vecs) != 4 && len(out.Vecs) != 5 {
+			return fmt.Errorf("unexpected ROLLUP output width: %d", len(out.Vecs))
+		}
+		counts := vector.MustFixedColWithTypeCheck[int64](out.Vecs[len(out.Vecs)-1])
+		var keys [3][]int32
+		for i := range keys {
+			keys[i] = vector.MustFixedColWithTypeCheck[int32](out.Vecs[i])
+		}
+		for row := 0; row < out.RowCount(); row++ {
+			key := rollupBenchmarkCountKey{prefix: 3}
+			for i := range keys {
+				rolled := out.Vecs[i].GetGrouping().Contains(uint64(row))
+				if rolled != out.Vecs[i].GetNulls().Contains(uint64(row)) {
+					return fmt.Errorf("wrong grouping/NULL provenance at key %d", i)
+				}
+				if rolled {
+					if key.prefix == 3 {
+						key.prefix = i
+					}
+				} else {
+					if key.prefix != 3 {
+						return fmt.Errorf("non-prefix ROLLUP grouping flags")
+					}
+					key.keys[i] = keys[i][row]
+				}
+			}
+			want, ok := expected[key]
+			if !ok || seen[key] || counts[row] != want {
+				return fmt.Errorf("wrong or duplicate ROLLUP row %v: count=%d want=%d", key, counts[row], want)
+			}
+			seen[key] = true
+		}
+		return nil
+	}
+	return observe, func() error {
+		if len(seen) != len(expected) {
+			return fmt.Errorf("ROLLUP returned %d groups, want %d", len(seen), len(expected))
+		}
+		return nil
+	}
+}
+
+func checkRollupBenchmarkCohort(
+	runners []*rollupBenchmarkRunner,
+	run func(*rollupBenchmarkRunner) (int64, error),
+) error {
+	defer func() {
+		for _, runner := range runners {
+			runner.observe = nil
+		}
+	}()
+	complete := make([]func() error, len(runners))
+	for i, runner := range runners {
+		runner.observe, complete[i] = rollupBenchmarkCountOracle(runner.inputs[0].base)
+	}
+	if err := runRollupBenchmarkCohort(runners, run); err != nil {
+		return err
+	}
+	for _, finish := range complete {
+		if err := finish(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestRollupConcurrentBenchmarkCohort(t *testing.T) {
+	for _, algorithm := range []struct {
+		name string
+		run  func(*rollupBenchmarkRunner) (int64, error)
+	}{
+		{name: "sort", run: (*rollupBenchmarkRunner).runSort},
+		{name: "hash-shared", run: (*rollupBenchmarkRunner).runHashShared},
+	} {
+		t.Run(algorithm.name, func(t *testing.T) {
+			runners, err := newRollupBenchmarkCohort(t, 2, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseline := make([]int64, len(runners))
+			for i, runner := range runners {
+				baseline[i] = runner.inputs[0].proc.Mp().CurrNB()
+			}
+			checkMemory := func() {
+				t.Helper()
+				for i, runner := range runners {
+					if got := runner.inputs[0].proc.Mp().CurrNB(); got != baseline[i] {
+						t.Fatalf("worker %d retained %d bytes; baseline %d", i, got, baseline[i])
+					}
+				}
+			}
+			if err := checkRollupBenchmarkCohort(runners, algorithm.run); err != nil {
+				t.Fatal(err)
+			}
+			checkMemory()
+			injected := errors.New("injected result observer failure")
+			for _, runner := range runners {
+				runner.observe = func(*batch.Batch) error { return injected }
+			}
+			if err := runRollupBenchmarkCohort(runners, algorithm.run); !errors.Is(err, injected) {
+				t.Fatalf("observer error lost: %v", err)
+			}
+			checkMemory()
+			if err := checkRollupBenchmarkCohort(runners, algorithm.run); err != nil {
+				t.Fatal(err)
+			}
+			checkMemory()
+		})
+	}
+}
+
 type rollupBenchmarkRunner struct {
 	inputs       []*rollupBenchmarkInput
 	groupBy      [][]*plan.Expr
@@ -156,6 +389,7 @@ type rollupBenchmarkRunner struct {
 	derivedOrder bool
 	aggregate    string
 	aggs         []aggexec.AggFuncExecExpression
+	observe      func(*batch.Batch) error
 }
 
 type rollupBenchmarkInput struct {
@@ -362,8 +596,8 @@ func (runner *rollupBenchmarkRunner) runSort() (int64, error) {
 		child.Free(source.proc, true, err)
 		return 0, err
 	}
-	peak, err := drainRollupBenchmarkOp(
-		group, source.proc, source.proc.Mp().CurrNB(), group.ctr.mp)
+	peak, err := drainRollupBenchmarkOpWithObserver(
+		group, source.proc, source.proc.Mp().CurrNB(), runner.observe, group.ctr.mp)
 	group.Free(source.proc, err != nil, err)
 	if order != nil {
 		order.Free(source.proc, err != nil, err)
@@ -456,8 +690,8 @@ func (runner *rollupBenchmarkRunner) runHashShared() (int64, error) {
 		child.Free(source.proc, true, err)
 		return 0, err
 	}
-	peak, err := drainRollupBenchmarkOp(
-		group, source.proc, source.proc.Mp().CurrNB(), group.ctr.mp)
+	peak, err := drainRollupBenchmarkOpWithObserver(
+		group, source.proc, source.proc.Mp().CurrNB(), runner.observe, group.ctr.mp)
 	group.Free(source.proc, err != nil, err)
 	expand.Free(source.proc, err != nil, err)
 	if order != nil {
@@ -558,10 +792,25 @@ func drainRollupBenchmarkOp(
 	peak int64,
 	additional ...*mpool.MPool,
 ) (int64, error) {
+	return drainRollupBenchmarkOpWithObserver(op, proc, peak, nil, additional...)
+}
+
+func drainRollupBenchmarkOpWithObserver(
+	op vm.Operator,
+	proc *process.Process,
+	peak int64,
+	observe func(*batch.Batch) error,
+	additional ...*mpool.MPool,
+) (int64, error) {
 	for {
 		result, err := vm.Exec(op, proc)
 		if err != nil {
 			return peak, err
+		}
+		if observe != nil && result.Batch != nil {
+			if err := observe(result.Batch); err != nil {
+				return peak, err
+			}
 		}
 		current := proc.Mp().CurrNB()
 		for _, mp := range additional {

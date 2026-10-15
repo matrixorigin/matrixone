@@ -106,7 +106,7 @@ func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		}
 	}()
-	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
+	rt.SetGlobalVariables("optimizer_hints", "")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	for _, tc := range []struct {
 		name      string
@@ -124,7 +124,9 @@ func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 		{name: "two-key-AVG-intermediate-NDV", keyCount: 2, ndvs: []float64{1, 10_000, 1}, aggregate: "avg(d.b)", wantSort: false},
 		{name: "low-NDV", ndvs: []float64{4, 4, 4}, wantSort: true},
 		{name: "asymmetric-low-NDV", ndvs: []float64{1, 1, 4}, wantSort: true},
-		{name: "asymmetric-admitted-edge", ndvs: []float64{1, 1, 5_000}, wantSort: true},
+		{name: "asymmetric-admitted-edge", ndvs: []float64{1, 1, 2_500}, wantSort: true},
+		{name: "asymmetric-conservative-concurrency-margin", ndvs: []float64{1, 1, 5_000}, wantSort: false},
+		{name: "asymmetric-concurrent-regression", ndvs: []float64{1, 1, 5_800}, wantSort: false},
 		{name: "asymmetric-intermediate-NDV", ndvs: []float64{1, 1, 10_000}, wantSort: false},
 		{name: "asymmetric-AVG-intermediate-NDV", ndvs: []float64{1, 1, 10_000}, aggregate: "avg(d.c)", wantSort: false},
 		{name: "asymmetric-middle-NDV", ndvs: []float64{1, 1, 25_000}, wantSort: false},
