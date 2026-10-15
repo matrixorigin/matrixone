@@ -76,7 +76,7 @@ func TestExportBuildSupportedSubset(t *testing.T) {
 	q.Steps[0] = 1
 	c, err := ExportEmbeddedMO(q, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
-	require.Len(t, c.testReads(), 1)
+	require.Len(t, c.reads, 1)
 	b, err := c.BuildEmbedded(testReadBindings(c))
 	require.NoError(t, err)
 	p := new(spb.Plan)
@@ -181,7 +181,7 @@ func TestSharedScanNodeProducesOneAdmissionRead(t *testing.T) {
 	q.Headings = []string{"left", "right"}
 	candidate, err := ExportEmbeddedMO(q, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
-	require.Len(t, candidate.testReads(), 1)
+	require.Len(t, candidate.reads, 1)
 }
 
 func TestProjectEmitsOnlyMOProjectColumns(t *testing.T) {
@@ -1234,4 +1234,3 @@ func testReadBindings(candidate *Candidate) map[int32]EmbeddedReadBinding {
 	}
 	return bindings
 }
-func (c *Candidate) testReads() []Read { return append([]Read(nil), c.reads...) }

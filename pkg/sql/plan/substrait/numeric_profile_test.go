@@ -187,7 +187,7 @@ func TestExactEmbeddedTPCHInventory(t *testing.T) {
 			candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
 			require.NoError(t, err, "signatures: %v", numericFunctionSignatures(query))
 			bindings := make(map[int32]EmbeddedReadBinding)
-			for ordinal, read := range candidate.testReads() {
+			for ordinal, read := range candidate.reads {
 				bindings[read.NodeID] = EmbeddedReadBinding{BindingID: uint64(ordinal + 1), Source: EmbeddedReadMO}
 			}
 			wire, err := candidate.BuildEmbedded(bindings)

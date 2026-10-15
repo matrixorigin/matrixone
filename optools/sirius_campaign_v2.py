@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bounded public-MO/Sirius campaign protocol v2; v1 remains independently valid."""
+"""Bounded public-MO/Sirius campaign protocol."""
 from __future__ import annotations
 
 import contextlib
@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 
-import sirius_parity as legacy
+import sirius_campaign_common as common
 
 MEMORY_BYTES = 32 << 20
 CHUNK_BYTES = 8 << 20
@@ -75,11 +75,11 @@ ORDER_KEYS = {
     22: (0,),
 }
 
-CampaignError = legacy.CampaignError
+CampaignError = common.CampaignError
 
 
 def canonical(value):
-    return legacy.canonical_json(value).encode("utf-8")
+    return common.canonical_json(value).encode("utf-8")
 
 
 def query_uuid(value):
@@ -136,7 +136,7 @@ def build_campaign(provenance, *, resource=False):
         ):
             raise CampaignError("invalid v2 revision")
     if any(
-        not legacy._is_sha256(provenance[key])
+        not common._is_sha256(provenance[key])
         for key in (
             "sdk_sha256",
             "service_binary_sha256",
@@ -186,7 +186,7 @@ def build_campaign(provenance, *, resource=False):
             raise CampaignError("invalid bounded provenance fields")
         if len(canonical(value)) > 4096:
             raise CampaignError("provenance section exceeds bound")
-    if not legacy._is_sha256(provenance["toolchain"]["pixi_lock_sha256"]):
+    if not common._is_sha256(provenance["toolchain"]["pixi_lock_sha256"]):
         raise CampaignError("invalid frozen toolchain lock identity")
     if provenance["config"]["session"] != {
         "campaign_evidence": True,
@@ -231,18 +231,18 @@ def build_campaign(provenance, *, resource=False):
         raise CampaignError("invalid toolchain identity")
     hashes = provenance["query_sha256"]
     if set(hashes) != {f"Q{x}" for x in range(1, 23)} or not all(
-        legacy._is_sha256(x) for x in hashes.values()
+        common._is_sha256(x) for x in hashes.values()
     ):
         raise CampaignError("invalid canonical query inventory")
     datasets = provenance["datasets"]
     if set(datasets) != {"SF1", "SF10"} or not all(
-        legacy._is_sha256(x) for x in datasets.values()
+        common._is_sha256(x) for x in datasets.values()
     ):
         raise CampaignError("invalid immutable dataset identity")
     schedule = []
 
     def append(scale, phase, stream, suite, repetition, query, route):
-        spec = legacy._run_spec(
+        spec = common._run_spec(
             len(schedule) + 1,
             phase,
             route,
@@ -291,13 +291,26 @@ def build_campaign(provenance, *, resource=False):
     }
 
 
-class BoundedExecutor(legacy.SubprocessExecutor):
-    """Reuse v1's exclusive ownership; bound both pipes before JSON decoding."""
+class BoundedExecutor:
+    """Own one exclusive runner and bound both pipes before JSON decoding."""
+
+    def __init__(self, command, timeout_seconds):
+        if not command:
+            raise CampaignError("runner command is required")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise CampaignError("runner timeout must be positive and finite")
+        self.command = tuple(command)
+        self.timeout_seconds = timeout_seconds
+        self.poisoned = False
+
+    def __call__(self, spec):
+        with common._SUBPROCESS_EXECUTOR_LOCK:
+            return self._call_exclusive(spec)
 
     def _call_exclusive(self, spec):
         if self.poisoned:
             raise CampaignError("runner cleanup owner is poisoned")
-        previous = legacy._enter_exclusive_subreaper()
+        previous = common._enter_exclusive_subreaper()
         process = None
         try:
             environment = os.environ.copy()
@@ -334,11 +347,11 @@ class BoundedExecutor(legacy.SubprocessExecutor):
                     if process.poll() is not None:
                         deadline = min(
                             deadline,
-                            time.monotonic() + legacy.RUNNER_CLEANUP_TIMEOUT_SECONDS,
+                            time.monotonic() + common.RUNNER_CLEANUP_TIMEOUT_SECONDS,
                         )
                 process.wait(timeout=max(0.001, deadline - time.monotonic()))
             status = process.returncode
-            legacy._cleanup_owned_processes(process, close_pipes=True)
+            common._cleanup_owned_processes(process, close_pipes=True)
             process = None
             if status:
                 raise CampaignError("runner exited unsuccessfully")
@@ -349,14 +362,14 @@ class BoundedExecutor(legacy.SubprocessExecutor):
         finally:
             if process is not None:
                 try:
-                    legacy._cleanup_owned_processes(process, close_pipes=True)
+                    common._cleanup_owned_processes(process, close_pipes=True)
                 except BaseException:
                     self.poisoned = True
                     raise
-            if legacy._direct_child_pids():
+            if common._direct_child_pids():
                 self.poisoned = True
                 raise CampaignError("runner descendants did not quiesce")
-            legacy._set_child_subreaper(previous)
+            common._set_child_subreaper(previous)
 
 
 class Scratch:
@@ -397,7 +410,7 @@ class Scratch:
             ):
                 raise CampaignError("spool is not a private complete regular file")
             if (
-                not legacy._is_sha256(result.get("sha256"))
+                not common._is_sha256(result.get("sha256"))
                 or type(result.get("row_count")) is not int
                 or result["row_count"] < 0
             ):
@@ -910,7 +923,7 @@ def validate_record(spec, record):
         )
     ):
         raise CampaignError("invalid retained first-row timing")
-    if not legacy._is_sha256(record.get("result_sha256")) or not legacy._is_sha256(
+    if not common._is_sha256(record.get("result_sha256")) or not common._is_sha256(
         record.get("output_schema_sha256")
     ):
         raise CampaignError("invalid retained result/schema identity")
@@ -984,7 +997,7 @@ def execute_campaign(campaign, executor, scratch):
             if identity in identities:
                 raise CampaignError("duplicate query identity")
             identities.add(identity)
-            key = legacy._oracle_cell(spec)
+            key = common._oracle_cell(spec)
             cell = pending.setdefault(key, {})
             if spec["route"] in cell:
                 raise CampaignError("duplicate oracle route")
@@ -1033,7 +1046,7 @@ def summarize(campaign, records):
         if identity in identities:
             raise CampaignError("summary contains duplicate query identity")
         identities.add(identity)
-        key = legacy._oracle_cell(spec)
+        key = common._oracle_cell(spec)
         cell = pending.setdefault(key, {})
         if record["route"] in cell:
             raise CampaignError("summary contains duplicate oracle route")
@@ -1113,34 +1126,3 @@ def summarize(campaign, records):
         ],
 
     }
-
-
-def main_from_legacy(arguments, input_spec, runner):
-    """V2 always owns real services and enriches from their observed events."""
-    from types import SimpleNamespace
-    from sirius_campaign import run_complete
-
-    config = input_spec.get("controller", {})
-    if (
-        len(runner) != 1
-        or not isinstance(config, dict)
-        or not {"workspace", "service"} <= set(config)
-    ):
-        raise CampaignError(
-            "v2 requires an owned service controller and one public runner binary"
-        )
-    options = SimpleNamespace(
-        workspace=Path(config["workspace"]),
-        service=Path(config["service"]),
-        runner=Path(runner[0]),
-        output=arguments.output,
-        port_base=config.get("port_base", 36001),
-        resource=input_spec.get("resource_campaign", False),
-    )
-    try:
-        run_complete(options, provenance=input_spec["provenance"])
-    except (CampaignError, OSError, ValueError, subprocess.SubprocessError):
-        if (arguments.output / "failure.json").exists():
-            return 1
-        raise
-    return 0

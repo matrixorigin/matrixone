@@ -264,7 +264,7 @@ while True: signal.pause()
                 )
             )
             restore = stack.enter_context(
-                patch.object(v2.legacy, "_set_child_subreaper")
+                patch.object(v2.common, "_set_child_subreaper")
             )
             for target, name, value in (
                 (controller, "Service", factory),
@@ -279,8 +279,8 @@ while True: signal.pause()
                 (controller, "PROFILE_FINALIZE_SECONDS", 2),
                 (resource, "MAX_LEDGER_BYTES", 0),
                 (resource, "MAX_SORT_FILE_BYTES", 0),
-                (v2.legacy, "_enter_exclusive_subreaper", lambda: False),
-                (v2.legacy, "_kill_and_reap_adopted_children", lambda *_: None),
+                (v2.common, "_enter_exclusive_subreaper", lambda: False),
+                (v2.common, "_kill_and_reap_adopted_children", lambda *_: None),
             ):
                 stack.enter_context(patch.object(target, name, value))
             stack.enter_context(
@@ -408,7 +408,7 @@ while True: signal.pause()
         # controller's child. v2's test caller bounds and owns this fixture too.
         script = """import json,subprocess,sys
 import sirius_campaign as c
-previous=c.v2.legacy._enter_exclusive_subreaper()
+previous=c.v2.common._enter_exclusive_subreaper()
 worker=subprocess.Popen([sys.executable,'-c',
     'import os,time; pid=os.fork(); '
     'os.setsid() if pid==0 else None; '
@@ -416,10 +416,10 @@ worker=subprocess.Popen([sys.executable,'-c',
     'time.sleep(30) if pid==0 else None'],stdout=subprocess.PIPE,text=True)
 escaped=int(worker.stdout.readline())
 worker.wait(timeout=5)
-assert escaped in c.v2.legacy._direct_child_pids()
+assert escaped in c.v2.common._direct_child_pids()
 c.close_services([],previous)
 worker.stdout.close()
-assert not c.v2.legacy._direct_child_pids()
+assert not c.v2.common._direct_child_pids()
 print(json.dumps({'joined':True}))
 """
         result = v2.BoundedExecutor([sys.executable, "-c", script], 10)({})
@@ -429,8 +429,8 @@ print(json.dumps({'joined':True}))
         service = MagicMock()
         service.close.side_effect = v2.CampaignError("injected close failure")
         with (
-            patch.object(v2.legacy, "_kill_and_reap_adopted_children") as join,
-            patch.object(v2.legacy, "_set_child_subreaper") as restore,
+            patch.object(v2.common, "_kill_and_reap_adopted_children") as join,
+            patch.object(v2.common, "_set_child_subreaper") as restore,
         ):
             with self.assertRaisesRegex(v2.CampaignError, "cleanup failed"):
                 controller.close_services([service], False)

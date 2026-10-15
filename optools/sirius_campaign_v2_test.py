@@ -279,7 +279,7 @@ class CampaignV2Test(unittest.TestCase):
         )
         with self.assertRaisesRegex(campaign.CampaignError, "bound"):
             executor({"sequence": 1})
-        self.assertFalse(campaign.legacy._direct_child_pids())
+        self.assertFalse(campaign.common._direct_child_pids())
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ func TestEmbeddedMOReadRejectsHiddenSuffixWithoutProjection(t *testing.T) {
 	require.Len(t, embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetRead().BaseSchema.Names, 2)
 }
 
-func TestEmbeddedTAESourceIsDeferred(t *testing.T) {
+func TestEmbeddedBindingRejectsUnknownSource(t *testing.T) {
 	candidate, err := ExportEmbeddedMO(embeddedProjectedScanQuery(), NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: 2}})

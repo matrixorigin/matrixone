@@ -46,14 +46,14 @@ const (
 // The read handles are installed only after snapshot admission succeeds.
 type Candidate struct {
 	query    *planpb.Query
-	reads    []Read
+	reads    []candidateRead
 	headings []string
 	types    []planpb.Type
 	profile  EmbeddedExportProfile
 }
 
-// Read identifies a query-local MO table scan.
-type Read struct{ NodeID int32 }
+// candidateRead identifies a query-local MO table scan.
+type candidateRead struct{ NodeID int32 }
 
 // OutputTypes returns the MatrixOne result contract corresponding to the
 // Substrait root names. Transport decoding uses it to restore MO physical
@@ -68,10 +68,6 @@ func (c *Candidate) OutputTypes() []planpb.Type {
 // ExportEmbeddedMO validates a plan whose entire scans remain owned by MO.
 // Storage ordering hints are legal at the scan boundaries owned by MO.
 func ExportEmbeddedMO(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
-	return exportCandidate(q, profile)
-}
-
-func exportCandidate(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
@@ -139,7 +135,7 @@ type exporter struct {
 	exactUsed        bool
 	query            *planpb.Query
 	embeddedBindings map[int32]EmbeddedReadBinding
-	reads            []Read
+	reads            []candidateRead
 	functions        map[string]uint32
 	validateOnly     bool
 	visiting         map[int32]bool
@@ -547,7 +543,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 		}
 		if !e.readSeen[n.NodeId] {
 			e.readSeen[n.NodeId] = true
-			e.reads = append(e.reads, Read{NodeID: n.NodeId})
+			e.reads = append(e.reads, candidateRead{NodeID: n.NodeId})
 		}
 	}
 	// Validation and emission consume the same post-scan contract. MO owns
@@ -1191,10 +1187,6 @@ func (e *exporter) extensions() []*extensions.SimpleExtensionDeclaration {
 		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionFunction_{ExtensionFunction: &extensions.SimpleExtensionDeclaration_ExtensionFunction{FunctionAnchor: uint32(anchor), Name: byAnchor[anchor], ExtensionUrnReference: ref}}})
 	}
 	return result
-}
-
-func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
-	return namedStructForProfile(t, EmbeddedExportProfile{})
 }
 
 func namedStructForProfile(t *planpb.TableDef, profile EmbeddedExportProfile) (*spb.NamedStruct, error) {

@@ -279,7 +279,7 @@ def validate(
         case.get("passed") is not True
         or case.get("retained_input_bytes") != 0
         or case.get("retained_result_bytes") != 0
-        or not campaign.legacy._is_sha256(case.get("evidence_sha256"))
+        or not campaign.common._is_sha256(case.get("evidence_sha256"))
         or not case.get("barrier")
         for case in cases
     ):
@@ -299,7 +299,7 @@ def validate(
         or sanitizer.get("unexplained_leaks") != 0
         or sanitizer.get("cudf_pinned_pool_reconciled") is not True
         or sanitizer.get("cub_diagnostic_reconciled") is not True
-        or not campaign.legacy._is_sha256(sanitizer.get("evidence_sha256"))
+        or not campaign.common._is_sha256(sanitizer.get("evidence_sha256"))
     ):
         raise campaign.CampaignError("sanitizer/pinned-pool/CUB acceptance unresolved")
     hashes = sanitizer.get("raw_evidence_sha256", {})
@@ -313,7 +313,7 @@ def validate(
             or Path(name).name != name
             for name in hashes
         )
-        or any(not campaign.legacy._is_sha256(value) for value in hashes.values())
+        or any(not campaign.common._is_sha256(value) for value in hashes.values())
         or len(set(hashes.values())) != len(hashes)
         or not isinstance(raw_runs, list)
         or len(raw_runs) != len(hashes)
@@ -372,10 +372,10 @@ def validate(
             or cub.get("control_revision") != "c440013c89f1a54a6e5d934aabd0f9d3ef15ed3c"
             or cub.get("symbol") != "_ZN3cub6detail11EmptyKernelIvEEvv"
             or cub.get("source_unchanged_from_control") is not True
-            or not campaign.legacy._is_sha256(cub.get("source_sha256"))
-            or not campaign.legacy._is_sha256(cub.get("no_op_header_sha256"))
+            or not campaign.common._is_sha256(cub.get("source_sha256"))
+            or not campaign.common._is_sha256(cub.get("no_op_header_sha256"))
             or any(
-                not campaign.legacy._is_sha256(item.get(key))
+                not campaign.common._is_sha256(item.get(key))
                 for item in (pinned, cub)
                 for key in ("candidate_evidence_sha256", "control_evidence_sha256")
             )
@@ -415,7 +415,7 @@ def validate(
         if (
             case.get("id") in identities
             or case.get("kind") != BASELINE_CASES.get(case.get("id"))
-            or not campaign.legacy._is_sha256(case.get("input_sha256"))
+            or not campaign.common._is_sha256(case.get("input_sha256"))
             or case.get("input_sha256") != case.get("reference_input_sha256")
             or case.get("rows") != 262144
             or case.get("timing_boundary_matched") is not True
@@ -484,7 +484,7 @@ def checked_artifacts(manifest, paths):
             or Path(name).is_absolute()
             or Path(name).as_posix() != name
             or ".." in Path(name).parts
-            or not campaign.legacy._is_sha256(expected)
+            or not campaign.common._is_sha256(expected)
         ):
             raise campaign.CampaignError("invalid archive checksum entry")
         path = root / name
