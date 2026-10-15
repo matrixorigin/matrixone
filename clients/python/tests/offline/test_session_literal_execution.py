@@ -481,6 +481,84 @@ def transformed_expected(value, composed):
     return (value + '|typed', 7) if composed else (value + '|typed',)
 
 
+@contextmanager
+def mysql_formatting_transport(engine, cursor_cls, paramstyle):
+    from sqlalchemy.dialects.mysql.pymysql import dialect
+
+    connection = pymysql.connections.Connection(defer_connect=True)
+    if cursor_cls is aiomysql.cursors.Cursor:
+        connection.loop = None
+    cursor = cursor_cls(connection)
+    mysql = dialect(paramstyle=paramstyle)
+    original = (
+        engine.dialect.paramstyle,
+        engine.dialect.positional,
+        engine.dialect.identifier_preparer._double_percents,
+    )
+    engine.dialect.paramstyle = mysql.paramstyle
+    engine.dialect.positional = mysql.positional
+    engine.dialect.identifier_preparer._double_percents = mysql.identifier_preparer._double_percents
+
+    def format_for_transport(conn, cur, sql, params, context, many):
+        # Match SQLAlchemy's dispatch: no_parameters omits an empty argument
+        # container, but a composed query must still send its real binds.
+        arguments = None if context.no_parameters and not params else params
+        return cursor.mogrify(sql, arguments), ()
+
+    event.listen(engine, 'before_cursor_execute', format_for_transport, retval=True)
+    try:
+        yield
+    finally:
+        event.remove(engine, 'before_cursor_execute', format_for_transport)
+        (
+            engine.dialect.paramstyle,
+            engine.dialect.positional,
+            engine.dialect.identifier_preparer._double_percents,
+        ) = original
+        # Formatting-only cursors have no live connection or result to drain.
+        connection.close()
+
+
+def mysql_transformed_expected(value, composed, no_parameters):
+    # Preserve the parent's documented bind-free no_parameters behavior.
+    if no_parameters and not composed:
+        value = value.replace('%', '%%')
+    return transformed_expected(value, composed)
+
+
+@pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('paramstyle', ['format', 'pyformat'])
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+def test_transformed_literals_at_real_mysql_driver(client, cls, paramstyle, composed, no_parameters):
+    with mysql_formatting_transport(client._engine, pymysql.cursors.Cursor, paramstyle):
+        with session_for(client, cls) as session:
+            event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+            for value in ['ordinary', '100%', '%s', '%%']:
+                sql = transformed_query(value)
+                expected = mysql_transformed_expected(value, composed, no_parameters)
+                for statement in [text(sql), sql]:
+                    result = session.execute(statement, execution_options={'no_parameters': no_parameters})
+                    assert tuple(result.one()) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('paramstyle', ['format', 'pyformat'])
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+async def test_async_transformed_literals_at_real_mysql_driver(async_client, paramstyle, composed, no_parameters):
+    engine = async_client._engine.sync_engine
+    with mysql_formatting_transport(engine, aiomysql.cursors.Cursor, paramstyle):
+        async with async_client.session() as session:
+            event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+            for value in ['ordinary', '100%', '%s', '%%']:
+                sql = transformed_query(value)
+                expected = mysql_transformed_expected(value, composed, no_parameters)
+                for statement in [text(sql), sql]:
+                    result = await session.execute(statement, execution_options={'no_parameters': no_parameters})
+                    assert tuple(result.one()) == expected
+
+
 def assert_parent_named_percent_error(error):
     # Some SQLAlchemy releases mistake quoted named-percent syntax for a
     # positional bind. Qualify this exact inherited failure with a real parent
