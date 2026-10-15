@@ -169,6 +169,54 @@ select id from (select id, prio from covered where match(body) against('needle' 
 ➤ id[-5,64,0]  𝄀
 3  𝄀
 2
+create function order_tick(x bigint) returns bigint language python as 'def tick(x, counter=[0]): counter[0] += 1; return counter[0]' handler 'tick';
+explain select id, order_tick(id) as seq from classic where match(body) against('needle' in natural language mode) order by seq;
+-- @regex("(?s)Sort Key:.*Sort Key:", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: order_tick(classic.id) INTERNAL  𝄀
+        ->  Project  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (classic.id = mo_fulltext_alias_0.doc_id)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on mo30164_validation.classic  𝄀
+                                Runtime Filter Probe: classic.id  𝄀
+                          ->  Fulltext Index Scan on classic_ft  𝄀
+                                Fulltext Index: classic_ft
+explain select id, order_tick(id) as seq from ft2 where match(body) against('needle' in natural language mode) order by seq;
+-- @regex("(?s)Sort Key:.*Sort Key:", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: order_tick(ft2.id) INTERNAL  𝄀
+        ->  Project  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (ft2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on mo30164_validation.ft2  𝄀
+                                Runtime Filter Probe: ft2.id  𝄀
+                          ->  Fulltext Index Scan on ft2_ft  𝄀
+                                Fulltext Index: ft2_ft
+explain select id, order_tick(id) as seq from covered where match(body) against('needle' in natural language mode) order by seq;
+-- @regex("Fulltext Index Scan", true)
+-- @regex("(?s)Sort Key:.*Sort Key:", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: order_tick(covered.id) INTERNAL  𝄀
+        ->  Project  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                    ->  Fulltext Index Scan on covered_ft  𝄀
+                          Fulltext Index: covered_ft
+drop function order_tick(bigint);
 drop database mo30164_validation;
 set ft_relevancy_algorithm = @hybrid_old_ft;
 set ft2_relevancy_algorithm = @hybrid_old_ft2;
