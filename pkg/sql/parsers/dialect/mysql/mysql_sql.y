@@ -72,6 +72,99 @@ func sqlTaskInt64(v any) int64 {
 
 const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
 
+func makeCharsetCastCharType(width int32, charsetName string) *tree.T {
+	locale := ""
+	familyString := "char"
+	oid := uint32(defines.MYSQL_TYPE_STRING)
+	if width == -1 {
+		// Match the existing CAST/CONVERT no-length CHAR target, which uses
+		// VARCHAR's expression width while preserving CHAR syntax for deparse.
+		familyString = "varchar"
+		oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+	}
+	return &tree.T{InternalType: tree.InternalType{
+		Family:          tree.StringFamily,
+		FamilyString:    familyString,
+		DisplayWith:     width,
+		Locale:          &locale,
+		Oid:             oid,
+		CastCharsetSpecified: true,
+		CastCharsetName: charsetName,
+	}}
+}
+
+func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
+    if left == nil {
+        return right
+    }
+    if right == nil {
+        return left
+    }
+    if right.IType != tree.INDEX_TYPE_INVALID {
+        left.IType = right.IType
+    } else if len(right.Comment) > 0 {
+        left.Comment = right.Comment
+    } else if right.KeyBlockSize > 0 {
+        left.KeyBlockSize = right.KeyBlockSize
+    } else if len(right.ParserName) > 0 {
+        left.ParserName = right.ParserName
+    } else if right.Visible != tree.VISIBLE_TYPE_INVALID {
+        left.Visible = right.Visible
+    } else if right.AlgoParamList > 0 {
+        left.AlgoParamList = right.AlgoParamList
+    } else if len(right.AlgoParamVectorOpType) > 0 {
+        left.AlgoParamVectorOpType = right.AlgoParamVectorOpType
+    } else if right.AlgoParamM > 0 {
+        left.AlgoParamM = right.AlgoParamM
+    } else if right.HnswEfConstruction > 0 {
+        left.HnswEfConstruction = right.HnswEfConstruction
+    } else if right.HnswEfSearch > 0 {
+        left.HnswEfSearch = right.HnswEfSearch
+    } else if right.Async {
+        left.Async = right.Async
+    } else if right.ForceSync {
+        left.ForceSync = right.ForceSync
+    } else if right.Merge {
+        left.Merge = right.Merge
+    } else if right.AutoUpdate {
+        left.AutoUpdate = right.AutoUpdate
+    } else if right.Day > 0 {
+        left.Day = right.Day
+    } else if right.Hour > 0 {
+        left.Hour = right.Hour
+    } else if right.Second > 0 {
+        left.Second = right.Second
+    } else if right.IntermediateGraphDegree > 0 {
+        left.IntermediateGraphDegree = right.IntermediateGraphDegree
+    } else if right.GraphDegree > 0 {
+        left.GraphDegree = right.GraphDegree
+    } else if right.BitsPerCode > 0 {
+        left.BitsPerCode = right.BitsPerCode
+    } else if len(right.Quantization) > 0 {
+        left.Quantization = right.Quantization
+    } else if len(right.DistributionMode) > 0 {
+        left.DistributionMode = right.DistributionMode
+    } else if right.ITopkSize > 0 {
+        left.ITopkSize = right.ITopkSize
+    } else if right.KmeansTrainPercent > 0 {
+        left.KmeansTrainPercent = right.KmeansTrainPercent
+    } else if right.KmeansMaxIteration > 0 {
+        left.KmeansMaxIteration = right.KmeansMaxIteration
+    } else if right.MaxIndexCapacity > 0 {
+        left.MaxIndexCapacity = right.MaxIndexCapacity
+    } else if right.MaxPostingsCapacity > 0 {
+        left.MaxPostingsCapacity = right.MaxPostingsCapacity
+    } else if right.QuantizerTrainLimit > 0 {
+        left.QuantizerTrainLimit = right.QuantizerTrainLimit
+    } else if right.PositionFreeSet {
+        left.PositionFree = right.PositionFree
+        left.PositionFreeSet = true
+    } else if len(right.IncludeColumns) > 0 {
+        left.IncludeColumns = right.IncludeColumns
+    }
+    return left
+}
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -886,12 +979,12 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <defaultOptional> default_opt
 %type <sourceOptional> replace_opt
 %type <str> database_or_schema
-%type <indexType> using_opt
+%type <indexType> using_opt using_type
 %type <str> opt_lang
 %type <indexCategory> index_prefix
 %type <keyParts> index_column_list index_column_list_opt
 %type <keyPart> index_column
-%type <indexOption> index_option_list index_option
+%type <indexOption> index_option_list index_option create_index_option_list create_index_option
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
@@ -9832,19 +9925,17 @@ index_prefix:
     }
 
 create_index_stmt:
-    CREATE index_prefix INDEX ident using_opt ON table_name '(' index_column_list ')' index_option_list
+    CREATE index_prefix INDEX ident using_opt ON table_name '(' index_column_list ')' create_index_option_list
     {
-        var io *tree.IndexOption = nil
-        if $11 == nil && $5 != tree.INDEX_TYPE_INVALID {
+        io := $11
+        if io == nil {
             io = tree.NewIndexOption()
+        }
+        // MySQL permits the index type before ON or after the key parts.
+        // When both forms are present, the trailing type takes precedence.
+        if io.IType == tree.INDEX_TYPE_INVALID {
             io.IType = $5
-        } else if $11 != nil{
-            io = $11
-            io.IType = $5
-        } else {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_INVALID
-	    }
+        }
         var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
@@ -9869,76 +9960,28 @@ index_option_list:
     }
 |   index_option_list index_option
     {
-        // Merge the options
-        if $1 == nil {
-            $$ = $2
-        } else {
-            opt1 := $1
-            opt2 := $2
-            if len(opt2.Comment) > 0 {
-                opt1.Comment = opt2.Comment
-            } else if opt2.KeyBlockSize > 0 {
-                opt1.KeyBlockSize = opt2.KeyBlockSize
-            } else if len(opt2.ParserName) > 0 {
-                opt1.ParserName = opt2.ParserName
-            } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
-                opt1.Visible = opt2.Visible
-            } else if opt2.AlgoParamList > 0 {
-	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
-	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    } else if opt2.AlgoParamM > 0 {
-	      opt1.AlgoParamM = opt2.AlgoParamM
-	    } else if opt2.HnswEfConstruction > 0 {
-	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
-            } else if opt2.HnswEfSearch > 0 {
-	      opt1.HnswEfSearch = opt2.HnswEfSearch
-	    } else if opt2.Async {
-	      opt1.Async = opt2.Async
-	    } else if opt2.ForceSync {
-	      opt1.ForceSync = opt2.ForceSync
-	    } else if opt2.Merge {
-	      opt1.Merge = opt2.Merge
-	    } else if opt2.AutoUpdate {
-	      opt1.AutoUpdate = opt2.AutoUpdate
-	    } else if opt2.Day > 0 {
-	      opt1.Day = opt2.Day
-	    } else if opt2.Hour > 0 {
-	      opt1.Hour = opt2.Hour
-	    } else if opt2.Second > 0 {
-	      opt1.Second = opt2.Second
-	    } else if opt2.IntermediateGraphDegree > 0 {
-              opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
-	    } else if opt2.GraphDegree > 0 {
-              opt1.GraphDegree = opt2.GraphDegree
-	    } else if opt2.BitsPerCode > 0 {
-              opt1.BitsPerCode = opt2.BitsPerCode
-            } else if len(opt2.Quantization) > 0 {
-              opt1.Quantization = opt2.Quantization
-            } else if len(opt2.DistributionMode) > 0 {
-              opt1.DistributionMode = opt2.DistributionMode
-            } else if opt2.BitsPerCode > 0 {
-              opt1.BitsPerCode = opt2.BitsPerCode
-            } else if opt2.ITopkSize > 0 {
-              opt1.ITopkSize = opt2.ITopkSize
-            } else if opt2.KmeansTrainPercent > 0 {
-              opt1.KmeansTrainPercent = opt2.KmeansTrainPercent
-            } else if opt2.KmeansMaxIteration > 0 {
-              opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
-            } else if opt2.MaxIndexCapacity > 0 {
-              opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
-            } else if opt2.MaxPostingsCapacity > 0 {
-              opt1.MaxPostingsCapacity = opt2.MaxPostingsCapacity
-            } else if opt2.QuantizerTrainLimit > 0 {
-              opt1.QuantizerTrainLimit = opt2.QuantizerTrainLimit
-            } else if opt2.PositionFreeSet {
-              opt1.PositionFree = opt2.PositionFree
-              opt1.PositionFreeSet = true
-            } else if len(opt2.IncludeColumns) > 0 {
-              opt1.IncludeColumns = opt2.IncludeColumns
-            }
-            $$ = opt1
-        }
+        $$ = mergeIndexOption($1, $2)
+    }
+
+create_index_option_list:
+    {
+        $$ = nil
+    }
+|   create_index_option_list create_index_option
+    {
+        $$ = mergeIndexOption($1, $2)
+    }
+
+create_index_option:
+    index_option
+    {
+        $$ = $1
+    }
+|   using_type
+    {
+        io := tree.NewIndexOption()
+        io.IType = $1
+        $$ = io
     }
 
 index_option:
@@ -10278,7 +10321,13 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_INVALID
     }
-|   USING BTREE
+|   using_type
+    {
+        $$ = $1
+    }
+
+using_type:
+    USING BTREE
     {
         $$ = tree.INDEX_TYPE_BTREE
     }
@@ -13075,6 +13124,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   CAST '(' expression AS CHAR length_option_opt CHARACTER SET charset_name ')'
+    {
+        $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $9))
+    }
 |   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
     {
 	$$ = tree.NewSerialExtractExpr($3, $5, $7)
@@ -13519,6 +13572,10 @@ mysql_cast_type:
                 DisplayWith: $2,
             },
         }
+    }
+|   CHAR length_option_opt CHARACTER SET charset_name
+    {
+        $$ = makeCharsetCastCharType($2, $5)
     }
 |   DATE
     {
@@ -14687,6 +14744,7 @@ name_confict:
 |   MINUTE
 |   MONTH
 |   QUARTER
+|   POINT
 |   REPEAT
 |   REPLACE
 |   REVERSE

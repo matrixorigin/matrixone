@@ -492,3 +492,41 @@ Final static checks: gofmt/diff whitespace checks PASS; frontend `go vet` PASS;
 configured golangci-lint 2.14.0 on frontend reports **0 issues**. Final-scope
 self-review found no additional code blockers. New exact-head CI remains required;
 passes from 1ec43a98 are reused only for unchanged semantic inputs.
+
+
+### 2026-10-15: merge upstream POINT/CHAR/index grammar without losing MV syntax
+
+Previous head `c0bab97f8cae9ecd0bb4611b9490e1eb3d94b1b2` completed ALL CI
+`38672006638` successfully after the failed-checkout rerun: ordinary UT, SCA,
+coverage UT, both BVT groups, coverage and CI Required passed. Its strict
+changed-line coverage was 894/1190 (75.13%). That is evidence for the old head,
+not a claim about the new merge commit.
+
+Merge verified main `f2093ae4b3cf019802091f6309e31c9524829b70` (six commits
+since f49bc6fa53). The only textual conflict is generated `mysql_sql.go`.
+The grammar source merges cleanly: preserve upstream POINT function syntax,
+CHAR CHARACTER SET casts and index USING suffix/options, together with all MV
+productions/tokens. Regenerate the complete parse tables from that source using
+the repository Makefile. Generation reports zero conflicts. A second generation
+produces the identical blob, proving that the delivered parser is reproducible.
+
+Validation on merged source, Go 1.27.1, linux/amd64, `-count=1`:
+
+- Full parser API package: PASS, 0.103 s.
+- Full MySQL dialect package: PASS, 0.225 s; includes MV syntax plus upstream
+  POINT, CHAR charset round trips and index suffix/identifier controls.
+- Full parser tree package: PASS, 0.054 s.
+- Planner `TestMaterializedView|Test.*Charset`: PASS, 0.179 s, using the repository
+  CGo wrapper with `matrixone_test` and `-short`; selection is nonempty.
+- MySQL dialect vet: PASS. Configured incremental golangci-lint 2.14.0: 0 issues.
+- Diff whitespace and unresolved-entry checks: PASS.
+
+Logs: `/workspace/mv-ci/parser-merge-f209-{generate,repeat,owning,plan,vet,lint}.log`.
+Self-review closure: grammar composition is R2 (two public syntax consumers),
+generated output and this record are R0. No handwritten parse-table selection,
+new SQL feature or MV lifecycle/protocol change is introduced by the conflict
+resolution. Upstream native cache/error/JSON fixes are merged unchanged. The
+owning parser suites and typed planner consumer tests cover the overlap; broader
+old-head CI is retained only within its semantic scope. No extra fixtures,
+retries, skips or thresholds are added. No new code blockers were found in this
+merge scope; external RFC/design review remains pending separately.
