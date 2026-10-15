@@ -1210,3 +1210,30 @@ func TestNormalizeToIntString(t *testing.T) {
 		})
 	}
 }
+
+func TestDoubleTextMySQL(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"1e20", "1e20"}, {"-1e20", "-1e20"}, {"1e-7", "0.0000001"},
+		{"1e-15", "0.000000000000001"}, {"1e-16", "1e-16"},
+		{"2.0", "2.0"}, {"-0.0", "-0.0"}, {"1000000000000000.2", "1000000000000000.2"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			bj, err := ParseFromString(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, TpCodeFloat64, bj.Type)
+			stored, err := bj.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, bj.String())
+			unquoted, err := bj.Unquote()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, unquoted)
+			after, err := bj.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, stored, after)
+			reparsed, err := ParseFromString(bj.String())
+			require.NoError(t, err)
+			require.Equal(t, TpCodeFloat64, reparsed.Type)
+			require.Equal(t, bj.Data, reparsed.Data)
+		})
+	}
+}

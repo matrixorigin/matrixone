@@ -308,15 +308,12 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// https://github.com/golang/go/issues/14135
-	var format byte
-	abs := math.Abs(f)
-	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
-		format = 'f'
-	} else {
-		format = 'e'
+	start := len(buf)
+	buf = util.AppendMySQLFloat(buf, f, 64)
+	// Keep DOUBLE distinguishable from integer JSON numbers when reparsed.
+	if !bytes.ContainsAny(buf[start:], ".e") {
+		buf = append(buf, '.', '0')
 	}
-	buf = strconv.AppendFloat(buf, f, format, -1, 64)
 	return buf, nil
 }
 
