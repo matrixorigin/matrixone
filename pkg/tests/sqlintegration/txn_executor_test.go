@@ -16,6 +16,7 @@ package sqlintegration
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -61,6 +62,61 @@ func TestInformationSchemaViewsUpgradeIsIdempotent(t *testing.T) {
 		installedID := viewID()
 		upgrade()
 		require.Equal(t, installedID, viewID(), "an installed VIEWS definition must not be dropped and recreated")
+
+		t.Run("aggregate_metadata_replay", func(t *testing.T) {
+			// Exercise the installed public catalog through MySQL on this same
+			// CN: three rows, two views, and no extra cluster or readiness poll.
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer db.Close()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			const schema = "view_aggregate_metadata_replay"
+			defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+			execSQL := func(statement string) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			execSQL("drop database if exists " + schema)
+			for round := 0; round < 2; round++ {
+				t.Logf("aggregate metadata replay round %d", round+1)
+				execSQL("create database " + schema)
+				execSQL("use " + schema)
+				execSQL("create table t(a int, b int)")
+				execSQL("insert into t values (1, 10), (1, 20), (2, 30)")
+				execSQL("create view agg_v as select a, count(*) cnt from t group by a")
+				var definition, updatable string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select view_definition, is_updatable from information_schema.views where table_schema=? and table_name='agg_v'", schema).Scan(&definition, &updatable))
+				require.Equal(t, "select `t`.`a`, count(*) as `cnt` from `t` group by `a`", definition)
+				require.Equal(t, "NO", updatable)
+				execSQL("create view replay_v as " + definition)
+				for _, view := range []string{"agg_v", "replay_v"} {
+					func() {
+						rows, err := conn.QueryContext(ctx, "select a, cnt from "+view+" order by a")
+						require.NoError(t, err)
+						defer rows.Close()
+						var got [][2]int64
+						for rows.Next() {
+							var row [2]int64
+							require.NoError(t, rows.Scan(&row[0], &row[1]))
+							got = append(got, row)
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, [][2]int64{{1, 2}, {2, 1}}, got, view)
+					}()
+				}
+				_, err = conn.ExecContext(ctx, "update agg_v set cnt=1")
+				require.ErrorContains(t, err, "cannot insert/update/delete from view")
+				execSQL("drop database " + schema)
+				var remaining int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
+				require.Zero(t, remaining, "verify cleanup before reusing the same CN, round %d", round+1)
+			}
+		})
 	})
 }
 
