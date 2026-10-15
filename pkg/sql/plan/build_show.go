@@ -369,12 +369,11 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	// the publication allowlist below instead of using publisher role/object IDs.
 	// Trusted internal discovery also runs during bootstrap, before the role and
 	// privilege catalogs exist. It already bypasses frontend authorization.
-	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) {
-		protocol := int64(defines.MORPCMinVersion)
-		if requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
-			protocol = defines.MORPCVersion41
-		}
-		sql = sysview.MetadataVisibilityCTE(protocol) + sql
+	// Below protocol 41 the frontend keeps the existing database-level gate.
+	// Do not narrow its full inherited-role authorization with legacy role SQL.
+	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
+		requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
+		sql = sysview.MetadataVisibilityCTE(defines.MORPCVersion41) + sql
 		sql += fmt.Sprintf(" and (EXISTS (SELECT 1 FROM __mo_visible_tables visible WHERE visible.account_id = mo_tables.account_id AND visible.rel_id = mo_tables.rel_id) or (account_id = 0 and (%s)))", mustShowTable+clusterTable)
 	}
 

@@ -16,8 +16,10 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -332,6 +334,7 @@ func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
 		for _, mode := range []string{"internal", "unmarked", "explicit false"} {
 			t.Run(mode+"/"+sql, func(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion41))
 				if mode != "unmarked" {
 					mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), defines.InternalExecutorKey{}, mode == "internal"))
 				}
@@ -356,18 +359,24 @@ func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
 }
 
 func TestShowTablesUserVisibilityPlan(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
-	require.NoError(t, err)
-	for _, node := range built.GetQuery().GetNodes() {
-		if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
-			return
-		}
+	for _, version := range []int64{defines.MORPCVersion40, defines.MORPCVersion41} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			filtered := false
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+					filtered = true
+				}
+			}
+			require.Equal(t, version >= defines.MORPCVersion41, filtered)
+		})
 	}
-	t.Fatal("ordinary SHOW TABLES must apply privilege visibility")
 }
 
 func TestCoverage_buildShowColumns(t *testing.T) {

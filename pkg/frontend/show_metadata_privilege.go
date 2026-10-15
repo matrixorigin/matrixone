@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -84,7 +85,14 @@ func showSubscriptionBaseTableSQL(database, table string) string {
 
 func authenticateShowMetadata(ctx context.Context, ses *Session, stmt tree.Statement) (allowed bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
-	localSQL, subscriptionSQL := showMetadataVisibilitySQL(stmt, ses.GetDatabaseName(), currentProtocolVersion(ses.GetProc()))
+	protocol := currentProtocolVersion(ses.GetProc())
+	// SHOW TABLES object-level admission and its per-table filter must be
+	// enabled together. Older protocols retain the existing database gate;
+	// their role SQL cannot represent the full inherited-role closure.
+	if _, ok := stmt.(*tree.ShowTables); ok && protocol < defines.MORPCVersion41 {
+		return false, stats, nil
+	}
+	localSQL, subscriptionSQL := showMetadataVisibilitySQL(stmt, ses.GetDatabaseName(), protocol)
 	if localSQL == "" {
 		return false, stats, nil
 	}

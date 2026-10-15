@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -79,7 +80,37 @@ func TestShowMetadataTarget(t *testing.T) {
 	require.Contains(t, local, "rg.grantee_id = current_role_id()")
 }
 
+func setShowMetadataTestProtocol(t *testing.T, version int64) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime("")
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, version)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+}
+
+func TestAuthenticateShowTablesLegacyProtocol(t *testing.T) {
+	setShowMetadataTestProtocol(t, defines.MORPCVersion40)
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	t.Cleanup(ses.Close)
+	// No executor methods may be called: object-level fallback is disabled
+	// before acquiring a catalog transaction on the compatibility path.
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+	ok, _, err := authenticateShowMetadata(t.Context(), ses, &tree.ShowTables{DBName: "db"})
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestAuthenticateShowMetadataFailsClosed(t *testing.T) {
+	setShowMetadataTestProtocol(t, defines.MORPCVersion41)
 	sentinel := errors.New("catalog failure")
 	for _, tc := range []struct {
 		name       string
