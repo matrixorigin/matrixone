@@ -401,18 +401,11 @@ func (b *spillFileBundle) accountedFiles(
 	// files may not have crossed their batch threshold; serial Finish calls
 	// would otherwise turn the larger window into a synchronous I/O burst.
 	// Queued reader payloads never retain writer descriptors.
+	var pendingTails [spillNumBuckets]*spillFileEntry
+	pending := pendingTails[:0]
 	for _, entry := range b.entries {
 		if entry != nil && entry.file == nil && entry.cacheToken != nil {
-			token, err := budget.ReserveSpillFD(1)
-			if err != nil {
-				return nil, err
-			}
-			file, err := entry.fs.OpenFile(ctx, entry.name)
-			if err != nil {
-				token.Release()
-				return nil, err
-			}
-			entry.file, entry.fdToken = file, token
+			pending = append(pending, entry)
 		}
 		if entry != nil && entry.file != nil {
 			if entry.cacheToken != nil {
@@ -421,6 +414,24 @@ func (b *spillFileBundle) accountedFiles(
 			if err := closeSpillEntry(entry); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// Release every idle writer before requesting another FD. A closed entry
+	// must not fail admission just because map iteration visits it first.
+	for _, entry := range pending {
+		token, err := budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+		file, err := entry.fs.OpenFile(ctx, entry.name)
+		if err != nil {
+			token.Release()
+			return nil, err
+		}
+		entry.file, entry.fdToken = file, token
+		entry.writeCache.SubmitTail(file)
+		if err := closeSpillEntry(entry); err != nil {
+			return nil, err
 		}
 	}
 	for bucket, entry := range b.entries {
