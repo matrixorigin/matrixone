@@ -60,6 +60,61 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, q, args...).Scan(&s), q)
 			return s
 		}
+		t.Run("explicit decimal range warnings remain per row", func(t *testing.T) {
+			exec(t, "create table cast_warning_rows(id int primary key)")
+			exec(t, "insert into cast_warning_rows values(1),(2),(3)")
+			read := func(rows *sql.Rows) []sql.NullString {
+				t.Helper()
+				var values []sql.NullString
+				for rows.Next() {
+					var value sql.NullString
+					require.NoError(t, rows.Scan(&value))
+					values = append(values, value)
+				}
+				return values
+			}
+			check := func(values []sql.NullString, want sql.NullString, warnings int) {
+				t.Helper()
+				require.Equal(t, []sql.NullString{want, want, want}, values)
+				require.Equal(t, strconv.Itoa(warnings), scalar(t, "select @@warning_count"))
+			}
+			for _, literal := range []string{"1000", "'1000'"} {
+				values := func() []sql.NullString {
+					rows, err := conn.QueryContext(ctx, "select cast("+literal+" as decimal(5,2)) from cast_warning_rows order by id")
+					require.NoError(t, err)
+					defer rows.Close()
+					values := read(rows)
+					require.NoError(t, rows.Err())
+					return values
+				}()
+				check(values, sql.NullString{String: "999.99", Valid: true}, 3)
+			}
+			p, err := conn.PrepareContext(ctx, "select cast(? as decimal(5,2)) from cast_warning_rows order by id")
+			require.NoError(t, err)
+			defer p.Close()
+			for _, tc := range []struct {
+				value    any
+				want     sql.NullString
+				warnings int
+			}{
+				{int64(1000), sql.NullString{String: "999.99", Valid: true}, 3},
+				{float64(1000), sql.NullString{String: "999.99", Valid: true}, 3},
+				{"1000", sql.NullString{String: "999.99", Valid: true}, 3},
+				{nil, sql.NullString{}, 0},
+				{int64(999), sql.NullString{String: "999.00", Valid: true}, 0},
+				{int64(1000), sql.NullString{String: "999.99", Valid: true}, 3},
+			} {
+				values := func() []sql.NullString {
+					rows, err := p.QueryContext(ctx, tc.value)
+					require.NoError(t, err)
+					defer rows.Close()
+					values := read(rows)
+					require.NoError(t, rows.Err())
+					return values
+				}()
+				check(values, tc.want, tc.warnings)
+			}
+		})
 		t.Run("NULL assignment history does not change SQL EXECUTE conversion", func(t *testing.T) {
 			exec(t, "create table null_history_result(v varchar(8))")
 			for _, history := range []struct {
