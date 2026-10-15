@@ -398,7 +398,10 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
   IVF algorithms' existing `algo_options` probe count) with a dedicated MORPC version,
   `vectorscan.SearchKnobsProtocolVersion`. A scan carrying any of them, from the SQL option or a
   session variable, requires that version on every CN that runs it; a scan without them requires
-  `vectorscan.IndexSearchScanProtocolVersion`.
+  `vectorscan.IndexSearchScanProtocolVersion`. The knob epoch is not shared with any other
+  feature, so a CN at an earlier epoch, including one that has other features of the same
+  cumulative series, is refused at placement, at the send-time destination re-probe and on the
+  execution-stream handshake.
 - **Membership**: no version change; an older hnsw, cagra or ivfpq reader refuses
   `MembershipFilterRequired`, so a CN of an older build fails a PRE plan instead of ignoring the
   filter. The cuVS filtered-search C functions take a `mo_membership_t`; libmo and the Go
