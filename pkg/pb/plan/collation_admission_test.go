@@ -13,6 +13,9 @@ package plan
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +67,94 @@ func TestTypedCollationAdmissionSchemaOnlyDDL(t *testing.T) {
 	require.Error(t, RequireLegacyCollations(owner))
 	table.KeyFormat = 0
 	table.Cols[0].Typ.Charset = 4
+	require.Error(t, RequireLegacyCollations(owner))
+}
+
+func TestNativeUnicodeUniqueTableAdmission(t *testing.T) {
+	native := Type{
+		Id:               61,
+		Charset:          uint32(collation.UTF8MB4UnicodeCIIdentity),
+		CollationVersion: uint32(collation.RevisionV1),
+	}
+	table := &TableDef{
+		DefaultCharset: 3,
+		KeyFormat:      collation.KeyFormatV1,
+		Cols:           []*ColDef{{Name: "v", Typ: native}},
+		Indexes: []*IndexDef{{
+			Parts:     []string{"v"},
+			Unique:    true,
+			KeyFormat: collation.KeyFormatV1,
+		}},
+	}
+	require.NoError(t, RequireLegacyCollations(table))
+
+	hidden := &TableDef{
+		Name:      "__mo_index_unique_test",
+		KeyFormat: collation.KeyFormatV1,
+		Cols:      []*ColDef{{Name: "__mo_index_idx_col", Typ: Type{Id: 65, Charset: 1}}},
+		Pkey:      &PrimaryKeyDef{Names: []string{"__mo_index_idx_col"}, PkeyColName: "__mo_index_idx_col"},
+		Defs: []*TableDef_DefType{{Def: &TableDef_DefType_Properties{
+			Properties: &PropertiesDef{Properties: []*Property{{Key: "relkind", Value: "i"}}},
+		}}},
+	}
+	require.NoError(t, RequireLegacyCollations(hidden))
+	// Catalog-resolved physical index relations carry the system index table
+	// type, while planner-created shells may leave it empty.  Both forms must
+	// pass the physical-index compatibility gate.
+	resolvedPhysical := proto.Clone(hidden).(*TableDef)
+	resolvedPhysical.TableType = "i"
+	require.NoError(t, RequireLegacyCollations(resolvedPhysical))
+
+	withoutUnique := *table
+	withoutUnique.Indexes = nil
+	require.Error(t, RequireLegacyCollations(&withoutUnique))
+	require.Error(t, RequireLegacyCollations(&IndexDef{KeyFormat: collation.KeyFormatV1}))
+
+	mixed := proto.Clone(table).(*TableDef)
+	mixed.Indexes = append(mixed.Indexes, &IndexDef{Parts: []string{"v"}, KeyFormat: collation.KeyFormatV1})
+	require.Error(t, RequireLegacyCollations(mixed))
+
+	for _, mutate := range []func(*TableDef){
+		func(v *TableDef) { v.IsTemporary = true },
+		func(v *TableDef) { v.TableType = SystemExternalRel },
+		func(v *TableDef) { v.TableType = "cluster" },
+		func(v *TableDef) {
+			v.Defs = []*TableDef_DefType{{Def: &TableDef_DefType_Properties{
+				Properties: &PropertiesDef{Properties: []*Property{{Key: "relkind", Value: "cluster"}}},
+			}}}
+		},
+		func(v *TableDef) { v.Pkey = &PrimaryKeyDef{Names: []string{"v"}, PkeyColName: "v"} },
+	} {
+		copy := proto.Clone(table).(*TableDef)
+		mutate(copy)
+		require.Error(t, RequireLegacyCollations(copy))
+	}
+
+	spoofedPhysical := proto.Clone(hidden).(*TableDef)
+	spoofedPhysical.Cols[0].Typ = native
+	require.Error(t, RequireLegacyCollations(spoofedPhysical))
+	wrongPhysicalShape := proto.Clone(hidden).(*TableDef)
+	wrongPhysicalShape.Pkey.PkeyColName = "not_the_index_key"
+	require.Error(t, RequireLegacyCollations(wrongPhysicalShape))
+	missingPhysicalKeyColumn := proto.Clone(hidden).(*TableDef)
+	missingPhysicalKeyColumn.Cols[0].Name = "not_the_index_key"
+	require.Error(t, RequireLegacyCollations(missingPhysicalKeyColumn))
+	spoofedPhysicalKind := proto.Clone(hidden).(*TableDef)
+	spoofedPhysicalKind.TableType = "cluster"
+	require.Error(t, RequireLegacyCollations(spoofedPhysicalKind))
+	extraPhysicalIndex := proto.Clone(hidden).(*TableDef)
+	extraPhysicalIndex.Indexes = []*IndexDef{{Unique: true, KeyFormat: collation.KeyFormatV1}}
+	require.Error(t, RequireLegacyCollations(extraPhysicalIndex))
+}
+
+func TestReflectiveTableValueAdmissionVisitsNestedColumns(t *testing.T) {
+	type foreignWrapper struct {
+		Table TableDef
+	}
+	owner := foreignWrapper{Table: TableDef{
+		DefaultCharset: 3,
+		Cols:           []*ColDef{{Typ: Type{Id: 61, Charset: 4}}},
+	}}
 	require.Error(t, RequireLegacyCollations(owner))
 }
 
