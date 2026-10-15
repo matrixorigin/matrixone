@@ -343,6 +343,7 @@ func init() {
 		"localtimestamp":             LOCALTIMESTAMP,
 		"lock":                       LOCK,
 		"locks":                      LOCKS,
+		"locked":                     LOCKED,
 		"logservice":                 LOGSERVICE,
 		"long":                       LONG,
 		"longblob":                   LONGBLOB,

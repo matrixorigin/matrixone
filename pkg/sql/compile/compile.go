@@ -9583,10 +9583,10 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if canonicalTarget == nil {
 			continue
 		}
-		if canonicalTarget.GetNoWait() {
+		if canonicalTarget.GetNoWait() || canonicalTarget.GetSkipLocked() {
 			if canonicalTarget.GetLockTable() || canonicalTarget.GetLockTableAtTheEnd() {
 				return nil, moerr.NewNotSupportedNoCtx(
-					"NOWAIT requires exact row lock targets")
+					"NOWAIT and SKIP LOCKED require exact row lock targets")
 			}
 			coordinatorLock = true
 		}
@@ -9672,17 +9672,17 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 
 func validateNonBlockingLockTargets(proc *process.Process, targets []*plan.LockTarget) error {
 	for _, target := range targets {
-		if target == nil || !target.GetNoWait() {
+		if target == nil || (!target.GetNoWait() && !target.GetSkipLocked()) {
 			continue
 		}
 		if proc == nil {
 			return moerr.NewNotSupportedNoCtx(
-				"NOWAIT requires a pessimistic transaction")
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
 		}
 		txnOp := proc.GetTxnOperator()
 		if txnOp == nil || !txnOp.Txn().IsPessimistic() {
 			return moerr.NewNotSupportedNoCtx(
-				"NOWAIT requires a pessimistic transaction")
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
 		}
 	}
 	return nil
