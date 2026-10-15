@@ -42,6 +42,48 @@ type countingMethodBasedClient struct {
 	asyncCalls atomic.Int32
 }
 
+func TestRemoveCachePreservesPublishedSnapshot(t *testing.T) {
+	s := &service{}
+	s.removeCache(1)
+	old := newReadCache()
+	old.shards[1] = shardsCache{}
+	old.shards[2] = shardsCache{}
+	s.cache.read.Store(old)
+	s.removeCache(3)
+	require.Same(t, old, s.getReadCache())
+	s.removeCache(1)
+	require.True(t, old.hasTableCache(1), "a snapshot retained by a reader is immutable")
+	require.False(t, s.getReadCache().hasTableCache(1))
+	require.True(t, s.getReadCache().hasTableCache(2))
+	s.removeCache(1)
+	require.True(t, old.hasTableCache(1))
+}
+
+func TestRemoveCacheConcurrentDeletes(t *testing.T) {
+	s := &service{}
+	old := newReadCache()
+	for _, id := range []uint64{1, 2, 3} {
+		old.shards[id] = shardsCache{}
+	}
+	s.cache.read.Store(old)
+	start := make(chan struct{})
+	done := make(chan struct{}, 2)
+	for _, id := range []uint64{1, 2} {
+		go func() {
+			<-start
+			s.removeCache(id)
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	<-done
+	<-done
+	require.Len(t, old.shards, 3)
+	require.False(t, s.getReadCache().hasTableCache(1))
+	require.False(t, s.getReadCache().hasTableCache(2))
+	require.True(t, s.getReadCache().hasTableCache(3))
+}
+
 func (c *countingMethodBasedClient) AsyncSend(
 	ctx context.Context,
 	req *shard.Request,
