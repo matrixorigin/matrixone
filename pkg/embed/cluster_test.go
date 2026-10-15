@@ -196,7 +196,8 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.NoError(t, err)
 	c.portLease = ports
 	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
-	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	lease, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err)
 	c.testAdmission = lease
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
@@ -210,7 +211,7 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.Nil(t, c.testAdmission)
 	require.Nil(t, c.portLease)
 	require.True(t, c.CloseComplete())
-	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	next, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err, "completed close must not poison the next cluster")
 	t.Cleanup(func() { require.NoError(t, next.Release()) })
 	require.NoError(t, c.Close())
@@ -375,6 +376,9 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 }
 
 func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	// This scenario owns its cluster independently of earlier shared-fixture tests.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
@@ -512,7 +516,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
 
-			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true",
 				cn0.GetServiceConfig().CN.Frontend.Port,
 			)
 
@@ -522,6 +526,78 @@ func TestRunSQLWithFrontend(t *testing.T) {
 
 			_, err = db.Exec("show databases")
 			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			var originalMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalMode))
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
+				defer done()
+				_, err := conn.ExecContext(cleanupCtx, "set sql_mode=?", originalMode)
+				assert.NoError(t, err)
+			}()
+			cases := []struct {
+				name, query string
+				want        []string
+			}{
+				{"versioned comment", "/*!50000 select 1; select 2 */;", []string{"1", "2"}},
+				{"ordinary prefix", "select 1; /*!50000 select 2; select 3 */;", []string{"1", "2", "3"}},
+				{"final inner delimiter", "/*! select 1; select 2; */;", []string{"1", "2"}},
+				{"consecutive wrappers", "/*! select 1; select 2 */; /*! select 3; select 4 */", []string{"1", "2", "3", "4"}},
+				{"mode transition and ordinary suffix", "select 1; /*! set sql_mode='ANSI_QUOTES'; select 2; select 3 */; select 4", []string{"1", "2", "3", "4"}},
+				{"mode sensitive continuation", `/*! set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2; */`, []string{`x\`, "2"}},
+			}
+			// Two bounded passes reuse the session and exercise repeated/cache paths.
+			for round := 0; round < 2; round++ {
+				for _, tc := range cases {
+					t.Run(fmt.Sprintf("%s/round_%d", tc.name, round), func(t *testing.T) {
+						_, err := conn.ExecContext(ctx, "set sql_mode=''")
+						require.NoError(t, err)
+						// QueryContext sends the entire string as one COM_QUERY.
+						rows, err := conn.QueryContext(ctx, tc.query)
+						require.NoError(t, err)
+						defer rows.Close()
+						var got []string
+						for {
+							columns, err := rows.Columns()
+							require.NoError(t, err)
+							if len(columns) != 0 {
+								require.Len(t, columns, 1)
+								require.True(t, rows.Next())
+								var value string
+								require.NoError(t, rows.Scan(&value))
+								got = append(got, value)
+								require.False(t, rows.Next())
+							}
+							require.NoError(t, rows.Err())
+							if !rows.NextResultSet() {
+								break
+							}
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, tc.want, got)
+					})
+				}
+			}
+			// A failed continuation must leave the connection and parser reusable.
+			t.Run("invalid continuation and recovery", func(t *testing.T) {
+				rows, err := conn.QueryContext(ctx, "/*! set sql_mode='ANSI_QUOTES'; select from */")
+				if err == nil {
+					defer rows.Close()
+					for rows.NextResultSet() {
+						for rows.Next() {
+						}
+					}
+					err = rows.Err()
+				}
+				require.Error(t, err)
+				var value int
+				require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
+				require.Equal(t, 9, value)
+			})
 		},
 	)
 }
@@ -663,6 +739,9 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 }
 
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
+	// This lock-only test must own its namespace: other cluster processes may
+	// legitimately acquire a released range before this test reacquires it.
+	t.Setenv("TMPDIR", t.TempDir())
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -1256,11 +1335,10 @@ func TestClusterCloseStopsAtServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	err = c.Close()
@@ -1334,11 +1412,10 @@ func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
 		state:    started,
 		services: []*operator{logOp, tnOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
@@ -1459,6 +1536,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root := t.TempDir()
 	var parsed cnservice.Config

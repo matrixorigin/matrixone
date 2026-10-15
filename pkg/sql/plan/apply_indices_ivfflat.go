@@ -939,6 +939,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if canIndexOnly {
 		joinRootID = candidateNodeID
 	} else if pushdownEnabled {
+		rowFetchFilters, membershipOnlyFilters := builder.ivfMembershipRowFetchFilters(scanNode)
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
@@ -1156,6 +1157,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			OnList:   []*Expr{outerOn},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
 		}, ctx)
+
+		// Every surviving PK passed the complete predicate on the copied scan.
+		// Commit this only after both exact PK joins have been built, so a declined
+		// rewrite retains its MATCH filters. The membership producer keeps them.
+		if len(membershipOnlyFilters) > 0 {
+			scanNode.FilterList = rowFetchFilters
+			if colRefCnt != nil {
+				increaseRefCntForExprList(membershipOnlyFilters, -1, colRefCnt)
+			}
+		}
 
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID

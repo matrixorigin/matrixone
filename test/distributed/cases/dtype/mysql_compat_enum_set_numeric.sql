@@ -46,7 +46,41 @@ create table special_numeric_agg (id int primary key, g int,
 insert into special_numeric_agg values
     (1, 1, 'red', 'a'), (2, 1, 'red', 'a'), (3, 1, 'green', 'a,b'),
     (4, 2, 'blue', 'c'), (5, 2, null, null);
+-- ENUM/SET aggregates expose DOUBLE to clients, matching MySQL (#30174).
+-- @metacmp(true)
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg;
+-- String results make the tiny-addend regression exact even with tolerant numeric comparison.
+select cast(sum(e) + cast('0.000000000000000001' as decimal(20,18)) as char) as se,
+       cast(avg(e) + cast('0.000000000000000001' as decimal(20,18)) as char) as ae,
+       cast(sum(s) + cast('0.000000000000000001' as decimal(20,18)) as char) as ss,
+       cast(avg(s) + cast('0.000000000000000001' as decimal(20,18)) as char) as avs
+from special_numeric_agg;
+-- Explicit exact operands retain DECIMAL precision.
+select cast(sum(cast(e as unsigned)) + cast('0.000000000000000001' as decimal(20,18)) as char) as se,
+       cast(avg(cast(e as decimal(20,0))) + cast('0.000000000000000001' as decimal(20,18)) as char) as ae,
+       cast(sum(cast(s as unsigned)) + cast('0.000000000000000001' as decimal(20,18)) as char) as ss,
+       cast(avg(cast(s as decimal(20,0))) + cast('0.000000000000000001' as decimal(20,18)) as char) as avs
+from special_numeric_agg;
+-- @metacmp(true)
+select id, sum(e) over () as se, avg(e) over () as ae,
+       sum(s) over () as ss, avg(s) over () as avs from special_numeric_agg order by id;
+drop table if exists special_numeric_results;
+create table special_numeric_results as
+select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg;
+select column_name, data_type from information_schema.columns
+where table_schema = database() and table_name = 'special_numeric_results' order by ordinal_position;
+drop table special_numeric_results;
+prepare special_numeric_domain from 'select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg where g <= ?';
+set @special_numeric_g = 1;
+-- @metacmp(true)
+execute special_numeric_domain using @special_numeric_g;
+set @special_numeric_g = 2;
+-- @metacmp(true)
+execute special_numeric_domain using @special_numeric_g;
+set @special_numeric_g = 0;
+-- @metacmp(true)
+execute special_numeric_domain using @special_numeric_g;
+deallocate prepare special_numeric_domain;
 select sum(distinct e) as se, cast(avg(distinct e) as decimal(12,4)) as ae,
        sum(distinct s) as ss, cast(avg(distinct s) as decimal(12,4)) as avs from special_numeric_agg;
 select g, sum(e) as se, cast(avg(e) as decimal(12,4)) as ae, sum(s) as ss, cast(avg(s) as decimal(12,4)) as avs

@@ -386,7 +386,11 @@ const (
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 // DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
+// DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
+// from native DECIMAL64/128 variance and standard deviation.
+// CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
+	CalendarIntervalNormalization   bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -411,18 +415,20 @@ type RemoteExpressionFeatures struct {
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
-	SpecialIntegerConsumers       bool
-	TemporalResultContracts       bool
-	InvalidTemporalResultContract bool
-	NormalizedIntervalUnits       bool
-	LegacyIntervalUnits           bool
-	WeekSessionDefault            bool
-	MediumIntAssignmentBounds     bool
-	DateNumericResultContracts    bool
+	SpecialIntegerConsumers                 bool
+	TemporalResultContracts                 bool
+	InvalidTemporalResultContract           bool
+	NormalizedIntervalUnits                 bool
+	LegacyIntervalUnits                     bool
+	WeekSessionDefault                      bool
+	MediumIntAssignmentBounds               bool
+	DateNumericResultContracts              bool
+	DecimalStatisticalResultContracts       bool
+	InvalidDecimalStatisticalResultContract bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -448,7 +454,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
-		features.DateNumericResultContracts
+		features.DateNumericResultContracts ||
+		features.DecimalStatisticalResultContracts ||
+		features.InvalidDecimalStatisticalResultContract
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -908,6 +916,18 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
+					features.CalendarIntervalNormalization = true
+				}
+				// Aliases and DISTINCT share these aggregate IDs. Inspect the
+				// argument domain even for legacy DECIMAL-typed result plans.
+				statisticalID := id & 0x7fffffff // remove the DISTINCT flag
+				if (statisticalID == 180 || statisticalID == 181 || statisticalID == 199 || statisticalID == 200) &&
+					len(fn.Args) == 1 && fn.Args[0] != nil &&
+					(fn.Args[0].Typ.Id == 32 || fn.Args[0].Typ.Id == 33) {
+					features.DecimalStatisticalResultContracts = true
+					features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract || current.Typ.Id != 31
+				}
 				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
 					isPlanMediumIntType(fn.Args[1].Typ)
 				if (id == mediumIntStrictCastFunctionID ||

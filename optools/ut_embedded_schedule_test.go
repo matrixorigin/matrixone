@@ -257,14 +257,16 @@ trap cleanup_pool_driver EXIT
 (
  trap release_pool_children EXIT
  trap 'exit 143' TERM INT
- read -r -t 3 first first_pid <&8 || exit 100
- read -r -t 3 second second_pid <&8 || exit 101
+ # The harness deadline bounds the whole operation. Precompilation may still
+ # be running here, so worker readiness must not start a separate short timer.
+ read -r first first_pid <&8 || exit 100
+ read -r second second_pid <&8 || exit 101
  [[ "$first $second" == 'a b' || "$first $second" == 'b a' ]] || exit 102
  [[ "$first_pid" != "$second_pid" ]] || exit 103
  kill -0 "$first_pid" && kill -0 "$second_pid" || exit 104
  [[ -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && ! -e "$CASE_DIR/executed-c" ]] || exit 105
  printf 'release\n' >&10
- read -r -t 3 third third_pid <&8 || exit 106
+ read -r third third_pid <&8 || exit 106
  [[ "$third" == c && "$third_pid" != "$first_pid" && "$third_pid" != "$second_pid" ]] || exit 107
  kill -0 "$third_pid" || exit 108
  [[ ! -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && -e "$CASE_DIR/active-c" ]] || exit 109
@@ -275,7 +277,10 @@ UT_EMBEDDED_PACKAGE_PARALLEL=2 run_embedded_tests "$scope" || status=$?
 driver_status=0
 wait "$pool_driver_pid" || driver_status=$?
 pool_driver_pid=""
-[[ "$status" == 0 && "$driver_status" == 0 ]] || exit 90
+[[ "$status" == 0 && "$driver_status" == 0 ]] || {
+ printf 'embedded execution status=%s pool driver status=%s\n' "$status" "$driver_status" >&2
+ exit 90
+}
 [[ "$(grep -c '^pool=2 ' "$CASE_DIR/pool-events")" == 3 ]] || exit 91
 # Indexed execution checkpoints exclude the outer command and compile events.
 awk '
@@ -314,6 +319,8 @@ cat "$UT_REPORT"
 // Exercise preparation and consumption as well as admission. Compilation
 // indices intentionally differ from execution indices after pkg/embed moves.
 func TestEmbeddedPrebuiltAdmission(t *testing.T) {
+	t.Setenv("UT_PREBUILD_EMBEDDED", "0")
+	t.Setenv("UT_HARD_TIMEOUT", "1s")
 	for _, tc := range []struct {
 		name, parallel, mode string
 	}{
@@ -1037,5 +1044,110 @@ kill -KILL $$
 	out, err := scheduleHarnessWithMock(t, script, mock, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
 	if err != nil {
 		t.Fatalf("prebuild normal return is not drainage proof: %v\n%s", err, out)
+	}
+}
+
+// Scope policy and report ownership use the existing command/consume boundary;
+// the executor's real pool/deadline/drain behavior is covered separately.
+func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
+	const embed = "github.com/matrixorigin/matrixone/pkg/embed"
+	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
+	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
+	const sql = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
+	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
+	for _, tc := range []struct {
+		name, scope, mode, ordinaryStatus, batchStatus, consumeStatus, want string
+		parallel, goParallel                                                string
+		retainOwner                                                         bool
+		status                                                              int
+	}{
+		{name: "rollback", scope: "example/a\n" + dml + "\n" + sql, mode: "1", want: "ordinary:example/a " + dml + " " + sql + "\n"},
+		{name: "embed-rollback", scope: embed + "\nexample/a", mode: "1", want: "ordinary:" + embed + " example/a\n"},
+		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:2:2:independent\nconsume\n"},
+		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:2:2:independent\nconsume\n"},
+		{name: "isolated-rollback", scope: isolated + "\nexample/a", mode: "1", want: "ordinary:" + isolated + " example/a\n"},
+		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:2:2:independent\nconsume\n" + batches},
+		{name: "both", scope: "example/a\n" + dml + "\nexample/b\n" + sql, mode: "4", want: "ordinary:example/a example/b\n" + batches},
+		{name: "only-audited", scope: dml + "\n" + sql, mode: "4", want: batches},
+		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
+		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:2:2:cleanup-only\nconsume\n"},
+		{name: "neither", scope: "example/a", mode: "4", want: "ordinary:example/a\n"},
+		{name: "ordinary-pool", scope: "example/a\nexample/b", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:example/a example/b\n"},
+		{name: "unknown-stays-serial", scope: "github.com/matrixorigin/matrixone/pkg/newcluster\nexample/a", mode: "4", parallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/newcluster example/a\n"},
+		{name: "high-footprint-rollback-stays-serial", scope: embed + "\nexample/a", mode: "1", parallel: "2", want: "ordinary:" + embed + " example/a\n"},
+		{name: "measured-multicn-pool", scope: "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn\nexample/a", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn example/a\n"},
+		{name: "empty", mode: "4"},
+		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
+		{name: "batch-failure-continues", scope: dml + "\n" + sql, mode: "4", batchStatus: "7", want: batches, status: 1},
+		{name: "ordinary-undrained-stops", parallel: "2", goParallel: "2", scope: "example/a\n" + dml, mode: "4", ordinaryStatus: "125", want: "ordinary:example/a\n", status: 125},
+		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:2:2:independent\n", status: 125},
+		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
+		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.parallel == "" {
+				tc.parallel = "1"
+			}
+			if tc.goParallel == "" {
+				tc.goParallel = "1"
+			}
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+: > "$CASE_DIR/calls"
+function run_ut_command() {
+ [[ "$1" == embedded ]] || return 90
+ CURRENT_UT_COMMAND_STAGE=$1
+ shift 2
+ if [[ "$1" == run_race_test_batches ]]; then "$@"; return $?; fi
+ [[ -z "$PREBUILT_RACE_REPORT" && -z "$PREBUILT_RACE_TEST_BINARY" ]] || return 91
+ [[ " $* " == *" -p $EXPECTED_GO_PARALLEL "* ]] || return 100
+ if [[ "$EXPECTED_GO_PARALLEL" == 2 ]]; then
+  [[ " $* " == *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
+ else
+  [[ " $* " != *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* ]] || return 102
+ fi
+ local package scope=""
+ for package in "$@"; do
+  case "$package" in example/*|github.com/matrixorigin/matrixone/pkg/*) scope="${scope:+$scope }$package" ;; esac
+ done
+ [[ -n "$scope" ]] || return 92
+ printf 'ordinary:%s\n' "$scope" >> "$CASE_DIR/calls"
+ return "${ORDINARY_STATUS:-0}"
+}
+function run_race_test_batches() {
+ [[ "$CURRENT_UT_COMMAND_STAGE" == embedded ]] || return 93
+ [[ ! -e "$2" && ! -e "$PREBUILT_RACE_REPORT" ]] || return 94
+ printf 'batch:%s:%s:%s:%s:%s\n' "$1" "$3" "$4" "$5" "$6" >> "$CASE_DIR/calls"
+ touch "$2" "$PREBUILT_RACE_REPORT"
+ case "$1" in */dml) return "${BATCH_STATUS:-0}" ;; esac
+}
+function consume_race_report() {
+ printf 'consume\n' >> "$CASE_DIR/calls"
+ [[ "$1 $2" == 'PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY' ]] || return 95
+ [[ -f "$PREBUILT_RACE_REPORT" && -f "$PREBUILT_RACE_TEST_BINARY" ]] || return 96
+ [[ -z "$CONSUME_STATUS" ]] || return "$CONSUME_STATUS"
+ [[ "$RETAIN_OWNER" != true ]] || return 0
+ rm -f "$PREBUILT_RACE_REPORT" "$PREBUILT_RACE_TEST_BINARY"
+ PREBUILT_RACE_REPORT="" PREBUILT_RACE_TEST_BINARY=""
+}
+status=0
+run_embedded_tests "$SCOPE" || status=$?
+[[ "$status" == "$EXPECTED_STATUS" ]] || { printf 'wrong status %s\n' "$status"; exit 97; }
+if [[ "$BATCH_STATUS" == 125 || -n "$CONSUME_STATUS" || "$RETAIN_OWNER" == true ]]; then
+ [[ -f "$PREBUILT_RACE_REPORT" && -f "$PREBUILT_RACE_TEST_BINARY" ]] || exit 98
+else
+ [[ -z "$PREBUILT_RACE_REPORT" && -z "$PREBUILT_RACE_TEST_BINARY" ]] || exit 99
+fi
+cat "$CASE_DIR/calls"
+`
+			out, err := scheduleHarnessWithMock(t, script, "#!/bin/bash\nexit 0\n",
+				"UT_EMBEDDED_BATCHES="+tc.mode, "SCOPE="+tc.scope,
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+tc.parallel, "EXPECTED_GO_PARALLEL="+tc.goParallel,
+				"ORDINARY_STATUS="+tc.ordinaryStatus, "BATCH_STATUS="+tc.batchStatus,
+				"CONSUME_STATUS="+tc.consumeStatus, fmt.Sprintf("EXPECTED_STATUS=%d", tc.status), fmt.Sprintf("RETAIN_OWNER=%t", tc.retainOwner))
+			if err != nil || string(out) != tc.want {
+				t.Fatalf("scope policy: %v\nwant %q\ngot %q", err, tc.want, out)
+			}
+		})
 	}
 }

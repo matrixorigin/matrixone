@@ -69,3 +69,15 @@ SELECT abs(1241)*abs(-0.4141);
 #比较操作
 SELECT abs(-100)>abs(-102);
 SELECT abs(-100)<>abs(100);
+
+# Signed zero: ABS must clear the sign before ATAN2 observes it.
+SELECT ABS(-0e0) AS abs_zero, ATAN2(ABS(-0e0), -1e0) AS angle, ATAN2(ABS(-0e0), -1e0) = PI() AS matches_pi;
+SELECT ATAN2(ABS(0e0), -1e0) = PI() AS positive_zero, ABS(NULL) AS null_abs, ATAN2(ABS(NULL), -1e0) AS null_angle;
+DROP TABLE IF EXISTS abs_signed_zero;
+CREATE TABLE abs_signed_zero(id INT PRIMARY KEY, f FLOAT, d DOUBLE);
+INSERT INTO abs_signed_zero VALUES (1, -0e0, -0e0), (2, 0e0, 0e0), (3, NULL, NULL);
+SELECT id, ATAN2(f, -1e0) = PI() AS raw_float_matches, ATAN2(d, -1e0) = PI() AS raw_double_matches FROM abs_signed_zero ORDER BY id;
+SELECT id, ATAN2(ABS(f), -1e0) = PI() AS float_matches, ATAN2(ABS(d), -1e0) = PI() AS double_matches FROM abs_signed_zero ORDER BY id;
+SELECT id FROM abs_signed_zero WHERE ATAN2(ABS(f), -1e0) = PI() ORDER BY id;
+SELECT id FROM abs_signed_zero WHERE ATAN2(ABS(d), -1e0) = PI() ORDER BY id;
+DROP TABLE abs_signed_zero;
