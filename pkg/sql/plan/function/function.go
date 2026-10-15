@@ -135,6 +135,13 @@ func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
 	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
 }
 
+// IsFoldCandidate admits deterministic expressions for speculative evaluation.
+// Unlike IsConstant, this is not permission to relocate or eliminate effects:
+// the folder must isolate diagnostics and publish only a warning-free result.
+func IsFoldCandidate(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFoldCandidate)
+}
+
 // IsStatementConstant conservatively admits speculative evaluation and endpoint
 // CONST provenance. Parameters and variables must already be materialized.
 func IsStatementConstant(expr *plan.Expr) bool {
@@ -152,6 +159,7 @@ type constantPurpose uint8
 const (
 	constantForFolding constantPurpose = iota
 	constantForRuntime
+	constantForFoldCandidate
 )
 
 func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
@@ -180,11 +188,13 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
-		if fid == CASE && purpose == constantForFolding {
+		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
-		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
+		if !ok || f.IsVolatile() ||
+			(f.HasRowScopedDiagnostics() && purpose != constantForFoldCandidate) ||
+			(f.IsRealTimeRelated() && !currentExecution) {
 			return false
 		}
 		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
@@ -502,7 +512,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := !f.CannotFold() && !f.IsRealTimeRelated()
+	fold := !f.IsVolatile() && !f.IsRealTimeRelated() && (!f.HasRowScopedDiagnostics() || length > 0)
 	evaluateLength := length
 	if fold {
 		for _, param := range inputs {
@@ -520,19 +530,29 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		return nil, err
 	}
 	exec, _, execFree, _ := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
-		result.Free()
-		if execFree != nil {
-			// NOTE: execFree is only applicable for serial and serial_full.
-			// if execFree is not nil, then make sure to call it after exec() is done.
-			_ = execFree()
-		}
-		return nil, err
-	}
 	if execFree != nil {
-		// NOTE: execFree is only applicable for serial and serial_full.
-		// if execFree is not nil, then make sure to call it after exec() is done.
-		_ = execFree()
+		defer func() { _ = execFree() }()
+	}
+	evalProc := proc
+	var probe *process.WarningProbe
+	if fold && f.HasRowScopedDiagnostics() {
+		probe = &process.WarningProbe{}
+		evalProc = proc.NewNoContextChildProc(0)
+		evalProc.Ctx = proc.Ctx
+		evalProc.WarningSink = probe
+	}
+	err = exec(inputs, result, evalProc, evaluateLength, nil)
+	if probe != nil && (err != nil || probe.Warned()) {
+		// The probe has no statement-visible effects. Re-evaluate at the
+		// requested cardinality so the caller owns diagnostics and errors.
+		fold = false
+		if err = result.PreExtendAndReset(length); err == nil {
+			err = exec(inputs, result, proc, length, nil)
+		}
+	}
+	if err != nil {
+		result.Free()
+		return nil, err
 	}
 
 	vec := result.GetResultVector()
@@ -926,10 +946,14 @@ func (ov *overload) IsVolatile() bool {
 	return ov.volatile
 }
 
-// CannotFold also protects deterministic functions whose diagnostics are
-// observable per row. Optimizers and evaluators must preserve those effects.
+// CannotFold conservatively protects effects when no warning-free evaluation
+// proof is available. Speculative folders use IsFoldCandidate and a warning probe.
 func (ov *overload) CannotFold() bool {
 	return ov.volatile || ov.rowScopedDiagnostics
+}
+
+func (ov *overload) HasRowScopedDiagnostics() bool {
+	return ov.rowScopedDiagnostics
 }
 
 func (ov *overload) IsRealTimeRelated() bool {

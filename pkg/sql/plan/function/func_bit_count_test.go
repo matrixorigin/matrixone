@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -368,24 +369,71 @@ func TestBitCountStringWarnings(t *testing.T) {
 }
 
 func TestBitCountDirectDiagnostics(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	session := &numericWarningSession{}
-	proc.Session = session
-	input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("3x"), 3, proc.Mp())
-	require.NoError(t, err)
-	defer input.Free(proc.Mp())
-	for _, length := range []int{3, 0} {
-		session.warnings = nil
-		func() {
-			result, err := RunFunctionDirectly(proc, EncodeOverloadID(BIT_COUNT, 13), []*vector.Vector{input}, length)
+	for _, tc := range []struct {
+		name, value string
+		null, warns bool
+	}{
+		{"malformed", "3x", false, true}, {"valid", "3 ", false, false}, {"null", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.value), 3, proc.Mp())
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
-			require.Equal(t, length, result.Length())
-			require.Len(t, session.warnings, length)
-			for row := 0; row < length; row++ {
-				require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
-				require.Equal(t, numericWarning{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}, session.warnings[row])
+			defer input.Free(proc.Mp())
+			if tc.null {
+				input.SetNull(0)
 			}
-		}()
+			for _, length := range []int{3, 0} {
+				session.warnings = nil
+				func() {
+					result, err := RunFunctionDirectly(proc, EncodeOverloadID(BIT_COUNT, 13), []*vector.Vector{input}, length)
+					require.NoError(t, err)
+					defer result.Free(proc.Mp())
+					require.Equal(t, length, result.Length())
+					if tc.warns {
+						require.Len(t, session.warnings, length)
+					} else {
+						require.Empty(t, session.warnings)
+					}
+					if length > 0 {
+						require.Equal(t, !tc.warns, result.IsConst())
+					}
+					for row := 0; row < length; row++ {
+						require.Equal(t, tc.null, result.IsNull(uint64(row)))
+						if !tc.null {
+							require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+						}
+						if tc.warns {
+							require.Equal(t, numericWarning{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}, session.warnings[row])
+						}
+					}
+				}()
+			}
+		})
+	}
+}
+
+func TestBitCountFoldCandidatesPreserveDiagnosticOwnership(t *testing.T) {
+	for _, value := range []string{"3", "3x"} {
+		source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+		expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(BIT_COUNT, 13)}, Args: []*plan.Expr{source},
+		}}}
+		require.True(t, IsFoldCandidate(expr, false))
+		require.False(t, IsConstant(expr, false))
+		require.False(t, IsStatementConstant(expr))
+		require.False(t, IsRuntimeConstant(expr))
+		require.False(t, IsStatementConstantInput(expr))
+		require.Equal(t, ZoneMapUnsupported, GetZoneMapEvaluation(expr.GetF()))
+		expr.GetF().Args[0] = &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+		require.False(t, IsFoldCandidate(expr, false))
+		require.True(t, IsFoldCandidate(expr, true))
+		expr.GetF().Args[0] = &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+		require.False(t, IsFoldCandidate(expr, true))
+		expr.GetF().Func.Obj = EncodeOverloadID(RANDOM, 0)
+		expr.GetF().Args = nil
+		require.False(t, IsFoldCandidate(expr, true))
 	}
 }

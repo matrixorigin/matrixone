@@ -4759,6 +4759,7 @@ func TestBitCountDiagnosticFolding(t *testing.T) {
 		fold   bool
 	}{
 		{"text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 2, false},
+		{"valid_text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3 "}}}}, 2, true},
 		{"binary", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 8, true},
 		{"numeric", makePlan2Int64ConstExprWithType(3), 2, true},
 	} {
@@ -4806,5 +4807,52 @@ func TestBitCountDiagnosticFolding(t *testing.T) {
 			require.Zero(t, result.Length())
 			require.Zero(t, session.warningCount)
 		})
+	}
+}
+
+func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	wasRunning := proc.GetBaseProcessRunningStatus()
+	t.Cleanup(func() { proc.SetBaseProcessRunningStatus(wasRunning) })
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	parameter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	// Bind the text overload explicitly; untyped BIT_COUNT markers keep their
+	// separate binary dispatch contract in the binder.
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", parameter))
+	if executor != nil {
+		t.Cleanup(executor.Free)
+	}
+	require.NoError(t, err)
+	input := batch.New(nil)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.SetRowCount(3)
+	for _, tc := range []struct {
+		value string
+		null  bool
+		fold  bool
+	}{
+		{"3", false, true}, {"3x", false, false}, {"", true, true}, {"3 ", false, true}, {"3x", false, false},
+	} {
+		executor.ResetForNextQuery()
+		sink.warningCount = 0
+		result := evalTestTextParameter(t, proc, executor, tc.value, tc.null, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+		require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold, tc.value)
+		require.Equal(t, tc.fold, result.IsConst(), tc.value)
+		require.Equal(t, 3, result.Length())
+		for row := 0; row < 3; row++ {
+			require.Equal(t, tc.null, result.IsNull(uint64(row)))
+			if !tc.null {
+				require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+			}
+		}
+		if tc.fold {
+			require.Zero(t, sink.warningCount)
+		} else {
+			require.Equal(t, 3, sink.warningCount, "the scalar probe must not leak a fourth warning")
+		}
+		require.Same(t, sink, proc.WarningSink)
 	}
 }

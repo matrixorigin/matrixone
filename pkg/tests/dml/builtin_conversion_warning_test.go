@@ -68,6 +68,42 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 				}
 			})
 		}
+		t.Run("constant_consumers", func(t *testing.T) {
+			for _, tc := range []struct{ name, query, want string }{
+				{"ceil_text", "select ceil(12.345,bit_count('3')) = 12.35", "1"},
+				{"ceil_numeric", "select ceil(12.345,bit_count(3)) = 12.35", "1"},
+				{"ceil_nested_text", "select ceil(12.345,bit_count(concat('', '3'))) = 12.35", "1"},
+				{"extractvalue_text", "select extractvalue('<a><b>x</b></a>',concat('/a/b[',bit_count('1'),']'))", "x"},
+				{"extractvalue_numeric", "select extractvalue('<a><b>x</b></a>',concat('/a/b[',bit_count(1),']'))", "x"},
+				{"extractvalue_nested_text", "select extractvalue('<a><b>x</b></a>',concat('/a/b[',bit_count(concat('', '1')),']'))", "x"},
+				{"updatexml_text", "select updatexml('<a><b>x</b></a>',concat('/a/b[',bit_count('1'),']'),'<c/>')", "<a><c/></a>"},
+				{"updatexml_numeric", "select updatexml('<a><b>x</b></a>',concat('/a/b[',bit_count(1),']'),'<c/>')", "<a><c/></a>"},
+				{"percentile_text", "select percentile_disc(bit_count('1')) within group (order by v) from (select 10 as v union all select 20) s", "20"},
+				{"percentile_numeric", "select percentile_disc(bit_count(1)) within group (order by v) from (select 10 as v union all select 20) s", "20"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					require.Equal(t, [][]string{{tc.want}}, queryStringRows(t, ctx, db, tc.query))
+					require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+				})
+			}
+			t.Run("prepared_xml_reuse", func(t *testing.T) {
+				query := "select extractvalue('<a><b>x</b><b>y</b></a>',concat('/a/b[',bit_count(cast(? as char)),']'))"
+				stmt, err := db.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				execSQLDB(t, ctx, db, "prepare warning_xpath from '"+strings.ReplaceAll(query, "'", "''")+"'")
+				defer execSQLDB(t, ctx, db, "deallocate prepare warning_xpath")
+				for _, tc := range []struct{ input, want string }{{"1", "x"}, {"3", "y"}, {"1", "x"}} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, tc.input).Scan(&got))
+					require.Equal(t, tc.want, got)
+					require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+					execSQLDB(t, ctx, db, "set @warning_xpath_arg='"+tc.input+"'")
+					require.Equal(t, [][]string{{tc.want}}, queryStringRows(t, ctx, db, "execute warning_xpath using @warning_xpath_arg"))
+					require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+				}
+			})
+		})
 		t.Run("columns_and_statement_constants", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "create database builtin_conversion_warnings")
 			defer cleanupTestDatabases(t, db, "builtin_conversion_warnings")
@@ -161,6 +197,7 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			for _, prepared := range []struct{ expression, want string }{
 				{"hex(lpad('x',?,'0'))", "303078"}, {"hex(rpad('x',?,'0'))", "783030"},
 				{"hex(repeat('x',?))", "787878"}, {"hex(space(?))", "202020"},
+				{"bit_count(cast(? as char))", "2"},
 			} {
 				expression := prepared.expression
 				func() {

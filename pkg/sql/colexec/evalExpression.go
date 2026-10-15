@@ -472,7 +472,8 @@ func newExpressionExecutorWithAllocation(
 			executor.stringToNumericCast = !overload.CannotFold() &&
 				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
 			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
-			executor.volatile = overload.CannotFold() || executor.stringToNumericCast || executor.rowScopedDecimalCast
+			executor.volatile = overload.IsVolatile() || executor.stringToNumericCast || executor.rowScopedDecimalCast
+			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
