@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/mv"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -144,6 +145,9 @@ func handleDropMaterializedView(ctx context.Context, ses *Session, stmt *tree.Dr
 	if err != nil {
 		return err
 	}
+	// Native DROP TABLE participates in the catalog/lineage lifecycle lock
+	// protocol. Select its required mode on this owning transaction, including
+	// when the deployment defaults to optimistic transactions.
 	return svc.SQL.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
 		if err := mv.DependencyGuard(tx, key.Account); err != nil {
 			return err
@@ -171,7 +175,9 @@ func handleDropMaterializedView(ctx context.Context, ses *Session, stmt *tree.Dr
 			r.Close()
 		}
 		return nil
-	}, executor.Options{}.WithAccountID(key.Account).WithWaitCommittedLogApplied())
+	}, executor.Options{}.WithAccountID(key.Account).
+		WithTxnMode(txn.TxnMode_Pessimistic).WithTxnIsolation(txn.TxnIsolation_RC).
+		WithWaitCommittedLogApplied())
 }
 func handleAlterMaterializedView(ctx context.Context, ses *Session, stmt *tree.AlterMaterializedView) error {
 	if err := checkMaterializedViewTransaction(ctx, ses); err != nil {

@@ -5,9 +5,10 @@ use mv_bvt;
 create table facts(id int primary key,k int,v bigint);
 insert into facts values(1,1,10),(2,1,20),(3,2,null);
 set experimental_materialized_view=0;
-create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by k;
+create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by facts.k;
 set experimental_materialized_view=1;
-create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by k;
+-- Qualify the grouping key so SHOW CREATE is stable in both transaction modes.
+create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by facts.k;
 select * from totals order by k;
 refresh materialized view totals;
 select k,n,s from totals order by k;

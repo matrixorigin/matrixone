@@ -427,3 +427,68 @@ self-review found no additional code blockers: both empty representations reach
 the existing cleanup; catalog migration, query errors, native-table capability,
 transaction rollback and object bounds remain enforced. Existing RFC approval
 and the new remote CI run remain separate pending delivery gates.
+
+
+### 2026-10-15: transaction-mode-independent SHOW CREATE fixture and native DROP
+
+Run `38665103998`, exact head `1ec43a9800906d6f22f6932f35eb4e9e25a371f9`:
+ordinary UT, coverage UT, SCA, shared build and Proxy BVT passed. Pessimistic
+BVT job `116197952536` failed exactly three SQL assertions (84,357 statements,
+83,899 successes, 3 failures, 455 existing ignores, 0 abnormal). All three are
+`SHOW CREATE MATERIALIZED VIEW` in `view/materialized_view.sql`: the stored
+GROUP BY is `k`, while the expected text has `facts.k`. Coverage aggregation
+failed its BVT-producer prerequisite and did not evaluate its threshold.
+
+The formatter persists the bound SELECT; qualification introduced during binding
+can differ with the transaction/optimizer path. Qualification equivalence is not
+a separate MV result contract. The fixture now explicitly supplies `facts.k` in
+both CREATE statements. The three exact SHOW CREATE result assertions, all data
+and error assertions, and the 58-statement count remain unchanged; the result
+file only updates the two echoed CREATE inputs. Unqualified grouping remains
+covered by the native consumer's aggregate/join/tenant cases, and the failing
+baseline itself passed all data/publication assertions with unqualified `k`.
+No alternate accepted output, ignore marker, retry or threshold change is used.
+
+Cross-mode validation also found an actual DROP ownership bug: with an optimistic
+deployment default, `handleDropMaterializedView` opens an optimistic internal
+transaction and native DROP TABLE rejects it with `data branch lineage lifecycle
+writer requires a pessimistic transaction`. The enclosing frontend transaction
+cannot select the mode of this independent executor transaction. The fix selects
+pessimistic/RC at the owning `ExecTxn`, matching normal native DROP admission in
+`frontend/txn.go`. The nested native DROP still borrows the same transaction and
+exact account/table/transaction capability; privileges, definition cleanup,
+rollback, wait-for-commit behavior and refresh transaction mode remain unchanged.
+
+Validation uses one local CN with the existing LOG/TN configuration, normal
+frontend authentication, three source rows and the actual mo-tester consumer.
+The test-owned service is stopped in a finally block after each run. Switching
+CN defaults changes only `[cn.txn].mode`; no fixture data or expected output is
+changed between the final two modes.
+
+- Unfixed pessimistic baseline: 55/58 PASS, the same 3 SHOW CREATE failures as CI.
+- Qualified-input fixture, before DROP fix: pessimistic 58/58 PASS; optimistic
+  51/58 PASS, exposing native DROP failure and six downstream failures. This
+  failed run is retained as diagnosis, not claimed as validation success.
+- Final fixture plus native DROP ownership fix: optimistic **58/58 PASS**,
+  pessimistic **58/58 PASS**, both 0 failures/ignores/abnormal.
+- Full frontend owning package: PASS, 25.077 s (Go 1.27.1, repository CGo wrapper,
+  `matrixone_test`, `-short`, `-count=1`).
+
+Logs: `/workspace/mv-ci/showcreate-{before,after-pessimistic,after-optimistic,
+fixed-optimistic,fixed-pessimistic}.log` and `showcreate-frontend-ut.log`.
+The local cluster binary uses the unchanged 1ec43a98 kernel plus the explicit
+DROP transaction-mode selection. No new cluster fixture or test data is added
+to CI; the existing SQL contract is reused for both public-path regressions.
+
+Review map: SQL fixture/result is R1 test determinism; DROP transaction ownership
+is R3 catalog lifecycle, using the existing native protocol rather than a new
+lock or retry mechanism; this record is R0. The public cross-mode test supplies
+the discriminating failure and success oracles; no options-only mock test is
+added. The existing TxnExecutor callback retains sole commit/rollback ownership,
+and no new asynchronous state, wait dependency or retained resource is added.
+This is a focused regression fix; RFC revision 3 remains pending external review.
+
+Final static checks: gofmt/diff whitespace checks PASS; frontend `go vet` PASS;
+configured golangci-lint 2.14.0 on frontend reports **0 issues**. Final-scope
+self-review found no additional code blockers. New exact-head CI remains required;
+passes from 1ec43a98 are reused only for unchanged semantic inputs.
