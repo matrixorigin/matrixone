@@ -19535,8 +19535,8 @@ yydefault:
 		{
 			var roleName = yyDollar[3].cstrUnion().Compare()
 			var ruleSQL = yyDollar[6].str
-			var dbName = yyDollar[9].cstrUnion().Compare()
-			var tblName = yyDollar[11].cstrUnion().Compare()
+			var dbName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[9].cstrUnion().Origin()).Compare()
+			var tblName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[11].cstrUnion().Origin()).Compare()
 			var ruleName = dbName + "." + tblName
 			yyLOCAL = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
 		}
@@ -19547,8 +19547,8 @@ yydefault:
 //line mysql_sql.y:4336
 		{
 			var roleName = yyDollar[3].cstrUnion().Compare()
-			var dbName = yyDollar[8].cstrUnion().Compare()
-			var tblName = yyDollar[10].cstrUnion().Compare()
+			var dbName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[8].cstrUnion().Origin()).Compare()
+			var tblName = yylex.(*Lexer).GetDbOrTblNameCStr(yyDollar[10].cstrUnion().Origin()).Compare()
 			yyLOCAL = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
 		}
 		yyVAL.union = yyLOCAL
@@ -35824,11 +35824,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:15997
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = int32(value)
+			yyLOCAL = value
 		}
 		yyVAL.union = yyLOCAL
 	case 2361:
@@ -35844,11 +35844,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:16008
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = int32(value)
+			yyLOCAL = value
 		}
 		yyVAL.union = yyLOCAL
 	case 2363:
@@ -35856,11 +35856,11 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:16016
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			yyLOCAL = tree.GetDisplayWith(int32(value))
+			yyLOCAL = tree.GetDisplayWith(value)
 		}
 		yyVAL.union = yyLOCAL
 	case 2364:
@@ -35879,12 +35879,12 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16031
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(value)),
+				DisplayWith: tree.GetDisplayWith(value),
 				Scale:       tree.NotDefineDec,
 			}
 		}
@@ -35894,17 +35894,17 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16040
 		{
-			width, ok := signedIntegral(yylex, yyDollar[2].item)
+			width, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			scale, ok := signedIntegral(yylex, yyDollar[4].item)
+			scale, ok := typeLengthIntegral(yylex, yyDollar[4].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(width)),
-				Scale:       int32(scale),
+				DisplayWith: tree.GetDisplayWith(width),
+				Scale:       scale,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -35924,12 +35924,12 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16060
 		{
-			value, ok := signedIntegral(yylex, yyDollar[2].item)
+			value, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(value)),
+				DisplayWith: tree.GetDisplayWith(value),
 				Scale:       0,
 			}
 		}
@@ -35939,17 +35939,17 @@ yydefault:
 		var yyLOCAL tree.LengthScaleOpt
 //line mysql_sql.y:16069
 		{
-			width, ok := signedIntegral(yylex, yyDollar[2].item)
+			width, ok := typeLengthIntegral(yylex, yyDollar[2].item)
 			if !ok {
 				goto ret1
 			}
-			scale, ok := signedIntegral(yylex, yyDollar[4].item)
+			scale, ok := typeLengthIntegral(yylex, yyDollar[4].item)
 			if !ok {
 				goto ret1
 			}
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: tree.GetDisplayWith(int32(width)),
-				Scale:       int32(scale),
+				DisplayWith: tree.GetDisplayWith(width),
+				Scale:       scale,
 			}
 		}
 		yyVAL.union = yyLOCAL

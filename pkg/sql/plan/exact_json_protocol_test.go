@@ -59,15 +59,15 @@ func TestExactJSONPersistedExpressionOwners(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(encoded, loaded))
 		floor, err := RequiredPersistedExpressionProtocolVersion(loaded)
 		require.NoError(t, err)
-		require.Equal(t, int64(113), floor, "bound function ID %d", id)
-		for _, version := range []int64{112, 113} {
+		require.Equal(t, int64(114), floor, "bound function ID %d", id)
+		for _, version := range []int64{112, 113, 114} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 			readErr := RequirePersistedExpressionProtocol(proc.Ctx, proc, loaded)
 			writeErr := RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, loaded)
-			if version == 112 {
-				require.ErrorContains(t, readErr, "protocol version 113")
-				require.ErrorContains(t, writeErr, "protocol version 113")
+			if version < 114 {
+				require.ErrorContains(t, readErr, "protocol version 114")
+				require.ErrorContains(t, writeErr, "protocol version 114")
 			} else {
 				require.NoError(t, readErr)
 				require.NoError(t, writeErr)
@@ -89,14 +89,14 @@ func TestExactJSONViewAuthoringBeforeConstantFolding(t *testing.T) {
 			}
 		})
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(113))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(114))
 	for _, sql := range []string{
 		`create view exact_constant as select json_parse_exact('{"cost":9007199254740993.001}') as doc`,
 		`create view exact_cast as select cast(json_extract(json_parse_exact('{"cost":9007199254740993.001}'),'$.cost') as decimal(38,3)) as cost`,
 		`create view exact_row as select json_parse_exact(l_comment) as doc from lineitem`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			for _, floor := range []int64{0, 112, 113} {
+			for _, floor := range []int64{0, 112, 113, 114} {
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
@@ -104,15 +104,15 @@ func TestExactJSONViewAuthoringBeforeConstantFolding(t *testing.T) {
 					defer stmt.Free()
 					return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 				}()
-				if floor < 113 {
-					require.ErrorContains(t, err, "protocol version 113")
+				if floor < 114 {
+					require.ErrorContains(t, err, "protocol version 114")
 					continue
 				}
 				require.NoError(t, err)
 				var view ViewData
 				require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &view))
 				require.NotNil(t, view.RequiredProtocolVersion)
-				require.Equal(t, int64(113), *view.RequiredProtocolVersion)
+				require.Equal(t, int64(114), *view.RequiredProtocolVersion)
 			}
 		})
 	}
@@ -136,7 +136,7 @@ func TestExactJSONSQLPlanRetainsBoundIdentity(t *testing.T) {
 		require.True(t, features.Any())
 		floor, err := RequiredPersistedExpressionProtocolVersion(p)
 		require.NoError(t, err)
-		require.Equal(t, int64(113), floor)
+		require.Equal(t, int64(114), floor)
 	}
-	require.GreaterOrEqual(t, int64(defines.MORPCLatestVersion), int64(113))
+	require.GreaterOrEqual(t, int64(defines.MORPCLatestVersion), int64(114))
 }

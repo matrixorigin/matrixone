@@ -33,7 +33,7 @@ import (
 )
 
 // Pin the semantic capability independently of the current latest version.
-const exactJSONTestProtocol int64 = 113
+const exactJSONTestProtocol int64 = 114
 
 func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 	t.Helper()
@@ -53,7 +53,8 @@ func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 		})
 	}
 	return map[string]*planpb.Expr{"parse": parse, "nested scan filter": nested,
-		"stored JSON decimal64": cast(types.T_decimal64), "stored JSON decimal128": cast(types.T_decimal128)}
+		"stored JSON decimal64": cast(types.T_decimal64), "stored JSON decimal128": cast(types.T_decimal128),
+		"decimal variance of stored JSON": bind("var_pop", cast(types.T_decimal128))}
 }
 
 func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
@@ -65,6 +66,10 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 			qry := &planpb.Query{Nodes: []*planpb.Node{{FilterList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 			require.NoError(t, err)
+			if name == "decimal variance of stored JSON" {
+				require.True(t, features.ExactJSONDecimalCast)
+				require.True(t, features.DecimalStatisticalResultContracts)
+			}
 			require.Equal(t, exactJSONTestProtocol, remoteExpressionProtocolVersion(features))
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(qry)
 			require.NoError(t, err)
@@ -81,7 +86,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
-			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
+			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113} {
 				place(old)
 				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 				require.Len(t, c.cnList, 1)
@@ -98,7 +103,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol-1)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 113")
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 114")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 			// Replace the worker after successful placement: no observation is cached.

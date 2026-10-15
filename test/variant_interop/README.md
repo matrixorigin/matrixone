@@ -61,7 +61,7 @@ For exact-JSON remote admission, use the repository's native test wrapper:
 ```
 
 The last test owns a fresh two-CN cluster and four rows. It checks results and
-actual worker addresses with v112 advertised, then with v113 restored. Both CNs
+actual worker addresses with v113 advertised, then with v114 restored. Both CNs
 run the current binary. To reproduce the independent old executor witness,
 copy only `pkg/sql/plan/function/exact_json_worker_contract_test.go` into a clean
 worktree at pre-feature main `5d971d07a7c5a52a71f2c10390b109cebf5c0825`, build

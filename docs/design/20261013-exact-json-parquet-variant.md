@@ -40,7 +40,11 @@ The SQL function ID is appended after the IDs allocated by current main; existin
 
 ### Remote execution and durable admission
 
-MORPC v113 identifies two independent contracts: bound `JSON_PARSE_EXACT`
+Main reserves v113 for DOUBLE results of DECIMAL statistical aggregates.
+Those workers do not implement exact JSON or standard Parquet VARIANT reads;
+the independent feature floor is therefore v114 after main synchronization.
+
+MORPC v114 identifies two independent contracts: bound `JSON_PARSE_EXACT`
 identity 598, and existing JSON-to-DECIMAL64/128 CAST semantics. Executors
 sharing the JSON scalar cast path are covered. A JSON column cast needs this
 floor even without the parser in its query. FLOAT conversion and
@@ -51,11 +55,11 @@ when a worker is old or unknown. The sender checks actual identity/address again
 before emitting a payload; the receiver recomputes requirements after decoding.
 Parent cancellation and a coordinator floor lowered during the probe cannot
 authorize a send. Observations do not survive another execution/send. Durable
-expression admission also requires v113; view requirements are captured before
+expression admission also requires v114; view requirements are captured before
 constant folding.
 
 Readers discover Parquet logical annotations after placement, so all Parquet
-file scans conservatively use the same v113 reader floor and stay on the
+file scans conservatively use the same v114 reader floor and stay on the
 coordinator when workers are unsupported. CSV/JSON/Arrow retain their own
 contracts; Kafka, MongoDB, Iceberg, foreign and datastream metadata retain their
 existing owners. Frontend export is coordinator owned; input expressions obey
@@ -63,9 +67,9 @@ the expression gates.
 
 Protocol tests cover bound identities, wire round trips, controls, worker
 placement/replacement, cancellation, failed probes and persisted owners/views.
-A real two-CN SQL test forces multi-CN placement, advertises v112 on a current
+A real two-CN SQL test forces multi-CN placement, advertises v113 on a current
 worker and requires its address to be absent from exact-query execution; with
-v113 restored, that address must occur in distributed execution. Unchanged
+v114 restored, that address must occur in distributed execution. Unchanged
 native worker-wire tests at pre-feature main reproduce missing function 598 and
 decimal rounding, with `0.125` as a control. The advertisement test does not
 deploy an older CN binary.

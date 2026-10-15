@@ -133,6 +133,9 @@ message Aggregate {
   repeated plan.Expr expr = 3;
   bytes config = 4;
   plan.AggregateConfigType config_type = 5;
+  // Required for decimal statistical descriptors whose final result ABI changed.
+  // Absence identifies a legacy sender; partial-state encoding is unchanged.
+  plan.Type result_type = 6;
 }
 
 message Group {

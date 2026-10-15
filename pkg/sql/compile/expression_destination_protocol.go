@@ -39,13 +39,13 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.ExactJSONParsing, defines.MORPCVersion113,
+		{features.ExactJSONParsing, defines.MORPCVersion114,
 			"exact JSON parsing requires a versioned remote destination",
 			"remote destination does not support exact JSON parsing (MORPC version %d)"},
-		{features.ExactJSONDecimalCast, defines.MORPCVersion113,
+		{features.ExactJSONDecimalCast, defines.MORPCVersion114,
 			"exact JSON decimal casts require a versioned remote destination",
 			"remote destination does not support exact JSON decimal casts (MORPC version %d)"},
-		{features.ParquetVariantRead, defines.MORPCVersion113,
+		{features.ParquetVariantRead, defines.MORPCVersion114,
 			"Parquet VARIANT reads require a versioned remote destination",
 			"remote destination does not support Parquet VARIANT reads (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
@@ -57,6 +57,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.DecimalStatisticalResultContracts, defines.MORPCVersion113,
+			"decimal statistical DOUBLE results require a versioned remote destination",
+			"remote destination does not support decimal statistical DOUBLE results (MORPC version %d)"},
 		{features.DateNumericResultContracts, defines.MORPCVersion112,
 			"signed date result contracts require a versioned remote destination",
 			"remote destination does not support signed date result contracts (MORPC version %d)"},

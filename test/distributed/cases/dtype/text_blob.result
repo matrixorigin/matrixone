@@ -92,7 +92,7 @@ null
 0
 10100
 select space(t3) from text_01;
-➤ space(t3)[12,65535,0]  𝄀
+➤ space(t3)[-1,536870911,0]  𝄀
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          𝄀
   𝄀
   𝄀
