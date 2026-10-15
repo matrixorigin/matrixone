@@ -144,6 +144,26 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				}
 			})
 		}
+		// CTAS must admit NULL synthesized from a non-NULL string value.
+		exec("create table " + schema + ".required_dates(id int primary key,v varchar(16) not null)")
+		exec("insert into " + schema + ".required_dates values(1,'2024-00-00'),(2,'2024-02-29')")
+		for _, tc := range []struct{ name, expression, complete string }{
+			{"to_days", "to_days(v)", "739310"},
+			{"to_seconds", "to_seconds(v)", "63876384000"},
+			{"datediff_strings", "datediff(v,'2024-01-01')", "59"},
+			{"datediff_string_date", "datediff(v,cast('2024-01-01' as date))", "59"},
+			{"datediff_date_string", "datediff(cast('2024-01-01' as date),v)", "-59"},
+			{"dayofweek", "dayofweek(v)", "5"},
+			{"date_format_month", "date_format(v,'%M')", "February"},
+		} {
+			t.Run("not_null_ctas/"+tc.name, func(t *testing.T) {
+				table := schema + ".materialized_" + tc.name
+				_, err := conn.ExecContext(ctx, "create table "+table+" as select id,"+tc.expression+" as n from "+schema+".required_dates")
+				require.NoError(t, err)
+				check(t, "select n from "+table+" order by id", []sql.NullString{{}, value(tc.complete)})
+				check(t, "select is_nullable from information_schema.columns where table_schema='"+schema+"' and table_name='materialized_"+tc.name+"' and column_name='n'", []sql.NullString{value("YES")})
+			})
+		}
 		check(t, "select date_format('0000-00-00','%Y-%m-%d')", []sql.NullString{value("0000-00-00")})
 		warnings(t, 0)
 		check(t, "select concat(year('2024-00-00'),'/',month('2024-00-00'),'/',dayofmonth('2024-00-00'))", []sql.NullString{value("2024/0/0")})
