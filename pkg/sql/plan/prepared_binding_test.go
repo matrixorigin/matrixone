@@ -460,9 +460,10 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
 		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
-		// ROUND sees the source before the explicit result cast clamps it to
-		// 9999. The full expression is safe to lower, but the cast must remain.
-		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, true, true},
+		// A silent result cast can be lowered. An overflowing cast must keep
+		// the original comparison so its range warning remains runtime-owned.
+		{"explicit value cast in range", "c=cast(round(?,0) as decimal(4,0))", []string{"9999.0"}, true, true},
+		{"explicit value cast overflow", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -527,6 +528,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bound.ValueDependent, "runtime value proof must not enter the type-only cache")
 			foundScan, columnCast, executableParam := false, false, false
+			checkExplicitResultCast := strings.HasPrefix(tc.name, "explicit value cast ")
 			explicitResultCast := false
 			for _, node := range bound.Plan.GetQuery().Nodes {
 				if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
@@ -539,15 +541,19 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 						// assert pruning eligibility here and actual blocks in public QA.
 						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning")
 					}
+					if checkExplicitResultCast && !tc.native {
+						require.False(t, ExprIsZonemappable(context.Background(), filter), "warning-producing predicate must retain row evaluation")
+					}
 					executableParam = executableParam || function.ContainsParameter(filter)
 					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
 						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
 							fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
 							columnCast = true
 						}
-						if tc.name == "explicit value cast" && types.T(expr.Typ.Id).IsDecimal() &&
+						if checkExplicitResultCast && types.T(expr.Typ.Id).IsDecimal() &&
 							expr.Typ.Width == 4 && expr.Typ.Scale == 0 {
-							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" {
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+								fn.Args[0].GetF() != nil && fn.Args[0].GetF().Func.ObjName == "round" {
 								_, overload := function.DecodeOverloadID(fn.Func.Obj)
 								require.EqualValues(t, 1, overload, "retain the explicit, not implicit, cast")
 								require.True(t, function.ContainsParameter(expr))
@@ -561,8 +567,8 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.True(t, foundScan)
 			require.Equal(t, !tc.native, columnCast, bound.Plan.String())
 			require.True(t, executableParam, "proof witnesses must not replace executable parameters")
-			if tc.name == "explicit value cast" {
-				require.True(t, explicitResultCast, "safe key lowering must still execute the user's narrowing cast")
+			if checkExplicitResultCast {
+				require.True(t, explicitResultCast, "the user's narrowing cast must remain executable")
 			}
 		})
 	}
@@ -1545,11 +1551,14 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name, expression, value string
 		null, dependent         bool
+		row                     int64
+		warningCode             uint16
 	}{
-		{"warning", "cast(? as double)", "12tail", false, true},
-		{"invalid", "cast(? as decimal(38,0))", "invalid", false, true},
-		{"null", "cast(? as decimal(38,0))", "", true, true},
-		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false},
+		{"warning", "cast(? as double)", "12tail", false, true, 12, 1292},
+		{"decimal range warning", "cast(round(?,0) as decimal(4,0))", "54321.0", false, true, 9999, 1264},
+		{"invalid", "cast(? as decimal(38,0))", "invalid", false, true, 0, 0},
+		{"null", "cast(? as decimal(38,0))", "", true, true, 0, 0},
+		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1577,17 +1586,17 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 			require.Same(t, original, rewritten, "diagnostics, NULL and volatility retain their execution owner")
 			require.Equal(t, tc.dependent, state.valueDependent)
 			require.Empty(t, sink.codes, "a proof must not publish warnings")
-			if tc.name == "warning" {
+			if tc.warningCode != 0 {
 				input := batch.NewWithSize(1)
 				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 				defer input.Clean(proc.Mp())
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(12), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.row, false, proc.Mp()))
 				input.SetRowCount(1)
 				vec, free, err := colexec.GetReadonlyResultFromExpression(proc, rewritten, []*batch.Batch{input})
 				require.NoError(t, err)
 				defer free()
 				require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
-				require.Len(t, sink.codes, 1, "runtime still owns the original warning")
+				require.Equal(t, []uint16{tc.warningCode}, sink.codes, "runtime still owns exactly one original warning")
 			}
 		})
 	}
