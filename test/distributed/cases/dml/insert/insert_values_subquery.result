@@ -117,7 +117,7 @@ select count(*) as udf_partial_rows from udf_dest;
 0
 insert into udf_dest values(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant());
 select count(*) as expression_rows,sum(v) as expression_sum from udf_dest;
-➤ expression_rows[-5,64,0]  ¦  expression_sum[3,38,0]  𝄀
+➤ expression_rows[-5,64,0]  ¦  expression_sum[-5,64,0]  𝄀
 33  ¦  66
 insert into udf_dest values((select values_lookup()));
 select count(*) as bounded_lookup_rows from udf_dest where v=2;
