@@ -269,9 +269,9 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		return expr
 	}
 
-	// Skip constant folding for division/modulo by zero.
-	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if IsDivisionByZeroConstant(fn) {
+	// Preserve diagnostic-bearing division subtrees through their parents;
+	// a later execution may use a different sql_mode or statement policy.
+	if ContainsSqlModeDependentDivision(expr) {
 		return expr
 	}
 
@@ -1070,6 +1070,43 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	return function.IsConstant(e, varAndParamIsConst)
+}
+
+// ContainsSqlModeDependentDivision preserves the path to divisions whose
+// denominator is not a proven nonzero numeric literal. Folding a parent under
+// an empty sql_mode could otherwise erase warnings for a later EXECUTE.
+// Children are folded first, so ordinary arithmetic with a nonzero constant
+// denominator retains its constant-folding fast path.
+func ContainsSqlModeDependentDivision(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if (id == function.DIV || id == function.INTEGER_DIV || id == function.MOD) && len(fn.Args) >= 2 {
+		divisor := fn.Args[1].GetLit()
+		if divisor == nil || divisor.GetIsnull() {
+			return true
+		}
+		switch divisor.Value.(type) {
+		case *plan.Literal_I8Val, *plan.Literal_I16Val, *plan.Literal_I32Val, *plan.Literal_I64Val,
+			*plan.Literal_U8Val, *plan.Literal_U16Val, *plan.Literal_U32Val, *plan.Literal_U64Val,
+			*plan.Literal_Fval, *plan.Literal_Dval, *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
+			if isZeroLiteral(divisor) {
+				return true
+			}
+		default:
+			// Packed/cast decimal256 and other representations are evaluated
+			// at execution rather than assuming their denominator is nonzero.
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if ContainsSqlModeDependentDivision(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDivisionByZeroConstant checks if the expression is a division/modulo operation
