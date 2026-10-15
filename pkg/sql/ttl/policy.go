@@ -165,7 +165,10 @@ func Clause(p *Policy) string {
 }
 
 // DeleteSQL uses a fixed UTC cutoff, avoiding overflow at the upper end of a
-// temporal column. NULL compares UNKNOWN and is retained. SQL DELETE preserves
+// temporal column. Cast the column too: mixed TIMESTAMP/DATETIME comparison
+// rounds the cutoff to the TIMESTAMP scale and can expire live rows early.
+// The worker uses a UTC session, so widening TIMESTAMP to DATETIME(6) is exact.
+// NULL compares UNKNOWN and is retained. SQL DELETE preserves
 // indexes, MVCC snapshots and constraints through the normal transaction path.
 func DeleteSQL(database, table string, p *Policy, now time.Time, batchSize int) (string, error) {
 	if err := p.Validate(); err != nil {
@@ -178,5 +181,5 @@ func DeleteSQL(database, table string, p *Policy, now time.Time, batchSize int) 
 	if cutoff.Year() < 1 || cutoff.Year() > 9999 {
 		return "", moerr.NewInvalidInputNoCtxf("TTL cutoff outside supported temporal range")
 	}
-	return fmt.Sprintf("DELETE FROM %s WHERE %s <= CAST('%s' AS DATETIME(6)) LIMIT %d", sqlquote.QualifiedIdent(database, table), sqlquote.Ident(p.Column), cutoff.Format("2006-01-02 15:04:05.000000"), batchSize), nil
+	return fmt.Sprintf("DELETE FROM %s WHERE CAST(%s AS DATETIME(6)) <= CAST('%s' AS DATETIME(6)) LIMIT %d", sqlquote.QualifiedIdent(database, table), sqlquote.Ident(p.Column), cutoff.Format("2006-01-02 15:04:05.000000"), batchSize), nil
 }

@@ -1,0 +1,20 @@
+{
+  "base": "4455ed39154ba46ff4f04339da191e22460e798e",
+  "source_sha256": {
+    "pkg/sql/ttl/policy.go": "0ac6ee39841bc92d848eb2ce259d8c273677940b775155fde3ffe3fa09caec8a",
+    "pkg/sql/ttl/policy_test.go": "f2b7e87a86af63e5f97a0393e179141d337bb9a4553147f2dd7407b55a0ddea3",
+    "pkg/tests/sqlintegration/ttl_test.go": "15f1a4b22e9ff64423389e20788bc62166dab1b85c480dba5c779d9651cd01f4",
+    "docs/design/20261013-table-ttl.en.md": "873b9dae75a70423feed976cca1921ea0ec006b97714d8e3fad6eb75b2418baa",
+    "docs/design/20261013-table-ttl.md": "3e01ccd624b8cade9cebfc5f791da221b7db6889a3a95563864fdbf5a9c406e2"
+  },
+  "log_sha256": {
+    "vet.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "before.txt": "c587fb10acb5a4a864123ab5bbdbce9b1f7f40ee8227ef3f3434c2189ae8cc70",
+    "lint.txt": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "after.txt": "999ac22f3c733ec8708d5f286581a8733dad02ff312241af4a0bbe353b996991"
+  },
+  "test_exit": 0,
+  "lint_exit": 0,
+  "vet_exit": 0,
+  "negative_control_exit": 1
+}

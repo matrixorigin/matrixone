@@ -96,7 +96,7 @@ func TestTTLDeleteSQLBoundaryAndQuoting(t *testing.T) {
 	p := &Policy{Version: 1, Column: "a`b", Seconds: 1}
 	sql, err := DeleteSQL("db`name", "tbl`name", p, now, 19)
 	require.NoError(t, err)
-	require.Equal(t, "DELETE FROM `db``name`.`tbl``name` WHERE `a``b` <= CAST('2026-03-08 00:59:59.123456' AS DATETIME(6)) LIMIT 19", sql)
+	require.Equal(t, "DELETE FROM `db``name`.`tbl``name` WHERE CAST(`a``b` AS DATETIME(6)) <= CAST('2026-03-08 00:59:59.123456' AS DATETIME(6)) LIMIT 19", sql)
 	local := now.In(time.FixedZone("offset", 8*3600))
 	sql2, err := DeleteSQL("db`name", "tbl`name", p, local, 19)
 	require.NoError(t, err)

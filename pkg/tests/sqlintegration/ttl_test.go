@@ -81,6 +81,26 @@ func TestTTLTemporalMatrix(t *testing.T) {
 		db := strings.ToLower(testutils.GetDatabaseName(t))
 		ttlExec(t, ctx, exec, "", "create database "+db, 0)
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		// Reuse this fixture; low-scale TIMESTAMP comparison must never round
+		// a fractional invocation cutoff forward into a still-live row.
+		for _, precision := range []int{0, 3, 6} {
+			t.Run(fmt.Sprintf("fractional_timestamp_%d", precision), func(t *testing.T) {
+				quantum := time.Second / time.Duration(map[int]int{0: 1, 3: 1000, 6: 1000000}[precision])
+				center := ttlTestCutoff.Add(time.Second)
+				for i, delta := range []time.Duration{-quantum * 4 / 10, 0, quantum} {
+					table := fmt.Sprintf("fractional_%d_%d", precision, i)
+					ttlExec(t, ctx, exec, db, fmt.Sprintf("create table %s(id int primary key, ts timestamp(%d)) ttl ts + interval %d second", table, precision, ttlTestSeconds), 0)
+					ttlExec(t, ctx, exec, db, fmt.Sprintf("insert into %s values (1,'%s'),(2,'%s'),(3,'%s'),(4,null)", table,
+						center.Add(-quantum).Format("2006-01-02 15:04:05.000000"), center.Format("2006-01-02 15:04:05.000000"), center.Add(quantum).Format("2006-01-02 15:04:05.000000")), 0)
+					c := ttlCandidate(t, ctx, exec, db, table, 0)
+					n, err := ttl.DeleteBatch(ctx, exec, c, center.Add(time.Duration(ttlTestSeconds)*time.Second).Add(delta), 16)
+					require.NoError(t, err)
+					require.Equal(t, uint64(i+1), n)
+					require.Equal(t, [][]int32{{2, 3, 4}, {3, 4}, {4}}[i], ttlIDs(t, ctx, exec, db, table, 0))
+					ttlExec(t, ctx, exec, db, "drop table "+table, 0)
+				}
+			})
+		}
 		units := []struct {
 			name   string
 			factor uint64
