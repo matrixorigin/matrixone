@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"strconv"
 	"testing"
 	"time"
 
@@ -46,6 +47,8 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 		{"string-prefix", NewFunctionTestInput(types.T_varchar.ToType(),
 			[]string{"1", "2.5", " 3 ", "-4e0", "12x", "", "abc", "ignored"},
 			[]bool{false, false, false, false, false, false, false, true}), "14.5", "2.0714285714285716"},
+		{"enum-ordinals", NewFunctionTestInput(types.T_enum.ToType(),
+			[]types.Enum{0, 1, 65535, 0}, []bool{false, false, false, true}), "65536", "21845.333333333332"},
 		{"date", NewFunctionTestInput(types.T_date.ToType(),
 			[]types.Date{types.DateFromCalendar(2026, 1, 1), types.DateFromCalendar(2026, 1, 2), 0},
 			[]bool{false, false, true}), "40520203", "20260101.5000"},
@@ -130,10 +133,8 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 						want = tc.avg
 					}
 					if results[0].GetType().Oid == types.T_float64 {
-						expected := 14.5
-						if name == "avg" {
-							expected = 14.5 / 7
-						}
+						expected, err := strconv.ParseFloat(want, 64)
+						require.NoError(t, err)
 						require.InDelta(t, expected, vector.GetFixedAtNoTypeCheck[float64](results[0], 0), 1e-14)
 					} else {
 						require.Equal(t, want,
