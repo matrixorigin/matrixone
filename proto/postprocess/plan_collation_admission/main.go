@@ -235,13 +235,17 @@ func generate(input string) ([]byte, error) {
 			fmt.Fprintln(&b, "if v.visited(p) { return nil }")
 		}
 		if name == "TableDef" {
-			fmt.Fprintln(&b, "if err := requireLegacySchema(p.DefaultCharset, p.CollationVersion, p.KeyFormat); err != nil { return err }")
+			fmt.Fprintln(&b, "if err := requireLegacyTable(p); err != nil { return err }")
 		}
 		if name == "IndexDef" {
 			fmt.Fprintln(&b, "if err := requireLegacySchema(0, 0, p.KeyFormat); err != nil { return err }")
 		}
 		for _, field := range structs[name].Fields.List {
 			for _, fieldName := range field.Names {
+				if name == "TableDef" && fieldName.Name == "Indexes" {
+					fmt.Fprintln(&b, "for _, item0 := range p.Indexes { if err := requireLegacyTableIndex(p, item0); err != nil { return err } }")
+					continue
+				}
 				emit(field.Type, "p."+fieldName.Name, 0)
 			}
 		}
