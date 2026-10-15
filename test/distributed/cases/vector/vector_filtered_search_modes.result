@@ -48,7 +48,10 @@ select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 
 52  𝄀
 53
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=include';
-invalid input: mode=include is deprecated. use mode=pre, post, iterative
+➤ id[-5,64,0]  𝄀
+51  𝄀
+52  𝄀
+53
 explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
@@ -134,5 +137,8 @@ select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 3
 52  𝄀
 53
 select id from t_ivf where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=include';
-invalid input: mode=include is deprecated. use mode=pre, post, iterative
+➤ id[-5,64,0]  𝄀
+51  𝄀
+52  𝄀
+53
 drop database vector_filtered_search_modes;

@@ -110,7 +110,7 @@ explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,
 -- @ignore:0
 select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=auto';
 
--- mode=include is deprecated: an error
-select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
+-- mode=include is an alias of mode=iterative
+select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
 
 drop database vector_filtered_search_gpu;

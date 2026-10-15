@@ -4,7 +4,7 @@
 -- join). mode=pre searches the nprobe nearest lists once. mode=iterative probes the
 -- nearest lists in rounds until it holds the candidate budget, all lists are probed, or
 -- max_nprobe is reached; a membership set of 100 keys or fewer is scanned in every list.
--- mode=include is deprecated: an error. Each query is compared with mode=force.
+-- mode=include is an alias of mode=iterative. Each query is compared with mode=force.
 drop database if exists vector_filtered_search_ivfflat;
 create database vector_filtered_search_ivfflat;
 use vector_filtered_search_ivfflat;
@@ -67,7 +67,7 @@ explain analyze select id from t where category = 1 order by l2_distance(v, '[0,
 select count(*) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 select group_concat(id order by id) from (select id from t where id in (3, 700, 999) order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre') x;
 
--- mode=include is deprecated: an error
+-- mode=include is an alias of mode=iterative
 select group_concat(id order by id) from (select id from t where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=include') x;
 
 -- a zero query vector ties every centroid under cosine: the rounds scan each list once

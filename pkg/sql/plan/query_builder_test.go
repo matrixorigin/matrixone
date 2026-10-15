@@ -6981,12 +6981,12 @@ func TestParseRankOption(t *testing.T) {
 		require.Equal(t, "force", rankOption.Mode)
 	})
 
-	t.Run("deprecated mode include", func(t *testing.T) {
+	t.Run("mode include is an alias of iterative", func(t *testing.T) {
 		for _, mode := range []string{"include", " INCLUDE "} {
 			rankOption, err := parseRankOption(map[string]string{"mode": mode}, ctx)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
-			require.Nil(t, rankOption)
-			require.ErrorContains(t, err, "mode=include is deprecated. use mode=pre, post, iterative")
+			require.NoError(t, err)
+			require.NotNil(t, rankOption)
+			require.Equal(t, "iterative", rankOption.Mode)
 		}
 	})
 

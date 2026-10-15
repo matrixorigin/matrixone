@@ -34,11 +34,11 @@ select group_concat(id order by id) from (select id from t_ivfpq where category 
 explain select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'nprobe=2', 'itopk=1000', 'max_itopk=2000', 'max_nprobe=2';
 
 -- iterative applies to cagra and ivfpq: category is not an INCLUDE column here, so it goes
--- through membership and the page fills; mode=include is deprecated: an error
+-- through membership and the page fills; mode=include is an alias of mode=iterative
 select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
-select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
+select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
 select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
 select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x where x.id <= 500;
-select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
+select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
 
 drop database vector_filtered_search_knobs_gpu;

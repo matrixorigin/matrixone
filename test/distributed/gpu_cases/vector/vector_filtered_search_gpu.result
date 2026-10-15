@@ -355,6 +355,7 @@ select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,
 695  𝄀
 748  𝄀
 782
-select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include';
-invalid input: mode=include is deprecated. use mode=pre, post, iterative
+select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
+➤ count(*)[-5,64,0]  𝄀
+10
 drop database vector_filtered_search_gpu;

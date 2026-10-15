@@ -80,7 +80,7 @@ resumable cursor (`IvfSearchCursor`), so its widening continues.
 | no option (default) | `post`, except that filters on INCLUDE columns also run inside the index search |
 | `pre` | the filter runs inside one index search (per algorithm below) |
 | `iterative` | `pre` whose search widens while the page is short, up to `max_itopk` / `max_nprobe` |
-| `include` | deprecated: an error on every index, `mode=include is deprecated. use mode=pre, post, iterative` |
+| `include` | alias of `iterative` on every index (ivfflat's earlier name for it, #24168) |
 | `auto` | `ADAPTIVE_TOP [post, pre, force]`: the next branch runs when the previous one is short |
 | `force` | exact search without the vector index |
 
@@ -92,7 +92,7 @@ How each index runs the filter inside its search:
 | ivfflat | INCLUDE-column and primary-key filters in the search; any other filter through membership | as `pre`, widening |
 | cagra, ivfpq | INCLUDE-column and primary-key filters in the GPU search; any other filter through membership, ANDed into the GPU filter mask | as `pre`, widening |
 
-`mode=include` is an error on every index. Every vector index supports `pre`,
+`mode=include` is accepted as an alias of `iterative` for compatibility. Every vector index supports `pre`,
 `iterative` and `auto`; the capability check is by interface (below), so an index that supports
 neither membership nor an index filter rejects them.
 
@@ -407,7 +407,8 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
   filter. The cuVS filtered-search C functions take a `mo_membership_t`; libmo and the Go
   bindings ship together.
 - **Defaults**: the default mode is unchanged; widening runs only under `mode=iterative`.
-  `mode=include`, ivfflat's earlier name for it (#24168), is an error naming its replacements.
+  `mode=include`, ivfflat's earlier name for it (#24168), stays accepted as an alias of `iterative`,
+  so existing queries keep running.
 - **Scan options**: `iterative` is a field of the hnsw, cagra, ivfpq and ivfflat `algo_options`
   JSON. A CN of an older build ignores it: hnsw, cagra and ivfpq search once; ivfflat widens a
   scan marked multi-round (`BucketExpandStep`) and searches a membership scan once.
@@ -448,7 +449,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 | # | Claim | Black-box test |
 |---|---|---|
 | 1 | A query without a mode or knob returns the rows it returns on main, on all four indexes, except an ivfflat query vector that ties every centroid (claim 15). | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
-| 2 | `pre`, `iterative` and `auto` are accepted on hnsw, ivfflat, cagra and ivfpq; `include` is rejected on every index as deprecated. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
+| 2 | `pre`, `iterative` and `auto` are accepted on hnsw, ivfflat, cagra and ivfpq; `include` is accepted on every index as an alias of `iterative` and returns its rows. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk` and `max_itopk` are accepted on every vector index, `nprobe` and `max_nprobe` on ivfflat and ivfpq only; values must be positive integers with a cap at least its start. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
 | 4 | `EXPLAIN` shows `Internal Top-K`, `Max Internal Top-K`, `Max NProbe` and `NProbe` from the SQL options. | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` |
 | 5 | A `SET vector_itopk` or `SET vector_max_nprobe` after `PREPARE` applies to the next `EXECUTE` and stops applying once reset; the SQL option wins over the session variable. | `cases/vector/vector_filtered_search_knobs.sql` |
@@ -476,7 +477,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - The default mode is unchanged. `post` is one search with only primary-key filters inside it;
   there is no `post` widening.
 - `pre` is the filter inside one search; widening is `iterative` (pgvector's iterative scan).
-  `include`, ivfflat's earlier name for it, is deprecated: an error on every index. `auto`'s
+  `include`, ivfflat's earlier name for it, is an alias of `iterative` on every index. `auto`'s
   middle branch is `pre`.
 - ivfflat `pre` runs filters on INCLUDE columns in the index search, as the default mode,
   `iterative`, cagra and ivfpq do; only filters on other columns go through membership. Before
