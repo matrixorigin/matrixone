@@ -419,6 +419,10 @@ type BaseProcess struct {
 	// session value so LAST_INSERT_ID() continues to observe the previous
 	// value when an INSERT supplies all auto-increment values explicitly.
 	StatementLastInsertID *uint64
+	// statementInsertIDMu serializes writes to LastInsertID and
+	// StatementLastInsertID so parallel PRE_INSERT scopes of one statement
+	// leave both fields holding the same value.
+	statementInsertIDMu sync.Mutex
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -666,6 +670,11 @@ func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
 	if proc.Base.LastInsertID != nil {
 		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
@@ -678,9 +687,42 @@ func (proc *Process) GetSessionInfo() *SessionInfo {
 // SetStatementLastInsertID sets the generated-key value of the current
 // statement's OK packet.
 func (proc *Process) SetStatementLastInsertID(num uint64) {
-	if proc.Base != nil && proc.Base.StatementLastInsertID != nil {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
 	}
+}
+
+// SetStatementLastInsertIDIfLater publishes a generated value as the
+// statement's insert id and the session-visible LAST_INSERT_ID when it is the
+// largest value published since StatementLastInsertID was reset. Both fields
+// are written under one lock, so parallel scopes of one statement leave them
+// equal. It returns the published statement value.
+func (proc *Process) SetStatementLastInsertIDIfLater(num uint64) uint64 {
+	if proc.Base == nil {
+		return num
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID == nil {
+		if num != 0 && proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+	if num <= current {
+		return current
+	}
+	atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+	if proc.Base.LastInsertID != nil {
+		atomic.StoreUint64(proc.Base.LastInsertID, num)
+	}
+	return num
 }
 
 // GetStatementLastInsertID returns the generated-key value of the current

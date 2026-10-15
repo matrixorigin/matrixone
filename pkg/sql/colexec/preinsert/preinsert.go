@@ -514,10 +514,10 @@ retryInsertValues:
 	// (#29903). It publishes nothing, so it neither clobbers the base table's
 	// value nor reports a value the statement did not generate. A generated
 	// value becomes this statement's OK-packet insert id and the
-	// session-visible LAST_INSERT_ID.
+	// session-visible LAST_INSERT_ID. Parallel scopes of one statement share
+	// the process state; the largest generated value is published to both.
 	if lastInsertValue != 0 {
-		proc.SetLastInsertID(lastInsertValue)
-		proc.SetStatementLastInsertID(lastInsertValue)
+		proc.SetStatementLastInsertIDIfLater(lastInsertValue)
 	}
 	return nil
 }
