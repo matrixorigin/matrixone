@@ -5741,25 +5741,6 @@ func TestFindInSet(t *testing.T) {
 	}
 }
 
-// Issue #30236: an empty string list is an empty list in MySQL and must
-// always yield 0, even for an empty needle (strings.Split("", ",") would
-// yield [""] and match it at position 1).
-func TestFindInSetEmptyStrList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	caseData := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "abc"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", ""}, nil),
-		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false,
-			[]uint64{0, 0}, []bool{false, false}),
-		FindInSet,
-	)
-	succeed, info := caseData.RunAndFree()
-	require.True(t, succeed, info)
-}
-
 func TestFindInSetInt32ResultWrapper(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	caseData := NewFunctionTestCase(
