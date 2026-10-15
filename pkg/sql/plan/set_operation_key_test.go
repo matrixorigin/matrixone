@@ -143,7 +143,6 @@ func TestCorrelatedUnionRejectsMismatchedIdentity(t *testing.T) {
 	for _, query := range []string{
 		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i)`,
 		`SELECT 1 FROM NATION o WHERE EXISTS (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_NATIONKEY UNION SELECT 1 FROM NATION i WHERE i.N_NATIONKEY=o.N_REGIONKEY)`,
-		`SELECT (SELECT 1 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY UNION SELECT 2 FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY) FROM NATION o`,
 	} {
 		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.ErrorContains(t, err, "correlated UNION", query)
@@ -406,4 +405,65 @@ func TestExistentialUnionKeepsBranchLocalVolatileProducers(t *testing.T) {
 	}
 	require.Equal(t, 2, randomCalls, "independent branch-local evaluations must remain; no canonical deduplication or template sharing")
 
+}
+
+func TestScalarSetReaggregationAdmission(t *testing.T) {
+	for _, kind := range []string{"identity", "computed", "dropped-member", "limit", "volatile"} {
+		t.Run(kind, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+			typ := planpb.Type{Id: int32(types.T_float64)}
+			corr := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{Depth: 1, RelPos: 1, ColPos: 0}}}
+			pred, err := BindFuncExprImplByPlanExpr(t.Context(), ">", []*planpb.Expr{GetColExpr(typ, 10, 0), corr})
+			require.NoError(t, err)
+			set := &planpb.Node{NodeType: planpb.Node_UNION, Children: []int32{0, 0}, BindingTags: []int32{20}, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}}
+			root := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{1}, BindingTags: []int32{30}, ProjectList: []*planpb.Expr{GetColExpr(typ, 20, 0)}}
+			switch kind {
+			case "computed":
+				root.ProjectList[0] = makePlan2Int64ConstExprWithType(1)
+			case "dropped-member":
+				set.ProjectList = append(set.ProjectList, GetColExpr(typ, 10, 1))
+			case "volatile":
+				set.ProjectList[0], err = BindFuncExprImplByPlanExpr(t.Context(), "rand", nil)
+				require.NoError(t, err)
+			case "limit":
+				root.Limit = makePlan2Uint64ConstExprWithType(1)
+			}
+			builder.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_FILTER, FilterList: []*planpb.Expr{pred}}, set, root}
+			require.Equal(t, kind == "identity", builder.scalarSetNeedsReaggregation(2))
+		})
+	}
+}
+
+func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
+	arm := "select cast(i.N_NATIONKEY as double) from NATION i where i.N_NATIONKEY>o.N_NATIONKEY"
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o.N_NATIONKEY,("+arm+" union "+arm+") from NATION o")
+	require.NoError(t, err)
+	single, memberGroups, outerGroups := false, false, false
+	seen := make(map[int32]bool)
+	var visit func(int32)
+	visit = func(id int32) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		node := p.GetQuery().Nodes[id]
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE {
+			single = true
+			require.Len(t, node.OnList, 1)
+			require.Equal(t, "or", node.OnList[0].GetF().Func.ObjName)
+		}
+		if node.NodeType == planpb.Node_AGG {
+			memberGroups = memberGroups || len(node.GroupByHashKey) == 3
+			outerGroups = outerGroups || len(node.GroupByHashKey) == 1
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, step := range p.GetQuery().Steps {
+		visit(step)
+	}
+	require.True(t, single, "the final optimizer must preserve scalar cardinality checking")
+	require.True(t, memberGroups, "membership must retain outer identity, marker and visible set key")
+	require.True(t, outerGroups, "final scalar aggregation must partition by outer identity")
 }

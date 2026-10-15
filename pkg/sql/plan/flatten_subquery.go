@@ -613,9 +613,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// decorrelation. An independent aggregate elsewhere in the subquery must
 	// not turn a previously supported scalar expression into NYI.
 	var crossedAggregate bool
-	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, subquery.Typ == plan.SubqueryRef_EXISTS || subquery.Typ == plan.SubqueryRef_NOT_EXISTS, &crossedAggregate)
+	scalarSet := subquery.Typ == plan.SubqueryRef_SCALAR && builder.scalarSetNeedsReaggregation(subID)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, scalarSet || subquery.Typ == plan.SubqueryRef_EXISTS || subquery.Typ == plan.SubqueryRef_NOT_EXISTS || subquery.Typ == plan.SubqueryRef_IN || subquery.Typ == plan.SubqueryRef_NOT_IN, &crossedAggregate)
 	if err != nil {
 		return 0, nil, err
+	}
+	if scalarSet {
+		return builder.flattenScalarSetAfterCorrelation(nodeID, subID, subCtx, preds, ctx, subquery)
 	}
 	wrappedAggregate := subquery.Typ == plan.SubqueryRef_SCALAR && crossedAggregate &&
 		(aggregateSpineCandidate || preserveAggregateSpine || len(subCtx.aggregates) == 0 && aggregateSuppression == aggregateSpineUnsuppressed)
@@ -4419,10 +4423,10 @@ func correlatedSetIdentityPredicate(expr *plan.Expr, childTag, setTag, pos int32
 	return out, true
 }
 
-// rebindExistentialSetPredicates matches complete branch predicates rather
+// rebindBagSetPredicates matches complete branch predicates rather
 // than assuming one hidden column per conjunct. UNION ALL retains every
 // candidate, so no hidden representation is normalized before the predicate.
-func rebindExistentialSetPredicates(preds []*plan.Expr, childTag, setTag int32, visible, width int) ([]*plan.Expr, bool) {
+func rebindBagSetPredicates(preds []*plan.Expr, childTag, setTag int32, visible, width int) ([]*plan.Expr, bool) {
 	out := DeepCopyExprList(preds)
 	valid := true
 	for _, pred := range out {
@@ -4458,21 +4462,21 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	ctx *BindContext,
 	subqueryType plan.SubqueryRef_Type,
 	isSubqueryRoot bool,
-	existenceOnly bool,
+	pullupSetAsBag bool,
 	crossedAggregate *bool,
 ) (int32, []*plan.Expr, error) {
 	node := builder.qry.Nodes[nodeID]
 	originalNodeType := node.NodeType
-	// Existence ignores duplicate elimination only through transparent
+	// Bag-input consumers defer or ignore duplicate elimination only through transparent
 	// consumers. Keep pagination's isSubqueryRoot proof separate: aggregates,
 	// filters and other consumers can observe row multiplicity or boundaries.
-	existenceOnly = existenceOnly && node.Limit == nil && node.Offset == nil
+	pullupSetAsBag = pullupSetAsBag && node.Limit == nil && node.Offset == nil
 	switch node.NodeType {
 	case plan.Node_PROJECT, plan.Node_SORT, plan.Node_UNION, plan.Node_UNION_ALL:
 	default:
-		existenceOnly = false
+		pullupSetAsBag = false
 	}
-	if existenceOnly && node.NodeType == plan.Node_UNION {
+	if pullupSetAsBag && node.NodeType == plan.Node_UNION {
 		node.NodeType = plan.Node_UNION_ALL
 		node.PhysicalEqualityKeyList = nil
 	}
@@ -4487,7 +4491,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			node.Limit == nil && node.Offset == nil &&
 			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
 		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(
-			childID, ctx, subqueryType, childIsSubqueryRoot, existenceOnly, crossedAggregate)
+			childID, ctx, subqueryType, childIsSubqueryRoot, pullupSetAsBag, crossedAggregate)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -4564,7 +4568,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 		left, right := builder.qry.Nodes[node.Children[0]], builder.qry.Nodes[node.Children[1]]
 		pos := len(node.ProjectList)
-		if existenceOnly {
+		if pullupSetAsBag {
 			width := len(left.ProjectList) - pos
 			if width < 0 || len(right.ProjectList) != pos+width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
 				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
@@ -4574,8 +4578,8 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 					return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identity types differ")
 				}
 			}
-			lp, lok := rebindExistentialSetPredicates(childPreds[0], left.BindingTags[0], node.BindingTags[0], pos, width)
-			rp, rok := rebindExistentialSetPredicates(childPreds[1], right.BindingTags[0], node.BindingTags[0], pos, width)
+			lp, lok := rebindBagSetPredicates(childPreds[0], left.BindingTags[0], node.BindingTags[0], pos, width)
+			rp, rok := rebindBagSetPredicates(childPreds[1], right.BindingTags[0], node.BindingTags[0], pos, width)
 			if !lok || !rok || len(lp) != len(rp) {
 				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch predicates differ")
 			}
