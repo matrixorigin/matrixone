@@ -197,17 +197,32 @@ func TestPreparedFieldWindowDefaultParameters(t *testing.T) {
 
 func TestPreparedFieldRetainedProvenance(t *testing.T) {
 	for _, tc := range []struct {
-		expr   string
-		peer   bool
-		binary bool
+		expr          string
+		peer          bool
+		binary        bool
+		inferredFact  bool
+		allowNullFact bool
 	}{
-		{"case when ? then concat_ws('',nullif(?,lower(coalesce(?,null)))) else null end", true, false},
-		{"case when ? then concat_ws('',nullif(?,cast(? as binary(1)))) else null end", true, true},
-		{"case when ? then concat_ws('',nullif(coalesce(?,null),lower(coalesce(?,null)))) else null end", true, false},
-		{"concat_ws('',case when ? then lower(coalesce(?,null)) else null end)", false, false},
-		{"concat_ws('',case when ? then lower(coalesce(?,null)) else _binary '' end)", false, true},
-		{"concat_ws('',case when ? then (case when true then lower(coalesce(?,null)) else null end) else null end)", false, false},
-		{"concat_ws('',case when ? then elt(1,coalesce(?,null)) else null end)", false, false},
+		{"case when ? then concat_ws('',nullif(?,lower(coalesce(?,null)))) else null end", true, false, false, false},
+		{"case when ? then concat_ws('',nullif(?,cast(? as binary(1)))) else null end", true, true, false, false},
+		{"case when ? then concat_ws('',nullif(coalesce(?,null),lower(coalesce(?,null)))) else null end", true, false, false, false},
+		{"concat_ws('',case when ? then lower(coalesce(?,null)) else null end)", false, false, true, false},
+		{"concat_ws('',case when ? then lower(coalesce(?,null)) else _binary '' end)", false, true, false, false},
+		{"concat_ws('',case when ? then (case when true then lower(coalesce(?,null)) else null end) else null end)", false, false, true, false},
+		{"concat_ws('',case when ? then elt(1,coalesce(?,null)) else null end)", false, false, true, false},
+		{"concat_ws('',elt(1,case when ? then lower(coalesce(?,null)) else null end))", false, false, true, false},
+		{"concat_ws('',elt(1,case when ? then ? else null end))", false, false, true, true},
+		{"concat_ws('',ltrim(case when ? then ? else null end))", false, false, true, true},
+		{"concat_ws('',ltrim(case when ? then lower(coalesce(?,null)) else null end))", false, false, true, false},
+		{"concat_ws('',rtrim(case when ? then lower(coalesce(?,null)) else null end))", false, false, true, false},
+		{"concat_ws('',elt(1,ltrim(case when ? then lower(coalesce(?,null)) else null end)))", false, false, true, false},
+		{"concat_ws(elt(1,case when ? then lower(coalesce(?,null)) else null end),'a')", false, false, true, false},
+		{"concat_ws('',elt(1,case when ? then lower(coalesce(?,null)) else null end,_binary ''))", false, true, true, false},
+		{"concat_ws('',elt(1,case when ? then lower(coalesce(?,null)) else _binary '' end))", false, true, false, false},
+		{"concat_ws('',unhex(case when ? then lower(coalesce(?,null)) else null end))", false, true, true, false},
+		{"concat_ws('',(select elt(1,x) from (select case when ? then lower(coalesce(?,null)) else null end x limit 1) d))", false, false, true, false},
+		{"concat_ws('',elt(1,(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select '') d where x<>'' limit 1)))", false, false, true, false},
+		{"concat_ws('',elt(1,(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select null) d where x<>'' limit 1)))", false, false, true, false},
 	} {
 		for _, textCondition := range []bool{false, true} {
 			name := "/numeric"
@@ -250,7 +265,13 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 					}
 					snapshot = bound.FieldTypes
 					for _, fact := range snapshot.cases {
-						require.Equal(t, !tc.peer && !tc.binary, fact.inferredBinary)
+						// A neutral NULL CASE fact acquires its BLOB declaration at
+						// the argument boundary, without mutating the stored fact.
+						if tc.allowNullFact && fact.result.Oid == types.T_any {
+							require.False(t, fact.inferredBinary)
+						} else {
+							require.Equal(t, tc.inferredFact, fact.inferredBinary)
+						}
 					}
 					if oid != types.T_any {
 						field := findPlanFunctionExpr(bound.Plan, "field")

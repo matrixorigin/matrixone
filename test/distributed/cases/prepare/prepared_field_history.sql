@@ -362,6 +362,16 @@ EXECUTE p_field_history USING @field_condition,@field_value,@field_peer,@field_c
 DEALLOCATE PREPARE p_field_history;
 SET SESSION sql_mode = @field_provenance_mode;
 SET @field_condition = 1;
+-- Registered consumers preserve CASE provenance through values, separators, and relations.
+PREPARE p_field_history FROM 'SELECT FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_elt_f, FIELD(CONCAT_WS('''',LTRIM(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_ltrim_f, FIELD(CONCAT_WS('''',RTRIM(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_rtrim_f, FIELD(CONCAT_WS(ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''a''),''A'',''a'') AS registered_separator_f, FIELD(CONCAT_WS('''',(SELECT ELT(1,x) FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x LIMIT 1) d)),''A'',''a'') AS registered_derived_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT NULL) d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS registered_union_f, FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary '''')),''A'',''a'') AS registered_explicit_f, FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN ? ELSE NULL END)),''A'',''a'') AS registered_null_fact_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
 CREATE DATABASE field_history_dependencies;
 CREATE TABLE field_history_dependencies.t(i INT);
 INSERT INTO field_history_dependencies.t VALUES(1);
