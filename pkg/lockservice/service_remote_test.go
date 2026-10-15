@@ -3214,12 +3214,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 			require.True(t, result.LockedOn.Valid,
 				"fatal result must retain the selected route for cleanup")
 			require.Equal(t, ownerBind, result.LockedOn)
-			require.False(t, result.HasConflict)
-			require.False(t, result.HasPrevCommit)
-			require.True(t, result.Timestamp.IsEmpty())
-			require.False(t, result.TableDefChanged)
-			require.False(t, result.NewLockAdd)
-			require.Nil(t, result.TableDefChangedAt)
+			require.Equal(t, pb.Result{LockedOn: ownerBind}, result)
 
 			require.NotNil(t, origin.activeTxnHolder.getActiveTxn(probeTxn, false, ""),
 				"origin cleanup witness must remain until Unlock")

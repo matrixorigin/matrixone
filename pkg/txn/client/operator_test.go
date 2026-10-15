@@ -438,7 +438,7 @@ func TestRollbackReadOnly(t *testing.T) {
 // fatalNoWaitFenceLockService turns a real remote partial-prefix conflict into
 // the fatal bind-fence response that can arrive when protocol admission changes
 // after the owner has acquired rows. The lockservice package separately tests
-// that exact V113->V112 race and that its production response carries only the
+// that capability-loss race and that its production response carries only the
 // cleanup route; this adapter lets the txn client exercise rollback end to end.
 type fatalNoWaitFenceLockService struct {
 	lockservice.LockService
@@ -535,12 +535,7 @@ func TestReadOnlyRollbackUsesRemoteNoWaitCleanupBinding(t *testing.T) {
 						"the actual remote partial-prefix conflict must be transformed into the injected fatal fence")
 					require.True(t, result.LockedOn.Valid,
 						"the fatal partial-prefix result must provide the client's cleanup route")
-					require.False(t, result.HasConflict)
-					require.False(t, result.HasPrevCommit)
-					require.True(t, result.Timestamp.IsEmpty())
-					require.False(t, result.TableDefChanged)
-					require.False(t, result.NewLockAdd)
-					require.Nil(t, result.TableDefChangedAt)
+					require.Equal(t, lock.Result{LockedOn: result.LockedOn}, result)
 					require.NoError(t, tc.AddLockTable(result.LockedOn))
 					tc.mu.RLock()
 					lockTableCount := len(tc.mu.lockTables)
