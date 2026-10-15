@@ -2910,7 +2910,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}
@@ -3183,7 +3183,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if nestedPreparedBitwiseSource != nil {
+			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					rewrittenArg, err = rule.ApplyExpr(unwrapPreparedImplicitCast(arg, true))
+					if err != nil {
+						return nil, err
+					}
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
 				if applyErr != nil {
