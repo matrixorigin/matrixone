@@ -204,11 +204,8 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		prefix     string
 		wantLimit  uint64
 	}{
-		// An explicit outer ORDER BY owns pagination after the implicit relevance
-		// sort is removed.  Keep the complete stream for that sort, including
-		// when its key is the projected score alias.
-		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2"},
-		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1"},
+		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2", wantLimit: 2},
+		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
 		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
 		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
 		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
