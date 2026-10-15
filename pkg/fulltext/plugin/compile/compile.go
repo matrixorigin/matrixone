@@ -94,7 +94,9 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		for _, part := range indexDef.Parts {
 			for _, col := range originalTableDef.Cols {
 				if col.Name == catalog.ResolveAlias(part) && col.Typ.Id == int32(types.T_datalink) {
-					checks = append(checks, "_check_async_datalink_source("+sqlquote.Ident(col.Name)+",true)")
+					// Consume every source value while returning one aggregate row;
+					// RunSql otherwise retains all discarded per-row check results.
+					checks = append(checks, "sum(cast(_check_async_datalink_source("+sqlquote.Ident(col.Name)+",true) as unsigned))")
 					break
 				}
 			}

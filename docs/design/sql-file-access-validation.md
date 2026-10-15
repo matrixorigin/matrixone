@@ -1,21 +1,51 @@
 # SQL file access validation record
 
-Issue #30185, PR #30212. Recorded validation snapshot:
+Issue #30185, PR #30212. Earlier broad validation snapshot:
 `9961057360d29b7afab0fb6d0afc7a1a92c32055`.
 Base: `461bc8e34920959e5fc141e3d1b37673a90894e1`.
 Each measurement below retains its actual source revision.
 
-## Latest rebase
+## Latest amendment and rebase
 
-Current main: `8795f3699b4` (revert of fulltext planner change #30189).
-This restores the original planner API and implicit-sort behavior. The now
-obsolete test-call boolean amendment is removed; that test file again matches
-main. The results below describe their recorded revisions, including the
-then-current upstream failures. Tests and performance measurements were not
-rerun for this rebase-only update; restored main behavior is not claimed as a
-fresh runtime pass.
+Current main: `83222fa8371`; the prior main `8795f3699b4` reverted fulltext
+planner change #30189. The obsolete test-call boolean amendment remains removed.
+The latest upstream delta fixes JSONLine vector-array handling; this amendment
+changes only classic async FULLTEXT Datalink admission and its regression proof.
+Earlier measurements below retain their original source revisions.
 
-## Functional and static evidence
+Classic async admission now aggregates each checker expression. The checker
+still evaluates every indexed value, but the nonstreaming executor retains one
+result row with one fixed-width sum per indexed Datalink column. This bounds
+**retained admission output**, not the whole scan, index build or process memory.
+The additional aggregate computation applies to that preflight, with no change
+to ordinary DQL/DML, the shared executor API or the existing resource owners.
+
+The new regression reuses the existing stage/CDC cluster. It invokes production
+`Hooks.HandleCreateIndex`, executes its unchanged generated query through the
+real nonstreaming internal executor, inspects every result batch before closing
+it and verifies sums against input cardinality. Empty, one-row NULL, 8193-row
+NULL, valid remote, late forbidden second-column and canceled-request controls
+have distinct oracles. The serial generate_series source's 8192+1 batch layout
+is checked, avoiding an assumption about stored-table scan order. Public failed
+CREATE also checks hidden-table, index-catalog and CDC-task rollback.
+
+### Current focused results
+
+The pre-fix regression fails because 8193 source rows retain 8193 result rows.
+After the correction, empty, one-row and 8193-row sources each retain one row,
+one batch and 32 allocated vector bytes for two checks. Each nonempty sum equals
+its source row count; the late second-column refusal and cancellation register
+no task. The new bounded-result subtest costs 0.10s normal / 0.52s race within
+the reused fixture (no additional cluster).
+
+The full classic-plugin owning package passes normal (1.195s) and race (1.549s).
+The existing public `TestSQLFileAccessTenantStageCDC` with the added regressions
+passes normal (87.640s) and race (93.620s). Derived from the complete delivery
+scope, all 22 CPU packages pass vet, molint and incremental golangci-lint on
+main `83222fa8371`. Formatting, `make err-check` and diff checks pass. Broader
+unchanged evidence below is reused with its original revision and limits.
+
+## Historical functional and static evidence
 
 - Real MySQL tests `TestSQLFileAccessAuthorization`, `TestSQLFileAccessTenantStageCDC`
   and `TestSQLFileAccessPeerPersistence` pass normal (97.108s) and race (104.800s).

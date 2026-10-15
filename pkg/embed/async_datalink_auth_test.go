@@ -83,8 +83,16 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 
 	// Both async algorithms share final-value admission; synchronous fulltext
 	// still reads authorized local content within the foreground statement.
+	var tablesBefore int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from mo_catalog.mo_tables where reldatabase=database()").Scan(&tablesBefore))
 	_, err = conn.ExecContext(t.Context(), "create fulltext index bad_async on existing_local(path) async")
 	require.ErrorContains(t, err, "asynchronous indexes require remote Datalink sources")
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from mo_catalog.mo_tables where reldatabase=database()").Scan(&count))
+	require.Equal(t, tablesBefore, count, "failed admission must roll back its hidden table")
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from mo_catalog.mo_indexes where name='bad_async' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='existing_local')").Scan(&count))
+	require.Zero(t, count)
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from mo_catalog.mo_iscp_log where account_id=0 and job_name='index_bad_async' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='existing_local')").Scan(&count))
+	require.Zero(t, count)
 	exec("create fulltext index local_sync on existing_local(path)")
 	exec("create table classic_async(id bigint primary key,path datalink,fulltext ft(path) async)")
 	_, err = conn.ExecContext(t.Context(), "insert into classic_async values(1,"+sqlquote.String(local)+")")
@@ -98,6 +106,9 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	service := cn.RawService().(cnservice.Service)
+	t.Run("bounded classic async admission", func(t *testing.T) {
+		testClassicAsyncAdmissionResults(t, conn, service, database, local, remote)
+	})
 	exec("create user async_source_public identified by 'owned-async-source' default role public")
 	defer admin.Exec("drop user if exists async_source_public")
 	exec("grant insert on table " + database + ".docs to public")

@@ -65,3 +65,26 @@ baseline failures remain visible. CPU evidence does not validate GPU-native
 code. The user approved PR update with GPU native verification explicitly
 pending because no suitable machine is available. Remote CI remains a separate
 result after publication.
+
+## Bounded classic async admission amendment
+
+For review #5531071132, gpt-6.1-sol / xhigh accepted the focused correction at
+`0cf0c8b2478a9dc96481178b9079338d40f4a1f1`, base `83222fa8371`.
+Session `01a13eff-93e6-7e10-a1b2-435e225e8373`, turn `01a13eff-9450-7663-a473-7c4971292f11`; actual rollout
+`turn_context` verifies model and effort. The retained design artifact has
+SHA256 `ce527e154a0f58bcc00fd5bf3dbe4b42c541d7a2b49f4be492b114aaed8d6970`.
+
+Aggregate each existing checker expression with SUM(CAST(... AS UNSIGNED)).
+The complete scan and existing failure/CDC ordering remain; the discarded
+nonstreaming result is one fixed-width aggregate row rather than one row per
+input. Existing owners, transaction, identity and cleanup are unchanged. This
+introduces no generic executor API, worker or ordinary-query path. Regression
+uses the existing cluster, the production plugin hook and real internal executor.
+
+Final overall review: **PASS**, no unresolved material blocker for PR update,
+gpt-6.1-sol / xhigh session `01a13f10-39ff-7c02-be5c-27701acebe74`, turn
+`01a13f10-3ab3-7e63-a0f3-c29fd8c8bf89`. The review reconciles the complete
+change map, unchanged earlier reviews, four amended Go fingerprints, normal/race
+terminal success and all 22 CPU static results. Review artifact SHA256:
+`30a5071965f3453e41841f068c3351d61fe3028c8568461a2812537e973a0237`.
+GPU-native validation and historical performance limits remain as stated.
