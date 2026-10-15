@@ -107,7 +107,7 @@ func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, snapshot)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
 	require.NoError(t, err)
 	require.True(t, handled, "the fixture must clear every covered-path guard")
 
@@ -127,7 +127,7 @@ func TestTryApplyCoveredFulltext2NoSnapshotLeavesSearchUnsnapshotted(t *testing.
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
 	require.NoError(t, err)
 	require.True(t, handled)
 
@@ -179,7 +179,7 @@ func TestCoveredFulltext2ScoreLimitOnlyForEquivalentSort(t *testing.T) {
 			builder.sqlCalcFoundRows = tc.foundRows
 			handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
 				[]int32{0}, []*plan.IndexDef{idxdef}, []int32{1}, nil,
-				map[int32]int32{0: 0}, makePlan2Uint64ConstExprWithType(200), nil)
+				map[int32]int32{0: 0}, makePlan2Uint64ConstExprWithType(200), nil, false)
 			require.NoError(t, err)
 			require.True(t, handled)
 			search := findCoveredFulltext2Scan(t, builder)
@@ -240,6 +240,40 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 				assert.Equal(t, tc.wantLimit, fulltextScanLimit(search).GetLit().GetU64Val())
 			} else {
 				require.Nil(t, fulltextScanLimit(search))
+			}
+		})
+	}
+}
+
+// The new direct SEARCH shape is covered by the bound-SQL tests above. Keep
+// the legacy implicit-sort shape and its pagination/key barriers valid too.
+func TestPushCoveredFulltext2ScoreLimitLegacySort(t *testing.T) {
+	for _, mode := range []string{"equivalent", "paginated", "non_column_key", "different_score_tag"} {
+		t.Run(mode, func(t *testing.T) {
+			score := plan.Type{Id: int32(types.T_float32)}
+			search := &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, BindingTags: []int32{7},
+				IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()}}}
+			inner := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{0},
+				OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(score, 7, 1), Flag: plan.OrderBySpec_DESC}}}
+			project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1}, BindingTags: []int32{8},
+				ProjectList: []*plan.Expr{GetColExpr(score, 7, 1)}}
+			outer := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{2}, Limit: makePlan2Uint64ConstExprWithType(2),
+				OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(score, 8, 0), Flag: plan.OrderBySpec_DESC}}}
+			switch mode {
+			case "paginated":
+				inner.Limit = makePlan2Uint64ConstExprWithType(1)
+			case "non_column_key":
+				inner.OrderBy[0].Expr = makePlan2Uint64ConstExprWithType(1)
+			case "different_score_tag":
+				inner.OrderBy[0].Expr.GetCol().RelPos = 9
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{search, inner, project, outer}}}
+			builder.pushCoveredFulltext2ScoreLimitFromSort(outer)
+			if mode == "equivalent" {
+				require.NotNil(t, search.IndexSearchScan.CandidateLimit)
+				require.Equal(t, uint64(2), search.IndexSearchScan.CandidateLimit.GetLit().GetU64Val())
+			} else {
+				require.Nil(t, search.IndexSearchScan.CandidateLimit)
 			}
 		})
 	}
