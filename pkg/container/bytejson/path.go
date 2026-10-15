@@ -274,14 +274,14 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 	}
 	pg.trimSpace()
 	if pg.tryNext(toKeyLen) == toKey {
-		if pg.pathStr[pg.pos-1] != ' ' {
+		if !unicode.IsSpace(rune(pg.pathStr[pg.pos-1])) {
 			return nil, false
 		}
 		pg.skip(toKeyLen)
 		if !pg.hasNext() {
 			return nil, false
 		}
-		if pg.front() != ' ' {
+		if !unicode.IsSpace(rune(pg.front())) {
 			return nil, false
 		}
 		pg.trimSpace()
@@ -290,7 +290,8 @@ func (pg *pathGenerator) generateIndex(legs []subPath) ([]subPath, bool) {
 		if !ok {
 			return nil, false
 		}
-		if i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num {
+		if (i1.tp == lastIndices && i2.tp == lastIndices && i1.num < i2.num) ||
+			(i1.tp == numberIndices && i2.tp == numberIndices && i1.num > i2.num) {
 			return nil, false
 		}
 		legs = append(legs, subPath{
