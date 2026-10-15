@@ -88,3 +88,26 @@ change map, unchanged earlier reviews, four amended Go fingerprints, normal/race
 terminal success and all 22 CPU static results. Review artifact SHA256:
 `30a5071965f3453e41841f068c3351d61fe3028c8568461a2812537e973a0237`.
 GPU-native validation and historical performance limits remain as stated.
+
+## CSV cleanup amendment
+
+For review #5531899835, gpt-6.1-sol / xhigh accepted the focused correction at
+`23bef8dc17d`, base `83222fa8371`: retain the CSV operation policy, derive
+uncancelled cleanup with the existing 30-second context budget, close only
+owned reacquired ETL services and leave borrowed SHARED with its owner.
+Session `01a13f10-39ff-7c02-be5c-27701acebe74`, turn `01a13f3b-7969-7803-aada-96df9aea6405`; actual
+rollout metadata verifies model/effort. Design artifact SHA256:
+`5ba6c388bbdd7344370da736c05e6174d81ef314f25b455b1309e5deb34d5fb3`.
+
+Final CSV overall review: **PASS**, gpt-6.1-sol / xhigh session
+`01a13f10-39ff-7c02-be5c-27701acebe74`, turn
+`01a13f46-d15a-7232-a912-3d0f0f9c258d`. It verified normal/race terminal
+success, all 22 CPU static checks, the real CSV owner regression and borrowed
+service cleanup. Review artifact SHA256:
+`0f6bc395a76f97b7491ef2e8b6fd6532d25f0401f9e10cb4ed7750f894eda652`.
+
+After rebase to `eb18dbfa030`, the same gpt-6.1-sol / xhigh session
+reconciled the 12 identical patches, unchanged 132 Go fingerprints and fresh
+focused normal/race plus 22 CPU static receipts: **PASS**, prior approval valid.
+Turn `01a13f4c-b0e7-70e3-bbcc-ea61a8b02e76`; reconciliation artifact SHA256:
+`d849e93e98ead0efa754d8b2a1fb67069acbab97cce93c5c50dee5c6fa3fdb27`.

@@ -7,10 +7,11 @@ Each measurement below retains its actual source revision.
 
 ## Latest amendment and rebase
 
-Current main: `83222fa8371`; the prior main `8795f3699b4` reverted fulltext
+Current delivery base: `eb18dbfa030`; main `8795f3699b4` reverted fulltext
 planner change #30189. The obsolete test-call boolean amendment remains removed.
-The latest upstream delta fixes JSONLine vector-array handling; this amendment
-changes only classic async FULLTEXT Datalink admission and its regression proof.
+The admission amendment began on `83222fa8371`, including JSONLine vector-array
+handling. The final delivery rebase adds only ADDTIME/SUBTIME fractional-precision
+matching; the PR Go patches and test fingerprints remain unchanged.
 Earlier measurements below retain their original source revisions.
 
 Classic async admission now aggregates each checker expression. The checker
@@ -44,6 +45,35 @@ passes normal (87.640s) and race (93.620s). Derived from the complete delivery
 scope, all 22 CPU packages pass vet, molint and incremental golangci-lint on
 main `83222fa8371`. Formatting, `make err-check` and diff checks pass. Broader
 unchanged evidence below is reused with its original revision and limits.
+
+### CSV failed-output cleanup
+
+A later complete review identified an additional CSV owner mismatch: both error
+cleanup closures used Background and lost the policy required for reacquisition.
+A new local pre-fix owner regression writes a real row using the original opener,
+writer and closer, injects an error after the finished CSV exists, and confirms
+that the failed output survives. An earlier invalid fixture run is retained and
+excluded; its missing session pool was corrected before this reproduction.
+
+The CSV owner now snapshots the file-operation policy once. Both cleanup callers
+preserve that context; the helper detaches failed cancellation/deadline and adds
+the existing 30-second budget before acquisition/deletion. This is a context-aware
+I/O budget, not a hard interrupt for native syscalls. The original finalization
+error is retained. Reacquired ETL is closed once; borrowed SHARED is not closed.
+
+Direct and cached-stage regressions cover successful file preservation, late
+finalization failure, cancellation and role change after writer completion,
+plus refusal of a current public role despite a stale administrator context.
+Helper controls cover expired deadlines, canceled parents, absent/nonprivileged
+policy, live bounded deletion and borrowed-service ownership. The tests reuse
+existing frontend fixtures and add no cluster. Broader unchanged validation
+remains revision-qualified. Full frontend package normal (26.499s) and race
+(35.981s) pass on the pre-rebase source. Delivery rebase validation repeats all
+10 owner and 6 helper cases in normal/race and all 22 CPU static checks; the
+whole-package results are reused for unchanged CSV behavior. The exact
+commands, source hashes, terminal exits and logs are retained in the local
+`csv-cleanup/` ledger; earlier public, provider and persistence evidence remains
+valid only for its unchanged semantic inputs.
 
 ## Historical functional and static evidence
 

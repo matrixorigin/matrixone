@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
@@ -2511,16 +2514,176 @@ func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
 	require.Equal(t, []string{"id", "value"}, info.writableNames)
 }
 
+// Exercise the real CSV owner/opener/writer; only inject the late finalization
+// failure after the original closer has made the output visible.
+func TestDataBranchCSVFinalizationCleanup(t *testing.T) {
+	for _, kind := range []string{"local", "stage"} {
+		for _, mode := range []string{"success", "finalization", "canceled", "role changed", "denied"} {
+			t.Run(kind+"/"+mode, func(t *testing.T) {
+				ses := newValidateSession(t)
+				ses.pool = ses.proc.Mp()
+				ses.SetMysqlResultSet(&MysqlResultSet{})
+				dir := t.TempDir()
+				outputDir := dir
+				if kind == "stage" {
+					u, err := url.Parse("file://" + dir)
+					require.NoError(t, err)
+					ses.proc.GetStageCache().Set("csv_cleanup", stage.StageDef{Name: "csv_cleanup", Url: u})
+					outputDir = "stage://csv_cleanup"
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if mode == "denied" {
+					ses.proc.Base.SessionInfo.Role = "public"
+					// A stale grant on the request cannot override the current role.
+					ctx = fileservice.WithSQLFileAccess(ctx, "sys", "moadmin")
+				}
+
+				bat := buildPickStreamingBatch(t, ses.proc.Mp(), []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, [][]any{{int64(1), "one"}})
+				exec := &pickStreamingExecutor{result: executor.Result{Batches: []*batch.Batch{bat}, Mp: ses.proc.Mp()}}
+				previousRuntime := moruntime.ServiceRuntime(ses.GetService())
+				bh := newPickStreamingBackExecForTest(t, ses, exec)
+				installedRuntime := moruntime.ServiceRuntime(ses.GetService())
+				t.Cleanup(func() {
+					if previousRuntime != nil {
+						moruntime.SetupServiceBasedRuntime(ses.GetService(), previousRuntime)
+					} else {
+						moruntime.CompareAndDeleteServiceBasedRuntime(ses.GetService(), installedRuntime)
+					}
+					if exec.sql == "" {
+						bat.Clean(ses.proc.Mp()) // ownership never passed to the writer
+					}
+				})
+				pool, err := ants.NewPool(3) // writer, producer and converter
+				require.NoError(t, err)
+				defer pool.Release()
+				tbl := newTestBranchTableStuff(gomock.NewController(t))
+				tbl.worker = pool
+				injected := moerr.NewInternalErrorNoCtx("injected CSV finalization failure")
+				originalClose := Close
+				t.Cleanup(func() { Close = originalClose })
+				var completed []string
+				var contents []byte
+				Close = func(ep *ExportConfig) error {
+					if err := originalClose(ep); err != nil {
+						return err
+					}
+					var err error
+					completed, err = filepath.Glob(filepath.Join(dir, "*.csv"))
+					if err != nil {
+						return err
+					}
+					if len(completed) == 1 {
+						contents, err = os.ReadFile(completed[0])
+						if err != nil {
+							return err
+						}
+					}
+					if mode == "canceled" {
+						cancel()
+					}
+					if mode == "role changed" {
+						ses.proc.Base.SessionInfo.Role = "public"
+					}
+					if mode != "success" {
+						return injected
+					}
+					return nil
+				}
+				err = writeCSV(ctx, ses, tbl, bh, &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir}})
+				if mode == "denied" {
+					require.ErrorContains(t, err, "only the sys account moadmin role")
+					require.Empty(t, completed)
+					entries, err := os.ReadDir(dir)
+					require.NoError(t, err)
+					require.Empty(t, entries)
+					return
+				}
+				require.Len(t, completed, 1, "original writer must finish a real file before injection")
+				require.Contains(t, string(contents), "one")
+				if mode == "success" {
+					require.NoError(t, err)
+					got, err := os.ReadFile(completed[0])
+					require.NoError(t, err)
+					require.Equal(t, contents, got)
+				} else {
+					require.ErrorIs(t, err, injected)
+					_, err := os.Stat(completed[0])
+					require.True(t, os.IsNotExist(err), "failed CSV output must be removed")
+				}
+			})
+		}
+	}
+}
+
+type csvCleanupFileService struct {
+	fileservice.FileService
+	deletes, closes int
+	contextErr      error
+	remaining       time.Duration
+}
+
+func (fs *csvCleanupFileService) Delete(ctx context.Context, paths ...string) error {
+	fs.deletes++
+	fs.contextErr = ctx.Err()
+	if deadline, ok := ctx.Deadline(); ok {
+		fs.remaining = time.Until(deadline)
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func (fs *csvCleanupFileService) Close(context.Context) { fs.closes++ }
+
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
-	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
-	filePath := filepath.Join(t.TempDir(), "diff.sql")
-	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+	for _, mode := range []string{"authorized", "canceled", "expired", "public", "missing policy"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
+			switch mode {
+			case "canceled":
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			case "expired":
+				expired, cancel := context.WithDeadline(ctx, time.Unix(1, 0))
+				defer cancel()
+				ctx = expired
+			case "public":
+				ctx = fileservice.WithSQLFileAccess(ctx, "sys", "public")
+			case "missing policy":
+				ctx = t.Context()
+			}
+			filePath := filepath.Join(t.TempDir(), "diff.csv")
+			require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o600))
+			removeFileIgnoreError(ctx, "", filePath)
+			_, err := os.Stat(filePath)
+			if mode == "public" || mode == "missing policy" {
+				require.NoError(t, err, "cleanup must retain factory admission")
+			} else {
+				require.True(t, os.IsNotExist(err))
+			}
+		})
+	}
 
-	removeFileIgnoreError(ctx, "", filePath)
-
-	_, err := os.Stat(filePath)
-	require.Error(t, err)
-	require.True(t, os.IsNotExist(err))
+	t.Run("borrowed SHARED retains owner and bounded context", func(t *testing.T) {
+		ses := newValidateSession(t)
+		local, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+		require.NoError(t, err)
+		defer local.Close(t.Context())
+		fs := &csvCleanupFileService{FileService: local}
+		installDataBranchTestFileService(t, ses, fs)
+		ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
+		require.NoError(t, local.Write(ctx, fileservice.IOVector{FilePath: "failed.csv", Entries: []fileservice.IOEntry{{Data: []byte("x"), Size: 1}}}))
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		removeFileIgnoreError(canceled, ses.GetService(), defines.SharedFileServiceName+":/failed.csv")
+		require.Equal(t, 1, fs.deletes)
+		require.NoError(t, fs.contextErr)
+		require.Greater(t, fs.remaining, time.Duration(0))
+		require.LessOrEqual(t, fs.remaining, diffOutputCleanupTimeout)
+		require.Zero(t, fs.closes, "registry owns the borrowed file service")
+		_, err = local.StatFile(ctx, "failed.csv")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	})
 }
 
 func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {

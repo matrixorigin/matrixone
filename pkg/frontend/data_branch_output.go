@@ -1585,6 +1585,7 @@ func writeCSV(
 
 	ctx, cancelCtx := context.WithCancel(inputCtx)
 	defer cancelCtx()
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
 
 	// SQLExecutor do not support snapshot read, we must use the MO_TS
 	snap := ""
@@ -1659,7 +1660,7 @@ func writeCSV(
 			return
 		}
 		cleanup = func() {
-			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.StageFilePath)
+			removeFileIgnoreError(ctx, ep.service, ep.userConfig.StageFilePath)
 		}
 	} else {
 		ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
@@ -1667,7 +1668,7 @@ func writeCSV(
 			return
 		}
 		cleanup = func() {
-			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+			removeFileIgnoreError(ctx, ep.service, ep.userConfig.FilePath)
 		}
 	}
 
@@ -2481,6 +2482,9 @@ func removeFileIgnoreError(ctx context.Context, service, filePath string) {
 	if err != nil {
 		return
 	}
+	// Cleanup completes an already admitted operation, even after cancellation.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diffOutputCleanupTimeout)
+	defer cancel()
 
 	var (
 		targetFS   fileservice.FileService
@@ -2495,11 +2499,11 @@ func removeFileIgnoreError(ctx context.Context, service, filePath string) {
 		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, filePath); err != nil {
 			return
 		}
+		defer etlFS.Close(ctx)
 		targetFS = etlFS
 	}
 
 	_ = targetFS.Delete(ctx, targetPath)
-	targetFS.Close(ctx)
 }
 
 func tryFlushDeletesOrInserts(
