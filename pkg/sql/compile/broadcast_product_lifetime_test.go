@@ -425,7 +425,14 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	select {
 	case <-retired:
 	case err := <-result:
-		t.Fatalf("scheduler stopped before the empty consumer retired: %v", err)
+		select {
+		case <-retired:
+			// Both events can already be ready. Preserve the result for the
+			// assertions below; this receive freed the sole buffered slot.
+			result <- err
+		default:
+			t.Fatalf("scheduler stopped before the empty consumer retired: %v", err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("empty consumer did not retire")
 	}
