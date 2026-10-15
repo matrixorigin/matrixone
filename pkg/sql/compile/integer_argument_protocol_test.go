@@ -266,27 +266,27 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatIntegerArguments)
 			require.True(t, features.Any())
 
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114} {
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion115))
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion116))
 			}
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion115, required)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			require.Equal(t, defines.MORPCVersion116, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 			op := projection.NewArgument()
 			defer op.Release()
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114} {
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115} {
 				client.version = old
 				_, err = encodeRemoteScope(scope, c.proc)
 				require.ErrorContains(t, err, "remote destination")
 			}
-			client.version = defines.MORPCVersion115
+			client.version = defines.MORPCVersion116
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 		})

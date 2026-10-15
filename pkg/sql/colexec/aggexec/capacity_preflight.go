@@ -2094,6 +2094,7 @@ func (exec *bitOpExecBytes) PreflightBatchFill(
 	winnerCount := 0
 	var needs [hashmap.UnitLimit]vectorAreaChunkCapacity
 	needCount := 0
+	isBlob := exec.argTypes[0].Oid == types.T_blob
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -2104,6 +2105,11 @@ func (exec *bitOpExecBytes) PreflightBatchFill(
 		}
 		if vectors[0].IsNull(uint64(row)) {
 			continue
+		}
+		if isBlob {
+			if err := exec.validateOperand(vectors[0].GetRawBytesAt(row)); err != nil {
+				return err
+			}
 		}
 		x, y, state, err := exec.validatePreflightTarget(group)
 		if err != nil {
@@ -2149,6 +2155,7 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 	winnerCount := 0
 	var needs [hashmap.UnitLimit]vectorAreaChunkCapacity
 	needCount := 0
+	isBlob := exec.argTypes[0].Oid == types.T_blob
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -2157,7 +2164,8 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		if err != nil {
 			return err
 		}
-		if !state.vecs[0].IsNull(uint64(y)) {
+		targetInitialized := !state.vecs[0].IsNull(uint64(y))
+		if targetInitialized && !isBlob {
 			continue
 		}
 		otherX, otherY := other.getXY(uint64(offset + i))
@@ -2167,6 +2175,14 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		}
 		source := other.state[otherX].vecs[0]
 		if source.IsNull(uint64(otherY)) {
+			continue
+		}
+		if isBlob {
+			if err := exec.validateOperand(source.GetRawBytesAt(int(otherY))); err != nil {
+				return err
+			}
+		}
+		if targetInitialized {
 			continue
 		}
 		winner, err := winnerForGroup(&winners, &winnerCount, group)

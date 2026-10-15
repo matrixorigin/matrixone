@@ -103,12 +103,15 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.DecimalStatisticalResultContracts {
 		required = max(required, defines.MORPCVersion113)
 	}
+	if features.CalendarIntervalNormalization {
+		required = max(required, defines.MORPCVersion115)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.LowPrecisionFloatIntegerArguments {
-		return defines.MORPCVersion115
+		return defines.MORPCVersion116
 	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104

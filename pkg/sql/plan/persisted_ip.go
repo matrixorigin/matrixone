@@ -147,8 +147,11 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
 	}
-	if features.LowPrecisionFloatIntegerArguments {
+	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
+	}
+	if features.LowPrecisionFloatIntegerArguments {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion116)
 	}
 	return requiredVersion, nil
 }

@@ -388,10 +388,12 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
-// LowPrecisionFloatIntegerArguments requires MORPC v115 because older executors reject
+// LowPrecisionFloatIntegerArguments requires MORPC v116 because older executors reject
 // bf16/float16/float8/float4 sources of private CAST 5..8.
+// CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatIntegerArguments bool
+	CalendarIntervalNormalization     bool
 	JSONScalarLiteralContracts        bool
 	JSONInputContracts                bool
 	YearBitCast                       bool
@@ -429,7 +431,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.LowPrecisionFloatIntegerArguments || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.LowPrecisionFloatIntegerArguments || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -917,6 +919,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
+					features.CalendarIntervalNormalization = true
+				}
 				// Aliases and DISTINCT share these aggregate IDs. Inspect the
 				// argument domain even for legacy DECIMAL-typed result plans.
 				statisticalID := id & 0x7fffffff // remove the DISTINCT flag
