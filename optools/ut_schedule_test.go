@@ -56,6 +56,8 @@ exit "$HEAVY_STATUS"
 `
 }
 
+// Scheduling cases may run in parallel: each harness owns its directory,
+// environment and child processes. Cases using t.Setenv stay serial.
 // Source the real runner in a private repository layout. Its startup clears
 // diagnostics, so sourcing it in the actual checkout would corrupt another UT.
 func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
@@ -143,6 +145,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 }
 
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	t.Parallel()
 	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
 	// diagnostics without cloning a repository or changing this worktree.
 	gitDir := filepath.Join(t.TempDir(), "git")
@@ -259,6 +262,7 @@ source ./run_ut.sh UT
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
 	}{
@@ -372,6 +376,7 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 }
 
 func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, budget, overlap, planParallel, engine, heavy, plan, expected string }{
 		{"default-safe", "", "1", "1", "0", "0", "0", "0"},
 		{"explicit-three", "3", "", "1", "0", "0", "0", "0"},
@@ -513,6 +518,7 @@ printf '\nREPORT\n'
 }
 
 func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
@@ -567,6 +573,7 @@ exit 0
 }
 
 func TestEngineChildRegistrationSurvivesCancellation(t *testing.T) {
+	t.Parallel()
 	transform := func(text string) string {
 		const anchor = "        \"$@\" &\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n"
 		if got := strings.Count(text, anchor); got != 1 {
@@ -619,6 +626,7 @@ exit 0
 }
 
 func TestEngineRaceHelperPublishesCompleteReport(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -664,6 +672,7 @@ exit 99
 // A failed build must still propagate; omitting DWARF must not bypass race,
 // tags, the bounded build parallelism, or module/vet policy.
 func TestRaceBinaryBuildPolicyAndFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, command string }{
 		{"engine", "run_engine_race_shards example/engine 1"},
 		{"plan", "run_plan_race_shards example/plan"},
@@ -699,6 +708,7 @@ exit 97
 }
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term", "marker-report-open", "marker-completion"} {
 		t.Run(mode, func(t *testing.T) {
 			transform := func(text string) string {
@@ -855,6 +865,7 @@ exit 99
 }
 
 func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
@@ -893,6 +904,7 @@ kill -TERM "$$"
 }
 
 func TestCancellationReportsCompletedSlowCases(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { printf "%s\n" "$2"; }
 UT_REPORT="$CASE_DIR/report.json"
@@ -924,6 +936,7 @@ exit 0
 }
 
 func TestCgroupResourceBreakdown(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkdir "$CASE_DIR/cgroup"
 printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
@@ -950,6 +963,7 @@ cgroup_resource_breakdown "$CASE_DIR/missing"
 }
 
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
 exec 9<> "$CASE_DIR/heartbeat-ready"
@@ -1011,6 +1025,7 @@ exit 0
 }
 
 func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-child"
 mkfifo "$CASE_DIR/heartbeat-release"
@@ -1143,6 +1158,7 @@ exit 0
 }
 
 func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
 exec 7<> "$CASE_DIR/heartbeat-ready"
@@ -1267,6 +1283,7 @@ exit 0
 }
 
 func TestLightIssuesOverlapPreservesReportsAndFailures(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *example/light-package* ]]; then
@@ -1336,6 +1353,7 @@ report=$(cat "$UT_REPORT")
 }
 
 func TestLightIssuesCancellationStopsWritersBeforeMerge(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *example/light-package* ]]; then
@@ -1372,6 +1390,7 @@ kill -TERM "$$"
 }
 
 func TestRunTestsPlacesHNSWBeforeLightIssuesOverlap(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
@@ -1544,6 +1563,7 @@ fi
 // One outstanding TERM at a time tests parser reentry without a signal flood.
 // The main PID comes from Go; the subshell PID comes from its parent's $!.
 func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	script := scheduleFixturePID + `
