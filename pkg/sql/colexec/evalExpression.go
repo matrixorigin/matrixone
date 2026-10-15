@@ -1233,6 +1233,15 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		}
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
+		// A skipped branch normally needs no execution. User-variable
+		// assignments are the exception: their row history must record the
+		// value visible on this row even when IF/CASE does not select the arm.
+		if containsUserVariableAssignmentExecutor(expr.parameterExecutor[1]) {
+			noRows := make([]bool, rowCount)
+			if _, err = expr.parameterExecutor[1].Eval(proc, batches, noRows); err != nil {
+				return err
+			}
+		}
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
 			return err
@@ -1246,8 +1255,38 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
+	if containsUserVariableAssignmentExecutor(expr.parameterExecutor[2]) {
+		noRows := make([]bool, rowCount)
+		if _, err = expr.parameterExecutor[2].Eval(proc, batches, noRows); err != nil {
+			return err
+		}
+	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
 	return err
+}
+
+func containsUserVariableAssignmentExecutor(executor ExpressionExecutor) bool {
+	switch e := executor.(type) {
+	case *UserVarAssignmentExpressionExecutor:
+		return true
+	case *FunctionExpressionExecutor:
+		for _, child := range e.parameterExecutor {
+			if containsUserVariableAssignmentExecutor(child) {
+				return true
+			}
+		}
+	case *ListExpressionExecutor:
+		for _, child := range e.parameterExecutor {
+			if containsUserVariableAssignmentExecutor(child) {
+				return true
+			}
+		}
+	case *memoExpressionExecutor:
+		return e.state != nil && containsUserVariableAssignmentExecutor(e.state.executor)
+	case *memoRootExpressionExecutor:
+		return containsUserVariableAssignmentExecutor(e.executor)
+	}
+	return false
 }
 
 func hasSelectedRows(selectList []bool) bool {

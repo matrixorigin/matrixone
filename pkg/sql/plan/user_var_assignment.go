@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func containsUserVarAssignment(expr tree.Expr) bool {
@@ -42,6 +43,7 @@ type assignmentVisit struct {
 
 var userVarAssignmentExprType = reflect.TypeOf((*tree.UserVarAssignmentExpr)(nil))
 var userVarExprType = reflect.TypeOf((*tree.VarExpr)(nil))
+var funcExprType = reflect.TypeOf((*tree.FuncExpr)(nil))
 
 func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]struct{}) bool {
 	if !v.IsValid() {
@@ -101,6 +103,73 @@ func userVarAssignmentRoot(expr tree.Expr) *tree.UserVarAssignmentExpr {
 	}
 	assignment, _ := expr.(*tree.UserVarAssignmentExpr)
 	return assignment
+}
+
+// containsUserVarAssignmentUnderAggregate identifies the one composition that
+// cannot be made row-wise: an assignment nested in an aggregate/window input.
+// The outer projection assignment remains supported, as do conditional
+// assignments such as @a := IF(..., @b := 1, 2). Reflection keeps this check
+// aligned with the full AST without relying on visitors that do not support
+// every legacy expression node.
+func containsUserVarAssignmentUnderAggregate(expr tree.Expr) bool {
+	return containsUserVarAssignmentUnderAggregateValue(reflect.ValueOf(expr), false, make(map[assignmentVisit]struct{}))
+}
+
+func containsUserVarAssignmentUnderAggregateValue(
+	v reflect.Value, aggregate bool, seen map[assignmentVisit]struct{},
+) bool {
+	if !v.IsValid() {
+		return false
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == userVarAssignmentExprType {
+			if aggregate {
+				return true
+			}
+		}
+		childAggregate := aggregate
+		if v.Type() == funcExprType {
+			fn := v.Interface().(*tree.FuncExpr)
+			childAggregate = childAggregate || fn.WindowSpec != nil
+			name := ""
+			if fn.FuncName != nil {
+				name = fn.FuncName.Compare()
+			} else if ref, ok := fn.Func.FunctionReference.(*tree.UnresolvedName); ok && ref != nil {
+				name = ref.ColName()
+			}
+			childAggregate = childAggregate || function.GetFunctionIsAggregateByName(name)
+		}
+		visit := assignmentVisit{typ: v.Type(), ptr: v.Pointer()}
+		if _, ok := seen[visit]; ok {
+			return false
+		}
+		seen[visit] = struct{}{}
+		return containsUserVarAssignmentUnderAggregateValue(v.Elem(), childAggregate, seen)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if field.CanInterface() && containsUserVarAssignmentUnderAggregateValue(field, aggregate, seen) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsUserVarAssignmentUnderAggregateValue(v.Index(i), aggregate, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func userVariableReadsBeforeAssignment(expr tree.Expr) map[string]struct{} {
@@ -246,6 +315,9 @@ func validateUserVarAssignmentScope(
 			hasAssignment = true
 			if !isUserVarAssignmentRoot(selectExpr.Expr) {
 				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
+			}
+			if containsUserVarAssignmentUnderAggregate(selectExpr.Expr) {
+				return userVarAssignmentNotSupported(ctx, "an aggregate or window argument")
 			}
 			for assignedName := range userVarAssignmentNames(selectExpr.Expr) {
 				assignedUserVariables[assignedName] = struct{}{}

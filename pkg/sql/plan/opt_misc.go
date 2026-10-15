@@ -506,6 +506,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		if ne.Sub != nil {
 			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap)
 		}
+
+	case *plan.Expr_UserVarAssignment:
+		if ne.UserVarAssignment != nil {
+			ne.UserVarAssignment.Value = replaceColumnsForExpr(ne.UserVarAssignment.Value, projMap)
+		}
 	}
 	return expr
 }
