@@ -388,6 +388,8 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
+// TimestampDatetimeResultContracts requires MORPC v114 for appended unary
+// TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
@@ -421,6 +423,7 @@ type RemoteExpressionFeatures struct {
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
+	TimestampDatetimeResultContracts        bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
 }
@@ -452,6 +455,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
+		features.TimestampDatetimeResultContracts ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
 		features.InvalidDecimalStatisticalResultContract
@@ -979,6 +983,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
+				}
+				if id == 250 && overload >= 0 && overload <= 10 { // TIMESTAMP
+					want := planTimestampTypeID
+					if overload >= 5 {
+						want = planDatetimeTypeID
+					}
+					if overload >= 6 {
+						features.TimestampDatetimeResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended

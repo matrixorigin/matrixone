@@ -6807,6 +6807,13 @@ func bindFuncExprImplByPlanExpr(
 		}
 		args = []*Expr{arg}
 	}
+	if name == "timestampadd" && len(args) == 3 && temporalDirectMarker(args[2]) {
+		args = append([]*Expr(nil), args...)
+		args[2], err = bindTemporalMarkerConsumer(ctx, args[2], types.New(types.T_datetime, 6, 6))
+		if err != nil {
+			return nil, err
+		}
+	}
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -7956,8 +7963,7 @@ func bindFuncExprImplByPlanExpr(
 		// A direct prepared parameter has TIME(6) result metadata in MySQL.
 		// Keep the string overload and its physical argument: an implicit cast
 		// would reject invalid values before the function can return NULL.
-		if len(args) == 2 && (args[0].GetP() != nil ||
-			(originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time))) {
+		if len(args) == 2 && temporalDirectMarkerArgument(args, originalBoundExpr, 0) {
 			returnType = types.New(types.T_time, 0, 6)
 		} else if len(args) == 2 && (argsType[0].Oid == types.T_time || argsType[0].Oid == types.T_datetime || argsType[0].Oid == types.T_timestamp) {
 			// A string duration contributes its known literal precision, or
@@ -8022,6 +8028,17 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 	case "timestamp":
+		if len(args) == 1 {
+			if argsType[0].Oid == types.T_any || argsType[0].Oid.IsMySQLString() {
+				returnType.Scale = 6
+				if !temporalDirectMarkerArgument(args, originalBoundExpr, 0) {
+					if fsp, ok := timestampPairLiteralFSP(args[0], true); ok {
+						returnType.Scale = fsp
+					}
+				}
+			}
+			returnType.Width = returnType.Scale
+		}
 		// The pair overload advertises FSP=6 for string columns and parameters,
 		// whose values are unknown while binding. For a direct string literal,
 		// MySQL derives DATETIME(fsp) from the parsed value's fractional digits.
@@ -11418,6 +11435,17 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if err != nil {
 		return nil, err
 	}
+	markerDate := temporalDirectMarker(dateExpr)
+	if markerDate {
+		target := types.New(types.T_datetime, 6, 6)
+		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
+			target = types.T_date.ToType()
+		}
+		dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if dateExpr.Typ.Id == int32(types.T_time) {
 		// Check the SQL unit before a string or marker can be normalized to
 		// MICROSECOND. Calendar units have no stable TIME result semantics.
@@ -11459,7 +11487,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	// DAY can carry a fractional day for these source types. Choose the
 	// result family from the static signature, including whole-valued rows;
 	// neither the spelling of a literal nor a row value may change metadata.
-	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+	if !markerDate && dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
 		switch types.T(firstExpr.Typ.Id) {
 		case types.T_float32, types.T_float64,
 			types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -11476,7 +11504,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	} else if handled {
 		// "date '2020-10-10' - interval 1 Hour"  will return datetime
 		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-		if dateExpr.Typ.Id == int32(types.T_date) {
+		if !markerDate && dateExpr.Typ.Id == int32(types.T_date) {
 			switch returnType {
 			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 			default:
@@ -11498,7 +11526,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 
 	// "date '2020-10-10' - interval 1 Hour"  will return datetime
 	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-	if dateExpr.Typ.Id == int32(types.T_date) {
+	if !markerDate && dateExpr.Typ.Id == int32(types.T_date) {
 		switch intervalType {
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
