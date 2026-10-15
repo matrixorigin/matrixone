@@ -1053,33 +1053,90 @@ func resultColumnIndexSearchScore(query *plan.Query, nodeID int32, expr *plan.Ex
 	if query == nil || expr == nil || expr.GetCol() == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 		return false
 	}
+	return resultColumnIndexSearchScoreAtNode(
+		query, nodeID, expr.GetCol(), make(map[int32]bool), false,
+	)
+}
+
+// resultColumnIndexSearchScoreAtNode follows the same relation/child routing
+// as result-column source lookup.  Searching every child of a join is wrong:
+// a result containing a stored column from the left side must not become
+// COMPUTED merely because the right side also has a synthetic score slot.
+func resultColumnIndexSearchScoreAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+	preferLocal bool,
+) bool {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
 	node := query.Nodes[nodeID]
 	if node == nil {
 		return false
 	}
 	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		ref := expr.GetCol()
-		if projected, _ := resultColumnProjectionWithIndex(node, ref); projected != nil && projected.GetCol() != nil {
+		projected := resultColumnProjectionAtNode(node, ref, preferLocal)
+		if projected != nil && projected.GetCol() != nil {
 			ref = projected.GetCol()
 		}
-		return ref.ColPos >= 0 && int(ref.ColPos) < len(node.TableDef.GetCols()) &&
-			node.TableDef.GetCols()[ref.ColPos] != nil &&
-			strings.EqualFold(node.TableDef.GetCols()[ref.ColPos].Name, "score")
+		if node.TableDef == nil || ref.ColPos < 0 || int(ref.ColPos) >= len(node.TableDef.GetCols()) {
+			return false
+		}
+		col := node.TableDef.GetCols()[ref.ColPos]
+		return col != nil && strings.EqualFold(col.Name, "score")
 	}
-	if len(node.Children) == 0 {
+	if len(node.Children) == 0 || isResultColumnSourceNode(node.NodeType) {
 		return false
 	}
-	projected, projectIndex := resultColumnProjectionWithIndex(node, expr.GetCol())
-	for _, childID := range node.Children {
-		childExpr := projected
-		if child := query.Nodes[childID]; childExpr == nil && child != nil && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
-			childExpr = child.ProjectList[projectIndex]
-		}
-		if childExpr != nil && resultColumnIndexSearchScore(query, childID, childExpr) {
-			return true
+
+	projectedRef := ref
+	childIdx := -1
+	projected := resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && node.NodeType == plan.Node_JOIN &&
+		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		projected = node.ProjectList[ref.ColPos]
+	}
+	if projected != nil && projected.GetCol() != nil {
+		projectedRef = projected.GetCol()
+		if node.NodeType == plan.Node_JOIN && projectedRef.RelPos >= 0 &&
+			int(projectedRef.RelPos) < len(node.Children) {
+			childIdx = int(projectedRef.RelPos)
+			if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
+				projectedRef = childRef
+			}
 		}
 	}
-	return false
+	if childIdx < 0 && node.NodeType == plan.Node_JOIN {
+		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
+	}
+	if childIdx >= 0 && childIdx < len(node.Children) {
+		return resultColumnIndexSearchScoreAtNode(
+			query, node.Children[childIdx], projectedRef,
+			cloneVisitedResultColumnNodes(visited), false,
+		)
+	}
+
+	if projected == nil || projected.GetCol() == nil {
+		return false
+	}
+	found := false
+	for _, childID := range node.Children {
+		if resultColumnIndexSearchScoreAtNode(
+			query, childID, projectedRef,
+			cloneVisitedResultColumnNodes(visited), false,
+		) {
+			if found {
+				// An unresolved/ambiguous route is not enough to widen a
+				// native stored column's wire metadata.
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 // resultColumnExpressionIsComputed follows output projections through the
