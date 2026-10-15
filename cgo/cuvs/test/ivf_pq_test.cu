@@ -1421,6 +1421,56 @@ TEST(GpuIvfPqTest, FilteredSearchAppliesMembership) {
     index.destroy();
 }
 
+// A SHARDED index prepares one mask per shard; each shard searches with its own.
+TEST(GpuIvfPqTest, PreparedBitsetSearchSharded) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 9000 + 2 * (int64_t)i;
+
+    std::vector<int> sim2 = {0, 0};  // 2 logical GPUs on physical device 0
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, sim2, 1,
+                                     DistributionMode_SHARDED, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    // members on both shards
+    std::vector<int64_t> keys = {ids[10], ids[150], ids[199]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t), keys.size(),
+                                     nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    const mo_membership_t cbitmap{bm, MO_MEMBERSHIP_CBITMAP};
+
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, "", cbitmap);
+    auto bitset = index.prepare_bitset("", cbitmap);
+    mo_cbitmap_free(bm);
+    ASSERT_EQ(bitset->masks.size(), (size_t)2);
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, keys);
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+    ASSERT_EQ(want.neighbors[0], ids[10]);
+
+    // a bitset with another shard count is refused
+    bitset->masks.pop_back();
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get()),
+                 std::invalid_argument);
+    index.destroy();
+}
+
 // prepare_bitset builds the mask of membership AND predicates once;
 // search_quantize_with_bitset reuses it.
 TEST(GpuIvfPqTest, PreparedBitsetSearch) {

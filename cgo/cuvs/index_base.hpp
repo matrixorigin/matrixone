@@ -933,14 +933,17 @@ public:
                      uint64_t shard_sz) {
         using bs_t = raft::core::bitset<uint32_t, int64_t>;
         auto res = handle.get_raft_resources();
-        // Rows past the mask (appended after it was built) are cleared.
+        // Rows past the mask (appended after it was built) are cleared; mask
+        // words past the shard are not copied.
         auto bs  = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz), false);
-        raft::copy(
-            *res,
-            raft::make_device_vector_view<uint32_t, int64_t>(
-                bs->data(), static_cast<int64_t>(host_mask.size())),
-            raft::make_host_vector_view<const uint32_t, int64_t>(
-                host_mask.data(), static_cast<int64_t>(host_mask.size())));
+        const int64_t nwords = std::min<int64_t>(static_cast<int64_t>(host_mask.size()),
+                                                 static_cast<int64_t>((shard_sz + 31) / 32));
+        if (nwords > 0) {
+            raft::copy(
+                *res,
+                raft::make_device_vector_view<uint32_t, int64_t>(bs->data(), nwords),
+                raft::make_host_vector_view<const uint32_t, int64_t>(host_mask.data(), nwords));
+        }
         return bs;
     }
 
