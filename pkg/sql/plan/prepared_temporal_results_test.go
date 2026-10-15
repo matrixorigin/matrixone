@@ -26,6 +26,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,6 +175,9 @@ func TestPreparedTemporalMarkerReuse(t *testing.T) {
 						wantType = types.T_time
 					}
 					assertTemporalResultType(t, expr.Typ, wantType, 6)
+					if strings.HasPrefix(expression, "timestamp") {
+						require.Equal(t, function.EncodeOverloadID(function.TIMESTAMP, 9), expr.GetF().Func.Obj)
+					}
 					executor, err := colexec.NewExpressionExecutor(proc, expr)
 					require.NoError(t, err)
 					defer executor.Free()

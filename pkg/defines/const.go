@@ -149,7 +149,8 @@ const (
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
 	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
-	MORPCLatestVersion       = MORPCVersion113
+	MORPCVersion114    int64 = 114 // append-only unary TIMESTAMP DATETIME result vectors
+	MORPCLatestVersion       = MORPCVersion114
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

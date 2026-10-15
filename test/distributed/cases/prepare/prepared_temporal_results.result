@@ -160,6 +160,19 @@ SELECT CAST(v AS CHAR) AS v FROM timestamp_predicate_control WHERE v = TIMESTAMP
 ➤ v[12,65535,0]  𝄀
 2024-01-01 00:20:00.123456  𝄀
 2024-01-01 00:30:00.654321
+CREATE TABLE timestamp_abi_control (v DATETIME(3));
+INSERT INTO timestamp_abi_control VALUES ('2024-02-29 12:34:56.123');
+PREPARE p_timestamp_column FROM 'SELECT CAST(TIMESTAMP(v) AS CHAR) AS v FROM timestamp_abi_control';
+EXECUTE p_timestamp_column;
+➤ v[12,65535,0]  𝄀
+2024-02-29 12:34:56.123
+DEALLOCATE PREPARE p_timestamp_column;
+CREATE VIEW timestamp_abi_view AS SELECT TIMESTAMP(v) AS v FROM timestamp_abi_control;
+SELECT CAST(v AS CHAR) AS v FROM timestamp_abi_view;
+➤ v[12,65535,0]  𝄀
+2024-02-29 12:34:56.123
+DROP VIEW timestamp_abi_view;
+DROP TABLE timestamp_abi_control;
 SET SESSION time_zone = '+00:00';
 PREPARE p_add FROM 'SELECT ADDTIME(?, ''02:00:00.000001'') AS v';
 SET @d = '2024-02-29 23:30:00.123456';

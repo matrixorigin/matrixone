@@ -114,6 +114,16 @@ CREATE TABLE timestamp_predicate_control (v TIMESTAMP(6) PRIMARY KEY);
 INSERT INTO timestamp_predicate_control VALUES ('2024-01-01 00:20:00.123456'), ('2024-01-01 00:30:00.654321'), ('2024-01-01 00:40:00.123456');
 SELECT CAST(v AS CHAR) AS v FROM timestamp_predicate_control WHERE v IN (TIMESTAMP '2024-01-01 00:20:00.123456', TIMESTAMP '2024-01-01 00:30:00.654321') ORDER BY v;
 SELECT CAST(v AS CHAR) AS v FROM timestamp_predicate_control WHERE v = TIMESTAMP('2024-01-01 00:20:00.123456') OR v = TIMESTAMP('2024-01-01 00:30:00.654321') ORDER BY v;
+-- A nonconstant unary expression survives PREPARE and catalog view replay.
+CREATE TABLE timestamp_abi_control (v DATETIME(3));
+INSERT INTO timestamp_abi_control VALUES ('2024-02-29 12:34:56.123');
+PREPARE p_timestamp_column FROM 'SELECT CAST(TIMESTAMP(v) AS CHAR) AS v FROM timestamp_abi_control';
+EXECUTE p_timestamp_column;
+DEALLOCATE PREPARE p_timestamp_column;
+CREATE VIEW timestamp_abi_view AS SELECT TIMESTAMP(v) AS v FROM timestamp_abi_control;
+SELECT CAST(v AS CHAR) AS v FROM timestamp_abi_view;
+DROP VIEW timestamp_abi_view;
+DROP TABLE timestamp_abi_control;
 SET SESSION time_zone = '+00:00';
 
 -- #30197: calendar rollover yields a clock, genuine durations keep hours beyond 24.

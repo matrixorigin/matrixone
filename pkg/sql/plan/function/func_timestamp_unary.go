@@ -21,20 +21,6 @@ import (
 )
 
 func timestampAsDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if result.GetResultVector().GetType().Oid == types.T_timestamp {
-		// Persisted expressions keep their original physical return vector until
-		// SQL replay rebinds them. Preserve the old overload IDs and ABI.
-		switch parameters[0].GetType().Oid {
-		case types.T_date:
-			return DateToTimestamp(parameters, result, proc, length, selectList)
-		case types.T_datetime:
-			return DatetimeToTimestamp(parameters, result, proc, length, selectList)
-		case types.T_timestamp:
-			return TimestampToTimestamp(parameters, result, proc, length, selectList)
-		default:
-			return DateStringToTimestamp(parameters, result, proc, length, selectList)
-		}
-	}
 	reader, err := newTimestampPairDateReader(parameters[0], proc)
 	if err != nil {
 		return err

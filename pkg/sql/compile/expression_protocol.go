@@ -43,6 +43,9 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if features.InvalidDecimalStatisticalResultContract {
 		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
 	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch requires rebinding")
+	}
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
@@ -64,6 +67,9 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.TimestampDatetimeResultContracts {
+		required = max(required, defines.MORPCVersion114)
+	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
 	}

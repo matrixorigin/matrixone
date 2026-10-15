@@ -5198,7 +5198,25 @@ func initToTimestampCase() []tcTemp {
 func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range initToTimestampCase() {
-		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, timestampAsDatetime)
+		var oid int32
+		switch tc.inputs[0].typ.Oid {
+		case types.T_date:
+			oid = 0
+		case types.T_datetime:
+			oid = 1
+		case types.T_timestamp:
+			oid = 2
+		case types.T_varchar:
+			oid = 3
+		case types.T_char:
+			oid = 4
+		default:
+			t.Fatalf("unexpected legacy TIMESTAMP input %s", tc.inputs[0].typ)
+		}
+		overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(TIMESTAMP, oid))
+		require.NoError(t, err)
+		exec, _, _, _ := overload.GetExecuteMethod()
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, exec)
 		ok, info := fc.RunAndFree()
 		require.True(t, ok, info)
 	}
