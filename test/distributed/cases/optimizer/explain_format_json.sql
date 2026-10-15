@@ -189,8 +189,61 @@ drop table serial_values;
 explain (analyze false, format json) select * from t;
 
 -- Explain-only DML must not run the write pipeline.
--- @regex("(?s)matrixone.*statement_type.*UPDATE",true)
+-- #30130: assignments resolve the row image through the lock projection.
+-- @regex("(?s)statement_type.*UPDATE.*assignments.*target[^}]*issue_28301[.]t[.]id[^}]*value[^}]*t[.]id.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*99",true)
 explain format=json update t set v = 99 where id = 1;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*t[.]v[^}]*[+] 1",true)
+explain format=json update t set v = v + 1 where id = 1;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*null",true)
+explain format=json update t set v = null where id = 1;
+prepare e30130_update from 'explain format=json update t set v = 7 where id = 1';
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*7",true)
+execute e30130_update;
+deallocate prepare e30130_update;
+-- Multi-target updates resolve materialized sources and dedup/window outputs.
+create table update_peer(id int primary key, v int);
+insert into update_peer values (1, 30);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*99.*target[^}]*issue_28301[.]update_peer[.]v[^}]*value[^}]*88",true)
+explain format=json update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value(?=[^}]*101)(?=[^}]*102)[^}]*UNION_ALL",true)
+explain format=json update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+-- EXPLAIN has not written either target; execution is an independent control.
+select id, v from t order by id;
+select v from update_peer;
+update t a join update_peer b on a.id = b.id set a.v = 99, b.v = 88;
+select v from t where id = 1;
+select v from update_peer;
+update t set v = 10 where id = 1;
+update t a join t b on a.id + 1 = b.id set a.v = 101, b.v = 102;
+select id, v from t order by id;
+update t set v = id * 10;
+-- MARK outputs in subquery assignments retain TRUE/UNKNOWN/FALSE semantics.
+update update_peer set v = 1 where id = 1;
+insert into update_peer values (3, null);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*MARK[^}]*[ap][.]",true)
+explain format=json update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*MARK",true)
+explain format=json update t a set v = a.id in (select v from update_peer);
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*not[^}]*MARK",true)
+explain format=json update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+-- @regex("(?s)assignments.*target[^}]*issue_28301[.]t[.]v[^}]*value[^}]*not[^}]*MARK",true)
+explain format=json update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = case when exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = case when not exists (select 1 from update_peer p where p.v = a.id) then 1 else 0 end;
+select id, v from t order by id;
+delete from update_peer;
+update t a set v = a.id in (select v from update_peer);
+select id, v from t order by id;
+update t a set v = a.id not in (select v from update_peer);
+select id, v from t order by id;
+update t set v = id * 10;
+drop table update_peer;
 -- @regex("(?s)matrixone.*statement_type.*DELETE",true)
 explain format=json delete from t where id = 1;
 -- @regex("(?s)matrixone.*statement_type.*INSERT",true)

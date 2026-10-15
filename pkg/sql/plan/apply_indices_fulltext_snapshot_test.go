@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -106,7 +107,7 @@ func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, snapshot)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
 	require.NoError(t, err)
 	require.True(t, handled, "the fixture must clear every covered-path guard")
 
@@ -126,13 +127,122 @@ func TestTryApplyCoveredFulltext2NoSnapshotLeavesSearchUnsnapshotted(t *testing.
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil)
+		[]int32{0}, []*plan.IndexDef{idxdef}, nil, nil, map[int32]int32{}, nil, nil, false)
 	require.NoError(t, err)
 	require.True(t, handled)
 
 	node := findCoveredFulltext2Scan(t, builder)
 	assert.Nil(t, node.ScanSnapshot)
 	assert.Nil(t, node.IndexSearchScan.ScanSnapshot)
+}
+
+func TestCoveredFulltext2ScoreLimitOnlyForEquivalentSort(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		keys      []*plan.OrderBySpec
+		foundRows bool
+		wantLimit uint64
+	}{
+		{name: "score descending", wantLimit: 200},
+		{name: "score ascending", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}}},
+		{name: "different projected key", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC,
+			Expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 0, 0)}}},
+		{name: "second key", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}, {Flag: plan.OrderBySpec_DESC}}},
+		{name: "explicit null placement", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST}}},
+		{name: "found rows", foundRows: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
+			ctx := builder.ctxByNode[nodeID]
+			ctx.projectTag = builder.genNewBindTag()
+			projNode.ProjectList = append(projNode.ProjectList, DeepCopyExpr(scanNode.FilterList[0]))
+			scoreKey := &plan.OrderBySpec{
+				Expr: GetColExpr(plan.Type{Id: int32(types.T_float32)}, ctx.projectTag, 1),
+				Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_INTERNAL,
+			}
+			scanNode.FilterList = append(scanNode.FilterList, fnExpr("is_null", &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 2, Name: "tag"}},
+			}))
+			if tc.keys == nil {
+				sortNode.OrderBy = []*plan.OrderBySpec{scoreKey}
+			} else {
+				for _, key := range tc.keys {
+					if key.Expr == nil {
+						key.Expr = DeepCopyExpr(scoreKey.Expr)
+					} else {
+						key.Expr.GetCol().RelPos = ctx.projectTag
+					}
+				}
+				sortNode.OrderBy = tc.keys
+			}
+			builder.sqlCalcFoundRows = tc.foundRows
+			handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
+				[]int32{0}, []*plan.IndexDef{idxdef}, []int32{1}, nil,
+				map[int32]int32{0: 0}, makePlan2Uint64ConstExprWithType(200), nil)
+			require.NoError(t, err)
+			require.True(t, handled)
+			search := findCoveredFulltext2Scan(t, builder)
+			opts, err := ft2plan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
+			require.NoError(t, err)
+			assert.Contains(t, opts.IncludePreds, `"op":"is_null"`)
+			if tc.wantLimit == 0 {
+				require.Nil(t, fulltextScanLimit(search))
+			} else {
+				require.NotNil(t, fulltextScanLimit(search))
+				assert.Equal(t, tc.wantLimit, fulltextScanLimit(search).GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
+func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		orderBy    string
+		pagination string
+		prefix     string
+		wantLimit  uint64
+	}{
+		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2", wantLimit: 2},
+		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
+		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
+		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
+		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
+		{name: "score expression", orderBy: "sc + 1 DESC", pagination: "LIMIT 2"},
+		{name: "no limit", orderBy: "sc DESC"},
+		{name: "overflow", orderBy: "sc DESC", pagination: "LIMIT 18446744073709551615 OFFSET 1"},
+		{name: "found rows", prefix: "SQL_CALC_FOUND_ROWS ", orderBy: "sc DESC", pagination: "LIMIT 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := newIssue24822FullText2Optimizer(t)
+			for _, idx := range optimizer.ctx.tables["ft"].Indexes {
+				idx.IncludedColumns = []string{"base_id"}
+			}
+			statement := `SELECT ` + tc.prefix + `id, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+				FROM ft WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
+				AND base_id IS NULL ORDER BY ` + tc.orderBy + ` ` + tc.pagination
+			p, err := runOneStmt(optimizer, t, statement)
+			require.NoError(t, err)
+			var search *plan.Node
+			for _, node := range p.GetQuery().Nodes {
+				if isFulltext2SearchScan(node) {
+					require.Nil(t, search)
+					search = node
+				}
+			}
+			require.NotNil(t, search)
+			opts, err := ft2plan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
+			require.NoError(t, err)
+			assert.Contains(t, opts.IncludePreds, `"op":"is_null"`)
+			if tc.wantLimit != 0 {
+				require.NotNil(t, fulltextScanLimit(search))
+				assert.Equal(t, tc.wantLimit, fulltextScanLimit(search).GetLit().GetU64Val())
+			} else {
+				require.Nil(t, fulltextScanLimit(search))
+			}
+		})
+	}
 }
 
 // findCoveredFulltext2Scan returns the single fulltext2 index search scan appended by the

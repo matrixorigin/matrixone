@@ -50,47 +50,94 @@ insert into special_numeric_agg values
 (1, 1, 'red', 'a'), (2, 1, 'red', 'a'), (3, 1, 'green', 'a,b'),
 (4, 2, 'blue', 'c'), (5, 2, null, null);
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg;
-se    ae    ss    avs
-7    1.7500    9    2.2500
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+7.0  ¦  1.75  ¦  9.0  ¦  2.25
+select cast(sum(e) + cast('0.000000000000000001' as decimal(20,18)) as char) as se,
+cast(avg(e) + cast('0.000000000000000001' as decimal(20,18)) as char) as ae,
+cast(sum(s) + cast('0.000000000000000001' as decimal(20,18)) as char) as ss,
+cast(avg(s) + cast('0.000000000000000001' as decimal(20,18)) as char) as avs
+from special_numeric_agg;
+➤ se[12,65535,0]  ¦  ae[12,65535,0]  ¦  ss[12,65535,0]  ¦  avs[12,65535,0]  𝄀
+7  ¦  1.75  ¦  9  ¦  2.25
+select cast(sum(cast(e as unsigned)) + cast('0.000000000000000001' as decimal(20,18)) as char) as se,
+cast(avg(cast(e as decimal(20,0))) + cast('0.000000000000000001' as decimal(20,18)) as char) as ae,
+cast(sum(cast(s as unsigned)) + cast('0.000000000000000001' as decimal(20,18)) as char) as ss,
+cast(avg(cast(s as decimal(20,0))) + cast('0.000000000000000001' as decimal(20,18)) as char) as avs
+from special_numeric_agg;
+➤ se[12,65535,0]  ¦  ae[12,65535,0]  ¦  ss[12,65535,0]  ¦  avs[12,65535,0]  𝄀
+7.000000000000000001  ¦  1.750000000000000001  ¦  9.000000000000000001  ¦  2.250000000000000001
+select id, sum(e) over () as se, avg(e) over () as ae,
+sum(s) over () as ss, avg(s) over () as avs from special_numeric_agg order by id;
+➤ id[4,32,0]  ¦  se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+1  ¦  7.0  ¦  1.75  ¦  9.0  ¦  2.25  𝄀
+2  ¦  7.0  ¦  1.75  ¦  9.0  ¦  2.25  𝄀
+3  ¦  7.0  ¦  1.75  ¦  9.0  ¦  2.25  𝄀
+4  ¦  7.0  ¦  1.75  ¦  9.0  ¦  2.25  𝄀
+5  ¦  7.0  ¦  1.75  ¦  9.0  ¦  2.25
+drop table if exists special_numeric_results;
+create table special_numeric_results as
+select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg;
+select column_name, data_type from information_schema.columns
+where table_schema = database() and table_name = 'special_numeric_results' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+se  ¦  double  𝄀
+ae  ¦  double  𝄀
+ss  ¦  double  𝄀
+avs  ¦  double
+drop table special_numeric_results;
+prepare special_numeric_domain from 'select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg where g <= ?';
+set @special_numeric_g = 1;
+execute special_numeric_domain using @special_numeric_g;
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+4.0  ¦  1.3333333333333333  ¦  5.0  ¦  1.6666666666666667
+set @special_numeric_g = 2;
+execute special_numeric_domain using @special_numeric_g;
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+7.0  ¦  1.75  ¦  9.0  ¦  2.25
+set @special_numeric_g = 0;
+execute special_numeric_domain using @special_numeric_g;
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null
+deallocate prepare special_numeric_domain;
 select sum(distinct e) as se, cast(avg(distinct e) as decimal(12,4)) as ae,
 sum(distinct s) as ss, cast(avg(distinct s) as decimal(12,4)) as avs from special_numeric_agg;
-se    ae    ss    avs
-6    2.0000    8    2.6667
+➤ se[8,53,31]  ¦  ae[3,12,4]  ¦  ss[8,53,31]  ¦  avs[3,12,4]  𝄀
+6.0  ¦  2.0000  ¦  8.0  ¦  2.6667
 select g, sum(e) as se, cast(avg(e) as decimal(12,4)) as ae, sum(s) as ss, cast(avg(s) as decimal(12,4)) as avs
 from special_numeric_agg group by g order by g;
-g    se    ae    ss    avs
-1    4    1.3333    5    1.6667
-2    3    3.0000    4    4.0000
+➤ g[4,32,0]  ¦  se[8,53,31]  ¦  ae[3,12,4]  ¦  ss[8,53,31]  ¦  avs[3,12,4]  𝄀
+1  ¦  4.0  ¦  1.3333  ¦  5.0  ¦  1.6667  𝄀
+2  ¦  3.0  ¦  3.0000  ¦  4.0  ¦  4.0000
 select sum(e + 0) as se, avg(e + 0) as ae, sum(s + 0) as ss, avg(s + 0) as avs from special_numeric_agg;
 se    ae    ss    avs
 7    1.7500    9    2.2500
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs
 from (select e, s from special_numeric_agg) d;
-se    ae    ss    avs
-7    1.7500    9    2.2500
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+7.0  ¦  1.75  ¦  9.0  ¦  2.25
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg where id = 5;
-se    ae    ss    avs
-null    null    null    null
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_agg where id < 0;
-se    ae    ss    avs
-null    null    null    null
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null
 drop table special_numeric_agg;
 drop table if exists special_numeric_empty;
 create table special_numeric_empty (id int primary key, e enum('', '99'), s set('', '99'));
 insert into special_numeric_empty values (1, 1, 1), (2, 2, 0), (3, null, null);
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs,
 sum(distinct s) as ds, avg(distinct s) as da from special_numeric_empty;
-se    ae    ss    avs    ds    da
-3    1.5000    1    0.5000    1    0.5000
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  ¦  ds[8,53,31]  ¦  da[8,53,31]  𝄀
+3.0  ¦  1.5  ¦  1.0  ¦  0.5  ¦  1.0  ¦  0.5
 select sum(s) as ss, avg(s) as avs from (select s from special_numeric_empty) d;
-ss    avs
-1    0.5000
+➤ ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+1.0  ¦  0.5
 select sum(s) as ss, avg(s) as avs from (select distinct s from special_numeric_empty) d;
-ss    avs
-0    0.0000
+➤ ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+0.0  ¦  0.0
 select sum(s) as ss, avg(s) as avs from (select s from special_numeric_empty limit 3) d;
-ss    avs
-0    0.0000
+➤ ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+0.0  ¦  0.0
 insert into special_numeric_empty values (4, 2, 2);
 select id, cast(s as decimal(10,2)) as decimal_bitmap, cast(s as double) as double_bitmap
 from (select id, s from special_numeric_empty) d order by id;
@@ -115,8 +162,8 @@ column_name    data_type
 e    enum
 s    set
 select sum(e) as se, avg(e) as ae, sum(s) as ss, avg(s) as avs from special_numeric_view;
-se    ae    ss    avs
-3    1.5000    1    0.5000
+➤ se[8,53,31]  ¦  ae[8,53,31]  ¦  ss[8,53,31]  ¦  avs[8,53,31]  𝄀
+3.0  ¦  1.5  ¦  1.0  ¦  0.5
 drop table if exists special_numeric_text;
 create table special_numeric_text as select cast(e as char) as e, cast(s as char) as s from special_numeric_empty;
 select column_name, data_type from information_schema.columns
@@ -136,8 +183,8 @@ drop table special_numeric_text;
 drop view special_numeric_view;
 insert ignore into special_numeric_empty values (4, 0, null);
 select sum(e) as se, avg(e) as ae from (select e from special_numeric_empty) d;
-se    ae
-3    1.0000
+➤ se[8,53,31]  ¦  ae[8,53,31]  𝄀
+3.0  ¦  1.0
 drop table special_numeric_empty;
 drop table if exists special_single_empty;
 create table special_single_empty (id int primary key, e enum('') default '', s set('') default '', u bigint unsigned);
