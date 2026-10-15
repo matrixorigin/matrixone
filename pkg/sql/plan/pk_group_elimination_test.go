@@ -1399,9 +1399,18 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 			useLegacyGroupingSetPlan(t, optimizer)
 			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
-			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
-			require.NotNil(t, agg)
-			require.True(t, hasInactiveGroupingColumn(agg.GroupingFlag))
+			// Detail groups contain one input row per primary key; only the
+			// inactive grand-total branch needs an aggregate.
+			query := logical.GetQuery()
+			require.Equal(t, 1, reachableNodeTypeCount(query, planpb.Node_AGG))
+			foundInactive := false
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType == planpb.Node_AGG && hasInactiveGroupingColumn(node.GroupingFlag) {
+					foundInactive = true
+				}
+			}
+			require.True(t, foundInactive)
 		})
 	}
 
@@ -1412,6 +1421,82 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 	)
 	require.NoError(t, err)
 	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyRollupCountGuardFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		"select deptno from constraint_test.emp group by rollup(deptno) limit 10",
+		"select empno,sum(sal) from constraint_test.emp group by rollup(empno) limit 10",
+		"select empno,count(comm) from constraint_test.emp group by rollup(empno) limit 10",
+		"select empno from constraint_test.emp group by rollup(empno) having empno>0 limit 10",
+		"select empno from constraint_test.emp where cast(ename as signed)>0 group by rollup(empno) limit 10",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			useLegacyGroupingSetPlan(t, optimizer)
+			logical, err := runOneStmt(optimizer, t, sql)
+			require.NoError(t, err)
+			require.Equal(t, 2, reachableNodeTypeCount(logical.GetQuery(), planpb.Node_AGG))
+		})
+	}
+}
+
+func TestPrimaryKeyRollupCountGuardMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*planpb.Node, *planpb.Node)
+		want   planpb.Node_NodeType
+	}{
+		{"valid guard", func(*planpb.Node, *planpb.Node) {}, planpb.Node_PROJECT},
+		{"inactive key", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag[0] = false }, planpb.Node_AGG},
+		{"missing flags", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag = nil }, planpb.Node_AGG},
+		{"malformed flags", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag = append(agg.GroupingFlag, true) }, planpb.Node_AGG},
+		{"extra aggregate", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList = append(agg.AggList, DeepCopyExpr(agg.AggList[0]))
+		}, planpb.Node_AGG},
+		{"wrong function ID", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Func.Obj = function.EncodeOverloadID(function.COUNT, 0)
+		}, planpb.Node_AGG},
+		{"distinct count", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Func.Obj = int64(uint64(agg.AggList[0].GetF().Func.Obj) | function.Distinct)
+		}, planpb.Node_AGG},
+		{"missing count argument", func(_ *planpb.Node, agg *planpb.Node) { agg.AggList[0].GetF().Args[0] = nil }, planpb.Node_AGG},
+		{"noncanonical argument", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Args[0] = makePlan2Int64ConstExprWithType(2)
+		}, planpb.Node_AGG},
+		{"nullable count result", func(_ *planpb.Node, agg *planpb.Node) { agg.AggList[0].Typ.NotNullable = false }, planpb.Node_AGG},
+		{"wrong comparison ID", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList[0].GetF().Func.Obj = function.EncodeOverloadID(function.EQUAL, 0)
+		}, planpb.Node_AGG},
+		{"different threshold", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList[0].GetF().Args[1] = makePlan2Int64ConstExprWithType(1)
+		}, planpb.Node_AGG},
+		{"extra HAVING", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList = append(filter.FilterList, makePlan2BoolConstExprWithType(true))
+		}, planpb.Node_AGG},
+		{"terminal filter", func(filter *planpb.Node, _ *planpb.Node) { filter.IsEnd = true }, planpb.Node_AGG},
+		{"barrier filter", func(filter *planpb.Node, _ *planpb.Node) { filter.FilterIsBarrier = true }, planpb.Node_AGG},
+		{"filter limit", func(filter *planpb.Node, _ *planpb.Node) { filter.Limit = makePlan2Uint64ConstExprWithType(1) }, planpb.Node_AGG},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, root, branches := bindEmptyRollupBranches(t,
+				"select empno from constraint_test.emp group by rollup(empno)")
+			agg := branches[0].agg
+			filter := builder.qry.Nodes[builder.qry.Nodes[branches[0].rootID].Children[0]]
+			require.Equal(t, planpb.Node_FILTER, filter.NodeType)
+			test.change(filter, agg)
+			builder.rewriteEffectlessAggToProject(root)
+			require.Equal(t, test.want, agg.NodeType)
+			require.Equal(t, planpb.Node_AGG, branches[1].agg.NodeType)
+			if test.want == planpb.Node_PROJECT {
+				require.Empty(t, filter.FilterList)
+				require.False(t, filter.RollupFilter)
+			} else {
+				require.NotEmpty(t, filter.FilterList)
+				require.True(t, filter.RollupFilter)
+			}
+		})
+	}
 }
 
 func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
