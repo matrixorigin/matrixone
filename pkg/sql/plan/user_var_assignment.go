@@ -130,7 +130,7 @@ func containsUserVarAssignmentUnderAggregateValue(
 			name := ""
 			if fn.FuncName != nil {
 				name = fn.FuncName.Compare()
-			} else if fn.Func != nil {
+			} else if fn.Func.FunctionReference != nil {
 				if ref, ok := fn.Func.FunctionReference.(*tree.UnresolvedName); ok && ref != nil {
 					name = ref.ColName()
 				}

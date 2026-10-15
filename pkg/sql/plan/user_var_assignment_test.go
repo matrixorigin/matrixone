@@ -331,6 +331,26 @@ func TestUserVariableAssignmentScopeValidationBranches(t *testing.T) {
 	require.False(t, containsUserVarAssignmentValue(reflect.ValueOf(cycle), make(map[assignmentVisit]struct{})))
 }
 
+func TestUserVariableAssignmentRejectsAggregateAndGeneratedColumn(t *testing.T) {
+	ctx := context.Background()
+	stmt, err := mysql.ParseOne(ctx, "select @a := max(@b := 1) from select_test.bind_select", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	selectStmt := stmt.(*tree.Select)
+	clause := selectStmt.Select.(*tree.SelectClause)
+	err = validateUserVarAssignmentScope(ctx, clause, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "aggregate or window argument")
+
+	create, err := mysql.ParseOne(ctx, "create table generated_assignment (id int, v int generated always as (@ddl := 1) stored)", 1)
+	require.NoError(t, err)
+	defer create.Free()
+	compiler := NewMockCompilerContext(true, newPlanTestProcess(t))
+	_, err = BuildPlan(compiler, create, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "user-variable assignment is not supported in generated column expressions")
+}
+
 func TestSelectContainsUserVariableAssignmentAcrossStatements(t *testing.T) {
 	value := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
 	assignment := tree.NewUserVarAssignmentExpr("a", value)
