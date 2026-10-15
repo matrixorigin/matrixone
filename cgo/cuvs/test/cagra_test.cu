@@ -978,3 +978,112 @@ TEST(GpuCagraTest, FilteredSearchAppliesMembership) {
                  std::exception);
     index.destroy();
 }
+
+// prepare_bitset builds the mask of membership AND predicates AND deletes once;
+// search_quantize_with_bitset reuses it.
+TEST(GpuCagraTest, PreparedBitsetSearch) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 5000 + 3 * (int64_t)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[2] = 2;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                    DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);  // nearest rows 0, 1, 2, ...
+    cagra_search_params_t sp = cagra_search_params_default();
+    const uint32_t limit = 3;
+    const std::string cat1 = "[{\"col\":0,\"op\":\"=\",\"val\":1}]";
+    auto payload = cagra_sorted64({ids[2], ids[5], ids[9]});
+    const mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+
+    // membership AND cat = 1 drops row 2: rows 5, 9, as search_quantize_with_filter
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, cat1, mem);
+    auto bitset = index.prepare_bitset(cat1, mem);
+    std::fill(payload.begin(), payload.end(), 0);  // the bitset does not read the membership
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_cagra(r.neighbors, r.distances, limit, {ids[5], ids[9]});
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+
+    // a running search holds its mask after the bitset is freed
+    auto job = index.search_quantize_with_bitset_async(query.data(), 1, dimension, limit, sp, bitset.get());
+    bitset.reset();
+    auto r2 = index.search_wait(job);
+    ASSERT_TRUE(r2.neighbors == want.neighbors);
+
+    // the deletes are those at prepare time
+    auto payload2 = cagra_sorted64({ids[2], ids[5], ids[9]});
+    const mo_membership_t mem2{payload2.data(), MO_MEMBERSHIP_SORTED64};
+    auto before = index.prepare_bitset(cat1, mem2);
+    index.delete_id(ids[5]);
+    auto after = index.prepare_bitset(cat1, mem2);
+    auto r3 = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, before.get());
+    expect_only_allowed_cagra(r3.neighbors, r3.distances, limit, {ids[5], ids[9]});
+    auto r4 = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, after.get());
+    expect_only_allowed_cagra(r4.neighbors, r4.distances, limit, {ids[9]});
+
+    // a null bitset and one of another index are refused
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, nullptr), std::invalid_argument);
+    gpu_cagra_t<float, float> other(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                    DistributionMode_SINGLE_GPU, ids.data());
+    other.start();
+    other.build();
+    auto foreign = other.prepare_bitset("", mem2);
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, foreign.get()),
+                 std::invalid_argument);
+    other.destroy();
+    index.destroy();
+}
+
+// Rows extended after prepare_bitset are outside its mask and never returned.
+TEST(GpuCagraTest, PreparedBitsetExcludesRowsAddedAfterPrepare) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)(i + 10);
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 5000 + (int64_t)i;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                    DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    auto payload = cagra_sorted64({ids[0], ids[1]});
+    const mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+    auto bitset = index.prepare_bitset("", mem);
+
+    // 40 rows at the query, nearer than every built row
+    const uint64_t n_ext = 40;
+    std::vector<float> ext(n_ext * dimension, 0.0f);
+    std::vector<int64_t> ext_ids(n_ext);
+    for (uint64_t i = 0; i < n_ext; ++i) ext_ids[i] = 9000 + (int64_t)i;
+    index.extend(ext.data(), n_ext, ext_ids.data());
+
+    std::vector<float> query(dimension, 0.0f);
+    cagra_search_params_t sp = cagra_search_params_default();
+    const uint32_t limit = 2;
+    auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+    expect_only_allowed_cagra(r.neighbors, r.distances, limit, {ids[0], ids[1]});
+    ASSERT_EQ(r.neighbors[0], ids[0]);
+    ASSERT_EQ(r.neighbors[1], ids[1]);
+    index.destroy();
+}

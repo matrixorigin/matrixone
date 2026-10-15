@@ -630,6 +630,99 @@ func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQue
 	return uint64(jobID), nil
 }
 
+// PrepareBitset builds the filter mask of a search once, from predsJSON and mem
+// as SearchQuantizeWithFilter, for SearchQuantizeWithBitset calls on this index
+// to reuse. mem is not referenced after it returns. The caller frees the bitset.
+func (gb *GpuBruteForce[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembership) (*Bitset, error) {
+	if gb.cIndex == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	var errmsg *C.char
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+	ptr := C.gpu_brute_force_prepare_bitset(gb.cIndex, cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)}, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return &Bitset{ptr: C.gpu_bitset_c(ptr)}, nil
+}
+
+// SearchQuantizeWithBitset is SearchQuantizeWithFilter on a bitset from
+// PrepareBitset of this index.
+func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint64, dimension uint32, limit uint32, bitset *Bitset) ([]int64, []float32, error) {
+	if gb.cIndex == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return nil, nil, nil
+	}
+
+	var errmsg *C.char
+	cResult := C.gpu_brute_force_search_quantize_with_bitset(
+		gb.cIndex,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		bitset.handle(),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if cResult == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_brute_force_free_search_result(cResult)
+	return neighbors, distances, nil
+}
+
+// SearchQuantizeWithBitsetAsync is SearchQuantizeWithFilterAsync on a bitset
+// from PrepareBitset of this index; collect the result with SearchWait.
+func (gb *GpuBruteForce[B, Q]) SearchQuantizeWithBitsetAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, bitset *Bitset) (uint64, error) {
+	if gb.cIndex == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	jobID := C.gpu_brute_force_search_quantize_with_bitset_async(
+		gb.cIndex,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		bitset.handle(),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(jobID), nil
+}
+
 // SearchWithFilterAsync submits a filtered K-NN search with native-typed (T)
 // queries and returns a job_id; collect the result with SearchWait. Native
 // counterpart of SearchFloatWithFilterAsync (no widening) — lets the filtered

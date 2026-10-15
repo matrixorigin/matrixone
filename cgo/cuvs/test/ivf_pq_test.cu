@@ -1420,3 +1420,70 @@ TEST(GpuIvfPqTest, FilteredSearchAppliesMembership) {
     mo_croaring_free(roaring);
     index.destroy();
 }
+
+// prepare_bitset builds the mask of membership AND predicates once;
+// search_quantize_with_bitset reuses it.
+TEST(GpuIvfPqTest, PreparedBitsetSearch) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 9000 + 2 * (int64_t)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[150] = 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                     DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    const std::string cat1 = "[{\"col\":0,\"op\":\"=\",\"val\":1}]";
+
+    std::vector<int64_t> keys = {ids[150], ids[170], ids[199]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t), keys.size(),
+                                     nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    const mo_membership_t cbitmap{bm, MO_MEMBERSHIP_CBITMAP};
+
+    // membership AND cat = 1 drops row 150: rows 170, 199, as search_quantize_with_filter
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, cat1, cbitmap);
+    auto bitset = index.prepare_bitset(cat1, cbitmap);
+    mo_cbitmap_free(bm);  // the bitset does not read the membership
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, {ids[170], ids[199]});
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+
+    // a running search holds its mask after the bitset is freed
+    auto job = index.search_quantize_with_bitset_async(query.data(), 1, dimension, limit, sp, bitset.get());
+    bitset.reset();
+    auto r2 = index.search_wait(job);
+    ASSERT_TRUE(r2.neighbors == want.neighbors);
+
+    // a null bitset and one of another index are refused
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, nullptr), std::invalid_argument);
+    gpu_ivf_pq_t<float, float> other(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                     DistributionMode_SINGLE_GPU, ids.data());
+    other.start();
+    other.build();
+    auto foreign = other.prepare_bitset("", mo_membership_t{});
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, foreign.get()),
+                 std::invalid_argument);
+    other.destroy();
+    index.destroy();
+}

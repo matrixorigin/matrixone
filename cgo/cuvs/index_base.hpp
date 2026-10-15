@@ -410,6 +410,28 @@ inline void transform_distance(distance_type_t metric,
     transform_distance(metric, distances.data(), distances.size(), dequant_factor);
 }
 
+// Output of gpu_index_base_t::build_filter_host_mask for rows
+// [start_row, start_row + shard_sz): bit p is set when row start_row + p passes
+// the predicates and the membership and is not deleted. `mask` is empty unless
+// `has_filter`. `deletes_only` distinguishes the no-user / has-deletes case:
+// the caller resolves the device bitset via acquire_delete_bitset_device on a
+// worker thread instead of uploading anything.
+struct host_mask_bundle_t {
+    std::vector<uint32_t> mask;
+    uint64_t              popcount = 0;
+    bool                  has_filter = false;
+    bool                  deletes_only = false;
+};
+
+// The masks gpu_index_base_t::prepare_bitset builds for one search: one per
+// shard for a SHARDED index, one otherwise. Only the index that built it
+// (owner) searches with it. A search copies the mask pointers, so freeing it
+// does not end a running search.
+struct prepared_bitset_t {
+    const void*                                      owner = nullptr;
+    std::vector<std::shared_ptr<host_mask_bundle_t>> masks;
+};
+
 /**
  * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
  *
@@ -771,16 +793,7 @@ public:
     // GPU work. See cgo/cuvs/ivf_pq.hpp:search_with_filter for the use site.
     // ---------------------------------------------------------------------
 
-    // Output of build_filter_host_mask. `mask` is empty unless `has_filter`.
-    // `deletes_only` distinguishes the no-user / has-deletes case — the
-    // caller resolves the device bitset via acquire_delete_bitset_device on
-    // a worker thread instead of uploading anything.
-    struct host_mask_bundle_t {
-        std::vector<uint32_t> mask;
-        uint64_t              popcount = 0;
-        bool                  has_filter = false;
-        bool                  deletes_only = false;
-    };
+    using host_mask_bundle_t = ::matrixone::host_mask_bundle_t;
 
     // Relaxed predicate used only to gate an optional stream sync in the
     // derived search paths (no user filter + no soft deletes ⇒ build_search_bitset
@@ -920,7 +933,8 @@ public:
                      uint64_t shard_sz) {
         using bs_t = raft::core::bitset<uint32_t, int64_t>;
         auto res = handle.get_raft_resources();
-        auto bs  = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz));
+        // Rows past the mask (appended after it was built) are cleared.
+        auto bs  = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz), false);
         raft::copy(
             *res,
             raft::make_device_vector_view<uint32_t, int64_t>(
@@ -1086,6 +1100,35 @@ public:
     build_filter_single_mask(const std::string& preds_json, const mo_membership_t& mem = {}) {
         return std::make_shared<host_mask_bundle_t>(
             this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count, mem));
+    }
+
+    // Builds the masks of one search once, for the search_*_with_bitset calls
+    // of this index to reuse: one per shard when sharded, one otherwise.
+    std::unique_ptr<prepared_bitset_t>
+    prepare_bitset(const std::string& preds_json, const mo_membership_t& mem, bool sharded) {
+        auto pb   = std::make_unique<prepared_bitset_t>();
+        pb->owner = this;
+        if (sharded) {
+            pb->masks = this->build_filter_shard_masks(preds_json, mem);
+        } else {
+            pb->masks.push_back(this->build_filter_single_mask(preds_json, mem));
+        }
+        return pb;
+    }
+
+    // The masks of pb, checked to be built by this index with the same shape.
+    const std::vector<std::shared_ptr<host_mask_bundle_t>>&
+    bitset_masks(const prepared_bitset_t* pb, bool sharded) const {
+        if (!pb) throw std::invalid_argument("search_with_bitset: bitset is null");
+        if (pb->owner != this) {
+            throw std::invalid_argument("search_with_bitset: bitset was prepared by another index");
+        }
+        const size_t want = sharded ? this->devices_.size() : 1;
+        if (pb->masks.size() != want) {
+            throw std::invalid_argument("search_with_bitset: bitset has " + std::to_string(pb->masks.size()) +
+                                        " masks, the index needs " + std::to_string(want));
+        }
+        return pb->masks;
     }
 
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {

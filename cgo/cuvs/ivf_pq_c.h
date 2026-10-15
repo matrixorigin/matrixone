@@ -219,6 +219,28 @@ uint64_t gpu_ivf_pq_search_quantize_with_filter_async(gpu_ivf_pq_c index_c, cons
                                                     uint32_t limit, ivf_pq_search_params_t search_params,
                                                     const char* preds_json, mo_membership_t membership, void* errmsg);
 
+// gpu_ivf_pq_prepare_bitset builds the filter masks of a search once, from
+// preds_json and membership as gpu_ivf_pq_search_quantize_with_filter, for the
+// gpu_ivf_pq_search_quantize_with_bitset calls of this index to reuse. Returns
+// NULL with errmsg set on failure; free it with gpu_bitset_free. The membership
+// is not referenced after it returns.
+gpu_bitset_c gpu_ivf_pq_prepare_bitset(gpu_ivf_pq_c index_c, const char* preds_json,
+                                       mo_membership_t membership, void* errmsg);
+
+// gpu_ivf_pq_search_quantize_with_filter on a bitset from gpu_ivf_pq_prepare_bitset
+// of this index.
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize_with_bitset(gpu_ivf_pq_c index_c, const void* queries_data,
+                                                             uint64_t num_queries, uint32_t query_dimension,
+                                                             uint32_t limit, ivf_pq_search_params_t search_params,
+                                                             gpu_bitset_c bitset, void* errmsg);
+
+// Async variant of gpu_ivf_pq_search_quantize_with_bitset, collected with
+// gpu_ivf_pq_search_wait.
+uint64_t gpu_ivf_pq_search_quantize_with_bitset_async(gpu_ivf_pq_c index_c, const void* queries_data,
+                                                    uint64_t num_queries, uint32_t query_dimension,
+                                                    uint32_t limit, ivf_pq_search_params_t search_params,
+                                                    gpu_bitset_c bitset, void* errmsg);
+
 
 
 
