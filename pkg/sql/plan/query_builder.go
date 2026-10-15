@@ -349,6 +349,9 @@ func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]i
 }
 
 func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
+	if expr == nil {
+		return nil
+	}
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return builder.remapSingleColRef(ne.Col, colMap, remapInfo)
@@ -385,6 +388,10 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			if err != nil {
 				return err
 			}
+		}
+	case *plan.Expr_UserVarAssignment:
+		if ne.UserVarAssignment != nil {
+			return builder.remapColRefForExpr(ne.UserVarAssignment.Value, colMap, remapInfo)
 		}
 	}
 	return nil

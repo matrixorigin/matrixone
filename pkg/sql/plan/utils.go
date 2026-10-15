@@ -1645,6 +1645,9 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 }
 
 func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
+	if expr == nil {
+		return
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Dependent:
 		for _, args := range [][]*plan.Expr{exprImpl.Dependent.Inputs, exprImpl.Dependent.Lhs} {
@@ -1670,6 +1673,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		//}
 		for _, order := range exprImpl.W.OrderBy {
 			increaseRefCnt(order.Expr, inc, colRefCnt)
+		}
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment != nil {
+			increaseRefCnt(exprImpl.UserVarAssignment.Value, inc, colRefCnt)
 		}
 	}
 }

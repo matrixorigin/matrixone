@@ -154,10 +154,30 @@ func (expr *UserVarAssignmentExpressionExecutor) evalAssignmentRow(
 	if childVec.IsNull(0) {
 		value.Value = nil
 	} else {
-		value.Value = vector.GetAny(childVec, 0, true)
+		value.Value = userVariableAssignmentValue(childVec, 0)
 	}
 	releaseRowBatches()
 	return value, nil
+}
+
+// userVariableAssignmentValue converts the physical vector representation to
+// the statement-overlay representation. Decimals are stored as scaled
+// coefficients in vectors, while JSON vectors contain encoded bytejson; both
+// must be converted to their textual form before the generic variable reader
+// reconstructs a typed vector.
+func userVariableAssignmentValue(vec *vector.Vector, row int) any {
+	switch vec.GetType().Oid {
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row).Format(vec.GetType().Scale)
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row).Format(vec.GetType().Scale)
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row).Format(vec.GetType().Scale)
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(row)).String()
+	default:
+		return vector.GetAny(vec, row, true)
+	}
 }
 
 func (expr *UserVarAssignmentExpressionExecutor) currentUserVariableAssignment(
