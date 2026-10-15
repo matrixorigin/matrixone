@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
 
@@ -161,12 +163,49 @@ func (c *fullTextOrderPythonUdfContext) ResolveUdf(name string, args []*planpb.E
 	if name != "py_tick" {
 		return c.fullTextJoinMockCompilerContext.ResolveUdf(name, args)
 	}
-	return &function.Udf{
-		Language: string(tree.PYTHON),
-		RetType:  "bigint",
-		Args:     []*function.Arg{{Name: "x", Type: "bigint"}},
-		ArgsType: []types.Type{types.T_int64.ToType()},
-	}, nil
+	// Bind a current catalog revision so this oracle reaches the fulltext
+	// ordering decision through the real typed Python routine path.
+	descriptor, err := function.NewPythonTypeDescriptor(types.T_int64.ToType())
+	if err != nil {
+		return nil, err
+	}
+	environment, err := udf.PythonEnvironmentDigest()
+	if err != nil {
+		return nil, err
+	}
+	const source = "def py_tick(ctx, x): return x"
+	body, err := json.Marshal(function.PythonRoutineBody{
+		DefinitionSchemaVersion: udf.PythonDefinitionSchemaVersion,
+		Handler:                 name,
+		Source:                  source,
+		Mode:                    "SCALAR",
+		NullPolicy:              udf.NullCallHandler,
+		ABIContract:             udf.PythonABIContract,
+		AdapterVersion:          udf.PythonAdapterVersion,
+		SDKVersion:              udf.PythonSDKVersion,
+		ArtifactDigest:          udf.PythonInlineArtifactDigest(name, source),
+		EnvironmentDigest:       environment,
+		ArgTypes:                []function.PythonTypeDescriptor{descriptor},
+		ReturnType:              &descriptor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	routine := &function.Udf{
+		FunctionID:       1,
+		DatabaseID:       1,
+		Revision:         1,
+		NamespaceVersion: 1,
+		Language:         string(tree.PYTHON),
+		Body:             string(body),
+		RetType:          "bigint",
+		Args:             []*function.Arg{{Name: "x", Type: "bigint"}},
+		ArgsType:         []types.Type{types.T_int64.ToType()},
+	}
+	if err := routine.LoadPythonTypeContract(); err != nil {
+		return nil, err
+	}
+	return routine, routine.ValidatePythonCatalogSignature()
 }
 
 // Parse/bind/optimize the public SQL shape as a separate reachability oracle.
@@ -211,6 +250,11 @@ func TestFullTextImplicitOrderSQLReachability(t *testing.T) {
 				require.NoError(t, err)
 				query := p.GetQuery()
 				require.NotNil(t, query)
+				if tc.name == "python udf alias" || tc.name == "nested python udf alias" {
+					require.Len(t, query.RoutineDependencies, 1)
+					require.Equal(t, int32(udf.PythonPlanContractVersion), query.RoutineDependencies[0].ContractVersion)
+					require.NotEmpty(t, query.RoutineDependencies[0].DefinitionFingerprint)
+				}
 				require.Len(t, query.Steps, 1)
 				planned := &QueryBuilder{qry: query}
 				require.Equal(t, tc.wantSorts, reachableFullTextOrderSorts(planned, query.Steps[0]))
