@@ -1797,6 +1797,29 @@ func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 	}
 }
 
+func TestMaterializedViewTimezoneJoinAdmissionSeesImplicitComparisons(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{name: "using timestamp", sql: "select a.id from a join b using (ts)", want: true},
+		{name: "natural join", sql: "select a.id from a natural join b", want: true},
+		{name: "using non timestamp", sql: "select a.id from a join b using (id)", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt := stmt.(*tree.Select)
+			require.Equal(t, tc.want, materializedViewHasTimezoneSensitiveJoin(
+				selectStmt,
+				map[string]struct{}{"ts": {}},
+			))
+		})
+	}
+}
+
 func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

@@ -1783,6 +1783,12 @@ func showFullTablesWitsTs(
 			viewDef: cols[3],
 		}
 	}
+	if err := annotateMaterializedViewStates(ans, dbName, ts, accountId,
+		func(query string, indices ...uint64) ([][]string, error) {
+			return getStringColsList(ctx, bh, query, indices...)
+		}); err != nil {
+		return nil, err
+	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
 	return ans, nil
 }

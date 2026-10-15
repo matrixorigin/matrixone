@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -28,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -45,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -243,6 +246,7 @@ type tableInfo struct {
 	relKind   string
 	viewDef   string
 	createSql string
+	mvState   bool
 	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
 	// raised while the dependency sort plans it. Such a view is still visited by the restore
 	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by
@@ -2557,7 +2561,6 @@ func showFullTables(
 			newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
 		}
 	}
-
 	accountId, err := defines.GetAccountId(newCtx)
 	if err != nil {
 		return nil, err
@@ -2585,6 +2588,12 @@ func showFullTables(
 		ans[i] = &tableInfo{
 			dbName: dbName, tblName: cols[0], typ: typ, relKind: relKind, viewDef: cols[3],
 		}
+	}
+	if err := annotateMaterializedViewStates(ans, dbName, ts, accountId,
+		func(query string, indices ...uint64) ([][]string, error) {
+			return getStringColsList(newCtx, bh, query, indices...)
+		}); err != nil {
+		return nil, err
 	}
 
 	getLogger(sid).Debug(fmt.Sprintf(
@@ -2730,7 +2739,81 @@ func isViewLike(tblInfo *tableInfo) bool {
 }
 
 func isMaterializedViewState(tblInfo *tableInfo) bool {
-	return tblInfo != nil && strings.HasPrefix(strings.ToLower(tblInfo.tblName), "__mo_mv_state_")
+	return tblInfo != nil && tblInfo.mvState
+}
+
+// annotateMaterializedViewStates authenticates the auxiliary-state identity
+// from the catalog constraint payload. The name prefix is only a cheap query
+// filter; it is deliberately not an identity claim because ordinary Views may
+// legally use that prefix.
+func annotateMaterializedViewStates(
+	tableInfos []*tableInfo,
+	dbName string,
+	ts int64,
+	accountID uint32,
+	query func(string, ...uint64) ([][]string, error),
+) error {
+	for _, tblInfo := range tableInfos {
+		if tblInfo == nil || !mvdefinition.IsStateName(tblInfo.tblName) {
+			continue
+		}
+		stateSQL := fmt.Sprintf(
+			"select cast(rel_id as char), hex(`constraint`) from %s.mo_tables%s where reldatabase = %s and relname = %s and account_id = %d",
+			moCatalog,
+			snapshotSpecForRestore(ts),
+			quoteSQLStringLiteral(dbName),
+			quoteSQLStringLiteral(tblInfo.tblName),
+			accountID,
+		)
+		rows, err := query(stateSQL, 0, 1)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 1 && materializedViewStateOwnerValid(rows[0][0], rows[0][1]) {
+			tblInfo.mvState = true
+		}
+	}
+	return nil
+}
+
+func snapshotSpecForRestore(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" {MO_TS = %d}", ts)
+}
+
+func materializedViewStateOwnerValid(relID, encodedConstraint string) bool {
+	id, err := strconv.ParseUint(relID, 10, 64)
+	if err != nil || id == 0 || encodedConstraint == "" {
+		return false
+	}
+	constraintBytes, err := hex.DecodeString(encodedConstraint)
+	if err != nil {
+		return false
+	}
+	constraint := &engine.ConstraintDef{}
+	if err = constraint.UnmarshalBinary(constraintBytes); err != nil {
+		return false
+	}
+	for _, item := range constraint.Cts {
+		configs, ok := item.(*engine.StreamConfigsDef)
+		if !ok {
+			continue
+		}
+		for _, property := range configs.Configs {
+			if property == nil || property.Key != mvdefinition.OwnerProperty {
+				continue
+			}
+			stateDef := &pbplan.TableDef{
+				TblId: id, TableType: "i",
+				Props: []*pbplan.PropertyDef{{Key: property.Key, Value: property.Value}},
+			}
+			_, err = mvdefinition.StateOwner(stateDef)
+			return err == nil
+		}
+	}
+	return false
 }
 
 func materializedViewCreateSQL(tblInfo *tableInfo) (string, bool) {

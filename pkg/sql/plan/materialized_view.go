@@ -112,6 +112,9 @@ func validateMaterializedViewTimezoneColumns(ctx CompilerContext, stmt *tree.Sel
 		}
 	}
 	var err error
+	if materializedViewHasTimezoneSensitiveJoin(stmt, timestampColumns) {
+		return moerr.NewNotSupported(ctx.GetContext(), "materialized view requires deterministic expressions without timezone-dependent TIMESTAMP conversions")
+	}
 	walkASTExpressions(stmt, func(expr tree.Expr) bool {
 		name, ok := expr.(*tree.UnresolvedName)
 		if ok && !name.Star {
@@ -123,6 +126,49 @@ func validateMaterializedViewTimezoneColumns(ctx CompilerContext, stmt *tree.Sel
 		return true
 	})
 	return err
+}
+
+// UsingJoinCond stores its identifiers outside tree.Expr, and NATURAL JOIN
+// stores no identifiers at all. The ordinary expression walker therefore
+// cannot see the comparison that binding synthesizes for either form. Reject
+// a USING comparison that names a TIMESTAMP column, and conservatively reject
+// NATURAL JOIN when one of the direct sources contains TIMESTAMP: the binder
+// chooses the common columns after this AST-level admission check.
+func materializedViewHasTimezoneSensitiveJoin(stmt *tree.Select, timestampColumns map[string]struct{}) bool {
+	if stmt == nil || len(timestampColumns) == 0 {
+		return false
+	}
+	clauses, _ := materializedViewUnionAllClauses(stmt.Select)
+	var visit func(tree.TableExpr) bool
+	visit = func(expr tree.TableExpr) bool {
+		join, ok := expr.(*tree.JoinTableExpr)
+		if !ok {
+			return false
+		}
+		if strings.Contains(join.JoinType, "NATURAL") {
+			return true
+		}
+		switch cond := join.Cond.(type) {
+		case *tree.UsingJoinCond:
+			for _, col := range cond.Cols {
+				if _, ok := timestampColumns[strings.ToLower(string(col))]; ok {
+					return true
+				}
+			}
+		}
+		return visit(join.Left) || visit(join.Right)
+	}
+	for _, clause := range clauses {
+		if clause == nil || clause.From == nil {
+			continue
+		}
+		for _, expr := range clause.From.Tables {
+			if visit(expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView, createView *plan.CreateView) error {
