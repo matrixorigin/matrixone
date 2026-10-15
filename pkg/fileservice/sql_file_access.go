@@ -106,7 +106,7 @@ func admitSQLFilePath(ctx context.Context, path Path) (ObjectStorageArguments, e
 		return ObjectStorageArguments{}, moerr.NewInternalErrorNoCtx("SQL file access policy is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return ObjectStorageArguments{}, err
+		return ObjectStorageArguments{}, moerr.ConvertGoError(ctx, err)
 	}
 	return policy.admit(path)
 }

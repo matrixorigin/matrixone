@@ -16,7 +16,6 @@ package external
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"strconv"
