@@ -817,6 +817,33 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	name string,
 	args []*plan.Expr,
 ) ([]*plan.Expr, error) {
+	// SET storage is UINT64, but MySQL SUM/AVG return DOUBLE. Select that
+	// domain while the operand still carries SET identity; the structural
+	// rewrite below deliberately clears it from the recovered bitmap.
+	if (name == "sum" || name == "avg") && len(args) == 1 && args[0] != nil {
+		bitmap, isSet := storedSetBitmapExpr(args[0])
+		if !isSet && isSetPlanType(&args[0].Typ) {
+			bitmap = DeepCopyExpr(args[0])
+			bitmap.Typ.Enumvalues = ""
+			isSet = true
+		}
+		if !isSet && b != nil && b.ctx != nil && isSetPlanType(b.ctx.mysqlSpecialOrderTypeForExpr(args[0])) {
+			var err error
+			bitmap, err = b.mysqlSpecialNumericOperand(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+			isSet = true
+		}
+		if isSet {
+			doubleType := types.T_float64.ToType()
+			value, err := forceCastExpr(ctx, bitmap, makePlan2Type(&doubleType))
+			if err != nil {
+				return nil, err
+			}
+			return []*plan.Expr{value}, nil
+		}
+	}
 	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
 	if b == nil || b.ctx == nil {
 		return result, nil
@@ -835,7 +862,7 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if !hasProvenanceCandidate {
 		return result, nil
 	}
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
 		recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 		if err != nil {
 			return nil, err

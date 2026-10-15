@@ -56,7 +56,9 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
-# Pool adoption requires matched full-wave resource evidence; stay opt-in.
+# Only audited DML/SQL roots may use fresh bounded process generations.
+UT_EMBEDDED_BATCHES=${UT_EMBEDDED_BATCHES:-"1"}
+# Direct invocation stays serial; Make supplies the validated CI issues pool.
 if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
     UT_ISSUES_BATCH_PARALLEL="1"
 fi
@@ -2365,34 +2367,45 @@ function run_race_inventory_with_deadline(){
     return "${status}"
 }
 
-function run_issues_race_batches(){
-    local package=$1 binary=$2 batches=$3
+function run_race_test_batches(){
+    local package=$1 binary=$2 batches=$3 parallel=${4:-1}
+    local child_go_budget=${5:-} main_contract=${6:-independent}
     local metadata="${binary}-metadata" inventory="${binary}-inventory"
     local directory import_path test_file deadline=0 status=0 index effective_go_flags
     local remaining fallback_timeout
     local -a shard_patterns=() shard_counts=()
     local test_count=0
     local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
+    # Preparation may finish without batch JSON (ordinary fallback or timeout).
+    # Establish report ownership now; the dispatcher replaces it with partials
+    # when execution starts. The parent consumes only after joining/draining.
+    : > "${PREBUILT_RACE_REPORT}" || return 125
     # Preparation may use the complete ordinary command only before any
     # selected test has executed. A runtime failure never reruns earlier roots.
     effective_go_flags=$(go env GOFLAGS 2>/dev/null) || status=1
     if [[ -n "${GOFLAGS:-}" || -n "${effective_go_flags:-}" ]]; then status=1; fi
-    if (( status == 0 )) &&
-        ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
+    case "${main_contract}" in
+        independent|cleanup-only) ;;
+        *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+        if ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
             -f '{{.Dir}}{{"\t"}}{{.ImportPath}}{{"\n"}}{{range .TestGoFiles}}{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{.}}{{"\n"}}{{end}}' \
             "${package}" > "${metadata}" ||
-        ! IFS=$'\t' read -r directory import_path < "${metadata}"; then
-        status=1
-    else
-        # A new TestMain may own cross-root assertions or process-wide teardown.
-        # Require review before opting that lifetime contract into batching.
-        while IFS= read -r test_file; do
-            [[ -n "${test_file}" ]] || continue
-            if grep -Eq '(^|[^[:alnum:]_])TestMain([^[:alnum:]_]|$)' "${directory}/${test_file}"; then
-                status=1
-                break
-            fi
-        done < <(tail -n +2 "${metadata}")
+            ! IFS=$'\t' read -r directory import_path < "${metadata}"; then
+            status=1
+        elif [[ "${main_contract}" == independent ]]; then
+            # A TestMain may own cross-root assertions or process-wide state.
+            # A caller may opt in only after auditing its cleanup-only contract;
+            # inventory and every batch still execute the real TestMain.
+            while IFS= read -r test_file; do
+                [[ -n "${test_file}" ]] || continue
+                if grep -Eq '(^|[^[:alnum:]_])TestMain([^[:alnum:]_]|$)' "${directory}/${test_file}"; then
+                    status=1
+                    break
+                fi
+            done < <(tail -n +2 "${metadata}")
+        fi
     fi
     if (( status == 0 )); then
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
@@ -2404,16 +2417,16 @@ function run_issues_race_batches(){
         run_race_inventory_with_deadline "${directory}" "${binary}" "${inventory}" "${deadline}" || status=$?
     fi
     local partition_layout=contiguous
-    if (( status == 0 && 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+    if (( status == 0 && 10#${parallel} > 1 )); then
         partition_layout=roundrobin
     fi
     if (( status == 0 )) && ! partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}"; then status=1; fi
     if (( status == 124 || status == 125 )); then
-        logger "ERR" "issues batching discovery exhausted its shared timeout (status ${status}); refusing an unbounded fallback" >&2
+        logger "ERR" "${package} batching discovery exhausted its shared timeout (status ${status}); refusing an unbounded fallback" >&2
         if (( status == 124 )); then
             rm -f "${metadata}" "${inventory}" "${binary}"
         else
-            logger "ERR" "retaining issues discovery diagnostics: ${metadata} ${inventory} ${binary}" >&2
+            logger "ERR" "retaining ${package} discovery diagnostics: ${metadata} ${inventory} ${binary}" >&2
         fi
         return "${status}"
     fi
@@ -2422,7 +2435,7 @@ function run_issues_race_batches(){
         if (( deadline != 0 )); then
             remaining=$((deadline - $(date +%s)))
             if (( remaining <= 0 )); then
-                logger "ERR" "issues batching preparation exhausted its shared timeout; refusing a fresh fallback" >&2
+                logger "ERR" "${package} batching preparation exhausted its shared timeout; refusing a fresh fallback" >&2
                 rm -f "${binary}"
                 return 124
             fi
@@ -2430,12 +2443,13 @@ function run_issues_race_batches(){
         else
             fallback_timeout=$((10#${UT_TIMEOUT} * 60))
         fi
-        logger "WRN" "issues batching preparation unavailable; run the ordinary command with ${fallback_timeout}s remaining" >&2
+        logger "WRN" "${package} batching preparation unavailable; run the ordinary command with ${fallback_timeout}s remaining" >&2
         rm -f "${binary}"
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
             go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
             -p 1 -timeout "${fallback_timeout}s" -race "${package}"
-        return $?
+        status=$?
+        return "${status}"
     fi
     for (( index=0; index<batches; index++ )); do
         (( shard_counts[index] > 0 )) || continue
@@ -2445,16 +2459,16 @@ function run_issues_race_batches(){
         race_patterns+=("${shard_patterns[index]}")
         race_deadlines+=("${deadline}")
     done
-    # The process pool is enabled only for this exact prebuilt batch wave.
-    # Ordinary packages keep the exclusive cluster admission contract.
-    if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
-        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL} and ${partition_layout} partition" >&2
-        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
-            run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
-                "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
-    else
-        run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    # Execution alone owns the smaller CPU and cluster-admission budget.
+    # Compilation, inventory and the caller retain their ordinary CPU budget.
+    if [[ -n "${child_go_budget}" ]]; then
+        local GOMAXPROCS=${child_go_budget}
+        export GOMAXPROCS
     fi
+    logger "INF" "Run ${batches} ${package} batches with bounded parallelism ${parallel} and ${partition_layout} partition" >&2
+    MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${parallel}" \
+        run_prebuilt_race_commands "${CURRENT_UT_COMMAND_STAGE:-serial}" "${PREBUILT_RACE_REPORT}" \
+            "${parallel}" "$((10#${UT_TIMEOUT} * 60 + 120))"
 }
 
 function run_embedded_tests(){
@@ -2521,10 +2535,49 @@ function run_embedded_tests(){
         logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
         cleanup_embedded_prebuild || return 1
     fi
-    run_ut_command embedded "embedded-cluster race-test packages" \
-        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-        -p 1 -timeout "${UT_TIMEOUT}m" -race ${package_scope}
+    local ordinary_scope=${package_scope} package package_status=0 main_contract
+    local -a batched_packages=()
+    if [[ "${UT_EMBEDDED_BATCHES}" == 4 ]]; then
+        for package in ${package_scope}; do
+            case "${package}" in
+                github.com/matrixorigin/matrixone/pkg/tests/dml|github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
+                    batched_packages+=("${package}") ;;
+            esac
+        done
+        if (( ${#batched_packages[@]} > 0 )); then
+            ordinary_scope=$(remove_packages_from_scope "${ordinary_scope}" "${batched_packages[@]}")
+        fi
+    fi
+    # Keep one Go driver for the remaining scope, including the exact original
+    # command/order when batching is disabled. Never pass an empty package list.
+    if [[ -n "${ordinary_scope}" ]]; then
+        run_ut_command embedded "embedded-cluster race-test packages" \
+            env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+            -p 1 -timeout "${UT_TIMEOUT}m" -race ${ordinary_scope}
+        test_status=$?
+        if (( test_status == 125 )); then return 125; fi
+    fi
+    for package in ${batched_packages[@]+"${batched_packages[@]}"}; do
+        # Publish ownership only after the preceding command has joined. Its
+        # nonempty report selects the parent's prebuilt-helper drain protocol.
+        PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
+        PREBUILT_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-embedded-batched-race.test"
+        main_contract=independent
+        if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/tests/sqlintegration ]]; then
+            main_contract=cleanup-only
+        fi
+        run_ut_command embedded "batched embedded-cluster race-test package ${package}" \
+            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" 4 2 2 "${main_contract}"
+        package_status=$?
+        if (( package_status == 125 )); then return 125; fi
+        consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || return $?
+        # A no-source consume deliberately preserves ownership for diagnosis.
+        # Do not reuse those paths for the next package.
+        [[ -z "${PREBUILT_RACE_REPORT}" && -z "${PREBUILT_RACE_TEST_BINARY}" ]] || return 1
+        if (( package_status != 0 )); then test_status=1; fi
+    done
+    return "${test_status}"
 }
 
 function run_tests(){
@@ -2542,6 +2595,7 @@ function run_tests(){
     echo "#  LINK PARALLEL:   $UT_LINK_PARALLEL"
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
+    echo "#  EMBEDDED BATCHES: $UT_EMBEDDED_BATCHES"
     echo "#  EMBEDDED PACKAGE PARALLEL: $UT_EMBEDDED_PACKAGE_PARALLEL"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
     echo "#  LIGHT OVERLAP:   $UT_OVERLAP_LIGHT (parallel $UT_OVERLAP_LIGHT_PARALLEL)"
@@ -2610,8 +2664,8 @@ function run_tests(){
         return 0
     fi
     if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
-        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
-        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
+        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 && "${UT_ISSUES_BATCHES}" != 8 ]]; then
+        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4|8"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2619,6 +2673,12 @@ function run_tests(){
     if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 ]] ||
         [[ "${UT_ISSUES_BATCHES}" == 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 1 ]]; then
         logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${UT_EMBEDDED_BATCHES}" != 1 && "${UT_EMBEDDED_BATCHES}" != 4 ]]; then
+        logger "ERR" "UT_EMBEDDED_BATCHES must be 1|4, got '${UT_EMBEDDED_BATCHES}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2920,11 +2980,14 @@ function run_tests(){
             logger "INF" "Run exclusive race-test packages serially"
             for package in ${serial_test_scope}; do
                 logger "INF" "Run exclusive race-test package ${package}"
-                if (( UT_ISSUES_BATCHES == 4 )); then
+                if (( UT_ISSUES_BATCHES > 1 )); then
                     PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-issues-race-report.out"
                     PREBUILT_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-issues-race.test"
+                    local issues_go_budget=""
+                    if [[ "${UT_ISSUES_BATCHES}:${UT_ISSUES_BATCH_PARALLEL}" == 8:2 ]]; then issues_go_budget=2; fi
                     run_ut_command serial "batched exclusive race-test package ${package}" \
-                        run_issues_race_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}"
+                        run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}" \
+                            "${UT_ISSUES_BATCH_PARALLEL}" "${issues_go_budget}"
                     package_status=$?
                     if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
                     consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || package_status=1

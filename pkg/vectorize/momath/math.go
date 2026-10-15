@@ -118,6 +118,10 @@ func Tan(v float64) (float64, error) {
 func AbsSigned[T constraints.Signed | constraints.Float](v T) (T, error) {
 	//NOTE: AbsSigned specifically deals with int and float and not uint.
 	// If we have uint, we return the value as such.
+	// Return positive zero for both floating-point zero representations.
+	if v == 0 {
+		return 0, nil
+	}
 	if v < 0 {
 		v = -v
 	}

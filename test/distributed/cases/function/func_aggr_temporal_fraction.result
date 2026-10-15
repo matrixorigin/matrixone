@@ -22,9 +22,9 @@ VAR_POP(ts), VAR_SAMP(ts), STDDEV_POP(ts), STDDEV_SAMP(ts)
 FROM variance_fraction
 GROUP BY id
 ORDER BY id;
-➤ id[4,32,0]  ¦  VAR_POP(t)[3,38,12]  ¦  VAR_SAMP(t)[3,38,12]  ¦  STDDEV_POP(t)[3,38,12]  ¦  STDDEV_SAMP(t)[3,38,12]  ¦  VAR_POP(d)[3,38,12]  ¦  VAR_SAMP(d)[3,38,12]  ¦  STDDEV_POP(d)[3,38,12]  ¦  STDDEV_SAMP(d)[3,38,12]  ¦  VAR_POP(ts)[3,38,12]  ¦  VAR_SAMP(ts)[3,38,12]  ¦  STDDEV_POP(ts)[3,38,12]  ¦  STDDEV_SAMP(ts)[3,38,12]  𝄀
-1  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  𝄀
-2  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+➤ id[4,32,0]  ¦  VAR_POP(t)[8,53,31]  ¦  VAR_SAMP(t)[8,53,31]  ¦  STDDEV_POP(t)[8,53,31]  ¦  STDDEV_SAMP(t)[8,53,31]  ¦  VAR_POP(d)[8,53,31]  ¦  VAR_SAMP(d)[8,53,31]  ¦  STDDEV_POP(d)[8,53,31]  ¦  STDDEV_SAMP(d)[8,53,31]  ¦  VAR_POP(ts)[8,53,31]  ¦  VAR_SAMP(ts)[8,53,31]  ¦  STDDEV_POP(ts)[8,53,31]  ¦  STDDEV_SAMP(ts)[8,53,31]  𝄀
+1  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953  𝄀
+2  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953
 SELECT id, SUM(date_value), AVG(date_value), SUM(t), AVG(t),
 SUM(d), AVG(d), SUM(ts), AVG(ts)
 FROM variance_fraction GROUP BY id ORDER BY id;
@@ -54,12 +54,12 @@ SET @variance_fraction_id = 1;
 PREPARE variance_fraction_stmt FROM
 'SELECT SUM(t), AVG(t), SUM(d), AVG(d), SUM(ts), AVG(ts), VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
 EXECUTE variance_fraction_stmt USING @variance_fraction_id;
-➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[3,38,12]  ¦  VAR_SAMP(variance_fraction.t)[3,38,12]  ¦  STDDEV_POP(variance_fraction.t)[3,38,12]  ¦  STDDEV_SAMP(variance_fraction.t)[3,38,12]  𝄀
-0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[8,53,31]  ¦  VAR_SAMP(variance_fraction.t)[8,53,31]  ¦  STDDEV_POP(variance_fraction.t)[8,53,31]  ¦  STDDEV_SAMP(variance_fraction.t)[8,53,31]  𝄀
+0.400000  ¦  0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953
 SET @variance_fraction_id = 2;
 EXECUTE variance_fraction_stmt USING @variance_fraction_id;
-➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[3,38,12]  ¦  VAR_SAMP(variance_fraction.t)[3,38,12]  ¦  STDDEV_POP(variance_fraction.t)[3,38,12]  ¦  STDDEV_SAMP(variance_fraction.t)[3,38,12]  𝄀
--0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
+➤ SUM(variance_fraction.t)[3,60,6]  ¦  AVG(variance_fraction.t)[3,42,10]  ¦  SUM(variance_fraction.d)[3,60,6]  ¦  AVG(variance_fraction.d)[3,42,10]  ¦  SUM(variance_fraction.ts)[3,60,6]  ¦  AVG(variance_fraction.ts)[3,42,10]  ¦  VAR_POP(variance_fraction.t)[8,53,31]  ¦  VAR_SAMP(variance_fraction.t)[8,53,31]  ¦  STDDEV_POP(variance_fraction.t)[8,53,31]  ¦  STDDEV_SAMP(variance_fraction.t)[8,53,31]  𝄀
+-0.400000  ¦  -0.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  40400202000000.400000  ¦  20200101000000.2000000000  ¦  0.010000000000000002  ¦  0.020000000000000004  ¦  0.1  ¦  0.14142135623730953
 DEALLOCATE PREPARE variance_fraction_stmt;
 CREATE VIEW temporal_sum_avg AS
 SELECT id, SUM(date_value) AS date_sum, AVG(date_value) AS date_avg,
@@ -101,9 +101,16 @@ INSERT INTO temporal_variance_precision VALUES
 (1, '2024-01-01 01:02:03', '2024-01-01 01:02:03'),
 (2, '2024-01-02 02:03:04', '2024-01-02 02:03:04'),
 (3, '2024-01-03 03:04:05', '2024-01-03 03:04:05');
+SELECT VAR_POP(d) AS datetime_var_pop, VAR_POP(ts) AS timestamp_var_pop
+FROM temporal_variance_precision;
+➤ datetime_var_pop[8,53,31]  ¦  timestamp_var_pop[8,53,31]  𝄀
+6.802026868006666E11  ¦  6.802026868006666E11
+SELECT CAST(CAST(680202686800.6666 AS DOUBLE) AS DECIMAL(24,6)) AS double_cast_control;
+➤ double_cast_control[3,24,6]  𝄀
+680202686800.666624
 SELECT CAST(VAR_POP(d) AS DECIMAL(24,6)) AS datetime_var_pop,
 CAST(VAR_POP(ts) AS DECIMAL(24,6)) AS timestamp_var_pop
 FROM temporal_variance_precision;
 ➤ datetime_var_pop[3,24,6]  ¦  timestamp_var_pop[3,24,6]  𝄀
-680202686800.666600  ¦  680202686800.666600
+680202686800.666624  ¦  680202686800.666624
 DROP TABLE temporal_variance_precision;

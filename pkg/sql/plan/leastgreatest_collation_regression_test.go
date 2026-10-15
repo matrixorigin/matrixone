@@ -107,32 +107,37 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 			require.NoError(t, err)
 			required, err := RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion113, required)
+			require.Equal(t, defines.MORPCVersion114, required)
 			dateExpr := &Expr{Typ: Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0)},
 				Args: []*Expr{{Typ: Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
 			}}}
+			statisticalExpr := &Expr{Typ: Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &ObjectRef{Obj: function.EncodeOverloadID(180, 0)}, // VAR_POP
+				Args: []*Expr{{Typ: Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}}},
+			}}}
 			owner := &planpb.TableDef{Cols: []*planpb.ColDef{
 				{GeneratedCol: &planpb.GeneratedCol{Expr: expr}},
 				{GeneratedCol: &planpb.GeneratedCol{Expr: dateExpr}},
+				{GeneratedCol: &planpb.GeneratedCol{Expr: statisticalExpr}},
 			}}
 			required, err = RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion113, required, "mixed owner takes the maximum floor")
-			setVersions(defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion113)
-			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 113")
-			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 113")
-			setVersions(defines.MORPCVersion113, defines.MORPCVersion112, defines.MORPCVersion112)
-			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 113")
-			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 113")
-			setVersions(defines.MORPCVersion113, defines.MORPCVersion113, defines.MORPCVersion113)
+			require.Equal(t, defines.MORPCVersion114, required, "mixed owner takes the maximum floor")
+			setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
+			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 114")
+			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 114")
+			setVersions(defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion113)
+			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 114")
+			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 114")
+			setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 			require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 			id, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
 			expr.GetF().Func.Obj = function.EncodeOverloadID(id, 0)
 			required, err = RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion112, required, "historical ordering keeps only the independent date contract")
+			require.Equal(t, defines.MORPCVersion113, required, "historical ordering keeps main's independent decimal contract")
 		})
 		for _, selection := range []string{
 			name + "(cast('a' as char(1)),cast('B' as char(1))) as v",
@@ -141,20 +146,20 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 		} {
 			t.Run(selection, func(t *testing.T) {
 				sql := "create view v_least_protocol as select " + selection
-				setVersions(defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion113)
+				setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
 				_, err := build(sql)
-				require.ErrorContains(t, err, "protocol version 113", "old deployment cannot publish a view")
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion113, defines.MORPCVersion112)
+				require.ErrorContains(t, err, "protocol version 114", "main-113 deployment cannot publish a view")
+				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion113)
 				_, err = build(sql)
-				require.ErrorContains(t, err, "protocol version 113", "read floor alone does not admit authoring")
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion113, defines.MORPCVersion113)
+				require.ErrorContains(t, err, "protocol version 114", "read floor alone does not admit authoring")
+				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
 				created, err := build(sql)
 				require.NoError(t, err)
 				table := created.GetDdl().GetCreateView().GetTableDef()
 				var view ViewData
 				require.NoError(t, json.Unmarshal([]byte(table.GetViewSql().GetView()), &view))
 				require.NotNil(t, view.RequiredProtocolVersion)
-				require.Equal(t, defines.MORPCVersion113, *view.RequiredProtocolVersion, "even constant-folded views record the pre-fold contract")
+				require.Equal(t, defines.MORPCVersion114, *view.RequiredProtocolVersion, "even constant-folded views record the pre-fold contract")
 				// Catalog resolution supplies the relation kind, separately from
 				// the CREATE VIEW definition's properties.
 				table.TableType = catalog.SystemViewRel
@@ -162,13 +167,13 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 				ctx.objects["v_least_protocol"] = &ObjectRef{SchemaName: "tpch", ObjName: "v_least_protocol"}
 				defer delete(ctx.tables, "v_least_protocol")
 				defer delete(ctx.objects, "v_least_protocol")
-				setVersions(defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion113)
+				setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
 				_, err = build("select * from v_least_protocol")
-				require.ErrorContains(t, err, "protocol version 113")
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion112, defines.MORPCVersion113)
+				require.ErrorContains(t, err, "protocol version 114")
+				setVersions(defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion114)
 				_, err = build("select * from v_least_protocol")
-				require.ErrorContains(t, err, "protocol version 113", "unfenced reader rejects saved metadata")
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion113, defines.MORPCVersion113)
+				require.ErrorContains(t, err, "protocol version 114", "unfenced reader rejects saved metadata")
+				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
 				_, err = build("select * from v_least_protocol")
 				require.NoError(t, err)
 			})

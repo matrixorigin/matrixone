@@ -40,6 +40,9 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	// This rebind requirement also applies to local execution. Do not hide it
 	// behind the remote-placement fast path or an earlier worker fallback.
+	if features.InvalidDecimalStatisticalResultContract {
+		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
+	}
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
@@ -98,6 +101,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion112)
 	}
 	if features.LeastGreatestCollationSemantics {
+		required = max(required, defines.MORPCVersion114)
+	}
+	if features.DecimalStatisticalResultContracts {
 		required = max(required, defines.MORPCVersion113)
 	}
 	return required
