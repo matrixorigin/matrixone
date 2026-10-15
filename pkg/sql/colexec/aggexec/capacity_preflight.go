@@ -2105,6 +2105,9 @@ func (exec *bitOpExecBytes) PreflightBatchFill(
 		if vectors[0].IsNull(uint64(row)) {
 			continue
 		}
+		if err := exec.validateOperand(vectors[0].GetRawBytesAt(row)); err != nil {
+			return err
+		}
 		x, y, state, err := exec.validatePreflightTarget(group)
 		if err != nil {
 			return err
@@ -2157,9 +2160,6 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		if err != nil {
 			return err
 		}
-		if !state.vecs[0].IsNull(uint64(y)) {
-			continue
-		}
 		otherX, otherY := other.getXY(uint64(offset + i))
 		if otherX < 0 || otherX >= len(other.state) ||
 			int(otherY) >= int(other.state[otherX].length) {
@@ -2167,6 +2167,12 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		}
 		source := other.state[otherX].vecs[0]
 		if source.IsNull(uint64(otherY)) {
+			continue
+		}
+		if err := exec.validateOperand(source.GetRawBytesAt(int(otherY))); err != nil {
+			return err
+		}
+		if !state.vecs[0].IsNull(uint64(y)) {
 			continue
 		}
 		winner, err := winnerForGroup(&winners, &winnerCount, group)
