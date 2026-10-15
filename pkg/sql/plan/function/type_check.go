@@ -3211,3 +3211,50 @@ func addFixedImplicitTypeCastRule(fromType types.T, toType types.T, preferLevel 
 	fixedCanImplicitCastRule[fromType].toList[toType].canCast = true
 	fixedCanImplicitCastRule[fromType].toList[toType].preferLevel = preferLevel
 }
+
+// Strings must reach their function before calendar conversion can erase zero
+// components. Restrict non-string inputs to released overloads so numeric and
+// typed temporal coercion does not change when adding the string signatures.
+func incompleteCalendarTypeMatch(overloads []overload, inputs []types.Type, legacy int, positions ...int) checkResult {
+	for _, position := range positions {
+		if position < len(inputs) && (inputs[position].Oid.IsMySQLString() || inputs[position].Oid == types.T_any) {
+			r := fixedTypeMatch(overloads[legacy:], inputs)
+			if r.status == succeedMatched || r.status == succeedWithCast {
+				r.idx += legacy
+			}
+			return r
+		}
+	}
+	return fixedTypeMatch(overloads[:legacy], inputs)
+}
+func incompleteDateFormatTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 2, 0)
+}
+func incompleteToDaysTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteToSecondsTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteDayofweekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 3, 0)
+}
+func incompleteWeekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 4, 0)
+}
+func incompleteDatediffTypeMatch(o []overload, i []types.Type) checkResult {
+	if len(i) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	raw := func(t types.T) bool { return t.IsMySQLString() || t == types.T_any }
+	a, b := raw(i[0].Oid), raw(i[1].Oid)
+	selected := 0
+	if a && b {
+		selected = 1
+	} else if a {
+		selected = 2
+	} else if b {
+		selected = 3
+	}
+	return fixedTypeMatchOnly(o, i, selected)
+}
