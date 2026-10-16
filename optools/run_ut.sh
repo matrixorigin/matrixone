@@ -3143,6 +3143,16 @@ function ut_summary(){
   local setup_summary=""
   local setup_status=0
 
+  # Failure files belong to this analysis, not an earlier run in the checkout.
+  # Preserve the previous generation beside the run-scoped raw report.
+  if [[ -d "${report_path}/failed" ]]; then
+    local previous_failed
+    if ! previous_failed=$(mktemp -d "${UT_REPORT}.previous-failed.XXXXXX") ||
+       ! mv "${report_path}/failed" "${previous_failed}/"; then
+      logger "ERR" "failed to archive the previous UT analysis"
+      exit 1
+    fi
+  fi
   # Keep the workflow's always-run report steps well-defined even when the
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
