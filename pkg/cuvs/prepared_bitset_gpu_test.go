@@ -232,6 +232,8 @@ func TestMultiGpuIvfPqPreparedBitset(t *testing.T) {
 	defer index.Destroy()
 	defer overflow.Destroy()
 	multi := NewMultiGpuIvfPq[float32, float32]([]*GpuIvfPq[float32, float32]{index}, overflow, dimension, L2Expanded)
+	require.Equal(t, uint64(4), multi.NLists())
+	require.Zero(t, NewMultiGpuIvfPq[float32, float32](nil, overflow, dimension, L2Expanded).NLists())
 
 	mem, free := bitsetTestMembership(t, []int64{1005, 1050, 2010})
 	query := []float32{0, 0}

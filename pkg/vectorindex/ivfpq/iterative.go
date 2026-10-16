@@ -17,6 +17,7 @@ package ivfpq
 import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 )
 
@@ -24,9 +25,11 @@ import (
 // NProbe lists and requests ITopK keys, the candidate budget; the filter runs inside
 // the search, so every key returned qualifies. The first round probes the scan's
 // nprobe lists; each further round doubles them, up to max_nprobe (every list when
-// unset). A round that returns LIMIT rows (every member of a smaller membership), or
-// probes the cap, is the last. cuVS
-// ivf_pq::search takes no list subset, so every round searches the lists again.
+// unset). A round that returns LIMIT rows (every member of a smaller membership, every
+// indexed row when fewer), or probes the cap, is the last. stats.Lists is the list count
+// of the built index; when it is 0 only the overflow is searched, every row in one
+// round, so the first round is the last. cuVS ivf_pq::search takes no list subset, so
+// every round searches the lists again.
 type IterativeSearch struct{}
 
 var _ searchplugin.IterativeSearchHooks = IterativeSearch{}
@@ -44,22 +47,22 @@ func (IterativeSearch) StartRound(spec *plan.IndexSearchScan, req searchplugin.R
 // NextRound returns the round after prev, which returned got rows.
 func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
 	capLists := iterativeListCap(req, stats)
-	if got >= iterativeTarget(req, stats) || (capLists != 0 && prev.NProbe >= capLists) {
+	if got >= iterativeTarget(req, stats) || stats.Lists == 0 || prev.NProbe >= capLists {
 		return prev, false
 	}
-	next := prev.NProbe * 2
-	if capLists != 0 {
-		next = min(next, capLists)
-	}
+	next := min(vectorindex.SaturatingAddUint64(prev.NProbe, prev.NProbe), capLists)
 	return searchplugin.Round{ITopK: prev.ITopK, NProbe: next}, true
 }
 
 // iterativeTarget is the row count that ends the widening: LIMIT, or the membership
-// size when fewer keys qualify.
+// size or the indexed rows when fewer.
 func iterativeTarget(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
 	target := max(req.ResultLimit, 1)
 	if stats.Members != 0 {
 		target = min(target, stats.Members)
+	}
+	if stats.IndexRows != 0 {
+		target = min(target, stats.IndexRows)
 	}
 	return target
 }

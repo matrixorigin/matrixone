@@ -17,6 +17,7 @@ package cagra
 import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // MaxInternalTopK is the largest count of keys one cuVS CAGRA search returns.
@@ -49,7 +50,7 @@ func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Reque
 	if got >= iterativeTarget(req, stats) || prev.ITopK >= capITopK {
 		return prev, false
 	}
-	return searchplugin.Round{ITopK: min(prev.ITopK*2, capITopK)}, true
+	return searchplugin.Round{ITopK: min(vectorindex.SaturatingAddUint64(prev.ITopK, prev.ITopK), capITopK)}, true
 }
 
 // iterativeTarget is the row count that ends the widening: LIMIT, or the membership

@@ -59,7 +59,7 @@ func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Reque
 	if got >= target || prev.ITopK >= capITopK {
 		return prev, false
 	}
-	return searchplugin.Round{ITopK: min(prev.ITopK*2, capITopK)}, true
+	return searchplugin.Round{ITopK: min(vectorindex.SaturatingAddUint64(prev.ITopK, prev.ITopK), capITopK)}, true
 }
 
 // iterativeCap is the largest ITopK of a round: max_itopk (DefaultMaxInternalTopK when
@@ -77,7 +77,7 @@ func iterativeCap(req searchplugin.Request, stats searchplugin.SearchStats) uint
 }
 
 // searchIterative answers a membership-filtered search in the rounds of IterativeSearch,
-// each one a searchOnce.
+// each one a searchOnce. A canceled statement ends the rounds.
 func (s *HnswSearch[T]) searchIterative(
 	sqlproc *sqlexec.SqlProcess,
 	query []T,
@@ -109,5 +109,10 @@ func (s *HnswSearch[T]) searchIterative(
 			return keys, distances, nil
 		}
 		round = next
+		if sqlproc != nil {
+			if ctx := sqlproc.GetContext(); ctx != nil && ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+		}
 	}
 }

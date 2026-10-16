@@ -101,7 +101,7 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	}
 	defer release()
 	if rt.Iterative {
-		return s.searchIterative(anyquery, rt, cardinality)
+		return s.searchIterative(sqlproc, anyquery, rt, cardinality)
 	}
 	return s.searchOnce(anyquery, rt, cardinality, nil)
 }
@@ -864,8 +864,9 @@ func (s *CagraSearch[B, Q]) DeviceResidency() map[int]int64 {
 }
 
 // searchIterative answers a mode=iterative search in the rounds of IterativeSearch,
-// each one a searchOnce requesting the round's ITopK keys.
-func (s *CagraSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+// each one a searchOnce requesting the round's ITopK keys. A canceled statement ends the
+// rounds.
+func (s *CagraSearch[B, Q]) searchIterative(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
 	req := searchplugin.Request{
 		ResultLimit:     uint64(rt.ResultLimit),
 		CandidateBudget: uint64(rt.Limit),
@@ -897,5 +898,10 @@ func (s *CagraSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.Runtime
 			return keys, distances, nil
 		}
 		round = next
+		if sqlproc != nil {
+			if ctx := sqlproc.GetContext(); ctx != nil && ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+		}
 	}
 }

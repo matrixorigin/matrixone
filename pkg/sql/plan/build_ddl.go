@@ -5623,22 +5623,19 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 		}
 		indexDef.IndexAlgoParams = params
 	} else {
-		// default indexInfo.IndexOption values
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
-		if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
-			// Vector-index algorithms supply their default params via the
-			// plugin (DefaultOptions). Non-vector algos miss the registry
-			// and leave the empty defaults set above.
-			if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
-				params, err := catalog.IndexParamsMapToJsonString(defaults)
-				if err != nil {
-					return nil, err
-				}
-				indexDef.IndexAlgoParams = params
+		if _, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+			// An index without options takes the plugin's ParamsFromTree of an
+			// empty option list, as CREATE INDEX does.
+			noOptions := *indexInfo
+			noOptions.IndexOption = &tree.IndexOption{}
+			params, err := buildIndexAlgoParams(&noOptions)
+			if err != nil {
+				return nil, err
 			}
+			indexDef.IndexAlgoParams = params
 		}
-
 	}
 
 	// Capture the plugin's build-time session vars (BuildSessionVars) into the

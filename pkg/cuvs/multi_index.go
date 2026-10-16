@@ -163,6 +163,18 @@ func NewMultiGpuIvfPq[B VectorType, Q VectorType](indices []*GpuIvfPq[B, Q], bru
 	return &MultiGpuIvfPq[B, Q]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
 }
 
+// NLists is the largest list count of the built sub-indexes; 0 when only the
+// overflow is searched.
+func (mi *MultiGpuIvfPq[B, Q]) NLists() uint64 {
+	var n uint64
+	for _, idx := range mi.indices {
+		if idx != nil {
+			n = max(n, uint64(idx.GetNList()))
+		}
+	}
+	return n
+}
+
 func (mi *MultiGpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {

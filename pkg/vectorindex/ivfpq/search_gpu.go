@@ -101,7 +101,7 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	}
 	defer release()
 	if rt.Iterative {
-		return s.searchIterative(anyquery, rt, cardinality)
+		return s.searchIterative(sqlproc, anyquery, rt, cardinality)
 	}
 	return s.searchOnce(anyquery, rt, cardinality, nil)
 }
@@ -840,8 +840,9 @@ func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
 }
 
 // searchIterative answers a mode=iterative search in the rounds of IterativeSearch,
-// each one a searchOnce probing the round's NProbe lists.
-func (s *IvfpqSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+// each one a searchOnce probing the round's NProbe lists. A canceled statement ends the
+// rounds.
+func (s *IvfpqSearch[B, Q]) searchIterative(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
 	algoOptions, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{Nprobe: rt.Probe})
 	if err != nil {
 		return nil, nil, err
@@ -852,7 +853,7 @@ func (s *IvfpqSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.Runtime
 		CandidateBudget: uint64(rt.Limit),
 		MaxNprobe:       uint64(rt.MaxProbe),
 	}
-	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: uint64(s.Idxcfg.CuvsIvfpq.Lists), Members: uint64(rt.MembershipCount)}
+	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: s.MultiIndex.NLists(), Members: uint64(rt.MembershipCount)}
 	// The filter mask is built once and every round searches with it.
 	var bitset *cuvs.MultiBitset
 	if rt.FilterJSON != "" || rt.Membership != nil {
@@ -878,5 +879,10 @@ func (s *IvfpqSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.Runtime
 			return keys, distances, nil
 		}
 		round = next
+		if sqlproc != nil {
+			if ctx := sqlproc.GetContext(); ctx != nil && ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+		}
 	}
 }

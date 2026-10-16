@@ -236,9 +236,17 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 - Filters: as cagra, membership included; the host post-filter also drops slots the
   membership excludes.
 - `iterative` (set as for cagra): `ivfpq.IterativeSearch` (`pkg/vectorindex/ivfpq/iterative.go`)
-  restarts with `nprobe × 2` up to `max_nprobe` (every list when unset). `ivf_pq::search` has no
-  list-subset or resume API, so each round re-scans the earlier lists; with doubling, all rounds
-  cost at most about twice the final round. `max_nprobe = n_lists` probes every list.
+  restarts with `nprobe × 2` up to `max_nprobe` (every list when unset), until `LIMIT` rows
+  qualify, or every member of a smaller membership, or every indexed row. The list count is
+  that of the built index (`MultiGpuIvfPq.NLists`), not the catalog option; a generation with
+  only the CDC overflow has no list, its first round searches every row and is the last. The
+  rounds are at most `log2(n_lists) + 1`; doubling saturates, and a canceled statement ends
+  them (as for cagra and hnsw). `ivf_pq::search` has no list-subset or resume API, so each
+  round re-scans the earlier lists; with doubling, all rounds cost at most about twice the
+  final round. `max_nprobe = n_lists` probes every list. IVF-PQ requires `lists`: an index
+  declared without it, inline in `CREATE TABLE` or by `CREATE INDEX`, is refused
+  (`TestInlineVectorIndexWithoutOptionsUsesParamsFromTree`, `TestIterativeSearchTerminates`,
+  `vector_ivfpq_iterative_overflow.sql`).
 - `auto`: as cagra.
 - Ranking: PQ distances (approximate) in every mode, including `n_probes = n_lists`; the index
   holds PQ codes only.
