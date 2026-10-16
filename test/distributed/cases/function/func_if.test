@@ -233,8 +233,10 @@ SELECT IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
 SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_true;
 SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
 
--- Default mode follows MySQL Item::val_bool/string-to-DOUBLE numeric-prefix
--- behavior while keeping MatrixOne extensions.
+-- Explicit MySQL-compatible mode follows Item::val_bool/string-to-DOUBLE
+-- numeric-prefix behavior while keeping MatrixOne extensions.
+SET @if_compat_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@if_compat_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_default_true;
 SELECT IF('abc', 'T', 'F') AS if_invalid_string_default_false;
 SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_prefix_default_true;
@@ -255,6 +257,8 @@ EXECUTE if_mode_literal;
 SET @if_mode_value = '1eabc';
 PREPARE if_mode_parameter FROM 'SELECT IF(?, ''T'', ''F'') AS prepared_if_parameter';
 EXECUTE if_mode_parameter USING @if_mode_value;
+SET SESSION sql_mode = @if_compat_saved_sql_mode;
+SET @if_compat_saved_sql_mode = NULL;
 
 -- MATRIXONE_NATIVE requires complete tokens while preserving MatrixOne numeric extensions.
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
@@ -282,12 +286,14 @@ SELECT CAST('' AS DOUBLE) AS cast_empty_string_native_error;
 EXECUTE if_mode_literal;
 EXECUTE if_mode_parameter USING @if_mode_value;
 
--- Session sql_mode changes apply per statement and restore compatible behavior after reset.
-SET SESSION sql_mode = '';
+-- Re-enter the explicit compatibility mode after the native-mode checks so the
+-- prepared statements are also verified across a mode transition.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
 SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_after_reset_true;
 SELECT IF('abc', 'T', 'F') AS if_invalid_string_after_reset_false;
 EXECUTE if_mode_literal;
 EXECUTE if_mode_parameter USING @if_mode_value;
+SET SESSION sql_mode = '';
 DEALLOCATE PREPARE if_mode_literal;
 DEALLOCATE PREPARE if_mode_parameter;
 SET SESSION sql_mode = default;

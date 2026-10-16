@@ -1,0 +1,67 @@
+DROP DATABASE IF EXISTS issue28487_math_string;
+CREATE DATABASE issue28487_math_string;
+USE issue28487_math_string;
+SET @old_math_string_numeric_sql_mode_28487 = @@session.sql_mode;
+
+-- Strict conversion rejects a trailing numeric prefix.
+SELECT ABS('1.5tail') AS strict_prefix_error;
+
+-- Compatibility consumes the numeric prefix and emits the established warning.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS prefix_value;
+SHOW WARNINGS;
+
+-- MATRIXONE_NATIVE remains authoritative when both modes are present.
+SET SESSION sql_mode = 'MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS native_wins_error;
+
+-- Ordinary BINARY text and marked HEX bytes remain distinct.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS(CAST('1' AS BINARY)) AS ordinary_binary,
+    ABS(X'31') AS marked_hex;
+
+-- One mixed CASE preserves the selected HEX marker, text-domain control, and NULL.
+SELECT id,
+    ABS(CASE
+        WHEN id = 1 THEN X'31'
+        WHEN id = 2 THEN CAST('1' AS BINARY)
+        ELSE NULL
+    END) AS case_numeric_provenance
+FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS src
+ORDER BY id;
+
+-- The same SQL PREPARE handle observes strict -> compatibility -> strict.
+SET SESSION sql_mode = '';
+PREPARE math_string_mode_flip_stmt_28487 FROM 'SELECT ABS(?) AS prepared_value';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+SHOW WARNINGS;
+SET SESSION sql_mode = '';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+DEALLOCATE PREPARE math_string_mode_flip_stmt_28487;
+
+-- The exact precision input controls the ROUND result.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ROUND('1.25', 1) AS round_precision_value;
+
+-- One SQL PREPARE handle follows text, DECIMAL, and marked HEX parameter metadata.
+PREPARE math_round_source_stmt_28487 FROM 'SELECT ROUND(?, ?) AS prepared_source_value';
+SET @math_round_source_v_28487 = '1.5';
+SET @math_round_source_p_28487 = 0;
+EXECUTE math_round_source_stmt_28487 USING @math_round_source_v_28487, @math_round_source_p_28487;
+SET @math_round_source_v_28487 = CAST('2.5' AS DECIMAL(2, 1));
+EXECUTE math_round_source_stmt_28487 USING @math_round_source_v_28487, @math_round_source_p_28487;
+SET @math_round_source_v_28487 = X'31';
+EXECUTE math_round_source_stmt_28487 USING @math_round_source_v_28487, @math_round_source_p_28487;
+DEALLOCATE PREPARE math_round_source_stmt_28487;
+
+SELECT ABS(-2) AS int_control,
+    FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS decimal_control;
+
+SET SESSION sql_mode = @old_math_string_numeric_sql_mode_28487;
+DROP DATABASE issue28487_math_string;
+SELECT COUNT(*) AS residual_database_count
+FROM information_schema.schemata
+WHERE schema_name = 'issue28487_math_string';

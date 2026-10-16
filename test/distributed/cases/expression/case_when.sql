@@ -13,12 +13,16 @@ select CASE 2.0 when 1 then "one" WHEN 2.0 then "two" ELSE "more" END;
 select (CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0;
 
 select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
+set @case_when_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@case_when_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select case 1/0 when "a" then "true" else "false" END;
 select case 1/0 when "a" then "true" END;
 
 select (case 1/0 when "a" then "true" END) | 0;
 
 select (case 1/0 when "a" then "true" END) + 0.0;
+set session sql_mode = @case_when_saved_sql_mode;
+set @case_when_saved_sql_mode = NULL;
 select case when 1>0 then "TRUE" else "FALSE" END;
 select case when 1<0 then "TRUE" else "FALSE" END;
 SELECT CAST(CASE WHEN 0 THEN '2001-01-01' END AS DATE);

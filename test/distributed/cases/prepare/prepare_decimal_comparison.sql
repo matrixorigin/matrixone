@@ -99,8 +99,21 @@ EXECUTE p_ifnull USING @p,@p;
 EXECUTE p_null_first USING @p;
 SET @p='not-a-number';
 EXECUTE p_nested USING @p,@p;
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_ifnull USING @p,@p;
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_marker_abs USING @p,@p,@p;
+SET @prepare_decimal_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@prepare_decimal_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE p_ifnull USING @p,@p;
 EXECUTE p_marker_abs USING @p,@p,@p;
+SET SESSION sql_mode = @prepare_decimal_saved_sql_mode;
+SELECT @@session.sql_mode = @prepare_decimal_saved_sql_mode AS mode_restored;
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_ifnull USING @p,@p;
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_marker_abs USING @p,@p,@p;
+SET @prepare_decimal_saved_sql_mode = NULL;
 SET @p='9007199254740992.0000000002';
 EXECUTE p_nested USING @p,@p;
 EXECUTE p_ifnull USING @p,@p;

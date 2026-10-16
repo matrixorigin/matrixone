@@ -32,9 +32,13 @@ select id, cast(var_pop(b) over (order by id rows between unbounded preceding an
 select cast(var_pop(e) as decimal(18,6)) as e_var_pop, cast(var_samp(e) as decimal(18,6)) as e_var_samp, cast(stddev_pop(e) as decimal(18,6)) as e_stddev_pop, cast(stddev_samp(e) as decimal(18,6)) as e_stddev_samp from (select e from stat_inputs where g = 1 order by id limit 3) d;
 ➤ e_var_pop[3,18,6]  ¦  e_var_samp[3,18,6]  ¦  e_stddev_pop[3,18,6]  ¦  e_stddev_samp[3,18,6]  𝄀
 0.666667  ¦  1.000000  ¦  0.816497  ¦  1.000000
+SET @stat_label_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
 select cast(var_pop(cast(e as char)) as decimal(18,6)) as label_variance from stat_inputs where g = 1;
 ➤ label_variance[3,18,6]  𝄀
 0.000000
+SET SESSION sql_mode = @stat_label_saved_sql_mode;
+SET @stat_label_saved_sql_mode = NULL;
 prepare stat_columns from 'select cast(var_pop(b) as decimal(18,6)) as b_var_pop, cast(var_samp(b) as decimal(18,6)) as b_var_samp, cast(stddev_pop(b) as decimal(18,6)) as b_stddev_pop, cast(stddev_samp(b) as decimal(18,6)) as b_stddev_samp, cast(var_pop(e) as decimal(18,6)) as e_var_pop, cast(var_samp(e) as decimal(18,6)) as e_var_samp, cast(stddev_pop(e) as decimal(18,6)) as e_stddev_pop, cast(stddev_samp(e) as decimal(18,6)) as e_stddev_samp from stat_inputs where g = ?';
 set @stat_group = 1;
 execute stat_columns using @stat_group;

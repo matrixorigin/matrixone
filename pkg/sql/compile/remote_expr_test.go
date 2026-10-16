@@ -78,6 +78,7 @@ func (s *remoteWarningSession) AppendWarningBatch(total uint64, codes []uint16, 
 
 func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	session := &remoteWarningSession{}
 	proc.Session = session
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
@@ -279,6 +280,7 @@ func TestRemoteWarningCollectorRespectsProcessNarrowedBudget(t *testing.T) {
 
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 	buildCast := func(proc *process.Process) *plan.Expr {
+		proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 		proc.Session = &remoteWarningSession{}
 		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 			if name == "s" && !system {
@@ -333,6 +335,7 @@ func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 
 func TestRemoteNumericCoercionWarningsFollowEvaluatedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	session := &remoteWarningSession{}
 	proc.Session = session
 	sourceType := types.T_text.ToType()

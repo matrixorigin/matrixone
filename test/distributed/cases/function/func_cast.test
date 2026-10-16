@@ -1,3 +1,8 @@
+# This long-standing CAST fixture records MySQL's permissive string-to-number
+# behavior. The behavior is opt-in under the strict default mode.
+SET @func_cast_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_cast_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 select CAST(1-2 AS UNSIGNED);
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
 select CAST('10 ' as unsigned integer);
@@ -826,3 +831,6 @@ drop database test;
 select hex(_binary X'FF' & _binary X'0F'),
        hex(_binary X'F0' | _binary X'0F'),
        hex(_binary X'FF' ^ _binary X'0F');
+
+SET SESSION sql_mode = @func_cast_saved_sql_mode;
+SET @func_cast_saved_sql_mode = NULL;

@@ -495,6 +495,7 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	applyInternalExecutorSessionModeSnapshot(exec.ctx, proc)
 	// Internal DML (including CTAS population) needs the same expression error
 	// policy as frontend DML, before planning can fold any constants.
 	initInternalStatementProfile(proc, stmts[0])

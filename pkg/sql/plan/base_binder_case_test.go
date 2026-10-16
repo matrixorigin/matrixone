@@ -24,13 +24,16 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1700,6 +1703,85 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	require.Equal(t, int32(38), arg1.Typ.Width)
 	require.Equal(t, int32(7), arg1.Typ.Scale)
 	require.False(t, isCastExpr(funcExpr.Args[2]), "ELSE value already has the common decimal scale")
+}
+
+func TestFoldedImplicitStringCastPreservesNumericBinaryLiteralMarker(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	source := makePlan2StringConstExprWithType("1", true)
+	source.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	toType := types.T_binary.ToType()
+	toType.Width = 1
+
+	implicit, err := appendCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedImplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, implicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedImplicit.GetLit())
+	require.True(t, foldedImplicit.GetLit().GetIsBin(),
+		"folding an implicit string cast must retain the HEX/BIT numeric-literal marker")
+
+	explicit, err := appendSyntaxExplicitCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedExplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, explicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedExplicit.GetLit())
+	require.False(t, foldedExplicit.GetLit().GetIsBin(),
+		"an explicit cast is a numeric-literal provenance boundary")
+}
+
+func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(2)
+	defer input.Clean(proc.Mp())
+	for pos, values := range [][]bool{{true, false, false}, {false, true, false}} {
+		input.Vecs[pos] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[pos], values, nil, proc.Mp()))
+	}
+	input.SetRowCount(3)
+
+	column := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}},
+		}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	text := makePlan2StringConstExprWithType("1")
+	binaryType := types.T_binary.ToType()
+	binaryType.Width = 1
+	explicitBinary, err := appendSyntaxExplicitCastBeforeExpr(ctx, text, makePlan2Type(&binaryType))
+	require.NoError(t, err)
+	numericHex := makePlan2StringConstExprWithType("1", true)
+	numericHex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+
+	caseExpr := bind("case", column(0), DeepCopyExpr(explicitBinary),
+		column(1), numericHex, makePlan2StringConstExprWithType("1"))
+	abs := bind("abs", caseExpr)
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, abs, proc, false, true)
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(folded)
+	require.NoError(t, err)
+	require.True(t, features.NumericBinaryLiteralProvenance)
+
+	executor, err := colexec.NewExpressionExecutor(proc, folded)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	values := vector.MustFixedColNoTypeCheck[float64](result)
+	require.Equal(t, []float64{1, 49, 1}, values,
+		"explicit BINARY and ordinary text stay text-numeric; the selected HEX literal remains numeric")
 }
 
 func TestBuildPreparedCaseConditionParameter(t *testing.T) {

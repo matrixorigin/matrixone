@@ -75,6 +75,7 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 					})
 					proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 					proc.GetSessionInfo().TimeZone = time.UTC
+					proc.GetSessionInfo().MySQLNumericCompatibilityMode = tc.name == "string-prefix"
 					bound, err := GetFunctionByName(proc.Ctx, name, []types.Type{tc.input.typ})
 					require.NoError(t, err)
 					targets, shouldCast := bound.ShouldDoImplicitTypeCast()

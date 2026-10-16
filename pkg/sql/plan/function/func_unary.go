@@ -6201,7 +6201,7 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if !ivecs[0].IsConst() {
 		return moerr.NewInvalidInput(proc.Ctx, "mo memory can only take scalar input")
 	}
-	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string) (int64, error) {
+	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string, _ uint64) (int64, error) {
 		switch v {
 		case "go":
 			return int64(system.MemoryGolang()), nil
@@ -6224,7 +6224,7 @@ func MoCPU(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	if !ivecs[0].IsConst() {
 		return moerr.NewInvalidInput(proc.Ctx, "mo cpu can only take scalar input")
 	}
-	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string) (int64, error) {
+	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string, _ uint64) (int64, error) {
 		switch v {
 		case "goroutine":
 			return int64(system.GoRoutines()), nil
@@ -6428,7 +6428,7 @@ func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[types.Timestamp](ivecs, result, proc, length, func(v string) (types.Timestamp, error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Timestamp](ivecs, result, proc, length, func(v string, _ uint64) (types.Timestamp, error) {
 		val, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, v, 6)
 		if err != nil {
 			return 0, err
@@ -9904,7 +9904,6 @@ func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // MySQL converts a string to its integer prefix before formatting it in base 8.
 // The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	isBinaryLiteral := ivecs[0].GetIsBin()
 	resultNulls := result.GetResultVector().GetNulls()
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
@@ -9914,7 +9913,7 @@ func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				resultNulls.Add(uint64(row))
 			}
 		}
-		if isBinaryLiteral {
+		if ivecs[0].GetIsBinAt(row) {
 			return strconv.FormatUint(octBinaryLiteralValue(v), 8), nil
 		}
 		s := trimASCIISpace(functionUtil.QuickBytesToStr(v))
@@ -10545,8 +10544,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary:
 		p := vector.GenerateFunctionStrParameter(param)
-		staticBinary := param.GetIsBin() ||
-			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
+		staticBinary := types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
 		return func(i uint64) (int64, bool, error) {
 			value, null := p.GetStrValue(i)
 			if null {
@@ -10563,7 +10561,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			case types.RuntimeStringBinary:
 				isBinary = true
 			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
+				isBinary = isBinary || param.GetIsBinaryStringAt(int(i)) || param.GetIsBinAt(int(i))
 			}
 			if isBinary {
 				if len(value) == 0 {
@@ -11401,7 +11399,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string) (bool, error) {
+	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string, _ uint64) (bool, error) {
 		_, err = fault.RemoveFaultPoint(proc.Ctx, v)
 		return true, err
 	}, selectList)

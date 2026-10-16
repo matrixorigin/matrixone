@@ -17,17 +17,127 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
+
+// withIssue27294PinnedConnection owns the pool checkout for the callback's scope.
+// Install Close before the callback can exit through require.FailNow.
+func withIssue27294PinnedConnection(t *testing.T, ctx context.Context, db *sql.DB, callback func(*sql.Conn)) error {
+	t.Helper()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close pinned connection: %v", err)
+		}
+	}()
+
+	callback(conn)
+	return nil
+}
+
+func TestIssue27294PinnedConnectionReleasesOnGoexit(t *testing.T) {
+	const regressionTimeout = 3 * time.Second
+	const cleanupSQL = "drop database if exists issue_27294_numeric_db"
+
+	type goexitResult struct {
+		queryErr    error
+		checkoutErr error
+		inUse       int
+	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	dbClosed := false
+	defer func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	}()
+
+	mock.ExpectQuery("^select @@sql_mode$").
+		WillReturnError(errors.New("server-side sql_mode lookup failed"))
+	mock.ExpectExec("^drop database if exists issue_27294_numeric_db$").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectClose()
+
+	ctx, cancel := context.WithTimeout(context.Background(), regressionTimeout)
+	resultCh := make(chan goexitResult, 1)
+	continueToGoexit := make(chan struct{})
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+		defer cancelDone()
+		select {
+		case <-done:
+		case <-doneCtx.Done():
+			t.Errorf("pinned-connection defers did not finish before %s", doneCtx.Err())
+		}
+	}()
+	go func() {
+		defer close(done)
+		err := withIssue27294PinnedConnection(t, ctx, db, func(conn *sql.Conn) {
+			var sqlMode string
+			queryErr := conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&sqlMode)
+			resultCh <- goexitResult{queryErr: queryErr, inUse: db.Stats().InUse}
+			select {
+			case <-continueToGoexit:
+			case <-ctx.Done():
+			}
+			runtime.Goexit()
+		})
+		if err != nil {
+			resultCh <- goexitResult{checkoutErr: err}
+		}
+	}()
+
+	resultCtx, cancelResult := context.WithTimeout(context.Background(), regressionTimeout)
+	defer cancelResult()
+	var result goexitResult
+	select {
+	case result = <-resultCh:
+	case <-resultCtx.Done():
+		t.Fatalf("pinned callback did not report its query result: %s", resultCtx.Err())
+	}
+	require.NoError(t, result.checkoutErr)
+	require.ErrorContains(t, result.queryErr, "server-side sql_mode lookup failed")
+	require.Equal(t, 1, result.inUse, "the checked-out connection must be in-use before callback exit")
+	close(continueToGoexit)
+
+	doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+	select {
+	case <-done:
+	case <-doneCtx.Done():
+		t.Fatalf("pinned-connection defers did not finish before %s", doneCtx.Err())
+	}
+	cancelDone()
+	require.Zero(t, db.Stats().InUse)
+
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
+	_, err = db.ExecContext(cleanupCtx, cleanupSQL)
+	cancelCleanup()
+	require.NoError(t, err, "database-level cleanup must reuse the sole pool connection")
+	require.Zero(t, db.Stats().InUse)
+	err = db.Close()
+	dbClosed = true
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 // TestIssue27294PreparedNumericOverloads exercises the COM_STMT_EXECUTE path.
 // The Go driver uses the binary protocol when interpolateParams is disabled;
@@ -40,16 +150,24 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		port := cn.GetServiceConfig().CN.Frontend.Port
-		db, err := sql.Open("mysql", fmt.Sprintf(
-			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port)
+		db, err := sql.Open("mysql", dsn)
 		require.NoError(t, err)
 		defer db.Close()
+		// Keep all session-level setup and prepared statements on one COM_STMT
+		// connection. In particular, USE and sql_mode must remain paired with
+		// the statement being exercised below.
+		db.SetMaxOpenConns(1)
 		_, err = db.ExecContext(ctx, "drop database if exists issue_27294_numeric_db")
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, "create database issue_27294_numeric_db")
 		require.NoError(t, err)
 		defer func() {
-			_, _ = db.ExecContext(context.Background(), "drop database if exists issue_27294_numeric_db")
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(cleanupCtx, "drop database if exists issue_27294_numeric_db"); err != nil {
+				t.Errorf("drop database issue_27294_numeric_db: %v", err)
+			}
 		}()
 		_, err = db.ExecContext(ctx, "use issue_27294_numeric_db")
 		require.NoError(t, err)
@@ -58,7 +176,11 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		_, err = db.ExecContext(ctx, "create table issue_27294_numeric_src (v bigint)")
 		require.NoError(t, err)
 		defer func() {
-			_, _ = db.ExecContext(context.Background(), "drop table if exists issue_27294_numeric_src")
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(cleanupCtx, "drop table if exists issue_27294_numeric_src"); err != nil {
+				t.Errorf("drop table issue_27294_numeric_src: %v", err)
+			}
 		}()
 		_, err = db.ExecContext(ctx, "insert into issue_27294_numeric_src values (-9007199254740993)")
 		require.NoError(t, err)
@@ -74,6 +196,72 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.NoError(t, sleep.QueryRowContext(ctx, value).Scan(&result))
 			require.Zero(t, result)
 		}
+
+		// Keep the two precision roles separate on a real COM_STMT handle:
+		// text values select DECIMAL while precision remains an integer cast.
+		type preparedMathResult struct {
+			value        float64
+			valid        bool
+			databaseType string
+		}
+		queryPreparedMath := func(stmt *sql.Stmt, value, precision any) (preparedMathResult, error) {
+			rows, err := stmt.QueryContext(ctx, value, precision)
+			if err != nil {
+				return preparedMathResult{}, err
+			}
+			defer rows.Close()
+			columns, err := rows.ColumnTypes()
+			if err != nil {
+				return preparedMathResult{}, err
+			}
+			if len(columns) != 1 {
+				return preparedMathResult{}, fmt.Errorf("expected one result column, got %d", len(columns))
+			}
+			var got sql.NullFloat64
+			if !rows.Next() {
+				if err := rows.Err(); err != nil {
+					return preparedMathResult{}, err
+				}
+				return preparedMathResult{}, fmt.Errorf("prepared math query returned no rows")
+			}
+			if err := rows.Scan(&got); err != nil {
+				return preparedMathResult{}, err
+			}
+			if err := rows.Err(); err != nil {
+				return preparedMathResult{}, err
+			}
+			return preparedMathResult{value: got.Float64, valid: got.Valid,
+				databaseType: strings.ToUpper(columns[0].DatabaseTypeName())}, nil
+		}
+
+		round, err := db.PrepareContext(ctx, "select round(?, ?)")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, round.Close()) }()
+		result, err := queryPreparedMath(round, "1.5", int64(0))
+		require.NoError(t, err)
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, float64(2), result.value)
+		_, err = queryPreparedMath(round, "1.5", "1.5tail")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad value 1.5tail")
+		result, err = queryPreparedMath(round, "1.5", int64(1))
+		require.NoError(t, err, "same handle must recover after rejected precision")
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, 1.5, result.value)
+		result, err = queryPreparedMath(round, nil, int64(0))
+		require.NoError(t, err)
+		require.False(t, result.valid)
+
+		truncate, err := db.PrepareContext(ctx, "select truncate(?, ?)")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, truncate.Close()) }()
+		result, err = queryPreparedMath(truncate, "1.5", int64(0))
+		require.NoError(t, err)
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, float64(1), result.value)
 
 		abs, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
@@ -162,7 +350,8 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		}()
 		require.Equal(t, int64(9007199254740993), exact)
 		var prefixResult float64
-		require.NoError(t, wide.QueryRowContext(ctx, "abc").Scan(&prefixResult))
+		prefixErr := wide.QueryRowContext(ctx, "abc").Scan(&prefixResult)
+		require.ErrorContains(t, prefixErr, `"abc" is invalid numeric string`)
 		var exactText string
 		require.NoError(t, wide.QueryRowContext(ctx, "-9007199254740993").Scan(&exactText))
 		require.Equal(t, "9007199254740993", exactText)
@@ -174,6 +363,70 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.NoError(t, nestedArithmetic.QueryRowContext(
 			ctx, int64(-9007199254740993)).Scan(&nestedArithmeticResult))
 		require.Equal(t, int64(9007199254740993), nestedArithmeticResult)
+
+		err = withIssue27294PinnedConnection(t, ctx, db, func(modeConn *sql.Conn) {
+			var originalSQLMode string
+			require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, restoreErr := modeConn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				if restoreErr != nil {
+					t.Errorf("restore sql_mode: %v", restoreErr)
+				}
+			}()
+			_, err = modeConn.ExecContext(ctx, "use issue_27294_numeric_db")
+			require.NoError(t, err)
+			stmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stmt.Close()) }()
+
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+			var value float64
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string")
+
+			_, err = modeConn.ExecContext(ctx,
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY'")
+			require.NoError(t, err)
+			require.NoError(t, stmt.QueryRowContext(ctx, "1.5tail").Scan(&value))
+			require.Equal(t, float64(1.5), value)
+			var level, message string
+			var code uint16
+			require.NoError(t, modeConn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+			require.Equal(t, "Warning", level)
+			require.Equal(t, uint16(1292), code)
+			require.Contains(t, message, "Truncated incorrect DOUBLE value")
+
+			// The outer numeric owner must not consume text owned by CONCAT.
+			concat, err := modeConn.PrepareContext(ctx, "select abs(concat('1', ?))")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, concat.Close()) }()
+			var concatResult float64
+			require.NoError(t, concat.QueryRowContext(ctx, "01").Scan(&concatResult))
+			require.Equal(t, float64(101), concatResult)
+			explicitCast, err := modeConn.PrepareContext(ctx, "select abs(cast(concat('1', ?) as char))")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, explicitCast.Close()) }()
+			var castResult float64
+			require.NoError(t, explicitCast.QueryRowContext(ctx, "01").Scan(&castResult))
+			require.Equal(t, float64(101), castResult)
+
+			_, err = modeConn.ExecContext(ctx,
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY'")
+			require.NoError(t, err)
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string",
+				"MATRIXONE_NATIVE must win over explicit compatibility")
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string",
+				"the same prepared handle returns to strict mode")
+		})
+		require.NoError(t, err)
 
 		multiMarker, err := db.PrepareContext(ctx, "select abs(? + ?)")
 		require.NoError(t, err)
