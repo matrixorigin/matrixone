@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -343,6 +344,16 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 						resultType := resolvedReturnType(t, op.id, []types.Type{typ, typ})
 						proc := testutil.NewProcess(t)
 						defer proc.Free()
+						sink := &uncompressWarningSink{}
+						proc.WarningSink = sink
+						proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+						profile := &process.StmtProfile{}
+						proc.SetStmtProfile(profile)
+						if mode.strict {
+							profile.SetStatementRuntimeProfile("Insert", "DML", false)
+						} else {
+							profile.SetStatementRuntimeProfile("Select", "DQL", false)
+						}
 						if mode.strict {
 							atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
 						} else {
@@ -351,6 +362,9 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 						tcc := NewFunctionTestCase(proc, inputs,
 							NewFunctionTestResult(resultType, false, nil, nil), op.fn)
 						defer tcc.Free()
+						if shape.leftConst && shape.rightConst {
+							require.Equal(t, !mode.strict && state.name != "all_null", ScalarDivisionNeedsRowEvaluation(tcc.parameters, proc))
+						}
 						require.NoError(t, tcc.result.PreExtendAndReset(2))
 						err := tcc.fn(tcc.parameters, tcc.result, proc, 2, selectList)
 
@@ -361,6 +375,16 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 							return
 						}
 						require.NoError(t, err)
+						wantWarnings := uint64(0)
+						if !mode.strict && state.name != "all_null" && !(state.name == "partial_mask" && !shape.rightConst) {
+							wantWarnings = 1
+						}
+						require.Equal(t, wantWarnings, sink.total)
+						require.Len(t, sink.records, int(wantWarnings))
+						for _, warning := range sink.records {
+							require.Equal(t, uint16(1365), warning.code)
+							require.Equal(t, "Division by 0", warning.message)
+						}
 						rsVec := tcc.GetResultVectorDirectly()
 						require.Equal(t, resultType, *rsVec.GetType())
 						require.False(t, rsVec.GetNulls().Contains(2), "must not retain a NULL outside length")

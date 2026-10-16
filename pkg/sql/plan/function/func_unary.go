@@ -931,23 +931,18 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	// Similar, for ulonglong.
 	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
 
-	rounded := math.RoundToEven(val)
-	if rounded <= float64(math.MinInt64) {
-		return bitCountFromUint64(minInt64BitPattern), nil
-	}
-	if rounded < 0 {
-		return bitCountFromUint64(uint64(int64(rounded))), nil
-	}
-	if rounded >= ULLONG_MAX_DOUBLE {
+	if val >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
+	// MySQL truncates FLOAT/DOUBLE inputs toward zero before counting bits.
+	truncated := math.Trunc(val)
 	// Converting a negative float directly to uint64 is undefined in Go (the
 	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
 	// so route negatives through int64 first and reinterpret the bit pattern.
-	if rounded < 0 {
-		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+	if truncated < 0 {
+		return bitCountFromSignedInt64Pattern(int64(truncated)), nil
 	}
-	return bitCountFromUint64(uint64(rounded)), nil
+	return bitCountFromUint64(uint64(truncated)), nil
 }
 
 func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
@@ -7895,7 +7890,13 @@ func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 // TimeToMicrosecond returns the microseconds from time (0-999999)
 func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
-		return v.MicroSec()
+		// MySQL returns the nonnegative fractional part (0-999999) even for
+		// negative TIME values; Time.MicroSec keeps the raw int64 sign.
+		ms := v.MicroSec()
+		if ms < 0 {
+			ms = -ms
+		}
+		return ms
 	}, selectList)
 }
 
@@ -7944,7 +7945,13 @@ func StringToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Try parsing as TIME first (most common format for microsecond)
 		timeVal, err1 := types.ParseTime(str, scale)
 		if err1 == nil {
-			if err := rs.Append(timeVal.MicroSec(), false); err != nil {
+			// A negative TIME literal must not leak its sign into the
+			// fractional part; MySQL reports 0-999999.
+			ms := timeVal.MicroSec()
+			if ms < 0 {
+				ms = -ms
+			}
+			if err := rs.Append(ms, false); err != nil {
 				return err
 			}
 			continue
@@ -9230,7 +9237,7 @@ func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
-func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+func unhexToBytes(proc *process.Process, data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
@@ -9243,6 +9250,14 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 
 	bs, err := hex.DecodeString(str)
 	if err != nil {
+		// MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) for malformed
+		// hexadecimal input while still returning NULL for the value.
+		if proc != nil {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+				appender.AppendWarningDiagnostic(moerr.ER_WRONG_VALUE_FOR_TYPE,
+					fmt.Sprintf("Incorrect string value: '%s' for function unhex", functionUtil.QuickBytesToStr(data)))
+			}
+		}
 		return rs.AppendMustNullForBytesResult()
 	}
 	return rs.AppendMustBytesValue(bs)
@@ -9255,7 +9270,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if err := unhexToBytes(data, null, rs); err != nil {
+		if err := unhexToBytes(proc, data, null, rs); err != nil {
 			return err
 		}
 	}

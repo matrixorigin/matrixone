@@ -12,9 +12,9 @@ timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00'
 from interval_text order by v;
 ➤ v[12,20,0]  ¦  second_us[-5,64,0]  ¦  minute_us[-5,64,0]  ¦  hour_us[-5,64,0]  ¦  day_us[-5,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
--1.5  ¦  -1500000  ¦  -90000000  ¦  -5400000000  ¦  -129600000000  𝄀
+-1.5  ¦  -1500000  ¦  -90000000  ¦  -5400000000  ¦  -86400000000  𝄀
 1  ¦  1000000  ¦  60000000  ¦  3600000000  ¦  86400000000  𝄀
-1.5  ¦  1500000  ¦  90000000  ¦  5400000000  ¦  129600000000
+1.5  ¦  1500000  ¦  90000000  ¦  5400000000  ¦  86400000000
 select timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval '1.5' second)) as literal_us;
 ➤ literal_us[-5,64,0]  𝄀
 1500000
@@ -358,19 +358,19 @@ drop table temporal_decimal_intervals;
 create table temporal_scalar_ties(n decimal(18,7));
 insert into temporal_scalar_ties values (34410126.8315485), (-34410126.8315485);
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
-cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_column_tie
+cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_column_tie
 from temporal_scalar_ties where n > 0;
 ➤ positive_column_tie[-7,1,0]  𝄀
 1
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
-cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_column_tie
+cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_column_tie
 from temporal_scalar_ties where n < 0;
 ➤ negative_column_tie[-7,1,0]  𝄀
 1
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(34410126.8315485 as decimal(18,7)) second) =
-cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_literal_tie,
+cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_literal_tie,
 date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(-34410126.8315485 as decimal(18,7)) second) =
-cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
+cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_literal_tie;
 ➤ positive_literal_tie[-7,1,0]  ¦  negative_literal_tie[-7,1,0]  𝄀
 1  ¦  1
 drop table temporal_scalar_ties;
@@ -421,13 +421,13 @@ date_add(time '12:00:00', interval cast(-0.0000005 as double) second) = cast('11
 date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(1.5 as decimal(40,1)) hour_second) =
 cast('2024-01-01 00:01:05' as datetime(6)) as datetime_compound,
 date_add(cast('2024-01-01' as date), interval cast(1.5 as decimal(40,1)) day) =
-cast('2024-01-02 12:00:00' as datetime(6)) as fractional_day;
+cast('2024-01-03' as date) as fractional_day;
 ➤ cast_double[-7,1,0]  ¦  negative_float_tie[-7,1,0]  ¦  datetime_compound[-7,1,0]  ¦  fractional_day[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
 select date_add(cast('2024-01-01' as date), interval 1 day) as integer_day,
 date_add(cast('2024-01-01' as date), interval cast(1.0 as decimal(4,1)) day) as decimal_day;
-➤ integer_day[91,10,0]  ¦  decimal_day[93,26,0]  𝄀
-2024-01-02  ¦  2024-01-02 00:00:00
+➤ integer_day[91,10,0]  ¦  decimal_day[91,10,0]  𝄀
+2024-01-02  ¦  2024-01-02
 select day('2024-00-15') as raw_day, dayofmonth('2024-00-15') as raw_dayofmonth,
 month('2024-00-15') as raw_month, year('2024-00-15') as raw_year;
 ➤ raw_day[-6,8,0]  ¦  raw_dayofmonth[-6,8,0]  ¦  raw_month[-6,8,0]  ¦  raw_year[-5,64,0]  𝄀

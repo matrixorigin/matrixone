@@ -4767,6 +4767,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
+			branchExprs := make([]*Expr, len(nodes))
+			for i, id := range nodes {
+				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+			}
+			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+				return 0, err
+			}
+			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
@@ -4778,7 +4786,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				needsCast := !argsType[idx].Eq(targetArgType)
+				needsCast := !argsType[idx].Eq(targetArgType) ||
+					(targetType.CollationCoercibilitySet && !builder.qry.Nodes[tmpID].ProjectList[columnIdx].Typ.SameCollation(targetType))
 				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
@@ -6135,12 +6144,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							// Keep branch-local duplicate elimination after
 							// grouping NULL normalization to reduce rows before
@@ -6157,7 +6166,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  selectClause.Having,
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -6819,6 +6828,8 @@ func seedPreparedNumericAggregateExprColumnTargets(
 	case *tree.ParenExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.CastExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.CollateExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.BitCastExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
@@ -7564,6 +7575,32 @@ func rewriteRollupWindowSelect(
 	return rewritten, hasWindow
 }
 
+// ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
+// to every branch so aggregate binding stays identical for shared input plans.
+// Keep fresh wrappers because a CTE declaration can be bound more than once.
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
+		return nil
+	}
+	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
+	if having != nil {
+		result.Expr = having.Expr
+	}
+	if guardEmptyInput {
+		count := &tree.FuncExpr{
+			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
+			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
+		}
+		positive := tree.NewComparisonExpr(tree.GREAT_THAN, count, tree.NewNumVal(int64(0), "0", false, tree.P_int64))
+		if result.Expr == nil {
+			result.Expr = positive
+		} else {
+			result.Expr = tree.NewAndExpr(tree.NewParentExpr(result.Expr), positive)
+		}
+	}
+	return result
+}
+
 func rewriteRollupWindowSelectWithHeadingProvenance(
 	ctx *BindContext,
 	selectClause *tree.SelectClause,
@@ -7604,18 +7641,12 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 	groupingAliases := rollupWindowGroupingAliases(selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
 	branchAliases := groupingAliases
 	if selectClause.Having != nil {
-		branchAliases = selectClause.Exprs
-	}
-	rewriteState.addBranchAliasExprs(branchAliases)
-	var rewrittenHaving *tree.Where
-	if selectClause.Having != nil {
 		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
 		// source columns (including ambiguity) before SELECT aliases. Hidden
 		// projections retain the original non-window aliases for the fallback.
-		nextHaving := *selectClause.Having
-		nextHaving.RollupHaving = true
-		rewrittenHaving = &nextHaving
+		branchAliases = selectClause.Exprs
 	}
+	rewriteState.addBranchAliasExprs(branchAliases)
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
 		return nil, true, nil
@@ -7636,6 +7667,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		}
 	}
 	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
@@ -7661,7 +7693,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: rewrittenHaving,
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}
@@ -8333,6 +8365,14 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.CollateExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
 	case *tree.BitCastExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -8759,6 +8799,8 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.CastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.CollateExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.BitCastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.SerialExtractExpr:
@@ -8811,40 +8853,16 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
-	// The catalog-only shortcut belongs to this SELECT, not to its siblings
-	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
-	// let a later ordinary SELECT bypass semantic binding.
-	previousSkipResolve := builder.isSkipResolveTableDef
-	builder.isSkipResolveTableDef = false
-	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
-
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
 	}
 
 	if len(clause.Exprs) == 1 {
-		switch clause.Exprs[0].Expr.(type) {
-		case tree.UnqualifiedStar:
-			if astLimit != nil && astLimit.Count != nil {
-				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx, false)
-				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
-					return
-				}
-
-				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						if c.U64Val == 0 {
-							// View metadata generation needs the complete catalog identity
-							// exposed by Resolve so it can persist reverse dependencies.
-							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
-							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
-								builder.isSkipResolveTableDef = true
-							}
-						}
-					}
-				}
+		if _, ok := clause.Exprs[0].Expr.(tree.UnqualifiedStar); ok && astLimit != nil && astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
+			if _, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+				return
 			}
 		}
 	}
@@ -10820,6 +10838,10 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	commonPlanType := makePlan2Type(&commonType)
+	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
+		return plan.Type{}, err
+	}
+	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain
 	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
 	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
@@ -10844,7 +10866,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 			expr.Typ.NotNullable = false
 			continue
 		}
-		if sourceType.Eq(commonType) {
+		if sourceType.Eq(commonType) && expr.Typ.SameCollation(commonPlanType) {
 			continue
 		}
 
@@ -12934,33 +12956,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			sqlDatabase = catalogDatabase
 		}
 
-		var subMeta *SubscriptionMeta
-		subMeta, err = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
-			var tableDef *TableDef
-			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(catalogDatabase, table)
-			if err != nil {
-				return 0, "", err
-			}
-
-			// Both frontend and internal compiler contexts must identify Views.
-			// Their persisted columns are not an output schema, even for no rows.
-			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
-				object := &plan.ObjectRef{DbName: catalogDatabase, SchemaName: catalogDatabase, ObjName: table,
-					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
-				builder.qry.CatalogDependencies = appendPrepareSchemas(
-					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:     plan.Node_TABLE_SCAN,
-					Stats:        nil,
-					ObjRef:       object,
-					TableDef:     tableDef,
-					BindingTags:  []int32{builder.genNewBindTag()},
-					ScanSnapshot: snapshot,
-				}, ctx)
-				return
-			}
-		}
+		// Preserve the existing probe; full resolution below owns error handling.
+		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
 		// TODO
 		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
@@ -12974,6 +12971,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, "", err
+		}
+		// Admit the complete catalog schema before pruning unused columns or
+		// replacing scans, after preserving the existing snapshot-scope error.
+		// The final plan fence cannot see metadata erased by those rewrites,
+		// even when the query only projects a constant.
+		if err = plan.RequireLegacyCollations(tableDef); err != nil {
 			return 0, "", err
 		}
 
