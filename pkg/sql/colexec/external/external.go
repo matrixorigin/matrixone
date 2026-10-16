@@ -703,10 +703,23 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			return nil, err
 		}
 		tailSize, err := getTailSize(param, visibleCols, r)
+		closeErr := r.Close()
 		if err != nil {
+			// Strict scanning retains its existing parser-resynchronization
+			// fallback. A fast scan may only fall back on EOF, not on I/O errors.
+			if !param.Strict && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
 			break
 		}
-		offsets = append(offsets, vec.Entries[0].Offset+tailSize)
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		next := vec.Entries[0].Offset + tailSize
+		if next >= fileSize {
+			break
+		}
+		offsets = append(offsets, next)
 	}
 
 	for i := 0; i < len(offsets); i++ {
@@ -724,15 +737,70 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
 	if param.Strict {
 		return getTailSizeStrict(param, cols, r)
-	} else {
-		return getTailSizeNoStrict(r), nil
 	}
+	return getTailSizeNoStrict(param, r)
 }
 
-func getTailSizeNoStrict(r io.ReadCloser) int64 {
-	r2 := bufio.NewReader(r)
-	line, _ := r2.ReadString('\n')
-	return int64(len(line))
+// getTailSizeNoStrict finds the next physical line terminator. Like the
+// non-strict fast split path, it does not recover quote/escape context from
+// before the requested offset. The reader is borrowed; ReadFileOffset owns it.
+func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
+	terminator := "\n"
+	if param.Tail != nil && param.Tail.Lines != nil {
+		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			terminator = terminated.Value
+		}
+	}
+	bufR := bufio.NewReader(r)
+	var size int64
+	if len(terminator) == 1 {
+		for {
+			if param.Ctx != nil {
+				if err := param.Ctx.Err(); err != nil {
+					return size, err
+				}
+			}
+			part, err := bufR.ReadSlice(terminator[0])
+			size += int64(len(part))
+			if err != bufio.ErrBufferFull {
+				return size, err
+			}
+		}
+	}
+
+	// KMP keeps both time and memory bounded for long records and overlapping
+	// delimiter prefixes, including delimiters spanning buffered reads.
+	prefix := make([]int, len(terminator))
+	for i, matched := 1, 0; i < len(terminator); i++ {
+		for matched > 0 && terminator[i] != terminator[matched] {
+			matched = prefix[matched-1]
+		}
+		if terminator[i] == terminator[matched] {
+			matched++
+		}
+		prefix[i] = matched
+	}
+	for matched := 0; ; {
+		if size%4096 == 0 && param.Ctx != nil {
+			if err := param.Ctx.Err(); err != nil {
+				return size, err
+			}
+		}
+		ch, err := bufR.ReadByte()
+		if err != nil {
+			return size, err
+		}
+		size++
+		for matched > 0 && ch != terminator[matched] {
+			matched = prefix[matched-1]
+		}
+		if ch == terminator[matched] {
+			matched++
+		}
+		if matched == len(terminator) {
+			return size, nil
+		}
+	}
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
