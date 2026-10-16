@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -1139,49 +1140,47 @@ func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
 
 // tolerance test
 func TestUpgradeTenant(t *testing.T) {
-	sid := ""
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Expected no panic")
-				}
-			}()
+	synctest.Test(t, func(t *testing.T) {
+		sid := ""
+		runtime.RunTest(
+			sid,
+			func(rt runtime.Runtime) {
+				attempts := 0
+				txnOp := &testTxnOperator{}
+				sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					target := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
+					if sql == target {
+						attempts++
+						return executor.Result{}, moerr.NewInternalErrorNoCtx("test err")
+					}
+					return executor.Result{}, nil
+				}, txnOp)
 
-			txnOp := &testTxnOperator{}
-			sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
-				target := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
-				if sql == target {
-					return executor.Result{}, moerr.NewInternalErrorNoCtx("test err")
-				}
-				return executor.Result{}, nil
-			}, txnOp)
+				b := newServiceForTest(
+					sid,
+					&memLocker{},
+					clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil,
+					sqlExecutor,
+					func(s *service) {
+						h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
+						h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
+						s.handles = append(s.handles, h1)
+						s.handles = append(s.handles, h2)
+					},
+				)
 
-			b := newServiceForTest(
-				sid,
-				&memLocker{},
-				clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil,
-				sqlExecutor,
-				func(s *service) {
-					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
-					s.handles = append(s.handles, h1)
-					s.handles = append(s.handles, h2)
-				},
-			)
+				defer b.Close()
 
-			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				defer cancel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
-			_, err := b.UpgradeTenant(ctx, "sys", 0, true)
-			assert.Error(t, err)
-		},
-	)
+				_, err := b.UpgradeTenant(ctx, "sys", 0, true)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Greater(t, attempts, 1, "upgrade must retry before its deadline")
+			},
+		)
+	})
 }
 
 func newServiceForTest(

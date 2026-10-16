@@ -3,6 +3,8 @@ CREATE DATABASE issue_28164_collation_gate;
 USE issue_28164_collation_gate;
 CREATE TABLE legacy (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_general_ci, token VARCHAR(20) COLLATE utf8mb4_bin) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO legacy VALUES (1, 'Alpha', 'Alpha'), (2, 'alpha', 'alpha');
+SELECT * FROM legacy LIMIT 0;
+id	name	token
 SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'alpha' ORDER BY id;
 id
 2
@@ -10,8 +12,7 @@ SELECT 1 COLLATE utf8mb4_general_ci AS legacy_numeric;
 legacy_numeric
 1
 SELECT NULL COLLATE utf8mb4_general_ci AS legacy_null;
-legacy_null
-null
+COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'
 CREATE TABLE native_column (name VARCHAR(20) COLLATE utf8mb4_0900_bin);
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 CREATE TABLE native_default (id INT) COLLATE utf8mb4_0900_bin;

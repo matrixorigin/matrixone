@@ -155,14 +155,13 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		t.Run("published_views", func(t *testing.T) {
 			account, publication := strings.ToLower(main)+"_acct", strings.ToLower(main)+"_pub"
 			exec(t, "create account "+account+" admin_name 'admin' identified by '111'")
-			defer func() {
+			cleanupResource := func(statement string) {
 				cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
 				defer stop()
-				_, err := db.ExecContext(cleanup, "drop publication if exists "+publication)
+				_, err := db.ExecContext(cleanup, statement)
 				assert.NoError(t, err)
-				_, err = db.ExecContext(cleanup, "drop account if exists "+account)
-				assert.NoError(t, err)
-			}()
+			}
+			t.Cleanup(func() { cleanupResource("drop account if exists " + account) })
 			exec(t, "use "+main)
 			for _, view := range []struct{ name, body string }{
 				{"plain_v", "select id from records where id=2"},
@@ -173,6 +172,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 				exec(t, "create view "+main+"."+view.name+" as "+view.body)
 			}
 			exec(t, "create publication "+publication+" database "+main+" account "+account)
+			t.Cleanup(func() { cleanupResource("drop publication if exists " + publication) })
 			sub, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
 			defer sub.Close()
