@@ -1277,6 +1277,8 @@ func exprHasUserVariableInto(expr Expr) bool {
 			exprHasUserVariableInto(node.IndexExpr)
 	case *CastExpr:
 		return exprHasUserVariableInto(node.Expr)
+	case *CollateExpr:
+		return exprHasUserVariableInto(node.Expr)
 	case *BitCastExpr:
 		return exprHasUserVariableInto(node.Expr)
 	case *Tuple:
@@ -1369,6 +1371,8 @@ func exprHasNestedInto(expr Expr) bool {
 	case *SerialExtractExpr:
 		return exprHasNestedInto(node.SerialExpr) || exprHasNestedInto(node.IndexExpr)
 	case *CastExpr:
+		return exprHasNestedInto(node.Expr)
+	case *CollateExpr:
 		return exprHasNestedInto(node.Expr)
 	case *BitCastExpr:
 		return exprHasNestedInto(node.Expr)

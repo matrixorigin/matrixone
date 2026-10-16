@@ -789,10 +789,30 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			// making the assertion depend on the asynchronous SQL control-plane
 			// response. The source/target setup and all boundary assertions remain
 			// public SQL operations.
+			// The restart oracle concerns the durable watermark, not the length
+			// of the daemon lease. Capture the old claim so expiry setup cannot
+			// invalidate a replacement that has already claimed the task.
+			res, err = exec.Exec(ctx,
+				"select task_id, cast(last_run as varchar) from mo_task.sys_daemon_task where task_metadata_id = (select cast(task_id as varchar) from mo_catalog.mo_cdc_task where task_name='"+taskName+"')",
+				executor.Options{})
+			require.NoError(t, err)
+			var daemonID uint64
+			var lastRun string
+			res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				daemonID = vector.GetFixedAtNoTypeCheck[uint64](cols[0], 0)
+				lastRun = cols[1].GetStringAt(0)
+				return false
+			})
+			res.Close()
+			require.NotZero(t, daemonID)
+			require.NotEmpty(t, lastRun)
 			phase.Store(2)
 			require.NoError(t, cn.Close())
 			require.NoError(t, cn.Start())
 			exec = testutils.GetSQLExecutor(cn)
+			// Use the same expired-lease setup as the cross-CN takeover test;
+			// the real runner still must claim and admit the replacement.
+			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set last_heartbeat='2000-01-01 00:00:00' where task_id=%d and last_run='%s'", daemonID, lastRun))
 			var secondScanDone chan error
 			secondScanAttempts := 0
 			for {

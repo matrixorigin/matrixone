@@ -27,12 +27,58 @@ import (
 type loadUserVariableNullIf struct {
 	target   string
 	variable string
-	expr     *tree.FuncExpr
+	expr     tree.Expr
 }
 
 type loadUserVariableScanColumn struct {
 	name string
 	pos  int32
+}
+
+// loadNullIfFunction recognizes supported NULLIF assignments without discarding
+// wrappers that must still be validated by the expression binder.
+func loadNullIfFunction(expr tree.Expr) (*tree.FuncExpr, bool) {
+	collated := false
+	for {
+		switch node := expr.(type) {
+		case *tree.CollateExpr:
+			collated = true
+			expr = node.Expr
+		case *tree.ParenExpr:
+			expr = node.Expr
+		case *tree.FuncExpr:
+			name, ok := node.Func.FunctionReference.(*tree.UnresolvedName)
+			if ok && strings.EqualFold(name.ColName(), "nullif") && len(node.Exprs) == 2 {
+				return node, collated
+			}
+			return nil, collated
+		default:
+			return nil, collated
+		}
+	}
+}
+
+// Copy only the validated wrapper path and function arguments. The parsed AST
+// belongs to the caller, while binding needs a scan-column reference instead of
+// the LOAD row variable.
+func copyLoadNullIfWithSource(expr tree.Expr, source string) tree.Expr {
+	switch node := expr.(type) {
+	case *tree.CollateExpr:
+		copied := *node
+		copied.Expr = copyLoadNullIfWithSource(node.Expr, source)
+		return &copied
+	case *tree.ParenExpr:
+		copied := *node
+		copied.Expr = copyLoadNullIfWithSource(node.Expr, source)
+		return &copied
+	case *tree.FuncExpr:
+		copied := *node
+		copied.Exprs = append(tree.Exprs(nil), node.Exprs...)
+		copied.Exprs[0] = tree.NewUnresolvedColName(source)
+		return &copied
+	default:
+		return expr
+	}
 }
 
 func loadUserVariableNullIfAssignments(param *tree.ExternParam, ctx CompilerContext) ([]loadUserVariableNullIf, error) {
@@ -46,12 +92,8 @@ func loadUserVariableNullIfAssignments(param *tree.ExternParam, ctx CompilerCont
 		if assignment == nil {
 			continue
 		}
-		expr, ok := assignment.Expr.(*tree.FuncExpr)
-		if !ok || len(expr.Exprs) != 2 {
-			continue
-		}
-		name, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || !strings.EqualFold(name.ColName(), "nullif") {
+		expr, _ := loadNullIfFunction(assignment.Expr)
+		if expr == nil {
 			continue
 		}
 		variable, ok := expr.Exprs[0].(*tree.VarExpr)
@@ -67,13 +109,10 @@ func loadUserVariableNullIfAssignments(param *tree.ExternParam, ctx CompilerCont
 		if len(assignment.Names) != 1 || assignment.Names[0] == nil {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "LOAD DATA SET with row variables requires one target column")
 		}
-		function := *expr
-		function.Exprs = append(tree.Exprs(nil), expr.Exprs...)
-
 		item := loadUserVariableNullIf{
 			target:   assignment.Names[0].ColName(),
 			variable: variable.Name,
-			expr:     &function,
+			expr:     assignment.Expr,
 		}
 		key := strings.ToLower(item.target)
 		if index, ok := byTarget[key]; ok {
@@ -132,7 +171,10 @@ func appendLoadUserVariableScanColumns(
 
 		name := uniqueLoadVariableScanName(targetTable, scanTable, *tbColToDataCol, fmt.Sprintf("__mo_load_user_var_%d", i))
 		position := int32(len(scanTable.Cols))
-		columnType := makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+		// Row variables carry raw string fields, not target-width VARCHARs.
+		// Preserve the full supported string domain through intermediate casts
+		// (for example COLLATE); only the final assignment enforces target size.
+		columnType := makeGeneratedPlan2Type(types.T_text, types.MaxLongTextLen, 0, false)
 		scanTable.Cols = append(scanTable.Cols, &plan.ColDef{Name: name, Typ: columnType})
 		scanTable.Name2ColIndex[name] = position
 		(*tbColToDataCol)[name] = int32(i)
@@ -218,10 +260,8 @@ func (builder *QueryBuilder) bindLoadUserVariableAssignments(
 				"LOAD DATA SET variable '@%s' is not present in the column list", assignment.variable)
 		}
 
-		function := *assignment.expr
-		function.Exprs = append(tree.Exprs(nil), assignment.expr.Exprs...)
-		function.Exprs[0] = tree.NewUnresolvedColName(source.name)
-		bound, err := NewDefaultBinderWithColumns(builder.GetContext(), plan.Type{}, scanTable.Cols).BindExpr(&function, 0, false)
+		expression := copyLoadNullIfWithSource(assignment.expr, source.name)
+		bound, err := NewDefaultBinderWithColumns(builder.GetContext(), plan.Type{}, scanTable.Cols).BindExpr(expression, 0, false)
 		if err != nil {
 			return nil, err
 		}
