@@ -864,11 +864,36 @@ type numericBinaryLiteralValueClass struct {
 	definitelyNonNull bool
 }
 
+// numericBinaryLiteralValueClassifier memoizes classification for a single
+// RequiredRemoteExpressionFeatures scan. Nested flow-control expressions
+// otherwise cause each ancestor to rescan its descendants.
+type numericBinaryLiteralValueClassifier struct {
+	classes map[*Expr]numericBinaryLiteralValueClass
+}
+
+func (classifier *numericBinaryLiteralValueClassifier) classify(expr *Expr) numericBinaryLiteralValueClass {
+	if expr == nil {
+		return numericBinaryLiteralValueClass{}
+	}
+	if class, ok := classifier.classes[expr]; ok {
+		return class
+	}
+	if classifier.classes == nil {
+		classifier.classes = make(map[*Expr]numericBinaryLiteralValueClass)
+	}
+	class := classifyNumericBinaryLiteralValueUncached(expr, classifier)
+	classifier.classes[expr] = class
+	return class
+}
+
 // classifyNumericBinaryLiteralValue follows only provenance-transparent
 // implicit casts and flow-control expressions. Ordinary functions and columns
 // may produce unmarked values; they do not inherit literal provenance from
 // their inputs. Explicit CAST deliberately resets the marker.
-func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClass {
+func classifyNumericBinaryLiteralValueUncached(
+	expr *Expr,
+	classifier *numericBinaryLiteralValueClassifier,
+) numericBinaryLiteralValueClass {
 	if expr == nil {
 		return numericBinaryLiteralValueClass{}
 	}
@@ -883,7 +908,7 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		if strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
-			source := classifyNumericBinaryLiteralValue(fn.Args[0])
+			source := classifier.classify(fn.Args[0])
 			if source.definitelyNull {
 				return numericBinaryLiteralValueClass{definitelyNull: true}
 			}
@@ -906,7 +931,7 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 			result := numericBinaryLiteralValueClass{}
 			if isCoalesce {
 				for _, value := range values {
-					branch := classifyNumericBinaryLiteralValue(value)
+					branch := classifier.classify(value)
 					if branch.definitelyNull {
 						continue
 					}
@@ -925,7 +950,7 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 
 			allDefinitelyNonNull := !omittedElse && len(values) != 0
 			for _, value := range values {
-				branch := classifyNumericBinaryLiteralValue(value)
+				branch := classifier.classify(value)
 				result.hasMarkedValue = result.hasMarkedValue || branch.hasMarkedValue
 				result.hasOrdinaryValue = result.hasOrdinaryValue || branch.hasOrdinaryValue
 				allDefinitelyNonNull = allDefinitelyNonNull && branch.definitelyNonNull
@@ -944,7 +969,10 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 // marker, so a downstream numeric cast could produce a different result.
 // NULL-only alternatives do not create a marker, but a marked value alongside
 // NULL still does.
-func isFlowControlNumericBinaryLiteralSource(expr *Expr) bool {
+func isFlowControlNumericBinaryLiteralSource(
+	expr *Expr,
+	classifier *numericBinaryLiteralValueClassifier,
+) bool {
 	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
 		return false
 	}
@@ -958,7 +986,7 @@ func isFlowControlNumericBinaryLiteralSource(expr *Expr) bool {
 	default:
 		return false
 	}
-	class := classifyNumericBinaryLiteralValue(expr)
+	class := classifier.classify(expr)
 	return class.hasMarkedValue
 }
 
@@ -1064,6 +1092,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	var numericBinaryLiteralValues numericBinaryLiteralValueClassifier
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
@@ -1267,7 +1296,8 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if isStrictStringNumericCompatibilityCast(current) {
 				features.StrictStringNumericCompatibility = true
 			}
-			if isFlowControlNumericBinaryLiteralSource(current) {
+			if !features.NumericBinaryLiteralProvenance &&
+				isFlowControlNumericBinaryLiteralSource(current, &numericBinaryLiteralValues) {
 				features.NumericBinaryLiteralProvenance = true
 			}
 			if !features.StrictStringNumericCompatibility && isStringConditionCompatibilityFunction(current) {
