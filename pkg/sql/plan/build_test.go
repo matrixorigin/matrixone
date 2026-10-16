@@ -6097,6 +6097,49 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 	require.True(t, foundCheckFilter)
 }
 
+func TestLoadCheckConstraintPolicy(t *testing.T) {
+	for _, table := range []string{"dept", "dept_composite_uk"} {
+		for _, tc := range []struct {
+			name, source, policy string
+			filter               bool
+		}{
+			{"inline_ignore", "inline format='csv', data='1,Sales,NY'", "ignore", true},
+			{"local_ignore", "local infile 'client.csv'", "ignore", true},
+			{"plain", "inline format='csv', data='1,Sales,NY'", "", false},
+			{"local_without_ignore", "local infile 'client.csv'", "", false},
+		} {
+			t.Run(table+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addPositiveCheck(t, mock, table, "deptno")
+				stmt, err := mysql.ParseOne(t.Context(), "load data "+tc.source+" "+tc.policy+" into table "+table+" fields terminated by ','", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				query, err := mock.Optimize(stmt)
+				require.NoError(t, err)
+				checks := 0
+				for _, node := range query.Nodes {
+					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+						require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "LOAD duplicate-key policy must remain unchanged")
+					}
+					for _, expr := range node.FilterList {
+						if !exprContainsFuncName(expr, "_check_constraint_assert") {
+							continue
+						}
+						checks++
+						wantType := plan.Node_ASSERT
+						if tc.filter {
+							wantType = plan.Node_FILTER
+						}
+						require.Equal(t, wantType, node.NodeType)
+						require.Equal(t, tc.filter, node.FilterIsBarrier)
+					}
+				}
+				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
+			})
+		}
+	}
+}
+
 func TestReplaceSetColRefAsDefault(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column

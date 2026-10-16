@@ -148,7 +148,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
 	// shares accepted rows after arbitration; ODKU shares the post-merge final
 	// image plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn, false)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -2638,6 +2638,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	astUpdateExprs tree.UpdateExprs,
 	irregularIndexes []*plan.IndexDef,
 	autoIncrementGeneratedColumn int32,
+	loadCheckIgnore bool,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -2912,11 +2913,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	//     the surviving rows — MySQL's row-skip semantics.
 	// ON DUPLICATE KEY UPDATE runs its own in-plan assert over the final merged
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
-	// INSERT IGNORE applies CHECK constraints as a FILTER. Materialize unique-key
-	// lock columns before that filter so its pass-through projection preserves the
+	// LOAD IGNORE skips CHECK-invalid rows independently of its duplicate-key
+	// policy. INSERT IGNORE uses the same filter with its own duplicate policy.
+	filterCheckRows := onDupAction == plan.Node_IGNORE || loadCheckIgnore
+	// Materialize unique-key lock columns before that filter so its projection preserves the
 	// physical vectors consumed by LockOp.
 	lockKeysMaterializedBeforeChecks := false
-	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 {
+	if filterCheckRows && len(tableDef.Checks) > 0 {
 		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
 		if err != nil {
 			return 0, err
@@ -2931,6 +2934,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			lockKeysMaterializedBeforeChecks = true
 		}
+	}
+
+	if filterCheckRows {
+		lastNodeID, err = appendCheckConstraintPlan(
+			builder,
+			bindCtx,
+			tableDef,
+			lastNodeID,
+			selectTag,
+			colName2Idx,
+			true,
+		)
+		if err != nil {
+			return 0, err
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
 	}
 
 	if onDupAction == plan.Node_FAIL {
@@ -2949,20 +2968,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	} else if onDupAction == plan.Node_IGNORE {
-		lastNodeID, err = appendCheckConstraintPlan(
-			builder,
-			bindCtx,
-			tableDef,
-			lastNodeID,
-			selectTag,
-			colName2Idx,
-			true,
-		)
-		if err != nil {
-			return 0, err
-		}
-		selectNode = builder.qry.Nodes[lastNodeID]
-
 		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
 		if err != nil {
 			return 0, err
@@ -4383,7 +4388,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE && onDupAction != plan.Node_UPDATE {
+	if !filterCheckRows && onDupAction != plan.Node_UPDATE {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,

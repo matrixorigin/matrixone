@@ -125,3 +125,55 @@ func TestInsertImageSinkScanRetainsAuxiliaryColumns(t *testing.T) {
 	require.True(t, n.TableDef.Cols[1].Hidden)
 	require.Equal(t, auxType, n.TableDef.Cols[1].Typ)
 }
+
+func TestLoadIgnoreCheckPrecedesIrregularMaintenance(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	table := mock.ctxt.tables["docs_ft"]
+	addPositiveCheck(t, mock, table.Name, "payload")
+	unique := *mock.ctxt.tables["dept"].Indexes[0]
+	unique.IndexName = "uk_body_payload"
+	unique.Parts = []string{"body", "payload"}
+	table.Indexes = append(table.Indexes, &unique)
+	idxTable := mock.ctxt.tables[unique.IndexTableName]
+	idxTable.Cols[idxTable.Name2ColIndex[catalog.IndexTablePrimaryColName]].Typ = table.Cols[0].Typ
+	p, err := runOneStmt(mock, t, "load data inline format='csv', data='1,alpha,-1' ignore into table docs_ft fields terminated by ',' (id,body,payload)")
+	require.NoError(t, err)
+	q := p.GetQuery()
+	assertEverySinkStepHasConsumer(t, q)
+	var reachesCheck func(int32) bool
+	reachesCheck = func(id int32) bool {
+		n := q.Nodes[id]
+		if n.NodeType == planpb.Node_FILTER && n.FilterIsBarrier {
+			for _, expr := range n.FilterList {
+				if exprContainsFuncName(expr, "_check_constraint_assert") {
+					return true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if reachesCheck(child) {
+				return true
+			}
+		}
+		for _, step := range n.SourceStep {
+			if reachesCheck(q.Steps[step]) {
+				return true
+			}
+		}
+		return false
+	}
+	writes, tokenizers := 0, 0
+	for id := range reachableODKUPlanNodes(q) {
+		n := q.Nodes[id]
+		if n.NodeType == planpb.Node_MULTI_UPDATE {
+			writes++
+			require.True(t, reachesCheck(id), "base and index writes must read filtered rows")
+		}
+		if n.NodeType == planpb.Node_APPLY {
+			tokenizers++
+			require.True(t, reachesCheck(id), "fulltext tokenization must read filtered rows")
+		}
+	}
+	require.Positive(t, writes)
+	require.Positive(t, tokenizers)
+}
