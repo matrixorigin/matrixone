@@ -94,6 +94,8 @@ func TestUserVariableAssignmentRejectsAmbiguousOrderAndLimit(t *testing.T) {
 	}{
 		{name: "order", sql: "select @rank := 1 order by 1", want: "ORDER BY with user-variable assignment"},
 		{name: "limit", sql: "select @rank := 1 limit 1", want: "LIMIT with user-variable assignment"},
+		{name: "limit expression", sql: "select 1 limit (@rank := 1)", want: "LIMIT/OFFSET"},
+		{name: "offset expression", sql: "select 1 limit 1 offset (@rank := 1)", want: "LIMIT/OFFSET"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
@@ -106,6 +108,17 @@ func TestUserVariableAssignmentRejectsAmbiguousOrderAndLimit(t *testing.T) {
 			require.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+func TestUserVariableAssignmentRejectsParenthesizedUnion(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "(select @rank := 1) union all (select 2)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UNION")
 }
 
 func TestUserVariableAssignmentRejectsMultipleProjectionAssignments(t *testing.T) {
@@ -405,6 +418,10 @@ func TestSelectContainsUserVariableAssignmentAcrossStatements(t *testing.T) {
 		&tree.SelectClause{Having: &tree.Where{Expr: assignment}},
 		true,
 	)))
+	parenUnion := &tree.ParenSelect{Select: &tree.Select{
+		Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: assignment}}},
+	}}
+	require.True(t, containsUserVarAssignmentInSelectStatement(parenUnion))
 	require.True(t, containsUserVarAssignmentInSelectStatement(tree.NewValuesClause([]tree.Exprs{{assignment}})))
 	require.False(t, containsUserVarAssignmentInSelectStatement(nil))
 }

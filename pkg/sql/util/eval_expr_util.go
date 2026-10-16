@@ -146,6 +146,17 @@ func GenVectorByVarValueWithAllocation(
 		return vec, err
 	}
 	strVal := getVal(val)
+	// Timestamp values are stored in the statement overlay as their native
+	// UTC-backed representation.  Timestamp.String includes a trailing
+	// " UTC" marker for diagnostics, which is not accepted by ParseTimestamp
+	// when the value is reconstructed for a later user-variable read.  Format
+	// the native value through the session timezone and scale, matching the
+	// frontend result conversion path.
+	if typ.Oid == types.T_timestamp {
+		if timestamp, ok := val.(types.Timestamp); ok {
+			strVal = timestamp.String2(sessionTimeZone(proc), typ.Scale)
+		}
+	}
 	// JSON values are stored in the vector's binary JSON representation rather
 	// than as their display string.  Route them through the typed setter just
 	// like fixed-width values; otherwise DecodeJson sees the raw text as an

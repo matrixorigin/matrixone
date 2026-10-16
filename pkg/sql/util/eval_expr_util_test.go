@@ -142,6 +142,23 @@ func TestGenVectorByVarValueTimestampUsesSessionTimeZone(t *testing.T) {
 	require.Equal(t, "2026-01-01 00:00:00", utcGot.String2(time.UTC, typ.Scale))
 }
 
+func TestGenVectorByVarValueTimestampNativeValueRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionTZ := time.FixedZone("UTC+8", 8*60*60)
+	proc.Base.SessionInfo.TimeZone = sessionTZ
+
+	typ := types.T_timestamp.ToType()
+	want, err := types.ParseTimestamp(sessionTZ, "2026-01-01 00:00:00", typ.Scale)
+	require.NoError(t, err)
+	vec, err := GenVectorByVarValue(proc, typ, want)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(proc.Mp()) })
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
+	require.Equal(t, want, got)
+	require.Equal(t, "2026-01-01 00:00:00", got.String2(sessionTZ, typ.Scale))
+}
+
 func TestGenVectorByVarValueInternalFixedTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	blockid := types.BuildTestBlockid(11, 22)
