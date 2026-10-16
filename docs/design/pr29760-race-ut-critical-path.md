@@ -14,6 +14,158 @@ by `gpt-6.1-sol`, reasoning `xhigh`, in design session
 its own overall review and validation. This revision supersedes the scheduling
 snapshot assumption in [UT racing owner costs](ut-race-owner-costs.md).
 
+## Eight-batch issues execution (2026-10-14)
+
+This amendment changes the Make/CI issues default to eight round-robin batches,
+with at most two test processes. Each process retains a complete two-CN cluster
+and all selected roots, subtests, assertions and race instrumentation. One or
+four batches remain serial by default; direct script invocation still defaults
+to one batch. Embedded execution remains serial. The new Make default disables
+embedded prebuild and uses its existing full-scope `go test -race -p1` path.
+One/four-batch rollback modes and explicit embedded-pool users retain their
+previous prebuild default; callers can still override `UT_PREBUILD_EMBEDDED`.
+
+The existing partitioner, process admission, dispatcher, shared package deadline,
+TestMain guard and failure/drain owners remain authoritative. Eight batches
+must enter the existing batched dispatch, rather than the ordinary package path.
+The eight-batch pool scopes `GOMAXPROCS=2` to issues execution after preparation.
+It restores the caller's environment on return and does not cap compilation.
+The default no longer overlaps an embedded compiler with two issues clusters.
+Four-batch pool opt-in retains its previous CPU policy.
+
+The cost being addressed is long process lifetime plus serialized independent
+root groups. Four pooled batches alone improved time but retained more memory.
+Shorter generations reduced measured total CPU and memory occupancy enough to
+offset four additional cluster starts in the local experiment:
+
+| Issues execution | Wall seconds | CPU seconds | Peak PSS GiB | PSS integral GiB-seconds |
+|---|---:|---:|---:|---:|
+| Four serial, GOMAXPROCS=8 | 570.93 | 926.20 | 2.84 | 939.77 |
+| Four pooled, GOMAXPROCS=2 | 304.36 | 761.96 | 4.14 | 833.49 |
+| Eight pooled, GOMAXPROCS=2 | 301.21 | 717.60 | 3.27 | 677.00 |
+
+These are standalone same-machine race measurements, not completed CI timings.
+The eight-batch phase peak still exceeds the serial phase peak. Overall memory
+acceptance therefore requires the combined issues/prebuild peak to stay below
+the unchanged whole-run peak, with lower CPU and anonymous/PSS occupancy. The
+unchanged same-machine SQL package supplies a measured peak floor; comparing
+different runners or anonymous memory against total cgroup memory is invalid.
+
+The first combined experiment included ten-package prebuild in both arms,
+identical starting Go caches, an actual eight-CPU quota, an 8-GiB memory limit
+and no swap. It improved elapsed time from 673.10 to 367.37 seconds and CPU
+from 1040.61 to 848.50 seconds, but failed the memory gate: process PSS peak
+rose from 4.41 to 5.72 GiB and cgroup max events rose from zero to 965. Neither
+arm had an OOM. The peak occurred during compilation; after compilation the
+candidate PSS peak was 3.13 GiB. That overlap is rejected for the new default.
+
+The revised resource experiment runs issues first and then compiles all ten
+embedded packages, retaining their binaries as a conservative resource proxy.
+It is not a timing measurement of complete embedded test execution. Production
+uses the existing ordinary embedded command, which compiles and executes with
+`-p1` and removes completed test work directories. No new scheduling state,
+resource fallback or cleanup path is introduced. Compiler budget stays eight.
+The revised experiment passed the resource gate at base `a33dcfb2e5`:
+
+| Issues plus ten-package compilation | Wall seconds | CPU seconds | Peak PSS GiB | Peak cgroup GiB | PSS integral GiB-seconds |
+|---|---:|---:|---:|---:|---:|
+| Four serial, overlapping prebuild | 673.10 | 1040.61 | 4.41 | 7.51 | 1277.67 |
+| Eight pooled, overlapping prebuild (rejected) | 367.37 | 848.50 | 5.72 | 8.00 | 976.67 |
+| Eight pooled, compilation afterward | 385.92 | 802.20 | 3.31 | 5.48 | 812.60 |
+
+The final arm had zero max/OOM events and zero CPU throttling. Anonymous memory
+occupancy fell 32.4%; some/full memory PSI fell from 11.60/11.51 seconds to
+1.08/1.08 seconds. Its issues-phase anonymous peak exceeds the serial issues
+phase, but remains below the unchanged SQL package's measured anonymous peak.
+The process and cgroup peaks both decrease against the combined baseline.
+Inventory comparison passed all 179 roots and 1548 terminal tests, with no
+failures, skips, duplicate terminals or malformed JSON. All ten compiles passed.
+
+Recent CI issues phases took 28–35 minutes, while prebuild overlapped about
+two minutes. Applying the standalone local improvement and subtracting that
+lost overlap projects roughly 11–14 minutes of CI saving. This is an estimate;
+no completed optimized CI run or full embedded-wave time is claimed. Design
+and source review used `gpt-6.1-sol` with `xhigh` reasoning.
+
+All 179 roots and 1548 terminal test results must remain; four subtest names contain a runtime PITR timestamp, which is the
+only normalization allowed in result-name comparison. No runtime failure reruns
+completed roots. `UT_ISSUES_BATCHES=4 UT_ISSUES_BATCH_PARALLEL=1` restores the
+previous execution policy.
+
+The following amendments retain the historical decisions and measurements;
+their serial Make default is superseded only by this bounded eight-batch mode.
+
+## Audited DML/SQL generations (2026-10-14, design v1)
+
+`gpt-6.1-sol`, reasoning `xhigh`, reviewed this design in
+`/root/ut_race_design_20261014`. Adoption of a new default requires the complete
+embedded-wave resource comparison below; isolated package results are insufficient.
+
+The target is the ordinary embedded stage's long process lifetimes and serial
+independent roots. DML has 44 roots and 200 terminal tests; SQL has 41 roots and
+270 terminal tests. Keep every topology, datum and oracle. DML's existing
+intra-root parallelism is preserved. SQL's real TestMain must execute for inventory
+and every batch, close its canonical fixture and propagate cleanup failure.
+
+Reuse the issues batching executor, partitioner, shared package deadline, process
+admission, report consumption and drain protocol. Its caller supplies batch
+count, process limit and execution CPU budget; preparation retains the caller's
+budget. Derive checkpoint stage from the current command. Unknown TestMain
+contracts remain ineligible; the exact SQL package receives an internal
+cleanup-only permission following its lifecycle audit. There is no environment
+override for this permission and no inferred parsing of a TestMain body.
+
+One `UT_EMBEDDED_BATCHES=1|4` option governs audited DML/SQL roots on the ordinary
+path. `1` restores the exact original full-scope Go command and order. `4` removes
+only those audited packages present in the scope, runs all remaining packages in
+one ordinary command, then compiles and executes each audited package in order:
+four round-robin batches, at most two processes, GOMAXPROCS=2 per process.
+Do not invoke Go with an empty ordinary scope. Explicit prebuild execution keeps
+its existing package policy. Make defaults to `4` after the complete-wave and
+full-UT gates below passed; direct script invocation retains `1`.
+
+Publish a batched report/binary only after the preceding command joins; consume
+and release them before the next package. Ordinary test failure still executes
+the remaining selected packages and retains failure. Status 125 or failed drain
+stops admission and preserves owned diagnostics. Preparation may fall back to
+the current package before its first root; runtime failure never retries roots
+or reruns the complete scope. No new scheduler, background owner or resource
+fallback is introduced.
+
+The SQL experiment exposed account PITR retained by CDCNoPrimaryKeyRejected.
+LegacyPartitionColumnLimitCopy passes alone but fails immediately after CDC:
+the retained PITR enables historical lineage's intentional DROP/ADD restriction.
+Clean CDC and PITR in the existing deferred cleanup before dropping its database;
+do not alter production lineage policy, reset the fixture or reorder roots.
+Also check DML's streaming result error after iteration, preserving both EXCEPT
+directions and the zero-row oracle.
+
+Before adoption, compare issues plus the complete ten-package embedded wave,
+including compilation, with identical cache starting conditions, eight CPU
+cores, 16 GiB, and no swap. CI run `38538693413` records an eight-CPU quota and
+`memory.max=17179869184`; use that actual runner budget for both variants. The
+initial 8 GiB baseline encountered memory-limit events and was stopped; its
+partial timing is not performance evidence.
+
+While the issues optimization remains in this unmerged PR, compare the original
+four serial batches with overlapping prebuild against the combined proposed
+policy. Count that complete difference once. Historical issues savings cannot
+be added again; after their merge, any further optimization needs the new
+baseline. Run variants sequentially. Require identical root/subtest terminal
+maps, retained failure propagation, lower CPU and memory occupancy, and no
+increase in whole-wave memory peak or max/OOM events. Tests must cover rollback,
+scope subsets, budgets, TestMain cleanup failure, preparation fallback and
+undrained ownership through the existing runner harness. Before delivery, also
+run the complete repository race UT through the real Make entry point and
+incremental SCA for the changed package closure.
+
+The matched eight-CPU/16-GiB pair saves 454.06 seconds (1717.49 to 1263.43)
+for issues plus all ten embedded packages, with identical 475 roots and 2636
+terminal tests. CPU falls 13.38%, cgroup peak 15.42%, and PSS occupancy 16.65%.
+This measures the changed wave; the whole-CI ten-minute target is unverified.
+The complete local Make race selection subsequently passes with explicit batch
+count `4`, and incremental SCA passes for all five changed Go packages.
+
 ## PR29795 amendment: optional bounded process waves
 
 Implementation: [#29795](https://github.com/matrixorigin/matrixone/pull/29795).

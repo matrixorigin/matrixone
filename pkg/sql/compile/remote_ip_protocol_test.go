@@ -324,9 +324,9 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 			require.NoError(t, err)
 			requiredVersion := defines.MORPCVersion101
 			if name == "concat" || name == "concat_ws" {
-				requiredVersion = defines.MORPCVersion113
+				requiredVersion = defines.MORPCVersion117
 			}
-			require.Equal(t, requiredVersion == defines.MORPCVersion113, features.JSONOpaqueTextContracts)
+			require.Equal(t, requiredVersion == defines.MORPCVersion117, features.JSONOpaqueTextContracts)
 			require.Equal(t, requiredVersion, floor)
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			op := projection.NewArgument()

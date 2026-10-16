@@ -92,6 +92,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return 0, moerr.NewNotSupportedNoCtx("persisted decimal statistical result contract requires rebinding")
+	}
 	if features.InvalidTemporalResultContract {
 		return 0, moerr.NewNotSupportedNoCtx("persisted temporal result vector contract mismatch requires rebinding")
 	}
@@ -139,10 +142,16 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.DecimalStatisticalResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
 	return requiredVersion, nil
 }

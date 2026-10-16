@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,23 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, "DISABLED")
 	})
+}
+
+func TestWindowPartitionAlgorithmVariable(t *testing.T) {
+	sv, ok := gSysVarsDefs["window_partition_algorithm"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, "SORT", sv.Default)
+
+	for _, value := range []string{"cost", "sort", "hash"} {
+		converted, err := sv.Type.Convert(value)
+		assert.NoError(t, err)
+		assert.Equal(t, strings.ToUpper(value), converted)
+	}
+	_, err := sv.Type.Convert("invalid")
+	assert.Error(t, err)
 }
 
 func TestSystemVariableSetTypeBits2String(t *testing.T) {

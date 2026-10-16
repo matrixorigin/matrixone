@@ -986,7 +986,7 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion113JSONStringConsumerOverload(t *testing.T) {
+func TestRequiresMORPCVersion117JSONStringConsumerOverload(t *testing.T) {
 	consumer := func(functionID, overloadID int32) *Expr {
 		return &Expr{
 			Typ: Type{Id: 61},
@@ -998,11 +998,11 @@ func TestRequiresMORPCVersion113JSONStringConsumerOverload(t *testing.T) {
 
 	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
 		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
-			required, err := RequiresMORPCVersion113JSONStringConsumerOverload(consumer(functionID, 1))
+			required, err := RequiresMORPCVersion117JSONStringConsumerOverload(consumer(functionID, 1))
 			require.NoError(t, err)
 			require.True(t, required)
 			for _, overloadID := range []int32{0, 2} {
-				required, err = RequiresMORPCVersion113JSONStringConsumerOverload(consumer(functionID, overloadID))
+				required, err = RequiresMORPCVersion117JSONStringConsumerOverload(consumer(functionID, overloadID))
 				require.NoError(t, err)
 				require.False(t, required)
 			}
@@ -1010,7 +1010,7 @@ func TestRequiresMORPCVersion113JSONStringConsumerOverload(t *testing.T) {
 	}
 
 	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
-		required, err := RequiresMORPCVersion113JSONStringConsumerOverload(control)
+		required, err := RequiresMORPCVersion117JSONStringConsumerOverload(control)
 		require.NoError(t, err)
 		require.False(t, required)
 	}
@@ -1150,4 +1150,22 @@ func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
 
 func TestJSONOpaqueRendererDoesNotExpandSharedStringTypes(t *testing.T) {
 	require.False(t, isPlanMySQLStringType(72))
+}
+
+func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
+	for _, id := range []int64{583, 598} {
+		expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32}}}}
+		owner := &TableDef{Cols: []*ColDef{{Default: &Default{Expr: expr}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded TableDef
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, id == 598, features.CalendarIntervalNormalization)
+		if id == 598 {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
 }

@@ -2720,10 +2720,10 @@ func TestDerivedGeometryRejectsMalformedCollectionMember(t *testing.T) {
 		{name: "is_simple", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "envelope", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "centroid", fn: StCentroid, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
-		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid polygon payload"},
-		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid geometry payload"},
+		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4831,22 +4831,85 @@ func TestSpace(t *testing.T) {
 func TestSpaceHonorsStringLimitAndNegativeCount(t *testing.T) {
 	require.Len(t, mustFillSpaceNumber(t, uint64(MaxAllowedValue)), MaxAllowedValue)
 	require.Empty(t, mustFillSpaceNumber(t, int64(-1)))
-	_, err := FillSpaceNumber(uint64(MaxAllowedValue + 1))
-	require.Error(t, err)
+	require.Empty(t, mustFillSpaceNumber(t, int64(math.MinInt64)))
+	for _, value := range []uint64{MaxAllowedValue + 1, math.MaxInt64, math.MaxUint64} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %d: %v", value, err)
+	}
+	for _, value := range []float64{MaxAllowedValue + 1, math.NaN(), math.Inf(1)} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %v: %v", value, err)
+	}
 
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	counts := []uint64{0, 8000, 8001, 10000, 65535, 65536, 100000}
+	want := make([]string, len(counts))
+	for i, count := range counts {
+		want[i] = strings.Repeat(" ", int(count))
+	}
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8000, 8001, 10000},
-				[]bool{false, false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(), counts, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{strings.Repeat(" ", 8000), strings.Repeat(" ", 8001), strings.Repeat(" ", 10000)},
-			[]bool{false, false, false}),
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, want, nil),
 		SpaceNumber[uint64],
 	)
+	succeeded, info := testCase.RunAndFree()
+	require.True(t, succeeded, info)
+}
+
+func TestSpaceLargeResultTypesAndDecimalCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for id, oid := range []types.T{types.T_uint64, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			overload, err := GetFunctionById(proc.Ctx, encodeOverloadID(SPACE, int32(id)))
+			require.NoError(t, err)
+			resultType := overload.retType([]types.Type{oid.ToType()})
+			require.Equal(t, types.New(types.T_text, types.MaxLongTextLen, 0), resultType)
+			if !oid.IsDecimal() {
+				return
+			}
+			inputType := types.New(oid, 18, 1)
+			var values any
+			switch oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal64{value}
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal128{value}
+			case types.T_decimal256:
+				value, err := types.ParseDecimal256("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal256{value}
+			}
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(inputType, values, nil)},
+				NewFunctionTestResult(resultType, false, []string{strings.Repeat(" ", 65536)}, nil),
+				overload.newOp())
+			succeeded, info := testCase.RunAndFree()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
+func TestSpaceSkipsNullAndMaskedLargeCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{65536, MaxAllowedValue + 1, MaxAllowedValue + 1, -1},
+			[]bool{false, true, false, false})},
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false,
+			[]string{strings.Repeat(" ", 65536), "", "", ""}, []bool{false, true, true, false}),
+		SpaceNumber[int64]).WithSelectList(&FunctionSelectList{
+		AnyNull: true, SelectList: []bool{true, true, false, true},
+	})
 	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
@@ -6384,6 +6447,29 @@ func TestUnhex(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30230: MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) when
+// UNHEX receives malformed hexadecimal input, while still returning NULL.
+func TestUnhexWarningForInvalidHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zz", "4d"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false,
+			[]string{"", "M"}, []bool{true, false}),
+		Unhex,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, uint16(moerr.ER_WRONG_VALUE_FOR_TYPE), warnings.warnings[0].code)
+	require.Equal(t, "Incorrect string value: 'zz' for function unhex", warnings.warnings[0].msg)
 }
 
 // ToBase64
@@ -8835,6 +8921,36 @@ func TestMicrosecond(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30239: MySQL reports the nonnegative fractional part (0-999999)
+// even for negative TIME values; Time.MicroSec keeps the raw int64 sign
+// and must not leak it into the MICROSECOND result.
+func TestMicrosecondNegativeTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// -00:00:01.123456 stored as raw microseconds
+	timeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.Time(-1123456)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		TimeToMicrosecond,
+	)
+	succeed, info := timeCase.RunAndFree()
+	require.True(t, succeed, info)
+
+	stringCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01.123456"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		StringToMicrosecond,
+	)
+	succeed, info = stringCase.RunAndFree()
+	require.True(t, succeed, info)
 }
 
 // TestStringToMicrosecond tests StringToMicrosecond function with string inputs
@@ -13384,6 +13500,150 @@ func TestCalendarNumericMaskedResults(t *testing.T) {
 			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_int32.ToType(), false, tc.want, []bool{true, false}), tc.fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStIsValidRepeatedVertices(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		inputs := []FunctionTestInput{NewFunctionTestInput(oid.ToType(), []string{"LINESTRING(0 0,0 0,1 0,1 0)", "LINESTRING(0 0,1 0,0 0)", "LINESTRING(0 0,0 0)", "LINESTRING(0 0,0.0000000001 0)", "LINESTRING(0 0,1 0)"}, []bool{false, false, false, false, true})}
+		fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false, true, false}, []bool{false, false, false, false, true}), StIsValid)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
+func TestGeometryStandardWKBPreservesStoredStructure(t *testing.T) {
+	// Previously admitted malformed WKB remains exportable. Constructors must
+	// reject re-admission, rather than silently repairing the historical ring.
+	malformed := geo.Polygon{Rings: [][]geo.Coord{{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}}}
+	payload := geo.WriteWKB(malformed)
+	standard, srid, err := GeometryPayloadToStandardWKB(payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Zero(t, srid)
+	require.Equal(t, payload, standard)
+	require.Error(t, validateGeometryTextForStorage(geo.WriteWKT(malformed), defaultMaxPointsInGeometry))
+	// An empty child does not justify trying the wrong coordinate codec first.
+	g := geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.Point{X: 1.0000001192092896, Y: -2.5}}}
+	compact, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	typ := types.T_geometry32.ToType()
+	typ.Width = 4327
+	standard, srid, err = GeometryPayloadToStandardWKB(compact, typ)
+	require.NoError(t, err)
+	require.Equal(t, uint32(4326), srid)
+	decoded, err := geo.ReadWKB(standard)
+	require.NoError(t, err)
+	require.Equal(t, g, decoded)
+	_, _, err = GeometryPayloadToStandardWKB(compact, types.T_geometry.ToType())
+	require.Error(t, err)
+}
+
+func TestGeometryStandardWKBPreservesHistoricalText(t *testing.T) {
+	ring := []geo.Coord{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}
+	polygon := geo.Polygon{Rings: [][]geo.Coord{ring}}
+	for _, g := range []geo.Geometry{polygon, geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.MultiPolygon{Polygons: []geo.Polygon{{}, polygon}}}}} {
+		for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+			for _, srid := range []int32{0, 4326} {
+				typ := oid.ToType()
+				typ.Width = srid + 1
+				wkb := geo.WriteWKB(g)
+				if oid == types.T_geometry32 {
+					var err error
+					wkb, err = geo.WriteWKBFloat32(g)
+					require.NoError(t, err)
+				}
+				for _, payload := range [][]byte{wkb, []byte(geo.WriteWKT(g)), []byte("SRID=999;" + geo.WriteWKT(g))} {
+					original := bytes.Clone(payload)
+					standard, gotSRID, err := GeometryPayloadToStandardWKB(payload, typ)
+					require.NoError(t, err)
+					require.Equal(t, uint32(srid), gotSRID)
+					decoded, err := geo.ReadWKB(standard)
+					require.NoError(t, err)
+					require.Equal(t, g, decoded)
+					require.Equal(t, original, payload)
+					_, _, _, _, err = validateGeometryPayload(payload, defaultMaxPointsInGeometry)
+					require.Error(t, err, "re-admission stays strict")
+				}
+			}
+		}
+	}
+	for _, text := range []string{"POLYGON((0 0,1 0,1))", "POINT(1 2) trailing", "POINT(1 2 3)", "LINESTRING(0 0,)"} {
+		_, _, err := GeometryPayloadToStandardWKB([]byte(text), types.T_geometry.ToType())
+		require.Error(t, err)
+	}
+}
+
+func TestAppendGeometryStandardWKB(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, payload string
+		oid           types.T
+	}{
+		{"standard", "0101000000000000000000f03f0000000000000040", types.T_geometry},
+		{"big endian", "00000000013ff00000000000004000000000000000", types.T_geometry},
+		{"float32", "01010000000000803f00000040", types.T_geometry32},
+		{"cached WKT", "POINT(1 2)", types.T_geometry},
+		{"cached EWKT", "SRID=999;POINT(1 2)", types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(tc.payload)
+			if strings.Contains(tc.name, "endian") || tc.name == "standard" || tc.name == "float32" {
+				payload, err = hex.DecodeString(tc.payload)
+				require.NoError(t, err)
+			}
+			original := bytes.Clone(payload)
+			typ := tc.oid.ToType()
+			typ.Width = 4327
+			dst := make([]byte, 4, 4+len(point))
+			copy(dst, []byte{1, 2, 3, 4})
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, payload, typ)
+			require.NoError(t, err)
+			require.Equal(t, uint32(4326), srid)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, append([]byte{1, 2, 3, 4}, point...), out)
+			require.Equal(t, original, payload)
+		})
+	}
+	// Mixed byte orders and a noncanonical NaN payload still normalize through
+	// the existing reader/emitter, rather than passing stored bytes through.
+	payload, err := hex.DecodeString("01070000000200000000000000013ff000000000000040000000000000000101000000000000000000f87f000000000000f87f")
+	require.NoError(t, err)
+	want, err := hex.DecodeString("0107000000020000000101000000000000000000f03f00000000000000400101000000010000000000f87f010000000000f87f")
+	require.NoError(t, err)
+	out, _, err := AppendGeometryPayloadToStandardWKB(nil, payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Equal(t, want, out)
+}
+
+func TestAppendGeometryStandardWKBErrorAtomicity(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	countInvalid, err := hex.DecodeString("0102000000ffffffff")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		oid     types.T
+	}{
+		{"missing type", point, types.T_varchar},
+		{"truncated", point[:len(point)-1], types.T_geometry},
+		{"invalid count", countInvalid, types.T_geometry},
+		{"trailing", append(bytes.Clone(point), 42), types.T_geometry},
+		{"malformed text", []byte("POLYGON((0 0,1 0,1))"), types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backing := bytes.Repeat([]byte{0xaa}, 64)
+			original := bytes.Clone(backing)
+			dst := backing[:4]
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, tc.payload, tc.oid.ToType())
+			require.Error(t, err)
+			require.Zero(t, srid)
+			require.Equal(t, dst, out)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, original, backing, "including spare capacity")
 		})
 	}
 }

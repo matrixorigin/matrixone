@@ -273,3 +273,75 @@ DROP TABLE bitwise_ctas_xor_29323;
 DROP TABLE bitwise_ctas_or_29323;
 DROP TABLE bitwise_ctas_and_29323;
 DROP TABLE bitwise_ctas_src_29323;
+
+-- ENUM bit aggregates consume member ordinals, including through query boundaries (#30198).
+DROP TABLE IF EXISTS bitwise_enum_30198;
+DROP TABLE IF EXISTS bitwise_enum_result_30198;
+DROP TABLE IF EXISTS bitwise_enum_edge_30198;
+CREATE TABLE bitwise_enum_30198 (id INT PRIMARY KEY, g INT, e ENUM('z','a','m'), n ENUM('8','16'));
+INSERT INTO bitwise_enum_30198 VALUES (1,1,'z','8'), (2,1,'a','16'), (3,2,'z','8'), (4,2,'z','8'), (5,3,NULL,NULL);
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(e + 0) AS a, BIT_OR(e + 0) AS o, BIT_XOR(e + 0) AS x FROM bitwise_enum_30198;
+SELECT g, BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198 GROUP BY g ORDER BY g;
+SELECT id, BIT_AND(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a, BIT_OR(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS o, BIT_XOR(e) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS x FROM bitwise_enum_30198 ORDER BY id;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT e FROM bitwise_enum_30198) d;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT e FROM bitwise_enum_30198 ORDER BY id LIMIT 4) d;
+CREATE TABLE bitwise_enum_result_30198 AS SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198;
+SELECT a, o, x FROM bitwise_enum_result_30198;
+SELECT BIT_AND(n) AS a, BIT_OR(n) AS o, BIT_XOR(n) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(CAST(n AS CHAR)) AS a, BIT_OR(CAST(n AS CHAR)) AS o, BIT_XOR(CAST(n AS CHAR)) AS x FROM bitwise_enum_30198;
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_30198 WHERE id < 0;
+PREPARE bitwise_enum_stmt_30198 FROM 'SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM (SELECT id, e FROM bitwise_enum_30198) d WHERE id <= ?';
+SET @bitwise_enum_id_30198 = 4;
+EXECUTE bitwise_enum_stmt_30198 USING @bitwise_enum_id_30198;
+SET @bitwise_enum_id_30198 = 1;
+EXECUTE bitwise_enum_stmt_30198 USING @bitwise_enum_id_30198;
+DEALLOCATE PREPARE bitwise_enum_stmt_30198;
+SET @bitwise_enum_id_30198 = NULL;
+DROP TABLE bitwise_enum_result_30198;
+DROP TABLE bitwise_enum_30198;
+
+-- Empty labels and the INSERT IGNORE error member still have numeric ordinals.
+CREATE TABLE bitwise_enum_edge_30198 (id INT PRIMARY KEY, e ENUM('', '99'));
+INSERT INTO bitwise_enum_edge_30198 VALUES (1, ''), (2, '99');
+SELECT id, BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_edge_30198 GROUP BY id ORDER BY id;
+INSERT IGNORE INTO bitwise_enum_edge_30198 VALUES (3, 'invalid');
+SELECT BIT_AND(e) AS a, BIT_OR(e) AS o, BIT_XOR(e) AS x FROM bitwise_enum_edge_30198 WHERE id = 3;
+DROP TABLE bitwise_enum_edge_30198;
+
+-- BLOB bit aggregates preserve binary strings across aggregate consumers (#30240).
+-- UNION binary values retain BLOB identity with unknown width; declarations over 511 are rejected.
+DROP VIEW IF EXISTS bitwise_blob_values_30240;
+DROP TABLE IF EXISTS bitwise_blob_result_30240;
+DROP TABLE IF EXISTS bitwise_blob_column_30240;
+SELECT HEX(BIT_AND(b)) AS a, HEX(BIT_OR(b)) AS o, HEX(BIT_XOR(b)) AS x FROM (SELECT UNHEX('0F') b UNION ALL SELECT UNHEX('F0')) q;
+CREATE VIEW bitwise_blob_values_30240 AS SELECT 1 id, 1 g, UNHEX('0F') b UNION ALL SELECT 2,1,UNHEX('F0') UNION ALL SELECT 3,2,UNHEX('AA') UNION ALL SELECT 4,2,UNHEX(NULL);
+SELECT g, HEX(BIT_AND(b)) AS a, HEX(BIT_OR(b)) AS o, HEX(BIT_XOR(b)) AS x FROM bitwise_blob_values_30240 GROUP BY g ORDER BY g;
+SELECT id, HEX(BIT_AND(b) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS a, HEX(BIT_OR(b) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS o, HEX(BIT_XOR(b) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS x FROM bitwise_blob_values_30240 ORDER BY id;
+CREATE TABLE bitwise_blob_result_30240 AS SELECT BIT_AND(b) AS a, BIT_OR(b) AS o, BIT_XOR(b) AS x FROM bitwise_blob_values_30240;
+SELECT HEX(a) AS a, HEX(o) AS o, HEX(x) AS x FROM bitwise_blob_result_30240;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'bitwise_blob_result_30240' ORDER BY ordinal_position;
+SELECT OCTET_LENGTH(BIT_AND(b)) AS a, OCTET_LENGTH(BIT_OR(b)) AS o, OCTET_LENGTH(BIT_XOR(b)) AS x, BIT_AND(b) IS NULL AS n FROM bitwise_blob_values_30240 WHERE id = 4;
+SELECT OCTET_LENGTH(BIT_AND(b)) AS a, OCTET_LENGTH(BIT_OR(b)) AS o, OCTET_LENGTH(BIT_XOR(b)) AS x, BIT_OR(b) IS NULL AS n FROM bitwise_blob_values_30240 WHERE id < 0;
+SELECT OCTET_LENGTH(BIT_AND(b)) AS a, OCTET_LENGTH(BIT_OR(b)) AS o, OCTET_LENGTH(BIT_XOR(b)) AS x FROM (SELECT UNHEX('') b UNION ALL SELECT UNHEX('')) q;
+SELECT OCTET_LENGTH(BIT_AND(b)) AS a, OCTET_LENGTH(BIT_OR(b)) AS o, OCTET_LENGTH(BIT_XOR(b)) AS x FROM (SELECT UNHEX(REPEAT('FF',511)) b UNION ALL SELECT UNHEX(NULL)) q;
+SELECT BIT_AND(b) FROM (SELECT UNHEX(REPEAT('FF',512)) b UNION ALL SELECT UNHEX(NULL)) q;
+SELECT BIT_OR(b) FROM (SELECT UNHEX(REPEAT('FF',512)) b UNION ALL SELECT UNHEX(NULL)) q;
+SELECT BIT_XOR(b) FROM (SELECT UNHEX(REPEAT('FF',512)) b UNION ALL SELECT UNHEX(NULL)) q;
+SELECT BIT_OR(b) FROM (SELECT UNHEX('00') b UNION ALL SELECT UNHEX('0000')) q;
+SELECT HEX(BIT_AND(SUBSTRING(b,1,511))) = REPEAT('FF',511) AS bounded FROM (SELECT UNHEX(REPEAT('FF',512)) b UNION ALL SELECT UNHEX(NULL)) q;
+PREPARE bitwise_blob_stmt_30240 FROM 'SELECT HEX(BIT_XOR(b)) AS x FROM bitwise_blob_values_30240 WHERE id <= ?';
+SET @bitwise_blob_id_30240 = 2;
+EXECUTE bitwise_blob_stmt_30240 USING @bitwise_blob_id_30240;
+SET @bitwise_blob_id_30240 = 1;
+EXECUTE bitwise_blob_stmt_30240 USING @bitwise_blob_id_30240;
+DEALLOCATE PREPARE bitwise_blob_stmt_30240;
+SET @bitwise_blob_id_30240 = NULL;
+CREATE TABLE bitwise_blob_column_30240 (b BLOB);
+INSERT INTO bitwise_blob_column_30240 VALUES (UNHEX('0F'));
+SELECT BIT_AND(b) FROM bitwise_blob_column_30240;
+SELECT BIT_OR(b) FROM bitwise_blob_column_30240;
+SELECT BIT_XOR(b) FROM bitwise_blob_column_30240;
+DROP TABLE bitwise_blob_column_30240;
+DROP TABLE bitwise_blob_result_30240;
+DROP VIEW bitwise_blob_values_30240;

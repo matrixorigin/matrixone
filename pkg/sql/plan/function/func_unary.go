@@ -931,23 +931,18 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	// Similar, for ulonglong.
 	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
 
-	rounded := math.RoundToEven(val)
-	if rounded <= float64(math.MinInt64) {
-		return bitCountFromUint64(minInt64BitPattern), nil
-	}
-	if rounded < 0 {
-		return bitCountFromUint64(uint64(int64(rounded))), nil
-	}
-	if rounded >= ULLONG_MAX_DOUBLE {
+	if val >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
+	// MySQL truncates FLOAT/DOUBLE inputs toward zero before counting bits.
+	truncated := math.Trunc(val)
 	// Converting a negative float directly to uint64 is undefined in Go (the
 	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
 	// so route negatives through int64 first and reinterpret the bit pattern.
-	if rounded < 0 {
-		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+	if truncated < 0 {
+		return bitCountFromSignedInt64Pattern(int64(truncated)), nil
 	}
-	return bitCountFromUint64(uint64(rounded)), nil
+	return bitCountFromUint64(uint64(truncated)), nil
 }
 
 func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
@@ -1547,15 +1542,8 @@ func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // interoperable standard WKB.
 func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		wkt, _, _, err := decodeGeometryPayload(v)
-		if err != nil {
-			return nil, err
-		}
-		g, perr := geo.ParseWKT(wkt)
-		if perr != nil {
-			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
-		}
-		return geo.WriteWKB(g), nil
+		wkb, _, err := GeometryPayloadToStandardWKB(v, *ivecs[0].GetType())
+		return wkb, err
 	}, selectList)
 }
 
@@ -2334,6 +2322,37 @@ func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined
 	return s, 0, false, nil
 }
 
+// GeometryPayloadToStandardWKB converts using declared precision, without a WKT
+// round trip for stored WKB. SRID remains authoritative in the result type.
+func GeometryPayloadToStandardWKB(payload []byte, typ types.Type) ([]byte, uint32, error) {
+	return AppendGeometryPayloadToStandardWKB(nil, payload, typ)
+}
+
+// AppendGeometryPayloadToStandardWKB decodes before appending, so errors leave
+// dst untouched. The caller owns dst, which must not alias borrowed payload
+// storage. Source precision and SRID remain authoritative in typ.
+func AppendGeometryPayloadToStandardWKB(dst, payload []byte, typ types.Type) ([]byte, uint32, error) {
+	if typ.Oid != types.T_geometry && typ.Oid != types.T_geometry32 {
+		return dst, 0, moerr.NewInvalidInputNoCtx("missing geometry source type")
+	}
+	var g geo.Geometry
+	var err error
+	if payloadIsWKB(payload) {
+		if typ.Oid == types.T_geometry32 {
+			g, err = geo.ReadWKBFloat32(payload)
+		} else {
+			g, err = geo.ReadWKB(payload)
+		}
+	} else {
+		wkt, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
+		g, err = geo.ParseWKTForSerialization(wkt)
+	}
+	if err != nil {
+		return dst, 0, err
+	}
+	return geo.AppendWKB(dst, g), sridFromTypeWidth(typ.Width), nil
+}
+
 func GeometryPayloadToText(payload []byte) (string, error) {
 	wkt, _, _, err := decodeGeometryPayload(payload)
 	if err != nil {
@@ -2493,26 +2512,18 @@ func validatePolygonRingTextContent(content string) error {
 	if err != nil {
 		return err
 	}
-	if len(items) < 3 {
-		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-
-	points := make([]geometryPoint2D, 0, len(items))
-	for _, item := range items {
+	var first, last geo.Coord
+	for i, item := range items {
 		x, y, err := parseCoordinatePairWithError(item, "invalid geometry payload")
 		if err != nil {
 			return err
 		}
-		points = append(points, geometryPoint2D{x: x, y: y})
+		last = geo.Coord{X: x, Y: y}
+		if i == 0 {
+			first = last
+		}
 	}
-
-	if len(points) > 1 && sameGeometryPoint(points[0], points[len(points)-1]) {
-		points = points[:len(points)-1]
-	}
-	if len(points) < 3 {
-		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-	return nil
+	return geo.ValidateLinearRingStructure(len(items), first, last)
 }
 
 func validateMultiPointGeometryTextContent(content string, depth int) error {
@@ -2586,6 +2597,9 @@ func validateMultiPolygonGeometryTextContent(content string) error {
 	}
 	for _, item := range items {
 		item = strings.TrimSpace(item)
+		if strings.EqualFold(item, "EMPTY") {
+			continue
+		}
 		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
@@ -2764,6 +2778,9 @@ func multiPolygonPointCountFromTextContent(content string) (int64, error) {
 	total := int64(0)
 	for _, item := range items {
 		item = strings.TrimSpace(item)
+		if strings.EqualFold(item, "EMPTY") {
+			continue
+		}
 		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
 			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
@@ -5050,12 +5067,12 @@ func lineStringIsValidFromPayload(payload []byte) (bool, error) {
 		}
 		return false, err
 	}
-	for i := 0; i < len(points)-1; i++ {
-		if sameGeometryPoint(points[i], points[i+1]) {
-			return false, nil
+	for _, point := range points[1:] {
+		if point != points[0] {
+			return true, nil
 		}
 	}
-	return true, nil
+	return false, nil
 }
 
 func polygonIsValidFromPayload(payload []byte) (bool, error) {
@@ -6245,11 +6262,10 @@ func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 const (
-	// SPACE returns a VARCHAR. Keep the execution bound aligned with the
-	// largest inline SQL string instead of an unrelated, smaller constant.
-	// The bound is still finite: a count supplied by a table must not turn one
-	// row into an unbounded allocation.
-	MaxAllowedValue = types.MaxVarcharLen
+	// Bound generated spaces by the supported large string result size,
+	// rather than the declared capacity of a VARCHAR column. Check this
+	// before converting the count to int or allocating the result.
+	MaxAllowedValue = types.MaxBlobLen
 )
 
 func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
@@ -7874,7 +7890,13 @@ func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 // TimeToMicrosecond returns the microseconds from time (0-999999)
 func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
-		return v.MicroSec()
+		// MySQL returns the nonnegative fractional part (0-999999) even for
+		// negative TIME values; Time.MicroSec keeps the raw int64 sign.
+		ms := v.MicroSec()
+		if ms < 0 {
+			ms = -ms
+		}
+		return ms
 	}, selectList)
 }
 
@@ -7923,7 +7945,13 @@ func StringToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Try parsing as TIME first (most common format for microsecond)
 		timeVal, err1 := types.ParseTime(str, scale)
 		if err1 == nil {
-			if err := rs.Append(timeVal.MicroSec(), false); err != nil {
+			// A negative TIME literal must not leak its sign into the
+			// fractional part; MySQL reports 0-999999.
+			ms := timeVal.MicroSec()
+			if ms < 0 {
+				ms = -ms
+			}
+			if err := rs.Append(ms, false); err != nil {
 				return err
 			}
 			continue
@@ -9209,7 +9237,7 @@ func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
-func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+func unhexToBytes(proc *process.Process, data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
@@ -9222,6 +9250,14 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 
 	bs, err := hex.DecodeString(str)
 	if err != nil {
+		// MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) for malformed
+		// hexadecimal input while still returning NULL for the value.
+		if proc != nil {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+				appender.AppendWarningDiagnostic(moerr.ER_WRONG_VALUE_FOR_TYPE,
+					fmt.Sprintf("Incorrect string value: '%s' for function unhex", functionUtil.QuickBytesToStr(data)))
+			}
+		}
 		return rs.AppendMustNullForBytesResult()
 	}
 	return rs.AppendMustBytesValue(bs)
@@ -9234,7 +9270,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if err := unhexToBytes(data, null, rs); err != nil {
+		if err := unhexToBytes(proc, data, null, rs); err != nil {
 			return err
 		}
 	}
