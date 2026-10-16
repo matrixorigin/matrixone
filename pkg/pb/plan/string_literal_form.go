@@ -428,6 +428,9 @@ type RemoteExpressionFeatures struct {
 	DateNumericResultContracts              bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
+	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
+	// Released overload 0 retains its historical byte-order contract.
+	LeastGreatestCollationSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -459,7 +462,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.LeastGreatestCollationSemantics
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -919,6 +923,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
+					features.LeastGreatestCollationSemantics = true
+				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
 				}
