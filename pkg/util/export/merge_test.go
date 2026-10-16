@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -325,73 +326,59 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs := testutil.NewSharedFS()
-	targetDate := "2021-01-01"
-	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
-	require.Nil(t, err)
-
-	ctx := trace.Generate(context.TODO())
-
-	type args struct {
-		ctx  context.Context
-		opts []MergeOption
-		task *task.AsyncTask
-	}
-	tests := []struct {
-		name string
-		args args
-		want func(ctx context.Context, task task.Task) error
+	for _, tc := range []struct {
+		name     string
+		checkErr error
 	}{
-		{
-			name: "normal",
-			args: args{
-				ctx:  ctx,
-				opts: []MergeOption{WithFileService(fs)},
-				task: &task.AsyncTask{
-					Metadata: task.TaskMetadata{
-						ID:                   "",
-						Executor:             0,
-						Context:              []byte(strings.Join([]string{dummyTable.GetIdentify(), targetDate}, ParamSeparator)),
-						Options:              task.TaskOptions{},
-						XXX_NoUnkeyedLiteral: struct{}{},
-						XXX_unrecognized:     nil,
-						XXX_sizecache:        0,
-					},
-				},
-			},
-			want: nil,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			_, err := initSingleLogsFile(tt.args.ctx, fs, dummyTable, ts, table.CsvExtension)
-			require.Nil(t, err)
-
-			got := MergeTaskExecutorFactory("", tt.args.opts...)
-			require.NotNil(t, got)
-
-			err = got(tt.args.ctx, tt.args.task)
-			require.Nilf(t, err, "err: %v", err)
-
-			files := make([]string, 0, 1)
-			dir := []string{"/"}
-			for len(dir) > 0 {
-				entrys, err := fileservice.SortedList(fs.List(tt.args.ctx, dir[0]))
-				require.Nil(t, err)
-				for _, e := range entrys {
-					p := path.Join(dir[0], e.Name)
-					if e.IsDir {
-						dir = append(dir, p)
-					} else {
-						files = append(files, p)
+		{name: "already uploaded"},
+		{name: "failed file retained", checkErr: errors.New("controlled lookup failure")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(trace.Generate(context.Background()))
+				defer cancel()
+				fs := testutil.NewSharedFS()
+				defer fs.Close(context.Background())
+				ts, err := time.Parse(time.DateOnly, "2021-01-01")
+				require.NoError(t, err)
+				filePath, err := initSingleLogsFile(ctx, fs, dummyTable, ts, table.CsvExtension)
+				require.NoError(t, err)
+				checked := 0
+				execute := MergeTaskExecutorFactory("", WithFileService(fs), func(m *Merge) {
+					m.isRecordExisted = func(_ context.Context, row []string, tbl *table.Table, _ db_holder.DBConnProvider) (bool, error) {
+						checked++
+						require.Equal(t, dummyTable, tbl)
+						require.Equal(t, "row1", row[0])
+						return tc.checkErr == nil, tc.checkErr
 					}
+				})
+				require.ErrorContains(t, execute(ctx, &task.CronTask{}), "invalid task type")
+				require.NoError(t, execute(ctx, &task.AsyncTask{Metadata: task.TaskMetadata{
+					Context: []byte(strings.Join([]string{dummyTable.GetIdentify(), "2021-01-01"}, ParamSeparator)),
+				}}))
+				require.Equal(t, 1, checked, "factory must process the fixture, not return vacuously")
+
+				var files []string
+				dirs := []string{"/"}
+				for len(dirs) > 0 {
+					entries, err := fileservice.SortedList(fs.List(ctx, dirs[0]))
+					require.NoError(t, err)
+					for _, entry := range entries {
+						p := path.Join(dirs[0], entry.Name)
+						if entry.IsDir {
+							dirs = append(dirs, p)
+						} else {
+							files = append(files, p)
+						}
+					}
+					dirs = dirs[1:]
 				}
-				dir = dir[1:]
-			}
-			require.Equal(t, 1, len(files))
-			t.Logf("%v", files)
+				if tc.checkErr != nil {
+					require.Equal(t, []string{path.Join("/", filePath)}, files)
+				} else {
+					require.Empty(t, files, "already uploaded file must be removed")
+				}
+			})
 		})
 	}
 }
