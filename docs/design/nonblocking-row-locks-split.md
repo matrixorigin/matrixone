@@ -1,9 +1,8 @@
 # Nonblocking row locks: complete series design
 
 Owner: issue #25107; NOWAIT foundation #30183, dependent SHARE SKIP LOCKED #30272.
-The design gate covers both parts together. Current independent approval is
-recorded separately against an exact document revision; historical records below
-are context and do not assert approval of this revision.
+The design gate covers both parts together. The approval record below pins the
+exact reviewed technical revision; implementation validation remains separate.
 
 ## Problem, goals and scope
 
@@ -188,8 +187,10 @@ so Part B still displays the foundation against main. It depends on Part A; afte
 Part A lands, update from main before reviewing/merging the remaining increment.
 Both stay Ready with do-not-merge/wip under the task's explicit no-merge scope.
 
-## Review record
+## Design approval
 
-[Historical design and approval receipts](https://github.com/matrixorigin/matrixone/pull/30183#design-review-provenance)
-pin their original input, reviewer and hashes. They are not approval of this
-revision. Current approval must identify this document's exact Git object/hash.
+Decision: **APPROVE**; independent reviewer `/root/current_series_design_review` (`fork_turns=none`).
+Reviewed technical revision: [02fde9006dd80036e6e1befa41113353378ed9cd](https://github.com/Lundomn/matrixone/blob/02fde9006dd80036e6e1befa41113353378ed9cd/docs/design/nonblocking-row-locks-split.md).
+Design blob `ac1fe701f454e2c62a4e0397c5f3ea05fd6e81d3`; SHA256 `27da256fbcdef89a76c989151aedd4ba3cb5864975827697cc6c9628054f3e53`.
+[Full independent assessment](https://github.com/matrixorigin/matrixone/pull/30183#independent-complete-series-design-review), SHA256 `f5dd94f74f4f5dc82654cabd993623be90c5c1659ac351f98981dc377b9649f8`.
+Approval is design-only; implementation conformity, execution evidence and final-head CI remain separately validated.
