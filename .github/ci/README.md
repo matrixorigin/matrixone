@@ -49,18 +49,6 @@ control, checks successful fan-out, and restores the default before proceeding.
 Its warm-cache, durable CDC, and exact-result oracles remain intact; no explicit
 cache eviction substitutes for freshness.
 
-The timing override is CN-global, not session-scoped. This case requires a
-BVT-owned cluster with the default cadence and no concurrent scenario changing
-that control; it must not run on a shared development/service cluster. Entry
-resets residue from an interrupted run and checks every CN, and normal exit
-restores the default with the same fan-out check. mo-tester continues after
-SQL errors, result mismatches, and `wait_expect` expiry, so those paths still
-reach restoration and retain their original failure. A killed tester, broken
-connection that cannot recover, or unavailable CN cannot guarantee SQL cleanup:
-the BVT runner must destroy its owned cluster on every terminal outcome (the
-compose CI runner already has an `always()` shutdown step). Do not reuse such a
-cluster merely because a subsequent SQL statement or the tester process exited.
-
 ## Validation boundaries
 
 `node --test .github/ci/*.test.cjs` includes a real Go module/import graph and

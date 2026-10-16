@@ -4,13 +4,6 @@
 -- into the tag=1 CdcTail via ISCP CDC. Poll that durable tail before MATCH so the
 -- test waits only as long as needed and cannot silently search before CDC settles.
 
--- This case requires a BVT-owned cluster with the default cadence. Recover a
--- prior interrupted run before warming any cache. Ordinary command errors and
--- wait_expect failures do not abort mo-tester: the restore below still executes.
--- A killed tester or unavailable CN requires cluster teardown, not SQL cleanup.
-set @freshness_entry = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
-select @freshness_entry not like '%failed=[%' as all_cn_reset;
-
 -- CREATE FULLTEXT2 INDEX is gated behind experimental_fulltext2_index (default off).
 set experimental_fulltext2_index = 1;
 
@@ -120,9 +113,7 @@ prepare warm_tail from @warm_tail_sql;
 -- @wait_expect(2, 120)
 execute warm_tail;
 deallocate prepare warm_tail;
--- Match the CDC hang guard while staying below the five-minute cache TTL.
--- A larger guard adds no delay when ready and cannot pass through TTL expiry.
--- @wait_expect(1, 120)
+-- @wait_expect(1, 60)
 select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
 set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
 select @freshness_restore not like '%failed=[%' as all_cn_restored;

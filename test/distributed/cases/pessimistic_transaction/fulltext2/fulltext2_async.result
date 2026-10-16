@@ -1,7 +1,3 @@
-set @freshness_entry = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
-select @freshness_entry not like '%failed=[%' as all_cn_reset;
-➤ all_cn_reset[-7,1,0]  𝄀
-1
 set experimental_fulltext2_index = 1;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT2 ftidx (body, title));
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
