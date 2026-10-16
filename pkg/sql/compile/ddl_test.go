@@ -2264,6 +2264,39 @@ func TestAlterViewEmptyDatabaseFallsBackToSession(t *testing.T) {
 	require.NotNil(t, current.createCtx)
 }
 
+func TestCheckConstraintNamesAvailable(t *testing.T) {
+	ctx := context.Background()
+	db := newStubDatabase("db")
+	db.rels["sibling_a"] = &stubRelation{
+		name: "sibling_a",
+		tableDef: &plan2.TableDef{
+			Checks: []*plan2.CheckDef{{Name: "sibling_a_chk_1"}, {Name: "ck_positive"}},
+		},
+	}
+	db.rels["sibling_b"] = &stubRelation{
+		name:     "sibling_b",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "sibling_b_chk_1"}}},
+	}
+
+	// No checks on the new table: nothing to validate.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t", nil))
+	// Fresh names pass even when siblings own other constraints.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "new_t_chk_1"}, {Name: "ck_limit"}}))
+	// Names compare case-insensitively, like MySQL.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "NEWT"}}))
+	// Reusing a name from another table in the same database is rejected.
+	err := checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "ck_positive"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'ck_positive'")
+	// Case-insensitive duplicate detection.
+	err = checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "CK_POSITIVE"}})
+	require.Error(t, err)
+}
+
 func TestLockDroppedRelation(t *testing.T) {
 	retryErr := moerr.NewTxnNeedRetryNoCtx()
 	catalogErr := errors.New("catalog lock failed")

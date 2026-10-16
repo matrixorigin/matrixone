@@ -670,6 +670,43 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	return nil
 }
 
+// checkConstraintNamesAvailable reports ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// when any CHECK of the new table reuses a name already declared by another
+// table in the same database.
+func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database, newTable string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(checks))
+	for _, check := range checks {
+		if check != nil {
+			wanted[strings.ToLower(check.GetName())] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	relNames, err := dbSource.Relations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, relName := range relNames {
+		if relName == newTable {
+			continue
+		}
+		rel, err := dbSource.Relation(ctx, relName, nil)
+		if err != nil {
+			return err
+		}
+		for _, check := range rel.GetTableDef(ctx).GetChecks() {
+			if _, dup := wanted[strings.ToLower(check.GetName())]; dup {
+				return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
+			}
+		}
+	}
+	return nil
+}
+
 func isMissingTableByNameForDropDatabase(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
 }
@@ -1947,6 +1984,18 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
+	}
+
+	// MySQL semantics: CHECK constraint names are unique per schema. The
+	// information_schema tables join constraints on
+	// (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) only, so a duplicate name would
+	// attribute another table's CHECK expression to the new table. Validate
+	// both explicit names and generated <table>_chk_<n> names against the
+	// sibling tables before creating.
+	if !qry.GetTemporary() {
+		if err := checkConstraintNamesAvailable(c.proc.Ctx, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	if !c.disableLock && !c.createNamePinsAdmitted {
