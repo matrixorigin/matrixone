@@ -2087,7 +2087,7 @@ func constantFoldWithPreparedExactSource(
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
-		isVec = isVec || foldExpr.GetVec() != nil
+		isVec = isVec || foldExpr.GetVec() != nil && !rule.IsScalarConstantVector(foldExpr)
 	}
 	if preservePreparedExactSource && rule.ContainsSqlModeDependentTemporalCall(expr) {
 		return expr, nil
@@ -2096,6 +2096,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
+		return expr, nil
+	}
+	if isVec && !rule.CanMaterializeConstantVector(expr) {
 		return expr, nil
 	}
 
@@ -2147,6 +2150,13 @@ func constantFoldWithPreparedExactSource(
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
+		constant, err := rule.MaterializeDecimal256Constant(proc, expr, vec)
+		if err != nil {
+			return nil, err
+		}
+		if constant != nil {
+			expr.Expr = &plan.Expr_Vec{Vec: constant}
+		}
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)

@@ -199,6 +199,7 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	if err = fs.Read(param.Ctx, &vec); err != nil {
 		return 0, err
 	}
+	defer r.Close()
 
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
@@ -703,6 +704,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")

@@ -150,12 +150,18 @@ func decimal256RoundedIntegerString(value types.Decimal256, scale int32) string 
 }
 
 func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
-	from vector.FunctionParameterWrapper[S], to *vector.FunctionResult[D], length int,
+	from vector.FunctionParameterWrapper[S], to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	convert func(S) (D, error), negative func(S) bool, clampable func(S) bool,
 	clamp func(bool) (D, error),
 ) error {
 	var zero D
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null := from.GetValue(i)
 		if null {
 			if err := to.Append(zero, true); err != nil {
@@ -172,6 +178,7 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 			if err != nil {
 				return err
 			}
+			appendDecimalCastRangeWarning(proc, i)
 		}
 		if err = to.Append(converted, false); err != nil {
 			return err
@@ -181,7 +188,7 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 }
 
 func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
-	from *vector.Vector, to *vector.FunctionResult[D], length int,
+	from *vector.Vector, to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	parseString func(string) (D, error), fromFloat func(float64) (D, error),
 	clamp func(bool) (D, error),
 ) (bool, error) {
@@ -189,70 +196,70 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 	switch from.GetType().Oid {
 	case types.T_bit, types.T_uint64:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[uint64](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[uint64](from), to, length, proc, selectList,
 			func(value uint64) (D, error) { return parseString(strconv.FormatUint(value, 10)) },
 			func(uint64) bool { return false }, nil, clamp)
 	case types.T_uint8:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[uint8](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[uint8](from), to, length, proc, selectList,
 			func(value uint8) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
 			func(uint8) bool { return false }, nil, clamp)
 	case types.T_uint16:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[uint16](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[uint16](from), to, length, proc, selectList,
 			func(value uint16) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
 			func(uint16) bool { return false }, nil, clamp)
 	case types.T_uint32:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[uint32](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[uint32](from), to, length, proc, selectList,
 			func(value uint32) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
 			func(uint32) bool { return false }, nil, clamp)
 	case types.T_int8:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[int8](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[int8](from), to, length, proc, selectList,
 			func(value int8) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
 			func(value int8) bool { return value < 0 }, nil, clamp)
 	case types.T_int16:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[int16](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[int16](from), to, length, proc, selectList,
 			func(value int16) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
 			func(value int16) bool { return value < 0 }, nil, clamp)
 	case types.T_int32:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[int32](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[int32](from), to, length, proc, selectList,
 			func(value int32) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
 			func(value int32) bool { return value < 0 }, nil, clamp)
 	case types.T_int64:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[int64](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[int64](from), to, length, proc, selectList,
 			func(value int64) (D, error) { return parseString(strconv.FormatInt(value, 10)) },
 			func(value int64) bool { return value < 0 }, nil, clamp)
 	case types.T_float32:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[float32](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[float32](from), to, length, proc, selectList,
 			func(value float32) (D, error) { return fromFloat(float64(value)) },
 			func(value float32) bool { return value < 0 },
 			func(value float32) bool { return finite(float64(value)) }, clamp)
 	case types.T_float64:
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[float64](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[float64](from), to, length, proc, selectList,
 			fromFloat, func(value float64) bool { return value < 0 }, finite, clamp)
 	case types.T_decimal64:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), to, length, proc, selectList,
 			func(value types.Decimal64) (D, error) { return parseString(value.Format(scale)) },
 			func(value types.Decimal64) bool { return value.Sign() }, nil, clamp)
 	case types.T_decimal128:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), to, length, proc, selectList,
 			func(value types.Decimal128) (D, error) { return parseString(value.Format(scale)) },
 			func(value types.Decimal128) bool { return value.Sign() }, nil, clamp)
 	case types.T_decimal256:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
-			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), to, length,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), to, length, proc, selectList,
 			func(value types.Decimal256) (D, error) { return parseString(value.Format(scale)) },
 			func(value types.Decimal256) bool { return value.Sign() }, nil, clamp)
 	default:
@@ -261,12 +268,12 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 }
 
 func explicitNumericToDecimal(
-	from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int,
+	from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, proc *process.Process, selectList *FunctionSelectList,
 ) (bool, error) {
 	switch toType.Oid {
 	case types.T_decimal64:
 		return explicitNumericToDecimalTarget(
-			from, vector.MustFunctionResult[types.Decimal64](result), length,
+			from, vector.MustFunctionResult[types.Decimal64](result), length, proc, selectList,
 			func(value string) (types.Decimal64, error) {
 				return parseDecimal64CastString(value, toType.Width, toType.Scale)
 			},
@@ -283,7 +290,7 @@ func explicitNumericToDecimal(
 			})
 	case types.T_decimal128:
 		return explicitNumericToDecimalTarget(
-			from, vector.MustFunctionResult[types.Decimal128](result), length,
+			from, vector.MustFunctionResult[types.Decimal128](result), length, proc, selectList,
 			func(value string) (types.Decimal128, error) {
 				return parseDecimal128CastString(value, toType.Width, toType.Scale)
 			},
@@ -300,7 +307,7 @@ func explicitNumericToDecimal(
 			})
 	case types.T_decimal256:
 		return explicitNumericToDecimalTarget(
-			from, vector.MustFunctionResult[types.Decimal256](result), length,
+			from, vector.MustFunctionResult[types.Decimal256](result), length, proc, selectList,
 			func(value string) (types.Decimal256, error) {
 				return parseDecimal256CastString(value, toType.Width, toType.Scale)
 			},
@@ -1176,7 +1183,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 	if mode == castModeExplicit && toType.IsDecimal() && fromType.IsNumeric() {
-		if handled, err := explicitNumericToDecimal(from, *toType, result, length); handled {
+		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
 			return err
 		}
 	}
@@ -7021,13 +7028,14 @@ func strToSignedWithProc[T constraints.Signed](
 				}
 				var r int64
 				var err error
+				var rangeWarning explicitIntegerCastWarning
 				var integerPrefix string
 				var integerHasPrefix, integerOutOfRange bool
 				if len(explicit) > 1 && explicit[1] {
 					r, integerPrefix, integerHasPrefix, integerOutOfRange, err =
 						parseSignedNumericPrefixCastString(s, bitSize)
 				} else if len(explicit) > 0 && explicit[0] {
-					r, err = parseSignedExplicitCastString(s, bitSize)
+					r, rangeWarning, err = parseSignedExplicitCastStringWithWarning(s, bitSize)
 				} else {
 					r, err = parseSignedCastString(s, bitSize)
 				}
@@ -7067,9 +7075,10 @@ func strToSignedWithProc[T constraints.Signed](
 				}
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
-				} else {
+				} else if rangeWarning != explicitIntegerCastTruncated {
 					appendNumericCoercionWarning(proc, s)
 				}
+				appendExplicitIntegerCastWarning(proc, s, rangeWarning)
 				result = T(r)
 			}
 			if err := to.Append(result, false); err != nil {
@@ -7487,6 +7496,45 @@ func appendStringAssignmentTruncationWarning(
 	)
 }
 
+// Range facts belong to conversion; only an executed row publishes diagnostics.
+func appendDecimalCastRangeWarning(proc *process.Process, row uint64) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
+			fmt.Sprintf("Out of range value for column 'decimal' at row %d", row+1))
+	}
+}
+
+type explicitIntegerCastWarning uint8
+
+const (
+	explicitIntegerCastNoWarning explicitIntegerCastWarning = iota
+	explicitIntegerCastSignedComplement
+	explicitIntegerCastUnsignedComplement
+	explicitIntegerCastTruncated
+)
+
+func appendExplicitIntegerCastWarning(proc *process.Process, value string, warning explicitIntegerCastWarning) {
+	if proc == nil || warning == explicitIntegerCastNoWarning {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	switch warning {
+	case explicitIntegerCastSignedComplement:
+		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_ERROR, "Cast to signed converted positive out-of-range integer to its negative complement")
+	case explicitIntegerCastUnsignedComplement:
+		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_ERROR, "Cast to unsigned converted negative integer to its positive complement")
+	case explicitIntegerCastTruncated:
+		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+			fmt.Sprintf("Truncated incorrect INTEGER value: '%-.128s'", value))
+	}
+}
+
 // appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
@@ -7865,24 +7913,37 @@ func numericIntegerPrefixOutOfRange(prefix string, bitSize int, strictErr error,
 }
 
 func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
+	value, _, err := parseSignedExplicitCastStringWithWarning(s, bitSize)
+	return value, err
+}
+
+func parseSignedExplicitCastStringWithWarning(s string, bitSize int) (int64, explicitIntegerCastWarning, error) {
 	parseInput := explicitIntegerCastInput(s)
 	value, err := parseSignedCastString(parseInput, bitSize)
 	if err == nil || !errors.Is(err, strconv.ErrRange) {
-		return value, err
+		return value, explicitIntegerCastNoWarning, err
 	}
 	token, tokenErr := parseCastNumericToken(parseInput)
 	if tokenErr != nil {
-		return 0, tokenErr
+		return 0, explicitIntegerCastNoWarning, tokenErr
 	}
 	var magnitude big.Int
 	if _, ok := magnitude.SetString(token.digits, token.base); !ok {
-		return 0, strconv.ErrSyntax
+		return 0, explicitIntegerCastNoWarning, strconv.ErrSyntax
+	}
+	warning := explicitIntegerCastNoWarning
+	if bitSize == 64 {
+		if token.negative || magnitude.BitLen() > 64 {
+			warning = explicitIntegerCastTruncated
+		} else {
+			warning = explicitIntegerCastSignedComplement
+		}
 	}
 	if token.negative {
 		if bitSize == 64 {
-			return math.MinInt64, nil
+			return math.MinInt64, warning, nil
 		}
-		return -(int64(1) << uint(bitSize-1)), nil
+		return -(int64(1) << uint(bitSize-1)), warning, nil
 	}
 	limit := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), uint(bitSize)), big.NewInt(1))
 	if magnitude.Cmp(limit) > 0 {
@@ -7890,13 +7951,13 @@ func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 	}
 	unsigned := magnitude.Uint64()
 	if bitSize == 64 {
-		return int64(unsigned), nil
+		return int64(unsigned), warning, nil
 	}
 	signBit := uint64(1) << uint(bitSize-1)
 	if unsigned&signBit != 0 {
-		return int64(unsigned - (uint64(1) << uint(bitSize))), nil
+		return int64(unsigned - (uint64(1) << uint(bitSize))), warning, nil
 	}
-	return int64(unsigned), nil
+	return int64(unsigned), warning, nil
 }
 
 // ParsePreparedStringToInt64 applies the ordinary SQL string-to-BIGINT cast
@@ -7906,29 +7967,45 @@ func ParsePreparedStringToInt64(s string) (int64, error) {
 }
 
 func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
+	value, _, err := parseUnsignedExplicitCastStringWithWarning(s, bitSize)
+	return value, err
+}
+
+func parseUnsignedExplicitCastStringWithWarning(s string, bitSize int) (uint64, explicitIntegerCastWarning, error) {
 	parseInput := explicitIntegerCastInput(s)
 	value, err := parseUnsignedCastString(parseInput, bitSize)
 	if err == nil {
-		return value, nil
+		return value, explicitIntegerCastNoWarning, nil
 	}
 	token, tokenErr := parseCastNumericToken(parseInput)
 	if tokenErr != nil {
-		return 0, tokenErr
+		return 0, explicitIntegerCastNoWarning, tokenErr
 	}
 	var magnitude big.Int
 	if _, ok := magnitude.SetString(token.digits, token.base); !ok {
-		return 0, strconv.ErrSyntax
+		return 0, explicitIntegerCastNoWarning, strconv.ErrSyntax
+	}
+	warning := explicitIntegerCastNoWarning
+	if bitSize == 64 {
+		// MySQL's string parser admits a signed negative magnitude before
+		// converting it to the unsigned complement. Larger negative inputs
+		// are range errors even when their magnitude fits in uint64.
+		if magnitude.BitLen() > 64 || (token.negative && magnitude.Uint64() > uint64(1)<<63) {
+			warning = explicitIntegerCastTruncated
+		} else if token.negative && magnitude.Sign() != 0 {
+			warning = explicitIntegerCastUnsignedComplement
+		}
 	}
 	modulus := new(big.Int).Lsh(big.NewInt(1), uint(bitSize))
 	if token.negative {
 		magnitude.Neg(&magnitude)
 		magnitude.Mod(&magnitude, modulus)
-		return magnitude.Uint64(), nil
+		return magnitude.Uint64(), warning, nil
 	}
 	if magnitude.BitLen() > bitSize {
-		return new(big.Int).Sub(modulus, big.NewInt(1)).Uint64(), nil
+		return new(big.Int).Sub(modulus, big.NewInt(1)).Uint64(), warning, nil
 	}
-	return magnitude.Uint64(), nil
+	return magnitude.Uint64(), warning, nil
 }
 
 // ParsePreparedStringToUint64 applies the ordinary SQL string-to-UNSIGNED
@@ -7971,6 +8048,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			}
 		} else {
 			var res *string
+			var rangeWarning explicitIntegerCastWarning
 			var integerPrefix string
 			var integerHasPrefix, integerOutOfRange bool
 			if isBinary {
@@ -8008,7 +8086,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =
 						parseUnsignedNumericPrefixCastString(s, bitSize)
 				} else if len(explicit) > 0 && explicit[0] {
-					val, tErr = parseUnsignedExplicitCastString(s, bitSize)
+					val, rangeWarning, tErr = parseUnsignedExplicitCastStringWithWarning(s, bitSize)
 				} else {
 					val, tErr = parseUnsignedCastString(s, bitSize)
 				}
@@ -8046,9 +8124,10 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			if !isBinary {
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
-				} else {
+				} else if rangeWarning != explicitIntegerCastTruncated {
 					appendNumericCoercionWarning(proc, *res)
 				}
+				appendExplicitIntegerCastWarning(proc, *res, rangeWarning)
 			}
 			if err := to.Append(T(val), false); err != nil {
 				return err
@@ -8175,7 +8254,11 @@ func strToDecimal64(
 				var result types.Decimal64
 				var err error
 				if isExplicit {
-					result, err = ParseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
+					var overflow bool
+					result, overflow, err = parseDecimal64CastStringWithOverflow(s, totype.Width, totype.Scale, true)
+					if err == nil && overflow {
+						appendDecimalCastRangeWarning(proc, i)
+					}
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
 				}
@@ -8248,26 +8331,32 @@ func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, er
 }
 
 func parseDecimal64CastStringMode(s string, width, scale int32, explicit bool) (types.Decimal64, error) {
+	value, _, err := parseDecimal64CastStringWithOverflow(s, width, scale, explicit)
+	return value, err
+}
+
+func parseDecimal64CastStringWithOverflow(s string, width, scale int32, explicit bool) (types.Decimal64, bool, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var scratch [76]byte
 	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(18)), scale, &scratch)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if overflow {
 		if explicit {
-			return clampDecimal64Value(token.negative, width, scale)
+			value, err := clampDecimal64Value(token.negative, width, scale)
+			return value, err == nil, err
 		}
-		return 0, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", s, width, scale)
+		return 0, false, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", s, width, scale)
 	}
 	result, err := types.Decimal64FromCoefficient(digits)
 	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, err
+	return result, false, err
 }
 
 // quantizeDecimalCoefficient rounds a validated token once into borrowed,
@@ -8409,26 +8498,32 @@ func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 }
 
 func parseDecimal128CastStringMode(s string, width, scale int32, explicit bool) (types.Decimal128, error) {
+	value, _, err := parseDecimal128CastStringWithOverflow(s, width, scale, explicit)
+	return value, err
+}
+
+func parseDecimal128CastStringWithOverflow(s string, width, scale int32, explicit bool) (types.Decimal128, bool, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
-		return types.Decimal128{}, err
+		return types.Decimal128{}, false, err
 	}
 	var scratch [76]byte
 	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(38)), scale, &scratch)
 	if err != nil {
-		return types.Decimal128{}, err
+		return types.Decimal128{}, false, err
 	}
 	if overflow {
 		if explicit {
-			return clampDecimal128Value(token.negative, width, scale)
+			value, err := clampDecimal128Value(token.negative, width, scale)
+			return value, err == nil, err
 		}
-		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", s, width, scale)
+		return types.Decimal128{}, false, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", s, width, scale)
 	}
 	result, err := types.Decimal128FromCoefficient(digits)
 	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, err
+	return result, false, err
 }
 
 func parseDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
@@ -8436,26 +8531,32 @@ func parseDecimal256CastString(s string, width, scale int32) (types.Decimal256, 
 }
 
 func parseDecimal256CastStringMode(s string, width, scale int32, explicit bool) (types.Decimal256, error) {
+	value, _, err := parseDecimal256CastStringWithOverflow(s, width, scale, explicit)
+	return value, err
+}
+
+func parseDecimal256CastStringWithOverflow(s string, width, scale int32, explicit bool) (types.Decimal256, bool, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
-		return types.Decimal256{}, err
+		return types.Decimal256{}, false, err
 	}
 	var scratch [76]byte
 	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(76)), scale, &scratch)
 	if err != nil {
-		return types.Decimal256{}, err
+		return types.Decimal256{}, false, err
 	}
 	if overflow {
 		if explicit {
-			return clampDecimal256Value(token.negative, width, scale)
+			value, err := clampDecimal256Value(token.negative, width, scale)
+			return value, err == nil, err
 		}
-		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", s, width, scale)
+		return types.Decimal256{}, false, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", s, width, scale)
 	}
 	result, err := types.Decimal256FromCoefficient(digits)
 	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, err
+	return result, false, err
 }
 
 func strToDecimal128(
@@ -8494,7 +8595,11 @@ func strToDecimal128(
 				var result types.Decimal128
 				var err error
 				if isExplicit {
-					result, err = ParseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
+					var overflow bool
+					result, overflow, err = parseDecimal128CastStringWithOverflow(s, totype.Width, totype.Scale, true)
+					if err == nil && overflow {
+						appendDecimalCastRangeWarning(proc, i)
+					}
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
 				}
@@ -8586,7 +8691,11 @@ func strToDecimal256(
 				var result types.Decimal256
 				var err error
 				if isExplicit {
-					result, err = ParseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
+					var overflow bool
+					result, overflow, err = parseDecimal256CastStringWithOverflow(s, totype.Width, totype.Scale, true)
+					if err == nil && overflow {
+						appendDecimalCastRangeWarning(proc, i)
+					}
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
 				}
