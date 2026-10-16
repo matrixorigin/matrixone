@@ -509,6 +509,50 @@ func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
 }
 
+// Issue #30254: MySQL installs a FOREIGN KEY declared under
+// foreign_key_checks=0 without validating pre-existing child rows; the
+// orphan survives and only later DML is rejected. With checks enabled the
+// detect SQLs must still reject orphans at DDL time.
+func TestAlterTableCopyForeignKeyChecksDisabledSkipsDetectSqls(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		checksOn    bool
+		wantDetects int
+	}{
+		{name: "checks enabled validates existing rows", checksOn: true, wantDetects: 1},
+		{name: "checks disabled skips existing-row validation", checksOn: false, wantDetects: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			originalContext := mock.ctxt
+			mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+				if name == "foreign_key_checks" {
+					if tc.checksOn {
+						return int64(1), nil
+					}
+					return int64(0), nil
+				}
+				return originalContext.ResolveVariable(name, system, global)
+			}
+
+			logicPlan, err := buildSingleStmt(mock, t, `
+			ALTER TABLE constraint_test.t1
+				ADD COLUMN parent_id INT,
+				ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
+					REFERENCES constraint_test.replace_fk_p(id)`)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.Len(t, alter.CopyTableDef.Fkeys, 1,
+				"the constraint definition must be installed in both modes")
+			require.Len(t, alter.UpdateFkSqls, 1,
+				"catalog maintenance for the new FK must still be planned")
+			require.Len(t, alter.DetectSqls, tc.wantDetects)
+		})
+	}
+}
+
 func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
