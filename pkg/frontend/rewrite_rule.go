@@ -1322,29 +1322,38 @@ type roleRuleLifecycleBackgroundExec interface {
 }
 
 type roleRuleCacheInvalidator interface {
-	invalidateRoleRuleCache()
+	invalidateRoleRuleCache(accountID uint32)
 }
 
-func (ses *Session) invalidateRoleRuleCache() {
-	ses.invalidateRewriteRuleCache()
+func (ses *Session) invalidateRoleRuleCache(accountID uint32) {
+	ses.invalidateRewriteRuleCache(accountID)
 }
 
-// invalidateRoleRuleCaches invalidates every active session cache on this CN.
+// invalidateRoleRuleCaches invalidates this account's active sessions on this CN.
 // Role rewrite rules are tenant metadata, so a successful change must not leave
-// another connection enforcing the previous policy indefinitely.
+// another connection enforcing the previous policy indefinitely, but must not
+// invalidate unrelated tenants' prepared statements.
 func invalidateRoleRuleCaches(ses *Session) {
 	if ses == nil {
 		return
 	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		return
+	}
+	accountID := tenant.GetTenantID()
 
-	ses.invalidateRoleRuleCache()
+	ses.invalidateRoleRuleCache(accountID)
 	rm := ses.getRoutineManager()
 	if rm == nil || rm.sessionManager == nil {
 		return
 	}
 	for _, candidate := range rm.sessionManager.GetAllSessions() {
+		if candidate == ses {
+			continue
+		}
 		if invalidator, ok := candidate.(roleRuleCacheInvalidator); ok {
-			invalidator.invalidateRoleRuleCache()
+			invalidator.invalidateRoleRuleCache(accountID)
 		}
 	}
 }
