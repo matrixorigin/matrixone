@@ -146,6 +146,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
+	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion118)
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -1978,6 +1981,11 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isJSONOpaqueGroupConcatAggregate(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONOpaqueTextContracts: true}); err != nil {
+				return err
+			}
+		}
 		if isDecimalStatisticalAggregate(agg) {
 			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
 				return err
@@ -2086,11 +2094,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	collectAggregateDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2103,6 +2111,7 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 				continue
 			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueGroupConcatAggregate(agg)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
 				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
@@ -2111,8 +2120,20 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 		}
 	}
 	for _, child := range p.Children {
-		collectDecimalStatisticalDescriptorFeatures(child, features)
+		collectAggregateDescriptorFeatures(child, features)
 	}
+}
+
+func isJSONOpaqueGroupConcatAggregate(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfGroupConcat {
+		return false
+	}
+	for _, arg := range agg.GetArgExpressions() {
+		if arg != nil && types.T(arg.Typ.Id) == types.T_json {
+			return true
+		}
+	}
+	return false
 }
 
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2293,6 +2314,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 118")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
