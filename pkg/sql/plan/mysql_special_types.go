@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -744,22 +743,6 @@ func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }
 
-// enumFoldKey produces the same equivalence classes used by strings.EqualFold
-// without an O(n^2) comparison across the maximum 65,535 ENUM members.
-func enumFoldKey(value string) string {
-	var folded strings.Builder
-	for _, r := range value {
-		min := r
-		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
-			if next < min {
-				min = next
-			}
-		}
-		folded.WriteRune(min)
-	}
-	return folded.String()
-}
-
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	switch {
 	case isSetPlanType(typ):
@@ -776,7 +759,7 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
-			key := enumFoldKey(value)
+			key := equalFoldKey(value)
 			if _, exists := seen[key]; exists {
 				return false
 			}
@@ -817,6 +800,33 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	name string,
 	args []*plan.Expr,
 ) ([]*plan.Expr, error) {
+	// SET storage is UINT64, but MySQL SUM/AVG return DOUBLE. Select that
+	// domain while the operand still carries SET identity; the structural
+	// rewrite below deliberately clears it from the recovered bitmap.
+	if (name == "sum" || name == "avg") && len(args) == 1 && args[0] != nil {
+		bitmap, isSet := storedSetBitmapExpr(args[0])
+		if !isSet && isSetPlanType(&args[0].Typ) {
+			bitmap = DeepCopyExpr(args[0])
+			bitmap.Typ.Enumvalues = ""
+			isSet = true
+		}
+		if !isSet && b != nil && b.ctx != nil && isSetPlanType(b.ctx.mysqlSpecialOrderTypeForExpr(args[0])) {
+			var err error
+			bitmap, err = b.mysqlSpecialNumericOperand(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+			isSet = true
+		}
+		if isSet {
+			doubleType := types.T_float64.ToType()
+			value, err := forceCastExpr(ctx, bitmap, makePlan2Type(&doubleType))
+			if err != nil {
+				return nil, err
+			}
+			return []*plan.Expr{value}, nil
+		}
+	}
 	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
 	if b == nil || b.ctx == nil {
 		return result, nil
@@ -835,7 +845,7 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if !hasProvenanceCandidate {
 		return result, nil
 	}
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 		if err != nil {
 			return nil, err

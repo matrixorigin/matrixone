@@ -967,18 +967,26 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 
 func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	bind := func(t *testing.T, sql string) *planpb.Expr {
+		t.Helper()
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		expr, err := NewGeneratedColBinder(proc.Ctx, nil, nil).BindExpr(ast, 0, false)
+		require.NoError(t, err)
+		return expr
+	}
+	const distanceSQL = "select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre')"
 	for _, sql := range []string{
 		"select st_frechetdistance(st_geomfromtext('LINESTRING(0 0, 1 0)', 4326), st_geomfromtext('LINESTRING(0 1, 1 1)', 4326))",
-		"select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre')",
+		distanceSQL,
+		"select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0, 1 0)', 4326), st_geomfromtext('LINESTRING(0 1, 1 1)', 4326))",
+		"select 1 + st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre')",
+		"select case when false then st_distance(st_geomfromtext('invalid', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre') else 1 end",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-			require.NoError(t, err)
-			defer stmt.Free()
-			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-			expr, err := NewGeneratedColBinder(proc.Ctx, nil, nil).
-				BindExpr(ast, 0, false)
-			require.NoError(t, err)
+			expr := bind(t, sql)
 			required, err := RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
 			require.Equal(t, defines.MORPCVersion90, required)
@@ -988,6 +996,8 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, folded.GetF(),
 				"spatial capability must remain visible after constant folding")
+			require.True(t, proto.Equal(expr, folded),
+				"spatial admission must precede evaluating children, including invalid inactive branches")
 			required, err = RequiredPersistedExpressionProtocolVersion(folded)
 			require.NoError(t, err)
 			require.Equal(t, defines.MORPCVersion90, required)
@@ -996,11 +1006,31 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 			planrule.NewConstantFold(false).Apply(node, nil, proc)
 			require.NotNil(t, node.ProjectList[0].GetF(),
 				"optimizer constant folding must preserve spatial provenance")
+			require.True(t, proto.Equal(expr, node.ProjectList[0]))
 			required, err = RequiredPersistedExpressionProtocolVersion(node.ProjectList[0])
 			require.NoError(t, err)
 			require.Equal(t, defines.MORPCVersion90, required)
 		})
 	}
+	t.Run("list elements have independent admission", func(t *testing.T) {
+		ordinary := bind(t, "select cast(1 as double) + 2")
+		spatial := bind(t, distanceSQL)
+		list := &planpb.Expr{Typ: spatial.Typ, Expr: &planpb.Expr_List{
+			List: &planpb.ExprList{List: []*planpb.Expr{ordinary, spatial}},
+		}}
+		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(list), proc, false, true)
+		require.NoError(t, err)
+		node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(list)}}
+		planrule.NewConstantFold(false).Apply(node, nil, proc)
+		for _, result := range []*planpb.Expr{folded, node.ProjectList[0]} {
+			require.NotNil(t, result.GetList())
+			elements := result.GetList().List
+			require.Len(t, elements, 2)
+			require.NotNil(t, elements[0].GetLit(), "ordinary sibling still folds")
+			require.Equal(t, float64(3), elements[0].GetLit().GetDval())
+			require.True(t, proto.Equal(spatial, elements[1]), "a sibling's scan cannot admit the spatial element")
+		}
+	})
 }
 
 func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
@@ -1219,11 +1249,11 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	require.True(t, features.DateNumericResultContracts)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion113, required)
+	require.Equal(t, defines.MORPCVersion117, required)
 	owner.Nodes[0].ProjectList = []*planpb.Expr{calendar, mediumInt, jsonInput, jsonValue}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion113, required, "feature order must not lower the cumulative floor")
+	require.Equal(t, defines.MORPCVersion117, required, "feature order must not lower the cumulative floor")
 	owner.Nodes[0].ProjectList = []*planpb.Expr{calendar, mediumInt, jsonInput}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
@@ -1309,27 +1339,27 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion113), required)
+			require.Equal(t, int64(defines.MORPCVersion117), required)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion112))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion116))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 113")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion113))
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 117")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion117))
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
 		})
 	}
 
 	for _, tc := range owners {
 		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion113))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion112))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion117))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion116))
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 113")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion113))
+			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 117")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion117))
 		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
@@ -1391,9 +1421,9 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		{"old CN", defines.MORPCVersion107, defines.MORPCVersion107, false},
 		{"Unicode predecessor", defines.MORPCVersion109, defines.MORPCVersion109, false},
 		{"MEDIUMINT predecessor", defines.MORPCVersion110, defines.MORPCVersion110, false},
-		{"immediate predecessor", defines.MORPCVersion112, defines.MORPCVersion112, false},
-		{"read only admission", defines.MORPCVersion113, defines.MORPCVersion112, false},
-		{"authoring admitted", defines.MORPCVersion113, defines.MORPCVersion113, true},
+		{"immediate predecessor", defines.MORPCVersion116, defines.MORPCVersion116, false},
+		{"read only admission", defines.MORPCVersion117, defines.MORPCVersion116, false},
+		{"authoring admitted", defines.MORPCVersion117, defines.MORPCVersion117, true},
 	} {
 		t.Run(state.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
@@ -1406,14 +1436,14 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 113")
+						require.ErrorContains(t, err, "protocol version 117")
 						return
 					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion113), required)
+						require.Equal(t, int64(defines.MORPCVersion117), required)
 						require.Len(t, table.GetIndexTables(), 1)
 						// The SQL builder's physical index stores materialized
 						// keys, not the generated expression owned by its table.
@@ -1425,7 +1455,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
 						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion113), *data.RequiredProtocolVersion)
+						require.Equal(t, int64(defines.MORPCVersion117), *data.RequiredProtocolVersion)
 					}
 				})
 			}

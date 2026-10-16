@@ -635,6 +635,16 @@ func TestFunctionLookupRejectsUnknownOverload(t *testing.T) {
 	}
 }
 
+func TestPointAliasUsesSTPointFunction(t *testing.T) {
+	args := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+	point, err := GetFunctionByName(context.Background(), "point", args)
+	require.NoError(t, err)
+	stPoint, err := GetFunctionByName(context.Background(), "st_point", args)
+	require.NoError(t, err)
+	require.Equal(t, stPoint.GetEncodedOverloadID(), point.GetEncodedOverloadID())
+	require.Equal(t, stPoint.GetReturnType(), point.GetReturnType())
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -685,6 +695,43 @@ func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 			require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
 			require.Equal(t, int32(6), result.targetTypes[1].Scale)
 			require.Equal(t, int32(6), result.retType.Scale)
+		}
+	}
+}
+
+func TestTimeArithmeticTypedDurationKeepsFractionalPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, tc := range []struct {
+			name       string
+			first      types.Type
+			duration   int32
+			result     types.T
+			scale      int32
+			overloadID int32
+		}{
+			{"date integer", types.T_date.ToType(), 0, types.T_datetime, 0, 2},
+			{"date milliseconds", types.T_date.ToType(), 3, types.T_datetime, 3, 2},
+			{"date microseconds", types.T_date.ToType(), 6, types.T_datetime, 6, 2},
+			{"datetime duration precision", types.T_datetime.ToType(), 6, types.T_datetime, 6, 2},
+			{"datetime first precision", types.T_datetime.ToTypeWithScale(6), 3, types.T_datetime, 6, 2},
+			{"time duration precision", types.T_time.ToType(), 6, types.T_time, 6, 0},
+			{"time first precision", types.T_time.ToTypeWithScale(6), 3, types.T_time, 6, 0},
+			{"timestamp duration precision", types.T_timestamp.ToType(), 6, types.T_datetime, 6, 4},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
+					tc.first, types.T_time.ToTypeWithScale(tc.duration),
+				})
+				require.NoError(t, err)
+				require.True(t, result.needCast)
+				require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
+				require.Equal(t, int32(17), result.targetTypes[1].Width)
+				require.Equal(t, tc.duration, result.targetTypes[1].Scale)
+				require.Equal(t, tc.result, result.retType.Oid)
+				require.Equal(t, tc.scale, result.retType.Scale)
+				require.Equal(t, tc.overloadID, result.overloadId)
+			})
 		}
 	}
 }

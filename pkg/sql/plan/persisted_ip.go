@@ -92,6 +92,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return 0, moerr.NewNotSupportedNoCtx("persisted decimal statistical result contract requires rebinding")
+	}
 	if features.InvalidTemporalResultContract {
 		return 0, moerr.NewNotSupportedNoCtx("persisted temporal result vector contract mismatch requires rebinding")
 	}
@@ -117,8 +120,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
-	if features.JSONValueContract && requiredVersion < defines.MORPCVersion113 {
-		requiredVersion = defines.MORPCVersion113
+	if features.JSONValueContract && requiredVersion < defines.MORPCVersion117 {
+		requiredVersion = defines.MORPCVersion117
 	}
 	if (features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts) &&
 		requiredVersion < defines.MORPCVersion86 {
@@ -143,6 +146,12 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.DecimalStatisticalResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
 	return requiredVersion, nil
 }

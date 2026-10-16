@@ -243,6 +243,12 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, sqlMode str
 	return mysql.SplitSqlByStatementWithSQLMode(ctx, sql, 1, sqlMode)
 }
 
+// SplitSqlByStatementFragmentsWithSQLMode retains raw source spans alongside
+// independently parseable SQL, including synthesized executable-comment ends.
+func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]mysql.SQLFragment, error) {
+	return mysql.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, sqlMode)
+}
+
 // FragmentHasStatement reports whether a semicolon-separated fragment carries an
 // actual statement rather than being blank or comment-only. The scanner skips
 // every comment form (-- , #, //, /* */, /*+ */) so the first token of a
@@ -427,13 +433,34 @@ func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames in
 		}
 		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
 	}
-	compareDB := tree.NewCStr(db, lowerCaseTableNames).Compare()
-	compareTable := tree.NewCStr(table, lowerCaseTableNames).Compare()
+	compareDB, compareTable, err := NormalizeRewriteKeyParts(ctx, db, table, lowerCaseTableNames)
+	if err != nil {
+		return "", "", "", err
+	}
 	if lowerCaseTableNames == 1 {
 		db = compareDB
 		table = compareTable
 	}
 	return compareDB + "." + compareTable, db, table, nil
+}
+
+// NormalizeRewriteKeyParts returns database and table comparison identities
+// independently. This preserves identifier boundaries for names containing a
+// dot; callers consuming the persisted database.table format must still parse
+// that format with SplitRewriteKey first.
+func NormalizeRewriteKeyParts(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	lowerCaseTableNames int64,
+) (string, string, error) {
+	databaseName = strings.TrimSpace(databaseName)
+	tableName = strings.TrimSpace(tableName)
+	if databaseName == "" || tableName == "" {
+		return "", "", moerr.NewParseError(ctx, "empty table or database")
+	}
+	return tree.NewCStr(databaseName, lowerCaseTableNames).Compare(),
+		tree.NewCStr(tableName, lowerCaseTableNames).Compare(), nil
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
@@ -777,6 +804,15 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 				if ps, ok := s.Source.Select.(*tree.ParenSelect); ok && ps.Select != nil {
 					ps.Select.RewriteOption = rewriteOption
 				}
+			}
+		case *tree.CreateTable:
+			// CREATE TABLE ... AS SELECT carries the rewrite option on its
+			// nested source query so CTAS materializes only rows visible through
+			// the active role/session policy.
+			if s.AsSource != nil {
+				s.AsSource.RewriteOption = rewriteOption
+			} else {
+				freeRewriteOption()
 			}
 		default:
 			// Every policy value must be valid even when this statement kind does

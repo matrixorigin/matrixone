@@ -565,7 +565,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion113JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion117JSONValueContract(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -584,11 +584,11 @@ func TestRequiresMORPCVersion113JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion113JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion117JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion113JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion117JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -618,7 +618,7 @@ func TestRequiresMORPCVersion113JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion113JSONValueContract(value)
+				required, err := RequiresMORPCVersion117JSONValueContract(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)
@@ -1131,4 +1131,22 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
 		})
 	}
+}
+
+func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
+	for _, id := range []int64{583, 598} {
+		expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32}}}}
+		owner := &TableDef{Cols: []*ColDef{{Default: &Default{Expr: expr}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded TableDef
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, id == 598, features.CalendarIntervalNormalization)
+		if id == 598 {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
 }

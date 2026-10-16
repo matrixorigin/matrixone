@@ -2,6 +2,15 @@
 
 Issue: #28037
 
+Base-sync note (2026-10-16): upstream main at
+`b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7` owns MORPC v113-v116.
+The provisional seven-argument JSON_VALUE contract now uses v117, with v116
+as its immediate predecessor. Binder, sender/receiver and persisted admission
+use that floor; existing upstream capability floors remain unchanged. References
+to v113 JSON_VALUE candidates below describe earlier revisions and are not the
+current allocation. This maintenance merge does not close the benchmark,
+mixed-version, durable recovery, QA or independent approval obligations below.
+
 ## Contract
 
 `JSON_VALUE` accepts a document and path, with optional `RETURNING`, `ON EMPTY`,

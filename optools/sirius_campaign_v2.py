@@ -44,6 +44,10 @@ SCRATCH_BYTES = 4 << 30
 ROW_BYTES = 1 << 20
 OUTPUT_BYTES = 1 << 20
 STDERR_BYTES = 64 << 10
+# The Go runtime parses GOMAXPROCS as a signed 32-bit integer. Larger values
+# are ignored, so accepting one would record a CPU budget the service never uses.
+MAX_GOMAXPROCS = (1 << 31) - 1
+EXECUTION_PROFILE_FIELDS = frozenset(("gomaxprocs", "native_host_block_bytes"))
 ROUTES = (
     {"id": "mo-native", "backend": "native", "scan_mode": "mo"},
     {"id": "embedded-mo", "backend": "embedded", "scan_mode": "mo"},
@@ -91,7 +95,24 @@ def query_uuid(value):
     return value
 
 
-def build_campaign(provenance, *, resource=False, flight_profiles=()):
+def validate_execution_profile(config):
+    if not isinstance(config, dict) or not EXECUTION_PROFILE_FIELDS <= config.keys():
+        raise CampaignError("campaign execution requires an explicit CPU and host profile")
+    if (
+        type(config["gomaxprocs"]) is not int
+        or not 0 < config["gomaxprocs"] <= MAX_GOMAXPROCS
+    ):
+        raise CampaignError("invalid campaign Go CPU budget")
+    if (
+        type(config["native_host_block_bytes"]) is not int
+        or config["native_host_block_bytes"] not in (65536, 1048576)
+    ):
+        raise CampaignError("invalid campaign host block size")
+
+
+def build_campaign(
+    provenance, *, resource=False, flight_profiles=(), require_execution_profile=True
+):
     required = (
         "matrixone_revision",
         "sirius_revision",
@@ -161,6 +182,11 @@ def build_campaign(provenance, *, resource=False, flight_profiles=()):
         ),
     ):
         value = provenance[field]
+        if field == "config" and isinstance(value, dict):
+            # V2 archives predating explicit profiles retain their original
+            # shape. Partial or invalid profiles never become historical data.
+            if require_execution_profile or EXECUTION_PROFILE_FIELDS & value.keys():
+                allowed |= EXECUTION_PROFILE_FIELDS
         if not isinstance(value, dict) or set(value) != allowed:
             raise CampaignError("invalid bounded provenance fields")
         if len(canonical(value)) > 4096:
@@ -173,6 +199,9 @@ def build_campaign(provenance, *, resource=False, flight_profiles=()):
         "time_zone": "+00:00",
     }:
         raise CampaignError("campaign session semantics differ")
+    config = provenance["config"]
+    if require_execution_profile or EXECUTION_PROFILE_FIELDS & config.keys():
+        validate_execution_profile(config)
     expected = {
         "gpu_memory_bytes": 6 << 30,
         "native_host_memory_bytes": 16 << 30,
@@ -1013,6 +1042,7 @@ def execute_campaign(campaign, executor, scratch):
     identities = set()
     produced = set()
     try:
+        validate_execution_profile(campaign["provenance"]["config"])
         for spec in campaign["schedule"]:
             request = copy.deepcopy(spec)
             request["spool_budget_bytes"] = min(
@@ -1101,6 +1131,7 @@ def summarize(campaign, records):
         campaign["provenance"],
         resource=campaign["resource_campaign"],
         flight_profiles=campaign["flight_profiles"],
+        require_execution_profile=False,
     )
     if campaign != trusted:
         raise CampaignError("summary rejects a partial or modified acceptance schedule")

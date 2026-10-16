@@ -60,4 +60,15 @@ select * from t3 order by col1;
 delete from t3;
 load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello'), col1=nullif(col1, 'HELLO');
 select * from t3 order by col1;
+-- #30320: unsupported SET expressions must fail before inserting any rows.
+delete from t3;
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' set col2='CONSTVAL';
+select count(*) as rejected_rows from t3;
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' (@v,col2) set col1=upper(@v);
+select count(*) as rejected_rows from t3;
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' set col1=nullif(col1,'x'),col2=concat(col2,'!');
+select count(*) as rejected_rows from t3;
+-- The supported NULLIF mapping must still be applied.
+load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello');
+select * from t3 order by col1;
 drop table t3;
