@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -37,7 +38,7 @@ func TestSetOperationFloatKeyProtocolPlacementSendReceive(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.SetOperationFloatKeys)
-	require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
@@ -50,32 +51,32 @@ func TestSetOperationFloatKeyProtocolPlacementSendReceive(t *testing.T) {
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		require.Equal(t, want, c.execType)
 	}
-	place(defines.MORPCVersion115, plan2.ExecTypeAP_ONECN)
+	place(defines.MORPCVersion116, plan2.ExecTypeAP_ONECN)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 116")
+	require.ErrorContains(t, err, "version 117")
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
-	place(defines.MORPCVersion116, plan2.ExecTypeAP_MULTICN)
+	place(defines.MORPCVersion117, plan2.ExecTypeAP_MULTICN)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
-	client.version = defines.MORPCVersion115
+	client.version = defines.MORPCVersion116
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 116", "send checks changed actual destination")
+	require.ErrorContains(t, err, "version 117", "send checks changed actual destination")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 116")
+	require.ErrorContains(t, err, "version 117")
 	require.Equal(t, client.calls, client.releases)
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	data, err := p.Marshal()
 	require.NoError(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion115, defines.MORPCVersion116} {
+	for _, version := range []int64{defines.MORPCVersion116, defines.MORPCVersion117} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		validationErr := validateRemoteExpressionPipelineProtocol(c.proc, p)
 		_, decodeErr := decodeScope(data, c.proc, true, nil)
-		if version == defines.MORPCVersion115 {
-			require.ErrorContains(t, validationErr, "version 116")
-			require.ErrorContains(t, decodeErr, "version 116")
+		if version == defines.MORPCVersion116 {
+			require.ErrorContains(t, validationErr, "version 117")
+			require.ErrorContains(t, decodeErr, "version 117")
 		} else {
 			require.NoError(t, validationErr)
 			require.NoError(t, decodeErr)
@@ -123,11 +124,11 @@ func TestCompiledSetOperationFloatKeyProtocol(t *testing.T) {
 			scope.Magic = Remote
 			scope.NodeInfo.Id = "old-worker"
 			scope.NodeInfo.Addr = "remote:6001"
-			client.version = defines.MORPCVersion115
-			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 116")
-			require.Positive(t, client.calls, "actual stage must probe its destination")
 			client.version = defines.MORPCVersion116
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err, "version 117")
+			require.Positive(t, client.calls, "actual stage must probe its destination")
+			client.version = defines.MORPCVersion117
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 			var wire pipeline.Pipeline
@@ -137,9 +138,66 @@ func TestCompiledSetOperationFloatKeyProtocol(t *testing.T) {
 			require.True(t, features.SetOperationFloatKeys)
 			require.Equal(t, client.calls, client.releases)
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 			_, err = decodeScope(data, c.proc, true, nil)
-			require.ErrorContains(t, err, "version 116")
+			require.ErrorContains(t, err, "version 117")
+		})
+	}
+}
+
+// A set-key floor must compose with SELECT-only division diagnostics without
+// making either capability depend on the other's session policy.
+func TestSetOperationFloatKeyAndDivisionProtocol(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	c.proc.SetStmtProfile(&process.StmtProfile{})
+	c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	c.proc.SetResolveVariableFunc(nil)
+	key, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "set_operation_float_key", []*planpb.Expr{
+		plan2.GetColExpr(types.T_float64.ToType().PlanType(), 0, 0),
+	})
+	require.NoError(t, err)
+	division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
+		plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 1),
+		plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 2),
+	})
+	require.NoError(t, err)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, tc := range []struct {
+		name   string
+		exprs  []*planpb.Expr
+		hasKey bool
+	}{
+		{"division", []*planpb.Expr{division}, false},
+		{"set-key", []*planpb.Expr{key}, true},
+		{"combined", []*planpb.Expr{division, key}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: tc.exprs}}}
+			features, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.NoError(t, err)
+			require.Equal(t, tc.hasKey, features.SetOperationFloatKeys)
+			for _, mode := range []string{"ERROR_FOR_DIVISION_BY_ZERO", ""} {
+				c.proc.GetSessionInfo().SqlMode = mode
+				want := remoteExpressionProtocolVersion(features)
+				if tc.hasKey {
+					require.Equal(t, defines.MORPCVersion117, want)
+				} else {
+					require.Less(t, want, defines.MORPCVersion116, "division diagnostics are not a persisted expression contract")
+					if mode != "" {
+						want = defines.MORPCVersion116
+					}
+				}
+				require.Equal(t, want, executionRemoteExpressionProtocolVersion(c.proc, features))
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+				err = validateRemoteExpressionPipelineProtocol(c.proc, p)
+				if tc.hasKey {
+					require.ErrorContains(t, err, "version 117")
+				} else {
+					require.NoError(t, err)
+				}
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+			}
 		})
 	}
 }
