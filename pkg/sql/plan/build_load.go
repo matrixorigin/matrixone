@@ -703,6 +703,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
