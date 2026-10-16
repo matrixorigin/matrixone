@@ -13,4 +13,28 @@ load data infile '$resources/into_outfile/array_out.csv' into table vec_table fi
 select * from vec_table;
 ➤ a[4,32,0]  ¦  b[12,3,0]  ¦  c[12,3,0]  𝄀
 1  ¦  [1, 2, 3]  ¦  [4, 5, 6]
+truncate table vec_table;
+load data infile {'filepath'='$resources/load_data/vector_array_object.jl','format'='jsonline','jsondata'='object'} into table vec_table;
+select a, b, c, vector_dims(b), vector_dims(c) from vec_table order by a;
+➤ a[4,32,0]  ¦  b[12,3,0]  ¦  c[12,3,0]  ¦  vector_dims(b)[-5,64,0]  ¦  vector_dims(c)[-5,64,0]  𝄀
+1  ¦  [4, 5, 6]  ¦  [-1.5, 0, 2.5]  ¦  3  ¦  3  𝄀
+2  ¦  [7, 8, 9]  ¦  [10, 11, 12]  ¦  3  ¦  3  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+truncate table vec_table;
+load data infile {'filepath'='$resources/load_data/vector_array_array.jl','format'='jsonline','jsondata'='array'} into table vec_table parallel 'true';
+select a, b, c, vector_dims(b), vector_dims(c) from vec_table order by a;
+➤ a[4,32,0]  ¦  b[12,3,0]  ¦  c[12,3,0]  ¦  vector_dims(b)[-5,64,0]  ¦  vector_dims(c)[-5,64,0]  𝄀
+1  ¦  [4, 5, 6]  ¦  [-1.5, 0, 2.5]  ¦  3  ¦  3  𝄀
+2  ¦  [7, 8, 9]  ¦  [10, 11, 12]  ¦  3  ¦  3  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+create external table json_object_vectors(a int, b vecf32(3), c vecf64(3)) infile {'filepath'='$resources/load_data/vector_array_object.jl','format'='jsonline','jsondata'='object'};
+select c from json_object_vectors where a = 1;
+➤ c[12,3,0]  𝄀
+[-1.5, 0, 2.5]
+create external table json_array_vectors(a int, b vecf32(3), c vecf64(3)) infile {'filepath'='$resources/load_data/vector_array_array.jl','format'='jsonline','jsondata'='array'};
+select a, b, c from json_array_vectors order by a;
+➤ a[4,32,0]  ¦  b[12,3,0]  ¦  c[12,3,0]  𝄀
+1  ¦  [4, 5, 6]  ¦  [-1.5, 0, 2.5]  𝄀
+2  ¦  [7, 8, 9]  ¦  [10, 11, 12]  𝄀
+3  ¦  null  ¦  null
 drop database vecdb2;

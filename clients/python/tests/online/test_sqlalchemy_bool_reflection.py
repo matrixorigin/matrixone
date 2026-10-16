@@ -26,12 +26,46 @@ import sqlalchemy as sa
 def mysql_engine(connection_params):
     host, port, user, password, database = connection_params
     engine = sa.create_engine(
-        sa.URL.create('mysql+pymysql', username=user, password=password, host=host, port=port, database=database)
+        sa.engine.URL.create('mysql+pymysql', username=user, password=password, host=host, port=port, database=database),
+        future=True,
     )
     try:
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.mark.online
+def test_describe_view_reflection_without_boolean_aliases(mysql_engine, connection_params):
+    """The three scalar types from #30045 must reflect without a BOOL workaround."""
+    database = connection_params[4]
+    suffix = uuid.uuid4().hex
+    source, view = [f'describe_reflection_{kind}_{suffix}' for kind in ('source', 'view')]
+    try:
+        # Commit before Inspector opens its independent metadata connection.
+        with mysql_engine.begin() as conn:
+            conn.exec_driver_sql(f'CREATE TABLE `{source}` (i INT, s VARCHAR(8), a DECIMAL(24,6))')
+            conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT * FROM `{source}`')
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', sa.exc.SAWarning)
+            inspector = sa.inspect(mysql_engine)
+            assert view in inspector.get_view_names(schema=database)
+            for name in (source, view):
+                columns = inspector.get_columns(name, schema=database)
+                assert [column['name'] for column in columns] == ['i', 's', 'a']
+                assert isinstance(columns[0]['type'], sa.Integer)
+                assert isinstance(columns[1]['type'], sa.String)
+                assert columns[1]['type'].length == 8
+                assert isinstance(columns[2]['type'], sa.Numeric)
+                assert (columns[2]['type'].precision, columns[2]['type'].scale) == (24, 6)
+                assert all(column['nullable'] for column in columns)
+                assert all(column['default'] is None for column in columns)
+                assert not any(isinstance(column['type'], sa.types.NullType) for column in columns)
+        assert not [warning for warning in caught if issubclass(warning.category, sa.exc.SAWarning)]
+    finally:
+        with mysql_engine.begin() as conn:
+            conn.exec_driver_sql(f'DROP VIEW IF EXISTS `{view}`')
+            conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{source}`')
 
 
 @pytest.mark.online

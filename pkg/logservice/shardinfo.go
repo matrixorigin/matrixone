@@ -68,8 +68,15 @@ func GetShardInfo(
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
+	result, ready := routableShardInfo(si)
+	return result, ready, nil
+}
+
+// routableShardInfo applies the shared discovery policy to a raw gossip view.
+// Addresses are routing hints; the client still verifies shard availability.
+func routableShardInfo(si pb.ShardInfoQueryResult) (ShardInfo, bool) {
 	if si.LeaderID == 0 {
-		return ShardInfo{}, false, nil
+		return ShardInfo{}, false
 	}
 	leader, present := si.Replicas[si.LeaderID]
 	if !present || leader.ServiceAddress == "" {
@@ -91,11 +98,11 @@ func GetShardInfo(
 				result.Replicas[replicaID] = info.ServiceAddress
 			}
 			if result.ReplicaID != 0 {
-				return result, true, nil
+				return result, true
 			}
 		}
 		// leader address is unknown, and no surviving replicas to fall back to
-		return ShardInfo{}, false, nil
+		return ShardInfo{}, false
 	}
 	result := ShardInfo{
 		ReplicaID: si.LeaderID,
@@ -107,7 +114,7 @@ func GetShardInfo(
 		}
 		result.Replicas[replicaID] = info.ServiceAddress
 	}
-	return result, true, nil
+	return result, true
 }
 
 // queryShardInfoRawFn is overridable in tests. Production uses the real RPC.

@@ -1289,7 +1289,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with CURRENT ROW start and PRECEDING end - should return error",
@@ -1307,7 +1307,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with GROUPS frame - should return error",
