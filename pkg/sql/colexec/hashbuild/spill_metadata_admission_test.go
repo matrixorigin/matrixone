@@ -45,7 +45,7 @@ func (fs *metadataAdmissionFS) RemoveFile(ctx context.Context, name string) erro
 	return fs.MutableFileService.RemoveFile(ctx, name)
 }
 
-func TestSpillWriterCacheCleanupAfterRemoveFailure(t *testing.T) {
+func TestHashBuildSpillCacheAndMetadataCleanupAfterRemoveFailure(t *testing.T) {
 	for _, detached := range []bool{false, true} {
 		name := "bundle-retry"
 		if detached {
