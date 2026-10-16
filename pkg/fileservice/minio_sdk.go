@@ -176,7 +176,21 @@ func NewMinioSDK(
 		}
 	}
 
-	options.Creds = credentials.NewChainCredentials(credentialProviders)
+	if args.callerCredentialsOnly && args.RoleARN != "" {
+		// A requested role must never fall back to static or anonymous credentials.
+		client := newHTTPClient(args)
+		client.Transport = sqlMinioSTSTransport{ctx: ctx, next: client.Transport}
+		provider := &credentials.STSAssumeRole{
+			Client: client, STSEndpoint: args.Endpoint,
+			Options: credentials.STSAssumeRoleOptions{AccessKey: keyID, SecretKey: keySecret, SessionToken: sessionToken, RoleARN: args.RoleARN, RoleSessionName: args.RoleSessionName, ExternalID: args.ExternalID, Location: args.Region},
+		}
+		options.Creds = credentials.New(provider)
+		if _, err := options.Creds.Get(); err != nil {
+			return nil, err
+		}
+	} else {
+		options.Creds = credentials.NewChainCredentials(credentialProviders)
+	}
 
 	// region
 	if args.Region != "" {
@@ -239,6 +253,18 @@ func NewMinioSDK(
 		),
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+// MinIO's STS provider creates requests without a context. SQL dynamic services
+// belong to one operation, so initial credentials and refresh borrow its lifetime.
+// This transport is used only for STS, not ordinary object requests or native services.
+type sqlMinioSTSTransport struct {
+	ctx  context.Context
+	next http.RoundTripper
+}
+
+func (t sqlMinioSTSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.next.RoundTrip(req.WithContext(t.ctx))
 }
 
 var _ ObjectStorage = new(MinioSDK)

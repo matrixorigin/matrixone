@@ -322,7 +322,7 @@ create database db01;
 use db01;
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data local infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t11;
 ➤ col1[4,32,0]  𝄀
 1  𝄀
@@ -337,14 +337,13 @@ show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage11  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  this is a stage
 select col1 from t11 into outfile 'stage://stage11/local_stage_table011.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 drop table if exists t11;
 create table t11 (col1 int);
 load data infile 'stage://stage11/local_stage_table011.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
+internal error: only the sys account moadmin role can access SQL file paths
 select * from t11;
-➤ col1[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3
+➤ col1[4,32,0]
 drop table t11;
 drop stage stage11;
 drop database db01;

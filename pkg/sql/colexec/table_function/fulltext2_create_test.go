@@ -15,6 +15,9 @@
 package table_function
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -507,39 +510,86 @@ func TestFulltext2CreateEndNotInited(t *testing.T) {
 }
 
 // TestFulltext2CreateSealAndEnd forces a seal (capacity=1) so the persistence path runs:
-// DeleteAllBasesSqls + ToInsertSqls (spilling to an os temp file, since no LOCAL
-// fileservice) are captured by a stubbed fulltext2_runSql, then end() seals the final
+// DeleteAllBasesSqls + Persist (spilling to an os temp file, since no LOCAL
+// fileservice) are captured at the borrowed executor boundary, then end() seals the final
 // (empty) segment and evicts the cache.
 func TestFulltext2CreateSealAndEnd(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"storage error", errors.New("storage write failed")},
+		{"cancelled storage", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			proc.Base.SessionInfo.Account = "tenant"
+			proc.Base.SessionInfo.Role = "accountadmin"
+			prev := fulltext2_runSql
+			t.Cleanup(func() { fulltext2_runSql = prev })
+			var ran int
+			dir := t.TempDir()
+			t.Setenv("TMPDIR", dir)
+			proc.Base.FileService = nil
+			fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				ran++
+				account, role := sqlproc.StatementOption().SessionIdentity()
+				require.Equal(t, "tenant", account)
+				require.Equal(t, "accountadmin", role)
+				return executor.Result{}, nil
+			}
+			mockIndexTxn(t, proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				ran++
+				account, role := opts.SessionIdentity()
+				require.Equal(t, "tenant", account)
+				require.Equal(t, "accountadmin", role)
+				require.NotContains(t, sql, "load_file")
+				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+				require.NoError(t, err)
+				require.Len(t, files, 1, "owned spill exists through synchronous execution")
+				if opts.HasParams() {
+					vec, err := opts.Params(mp)
+					require.NoError(t, err)
+					require.NotEmpty(t, vec.GetRawBytesAt(1))
+					vec.Free(mp)
+					return executor.Result{}, tc.err
+				}
+				return executor.Result{}, nil
+			})
 
-	prev := fulltext2_runSql
-	defer func() { fulltext2_runSql = prev }()
-	var ran int
-	fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		ran++
-		return executor.Result{}, nil
+			// capacity=1 seals one real spill without additional data or services.
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1})
+			require.NoError(t, err)
+			st := &fulltext2CreateState{}
+			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
+			t.Cleanup(func() {
+				st.free(tf, proc, false, nil)
+				for _, v := range vecs {
+					v.Free(mp)
+				}
+			})
+			err = st.start(tf, proc, 0, nil)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, st.cur)
+				require.Zero(t, st.cur.NumDocs())
+				// The final empty segment adds no storage statements.
+				before := ran
+				require.NoError(t, st.end(tf, proc))
+				require.Equal(t, before, ran)
+			}
+			require.Equal(t, int64(1), st.capacity)
+			require.Equal(t, 1, st.segIdx)
+			require.True(t, st.basesCleared)
+			files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+			require.NoError(t, err)
+			require.Empty(t, files, "success/error/cancellation removes the owned spill")
+			require.Equal(t, "tenant", proc.GetSessionInfo().Account)
+			require.Equal(t, "accountadmin", proc.GetSessionInfo().Role)
+		})
 	}
-
-	// capacity=1 ⇒ each doc seals its own segment.
-	cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram, Capacity: 1})
-	require.NoError(t, err)
-
-	st := &fulltext2CreateState{}
-	tf, _ := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
-	require.NoError(t, st.start(tf, proc, 0, nil))
-	require.Equal(t, int64(1), st.capacity)
-	// the doc reached capacity ⇒ its segment was sealed and persisted.
-	require.Equal(t, 1, st.segIdx)
-	require.True(t, st.basesCleared)
-	require.NotNil(t, st.cur) // a fresh empty builder replaces the sealed one
-	require.Equal(t, 0, st.cur.NumDocs())
-	require.Positive(t, ran)
-
-	// end() seals the (empty) trailing segment and evicts the cache; segIdx stays 1.
-	require.NoError(t, st.end(tf, proc))
-	require.Equal(t, 1, st.segIdx)
-
-	st.free(tf, proc, false, nil)
 }

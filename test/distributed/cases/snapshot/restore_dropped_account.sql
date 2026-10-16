@@ -239,7 +239,7 @@ create table t1(
                    col4 bool
 );
 set time_zone = 'SYSTEM';
-load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
+load data local infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
@@ -250,6 +250,8 @@ show stages;
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
+-- Preserve the snapshot data oracle using a client-owned input.
+load data local infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 
 drop table if exists vtab32;
@@ -309,6 +311,7 @@ select * from t1 where a like 'ab\_def' order by 1 asc;
 drop table if exists test02;
 create table test02 (col1 int, col2 datalink);
 insert into test02 values (1, 'file://$resources/load_data/time_date_2.csv');
+select col1, col2 = cast('file://$resources/load_data/time_date_2.csv' as datalink) as uri_preserved from test02;
 select col1, load_file(col2) from test02;
 -- @session
 

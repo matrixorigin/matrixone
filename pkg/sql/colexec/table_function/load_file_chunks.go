@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -106,11 +105,7 @@ func (st *loadFileChunksState) start(tf *TableFunction, proc *process.Process, n
 
 	endOffset := int64(0)
 	if dl.Size < 0 {
-		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-		if err != nil {
-			return err
-		}
-		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		entry, err := dl.StatFile(proc)
 		if err != nil {
 			return err
 		}
