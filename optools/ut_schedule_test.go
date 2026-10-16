@@ -210,10 +210,11 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 			cmd.Dir = ".."
 			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\"\n")
 			// Test Make's defaults, not the enclosing UT's scheduling overrides.
-			for _, value := range os.Environ() {
+			// Always model the eight-task CI parent, even in focused local runs.
+			for _, value := range append(os.Environ(), "UT_PARALLEL=8") {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)
