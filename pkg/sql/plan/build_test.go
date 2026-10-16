@@ -6100,26 +6100,35 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 func TestLoadCheckConstraintPolicy(t *testing.T) {
 	for _, table := range []string{"dept", "dept_composite_uk"} {
 		for _, tc := range []struct {
-			name, source, policy string
-			filter               bool
+			name, sql    string
+			filter, load bool
 		}{
-			{"inline_ignore", "inline format='csv', data='1,Sales,NY'", "ignore", true},
-			{"local_ignore", "local infile 'client.csv'", "ignore", true},
-			{"plain", "inline format='csv', data='1,Sales,NY'", "", false},
-			{"local_without_ignore", "local infile 'client.csv'", "", false},
+			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true},
+			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true},
+			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true},
+			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false},
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				addPositiveCheck(t, mock, table, "deptno")
-				stmt, err := mysql.ParseOne(t.Context(), "load data "+tc.source+" "+tc.policy+" into table "+table+" fields terminated by ','", 1)
+				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
 				require.NoError(t, err)
 				defer stmt.Free()
 				query, err := mock.Optimize(stmt)
 				require.NoError(t, err)
 				checks := 0
-				for _, node := range query.Nodes {
+				ignoreArbitration := false
+				for id := range reachableODKUPlanNodes(query) {
+					node := query.Nodes[id]
+					multiDedup := node.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup()
 					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
-						require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "LOAD duplicate-key policy must remain unchanged")
+						require.False(t, tc.load, "LOAD must keep its existing dedup bypass")
+						ignoreArbitration = ignoreArbitration || node.OnDuplicateAction == plan.Node_IGNORE
+					}
+					if multiDedup {
+						require.False(t, tc.load, "CHECK filtering must not enable INSERT IGNORE arbitration for LOAD")
+						ignoreArbitration = true
 					}
 					for _, expr := range node.FilterList {
 						if !exprContainsFuncName(expr, "_check_constraint_assert") {
@@ -6134,6 +6143,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 						require.Equal(t, tc.filter, node.FilterIsBarrier)
 					}
 				}
+				require.Equal(t, !tc.load, ignoreArbitration, "only INSERT IGNORE arbitrates duplicate keys")
 				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
 			})
 		}

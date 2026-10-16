@@ -130,15 +130,18 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 				})
 			}
 		}
-		t.Run("surviving rows keep duplicate and foreign key policies", func(t *testing.T) {
-			validCSV := filepath.Join(filepath.Dir(csv), "valid_checks.csv")
-			require.NoError(t, os.WriteFile(validCSV, []byte("2,k_input,1,6\n3,k_tail,1,8\n"), 0o600))
+		t.Run("insert ignore keeps duplicate arbitration", func(t *testing.T) {
 			exec(t, "create table "+database+".dup(id int primary key,k varchar(20),tag int,v int,check(v>0))")
 			exec(t, "insert into "+database+".dup values(2,'seed',1,5)")
-			// Existing LOAD primary-key conflicts are tracked by #25470. CHECK
-			// filtering must not enable INSERT IGNORE's duplicate arbitration.
-			exec(t, "load data infile '"+validCSV+"' ignore into table "+database+".dup fields terminated by ','")
-			require.ElementsMatch(t, [][3]int{{2, 5, 10}, {2, 6, 12}, {3, 8, 16}}, read(t, database+".dup", "v*2"))
+			// LOAD's dedup bypass is checked by TestLoadCheckConstraintPolicy.
+			// Do not require the duplicate-row corruption tracked by #25470.
+			exec(t, "insert ignore into "+database+".dup values(2,'k_input',1,6),(3,'k_tail',1,8)")
+			requireWarningCodes(t, ctx, conn, map[uint16]int{1062: 1})
+			require.Equal(t, [][3]int{{2, 5, 10}, {3, 8, 16}}, read(t, database+".dup", "v*2"))
+		})
+		t.Run("load ignore keeps foreign key rejection", func(t *testing.T) {
+			validCSV := filepath.Join(filepath.Dir(csv), "valid_checks.csv")
+			require.NoError(t, os.WriteFile(validCSV, []byte("2,k_input,1,6\n3,k_tail,1,8\n"), 0o600))
 			exec(t, "create table "+database+".parent(id int primary key)")
 			exec(t, "create table "+database+".child(id int primary key,k varchar(20),tag int,v int,check(v>0),foreign key(tag) references "+database+".parent(id))")
 			_, err := conn.ExecContext(ctx, "load data infile '"+validCSV+"' ignore into table "+database+".child fields terminated by ','")
