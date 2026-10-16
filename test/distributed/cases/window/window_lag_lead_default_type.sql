@@ -283,6 +283,24 @@ create view wtemporal_view as select id, lag(v,0,d) over (order by id) as lg,
 show columns from wtemporal_view;
 select * from wtemporal_view order by id;
 
+-- 公共字符串域保留排序身份，不能因未使用的 BIT/BOOL 默认值改变比较结果。
+create table wcollation (v varchar(100) collate utf8mb4_unicode_ci, t text collate utf8mb4_unicode_ci, b bit(3), flag bool);
+insert into wcollation values ('ß','ß',7,true);
+select v = 'ss' as source_equal, lag(v,0) over () = 'ss' as control_equal,
+       lag(v,0,b) over () = 'ss' as lg_v, lead(v,0,b) over () = 'ss' as ld_v,
+       lag(t,0,flag) over () = 'ss' as lg_t, lead(t,0,flag) over () = 'ss' as ld_t from wcollation;
+select lag(b,1,v) over () = 'ss' as varchar_default,
+       lead(flag,1,t) over () = 'ss' as text_default from wcollation;
+create table wcollation_copy as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+       lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+show create table wcollation_copy;
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_copy;
+create view wcollation_view as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+       lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+select column_name, collation_name from information_schema.columns
+       where table_schema = 'window_lag_lead_default_type' and table_name = 'wcollation_view' order by ordinal_position;
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_view;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';

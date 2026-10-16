@@ -8164,6 +8164,8 @@ func bindFuncExprImplByPlanExpr(
 				// VARCHAR capacity. Refine known display bounds, but never shrink
 				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
 				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text || commonType.Oid == types.T_blob {
+					// 重建公共字符串类型不能重置原有排序身份；字符集与版本必须一起传递。
+					commonType = types.MergeStringCollationMetadata(commonType, []types.Type{argsType[0], argsType[2]})
 					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
 					// An unknown result bound (for example JSON -> TEXT) cannot
 					// be bounded by only the other argument's declared capacity.

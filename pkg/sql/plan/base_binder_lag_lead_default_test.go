@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -168,6 +169,34 @@ func TestBindLagLeadDefaultStringDomain(t *testing.T) {
 	}
 }
 
+func TestBindLagLeadDefaultStringCollation(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		for _, oid := range []types.T{types.T_varchar, types.T_text} {
+			for _, scalar := range []types.T{types.T_bit, types.T_bool} {
+				for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8MB3UnicodeCI, types.CharsetUTF8MB4Bin, types.CharsetUTF8} {
+					for _, reverse := range []bool{false, true} {
+						label := fmt.Sprintf("%s/%s/%s/charset=%d/reverse=%t", name, oid, scalar, charset, reverse)
+						t.Run(label, func(t *testing.T) {
+							stringType := types.NewWithCharset(oid, 100, 0, charset)
+							value := &planpb.Expr{Typ: makePlan2Type(&stringType)}
+							def := &planpb.Expr{Typ: planpb.Type{Id: int32(scalar)}}
+							if reverse {
+								value, def = def, value
+							}
+							expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{value, makePlan2Int64ConstExprWithType(0), def})
+							require.NoError(t, err)
+							for _, typ := range []planpb.Type{expr.Typ, expr.GetF().Args[0].Typ, expr.GetF().Args[2].Typ} {
+								require.Equal(t, uint32(charset), typ.Charset)
+								require.Equal(t, uint32(stringType.CollationVersion), typ.CollationVersion)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestBindLagLeadDefaultTemporalDomain(t *testing.T) {
 	for _, name := range []string{"lag", "lead"} {
 		for _, tc := range []struct {
@@ -210,6 +239,8 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 			oid                    types.T
 			width, scale           int32
 		}{
+			{"varchar(100) collate utf8mb4_unicode_ci", "cast(7 as bit(3))", types.T_text, types.MaxLongTextLen, 0},
+			{"text collate utf8mb4_unicode_ci", "true", types.T_text, types.MaxLongTextLen, 0},
 			{"time(6)", "cast('2024-01-02' as date)", types.T_varchar, 24, 0},
 			{"date", "cast('12:34:56.123456' as time(6))", types.T_varchar, 24, 0},
 			{"datetime(6)", "cast('2024-01-02' as date)", types.T_datetime, 6, 6},
@@ -250,6 +281,7 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 				require.Equal(t, persisted.Cols[0].Typ.Width, rebuilt.Cols[0].Typ.Width)
 				require.Equal(t, persisted.Cols[0].Typ.Scale, rebuilt.Cols[0].Typ.Scale)
 				require.Equal(t, persisted.Cols[0].Typ.Charset, rebuilt.Cols[0].Typ.Charset)
+				require.Equal(t, persisted.Cols[0].Typ.CollationVersion, rebuilt.Cols[0].Typ.CollationVersion)
 			})
 		}
 	}

@@ -530,6 +530,42 @@ select * from wtemporal_view order by id;
 1  ¦  12:34:56.123456  ¦  12:34:56.123456  𝄀
 2  ¦  -838:59:58.123456  ¦  -838:59:58.123456  𝄀
 3  ¦  null  ¦  null
+create table wcollation (v varchar(100) collate utf8mb4_unicode_ci, t text collate utf8mb4_unicode_ci, b bit(3), flag bool);
+insert into wcollation values ('ß','ß',7,true);
+select v = 'ss' as source_equal, lag(v,0) over () = 'ss' as control_equal,
+lag(v,0,b) over () = 'ss' as lg_v, lead(v,0,b) over () = 'ss' as ld_v,
+lag(t,0,flag) over () = 'ss' as lg_t, lead(t,0,flag) over () = 'ss' as ld_t from wcollation;
+➤ source_equal[-7,1,0]  ¦  control_equal[-7,1,0]  ¦  lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+select lag(b,1,v) over () = 'ss' as varchar_default,
+lead(flag,1,t) over () = 'ss' as text_default from wcollation;
+➤ varchar_default[-7,1,0]  ¦  text_default[-7,1,0]  𝄀
+1  ¦  1
+create table wcollation_copy as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+show create table wcollation_copy;
+➤ Table[12,15,0]  ¦  Create Table[12,269,0]  𝄀
+wcollation_copy  ¦  CREATE TABLE `wcollation_copy` (
+  `lg_v` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ld_v` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `lg_t` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ld_t` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL
+)
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_copy;
+➤ lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+create view wcollation_view as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+select column_name, collation_name from information_schema.columns
+where table_schema = 'window_lag_lead_default_type' and table_name = 'wcollation_view' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+lg_v  ¦  utf8mb4_unicode_ci  𝄀
+ld_v  ¦  utf8mb4_unicode_ci  𝄀
+lg_t  ¦  utf8mb4_unicode_ci  𝄀
+ld_t  ¦  utf8mb4_unicode_ci
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_view;
+➤ lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';
