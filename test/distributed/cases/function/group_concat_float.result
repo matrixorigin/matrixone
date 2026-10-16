@@ -68,4 +68,18 @@ float_text    double_text    float_aggregate
 select cast(null as char) is null as null_cast, concat(cast(null as double)) is null as null_concat, cast(cast('123.450' as decimal(6,3)) as char) as decimal_control;
 null_cast    null_concat    decimal_control
 1    1    123.450
+select concat(cast('-1.2345678901234567e-15' as double)) as literal_concat;
+literal_concat
+-0.0000000000000012345678901234568
+insert into float_values (id,d) values
+(8,cast('-1.2345678901234567e-15' as double)),
+(9,cast('1.2345678901234567e-15' as double)),
+(10,cast('-1.2345678901234567e-14' as double)),
+(11,cast('-1.2345678901234567e-16' as double));
+select id, cast(d as char) as scalar_text, concat(d) as concat_text, concat_ws('',d) as concat_ws_text, quote(d) as quoted_text from float_values where id >= 8 order by id;
+id    scalar_text    concat_text    concat_ws_text    quoted_text
+8    -0.0000000000000012345678901234568    -0.0000000000000012345678901234568    -0.0000000000000012345678901234568    '-0.0000000000000012345678901234568'
+9    0.0000000000000012345678901234568    0.0000000000000012345678901234568    0.0000000000000012345678901234568    '0.0000000000000012345678901234568'
+10    -0.000000000000012345678901234567    -0.000000000000012345678901234567    -0.000000000000012345678901234567    '-0.000000000000012345678901234567'
+11    -1.2345678901234568e-16    -1.2345678901234568e-16    -1.2345678901234568e-16    '-1.2345678901234568e-16'
 drop database group_concat_float_28660;
