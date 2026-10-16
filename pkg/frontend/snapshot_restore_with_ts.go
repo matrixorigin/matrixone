@@ -191,6 +191,9 @@ func getTableInfosFromTS(ctx context.Context,
 					},
 				)
 			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
+			}
 			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
 		},
 	)
@@ -224,6 +227,12 @@ func showFullTablesFromTS(ctx context.Context,
 			relKind: cols[2],
 			viewDef: cols[3],
 		}
+	}
+	if err := annotateMaterializedViewStates(ans, dbName, ts, from,
+		func(query string, indices ...uint64) ([][]string, error) {
+			return getStringColsListFromTS(newCtx, bh, query, from, to, indices...)
+		}); err != nil {
+		return nil, err
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s`, get table number `%d`", from, ts, dbName, tblName, len(ans)))
 	return ans, nil
@@ -510,7 +519,10 @@ func restoreDatabaseFromTS(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}
@@ -787,7 +799,7 @@ func restoreViewsFromTS(
 				continue
 			}
 
-			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(toCtx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 

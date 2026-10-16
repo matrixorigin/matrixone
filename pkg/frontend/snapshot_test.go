@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -226,6 +228,67 @@ func setCurrentRestoreObject(
 	bh.sql2result[sql] = newMrsForRestoreStringRows(
 		[]string{"relname", "table_type", "relkind", "viewdef"}, rows)
 	return sql
+}
+
+func TestMaterializedViewRestoreClassification(t *testing.T) {
+	sql := buildTableInfoListSQL("db", "mv", 42, 7)
+	require.NotContains(t, sql, "create materialized view")
+
+	mv := &tableInfo{
+		typ:     materializedView,
+		tblName: "mv",
+		viewDef: `{"Stmt":"create materialized view mv as select 1"}`,
+	}
+	createSQL, ok := materializedViewCreateSQL(mv)
+	require.True(t, ok)
+	require.Equal(t, "create materialized view mv as select 1", createSQL)
+	require.True(t, isViewLike(mv))
+	require.False(t, isMaterializedViewState(&tableInfo{tblName: "__mo_mv_state_mv"}))
+	constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.StreamConfigsDef{Configs: []*plan.Property{{
+			Key: mvdefinition.OwnerProperty,
+			Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+				Format: mvdefinition.Format, TargetID: 10, Generation: 1, StateID: 42,
+			}),
+		}}},
+	}}).MarshalBinary()
+	require.NoError(t, err)
+	require.True(t, materializedViewStateOwnerValid("42", hex.EncodeToString(constraint)))
+	require.True(t, (&tableInfo{tblName: "__mo_mv_state_mv", mvState: true}).mvState)
+	require.False(t, isMaterializedViewState(&tableInfo{tblName: "mv"}))
+	require.Equal(t, "drop materialized view if exists `mv`", dropRestoreViewIfExistsSQL(mv))
+
+	ordinary := &tableInfo{typ: view, tblName: "v", viewDef: `{"Stmt":"create view v as select 'create materialized view x'"}`}
+	_, ok = materializedViewCreateSQL(ordinary)
+	require.False(t, ok)
+	require.Equal(t, "drop view if exists `v`", dropRestoreViewIfExistsSQL(ordinary))
+}
+
+func TestAnnotateMaterializedViewStatesRequiresCatalogOwnership(t *testing.T) {
+	constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.StreamConfigsDef{Configs: []*plan.Property{{
+			Key: mvdefinition.OwnerProperty,
+			Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+				Format: mvdefinition.Format, TargetID: 10, Generation: 1, StateID: 42,
+			}),
+		}}},
+	}}).MarshalBinary()
+	require.NoError(t, err)
+
+	infos := []*tableInfo{
+		{dbName: "db", tblName: "__mo_mv_state_real"},
+		{dbName: "db", tblName: "__mo_mv_state_public"},
+	}
+	err = annotateMaterializedViewStates(infos, "db", 100, 7,
+		func(sql string, _ ...uint64) ([][]string, error) {
+			if strings.Contains(sql, "__mo_mv_state_real") {
+				return [][]string{{"42", hex.EncodeToString(constraint)}}, nil
+			}
+			return [][]string{{"43", ""}}, nil
+		})
+	require.NoError(t, err)
+	require.True(t, isMaterializedViewState(infos[0]))
+	require.False(t, isMaterializedViewState(infos[1]))
 }
 
 func TestRestoreSequenceState(t *testing.T) {

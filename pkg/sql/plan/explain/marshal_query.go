@@ -242,6 +242,11 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			return "", moerr.NewInvalidInput(ctx, "Vector index scan metadata not found")
 		}
 		fmt.Fprintf(buf, "%s[%s]", IndexSearchScanLabel(m.node.IndexSearchScan), m.node.IndexSearchScan.Index.IndexName)
+	case plan.Node_VECTOR_INDEX_SCAN:
+		if m.node.VectorIndexScan == nil || m.node.VectorIndexScan.Index == nil {
+			return "", moerr.NewInvalidInput(ctx, "Vector index scan metadata not found")
+		}
+		fmt.Fprintf(buf, "Vector Index Scan[%s]", m.node.VectorIndexScan.Index.IndexName)
 	case plan.Node_FUZZY_FILTER:
 		return "fuzzy_filter", nil
 	case plan.Node_SAMPLE:
@@ -379,6 +384,22 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		labels = append(labels, models.Label{
 			Name:  Label_Table_Name,
 			Value: m.node.IndexSearchScan.Index.IndexName,
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Columns,
+			Value: GetTableColsLableValue(ctx, m.node.TableDef.Cols, options),
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Scan_Columns,
+			Value: len(m.node.TableDef.Cols),
+		})
+	case plan.Node_VECTOR_INDEX_SCAN:
+		if m.node.VectorIndexScan == nil || m.node.VectorIndexScan.Index == nil || m.node.TableDef == nil {
+			return nil, moerr.NewInvalidInput(ctx, "Vector index scan definition not found when plan is serialized to json")
+		}
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Name,
+			Value: m.node.VectorIndexScan.Index.IndexName,
 		})
 		labels = append(labels, models.Label{
 			Name:  Label_Table_Columns,

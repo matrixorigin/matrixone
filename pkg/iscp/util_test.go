@@ -257,8 +257,6 @@ func TestConvertColIntoSQLSpecialValues(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func ptrType(t types.Type) *types.Type { return &t }
-
 func TestRowFromVector(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
@@ -280,6 +278,27 @@ func TestRowFromVector(t *testing.T) {
 		sql = sql[:0]
 	}
 
+}
+
+func TestConvertNativeDecimalAndUUIDIntoSQL(t *testing.T) {
+	uuid := types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8})
+	tests := []struct {
+		name string
+		data any
+		typ  types.Type
+		want string
+	}{
+		{name: "decimal64", data: types.Decimal64(12345), typ: types.New(types.T_decimal64, 12, 2), want: "'123.45'"},
+		{name: "decimal128", data: types.Decimal128{B0_63: 12345}, typ: types.New(types.T_decimal128, 24, 2), want: "'123.45'"},
+		{name: "uuid", data: uuid, typ: types.New(types.T_uuid, 16, 0), want: "'00010002-0003-0004-0005-000600070008'"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := convertColIntoSql(t.Context(), test.data, &test.typ, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, string(got))
+		})
+	}
 }
 
 // TestExtractRowNativeRepr covers the ReprNative path added for binary CDC consumers
