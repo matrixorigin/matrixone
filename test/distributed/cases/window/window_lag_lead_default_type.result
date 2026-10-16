@@ -566,6 +566,53 @@ ld_t  ¦  utf8mb4_unicode_ci
 select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_view;
 ➤ lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
+create table wyear (id int, d decimal(20,4), y year, n bigint, ts timestamp(6));
+insert into wyear values (1,12.3456,2024,1000000000000,'2024-01-02 03:04:05.123456'),
+(2,null,0,-1000000000000,null);
+select id, d, lag(d,0) over (order by id) as control_value,
+lag(d,0,y) over (order by id) as lg, lead(d,0,y) over (order by id) as ld,
+lag(y,0,d) over (order by id) as year_source, lead(d,2,y) over (order by id) as year_default from wyear order by id;
+➤ id[4,32,0]  ¦  d[3,20,4]  ¦  control_value[3,20,4]  ¦  lg[3,20,4]  ¦  ld[3,20,4]  ¦  year_source[3,20,4]  ¦  year_default[3,20,4]  𝄀
+1  ¦  12.3456  ¦  12.3456  ¦  12.3456  ¦  12.3456  ¦  2024.0000  ¦  2024.0000  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0.0000  ¦  0.0000
+select id, n, lag(n,0,ts) over (order by id) as lg_n, lead(n,0,ts) over (order by id) as ld_n,
+lag(d,0,ts) over (order by id) as lg_d, lead(d,0,ts) over (order by id) as ld_d from wyear order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  lg_n[12,26,0]  ¦  ld_n[12,26,0]  ¦  lg_d[12,26,0]  ¦  ld_d[12,26,0]  𝄀
+1  ¦  1000000000000  ¦  1000000000000  ¦  1000000000000  ¦  12.3456  ¦  12.3456  𝄀
+2  ¦  -1000000000000  ¦  -1000000000000  ¦  -1000000000000  ¦  null  ¦  null
+select id, lag(n,2,ts) over (order by id) as timestamp_default,
+lead(ts,0,n) over (order by id) as timestamp_source,
+lag(ts,2,n) over (order by id) as integer_default,
+lead(ts,2,d) over (order by id) as decimal_default from wyear order by id;
+➤ id[4,32,0]  ¦  timestamp_default[12,26,0]  ¦  timestamp_source[12,26,0]  ¦  integer_default[12,26,0]  ¦  decimal_default[12,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.123456  ¦  2024-01-02 03:04:05.123456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  null  ¦  -1000000000000  ¦  null
+create table wyear_copy as select id, lag(d,0,y) over (order by id) as yd,
+lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show create table wyear_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,154,0]  𝄀
+wyear_copy  ¦  CREATE TABLE `wyear_copy` (
+  `id` int DEFAULT NULL,
+  `yd` decimal(20,4) DEFAULT NULL,
+  `tn` varchar(26) DEFAULT NULL,
+  `td` varchar(26) DEFAULT NULL
+)
+select * from wyear_copy order by id;
+➤ id[4,32,0]  ¦  yd[3,20,4]  ¦  tn[12,26,0]  ¦  td[12,26,0]  𝄀
+1  ¦  12.3456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  -1000000000000  ¦  null
+create view wyear_view as select id, lag(d,0,y) over (order by id) as yd,
+lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show columns from wyear_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+yd  ¦  decimal(20,4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tn  ¦  varchar(26)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+td  ¦  varchar(26)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wyear_view order by id;
+➤ id[4,32,0]  ¦  yd[3,20,4]  ¦  tn[12,26,0]  ¦  td[12,26,0]  𝄀
+1  ¦  12.3456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  -1000000000000  ¦  null
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';

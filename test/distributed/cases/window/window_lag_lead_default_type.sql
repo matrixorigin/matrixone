@@ -301,6 +301,28 @@ select column_name, collation_name from information_schema.columns
        where table_schema = 'window_lag_lead_default_type' and table_name = 'wcollation_view' order by ordinal_position;
 select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_view;
 
+-- YEAR 使用完整整数年份域；数值与时间混合不能把数值交给日期解析器。
+create table wyear (id int, d decimal(20,4), y year, n bigint, ts timestamp(6));
+insert into wyear values (1,12.3456,2024,1000000000000,'2024-01-02 03:04:05.123456'),
+       (2,null,0,-1000000000000,null);
+select id, d, lag(d,0) over (order by id) as control_value,
+       lag(d,0,y) over (order by id) as lg, lead(d,0,y) over (order by id) as ld,
+       lag(y,0,d) over (order by id) as year_source, lead(d,2,y) over (order by id) as year_default from wyear order by id;
+select id, n, lag(n,0,ts) over (order by id) as lg_n, lead(n,0,ts) over (order by id) as ld_n,
+       lag(d,0,ts) over (order by id) as lg_d, lead(d,0,ts) over (order by id) as ld_d from wyear order by id;
+select id, lag(n,2,ts) over (order by id) as timestamp_default,
+       lead(ts,0,n) over (order by id) as timestamp_source,
+       lag(ts,2,n) over (order by id) as integer_default,
+       lead(ts,2,d) over (order by id) as decimal_default from wyear order by id;
+create table wyear_copy as select id, lag(d,0,y) over (order by id) as yd,
+       lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show create table wyear_copy;
+select * from wyear_copy order by id;
+create view wyear_view as select id, lag(d,0,y) over (order by id) as yd,
+       lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show columns from wyear_view;
+select * from wyear_view order by id;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';

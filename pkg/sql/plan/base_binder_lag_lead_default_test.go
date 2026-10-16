@@ -68,6 +68,11 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"medium text byte capacity", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 20000}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, types.MaxMediumTextLen, 0},
 				{"varchar tinyblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 100}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 255}}, types.T_blob, 0, 0},
 				{"tinyblob varchar", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 255}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 100}}, types.T_blob, 0, 0},
+				{"integer year", makePlan2Int64ConstExprWithType(1000000000000), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}, types.T_int64, 0, 0},
+				{"year integer", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}, makePlan2Int64ConstExprWithType(1000000000000), types.T_int64, 0, 0},
+				{"decimal year", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}, types.T_decimal128, 20, 4},
+				{"year decimal", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 4}}, types.T_decimal64, 8, 4},
+				{"decimal null year", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, types.T_decimal256, 65, 65},
 				{"decimal bit", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 3}}, types.T_decimal64, 5, 2},
 				{"bit decimal", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 3}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 2}}, types.T_decimal64, 3, 2},
 				{"decimal bit64", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}}, types.T_decimal128, 22, 2},
@@ -122,6 +127,7 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				name       string
 				value, def *planpb.Expr
 			}{
+				{"year precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 62}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}},
 				{"bit default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 1}}},
 				{"bit source precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
 				{"bool default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2BoolConstExprWithType(true)},
@@ -203,6 +209,13 @@ func TestBindLagLeadDefaultTemporalDomain(t *testing.T) {
 			name             string
 			value, def, want types.Type
 		}{
+			{"integer timestamp", types.T_int64.ToType(), types.New(types.T_timestamp, 6, 6), types.New(types.T_varchar, 26, 0)},
+			{"decimal timestamp", types.New(types.T_decimal128, 20, 4), types.New(types.T_timestamp, 6, 6), types.New(types.T_varchar, 26, 0)},
+			{"integer date", types.T_int64.ToType(), types.T_date.ToType(), types.New(types.T_varchar, 20, 0)},
+			{"bit datetime", types.New(types.T_bit, 64, 0), types.New(types.T_datetime, 6, 6), types.New(types.T_varchar, 26, 0)},
+			{"float time", types.T_float64.ToType(), types.New(types.T_time, 6, 6), types.New(types.T_text, types.MaxLongTextLen, 0)},
+			{"bool date", types.T_bool.ToType(), types.T_date.ToType(), types.New(types.T_varchar, 10, 0)},
+			{"year timestamp", types.T_year.ToType(), types.New(types.T_timestamp, 6, 6), types.New(types.T_varchar, 26, 0)},
 			{"time date", types.New(types.T_time, 6, 6), types.T_date.ToType(), types.New(types.T_varchar, 24, 0)},
 			{"time datetime", types.New(types.T_time, 6, 6), types.New(types.T_datetime, 6, 6), types.New(types.T_varchar, 26, 0)},
 			{"time timestamp", types.New(types.T_time, 6, 6), types.New(types.T_timestamp, 6, 6), types.New(types.T_varchar, 26, 0)},
@@ -241,6 +254,8 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 		}{
 			{"varchar(100) collate utf8mb4_unicode_ci", "cast(7 as bit(3))", types.T_text, types.MaxLongTextLen, 0},
 			{"text collate utf8mb4_unicode_ci", "true", types.T_text, types.MaxLongTextLen, 0},
+			{"decimal(20,4)", "cast(2024 as year)", types.T_decimal128, 20, 4},
+			{"bigint", "cast('2024-01-02 03:04:05.123456' as timestamp(6))", types.T_varchar, 26, 0},
 			{"time(6)", "cast('2024-01-02' as date)", types.T_varchar, 24, 0},
 			{"date", "cast('12:34:56.123456' as time(6))", types.T_varchar, 24, 0},
 			{"datetime(6)", "cast('2024-01-02' as date)", types.T_datetime, 6, 6},

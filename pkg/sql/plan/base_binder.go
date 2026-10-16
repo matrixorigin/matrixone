@@ -8396,6 +8396,29 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 		scale := max(valueArg.Scale, defaultArg.Scale)
 		return types.New(oid, scale, scale), true, nil
 	}
+	if valueTemporal != defaultTemporal {
+		scalar, temporalWidth := valueArg, defaultWidth
+		if valueTemporal {
+			scalar, temporalWidth = defaultArg, valueWidth
+		}
+		if scalar.IsNumeric() || scalar.Oid == types.T_bool || scalar.Oid == types.T_year {
+			// 数值不是编码后的日期；用显示域合并，避免时间解析造成 NULL、
+			// 报错或舍入。FLOAT 无已知显示上界时保持未知容量。
+			width, known := controlFlowStringWidth(nil, scalar)
+			switch scalar.Oid {
+			case types.T_bit:
+				width, known = 20, true
+			case types.T_year:
+				width, known = 4, true
+			case types.T_bool:
+				width, known = 1, true
+			}
+			if known {
+				return types.New(types.T_varchar, max(width, temporalWidth), 0), true, nil
+			}
+			return types.New(types.T_varchar, 0, 0), true, nil
+		}
+	}
 	if (valueArg.IsNumeric() && defaultArg.Oid == types.T_bool) ||
 		(valueArg.Oid == types.T_bool && defaultArg.IsNumeric()) {
 		// A Boolean contributes 0/1 to a numeric value domain. COALESCE's
@@ -8418,13 +8441,13 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
-	if valueArg.Oid == types.T_bit && defaultArg.Oid.IsDecimal() {
-		// Align the decimal operand first. The original default expression
-		// is not the BIT source, so use its declared domain rather than its literal.
+	if (valueArg.Oid == types.T_bit || valueArg.Oid == types.T_year) && defaultArg.Oid.IsDecimal() {
+		// 将 DECIMAL 对齐到前面；原默认表达式不是 BIT/YEAR 源值，
+		// 因此交换后按完整声明域合并，不借用错误的字面量宽度。
 		valueArg, defaultArg = defaultArg, valueArg
 		defaultExpr = nil
 	}
-	if valueArg.Oid.IsDecimal() && (defaultArg.Oid.IsInteger() || defaultArg.Oid == types.T_bit) {
+	if valueArg.Oid.IsDecimal() && (defaultArg.Oid.IsInteger() || defaultArg.Oid == types.T_bit || defaultArg.Oid == types.T_year) {
 		// Zero fits even DECIMAL(M,M); it needs no extra integer digit.
 		digits, known := decimalIntegerWidth(defaultExpr, defaultArg, true)
 		if defaultArg.Oid == types.T_bit && !known {
@@ -8433,6 +8456,10 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 				bits = 64
 			}
 			digits = int32(len(strconv.FormatUint(math.MaxUint64>>uint(64-bits), 10)))
+		}
+		if defaultArg.Oid == types.T_year && !known {
+			// YEAR 的完整年份域最多四位，不按物理整数重载丢弃小数。
+			digits = 4
 		}
 		if lit := defaultExpr.GetLit(); lit != nil && lit.Isnull {
 			digits = 0
@@ -8444,6 +8471,13 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
+	}
+	// YEAR 的完整值域可由 INT16 表示，但不能用 YEAR 接收普通数值。
+	if valueArg.Oid == types.T_year && defaultArg.IsNumeric() {
+		valueArg = types.T_int16.ToType()
+	}
+	if defaultArg.Oid == types.T_year && valueArg.IsNumeric() {
+		defaultArg = types.T_int16.ToType()
 	}
 	// BIT's payload is an unsigned integer. Resolve other numeric mixtures
 	// using that domain instead of the physical BIT overload's cast costs.
