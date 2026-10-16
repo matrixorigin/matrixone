@@ -611,6 +611,7 @@ func TestWalkExprForSubqueries_MoreTypes(t *testing.T) {
 		{"IS NULL", "SELECT * FROM t1 WHERE (SELECT x FROM tpch.t2 LIMIT 1) IS NULL"},
 		{"IS NOT NULL", "SELECT * FROM t1 WHERE (SELECT x FROM tpch.t2 LIMIT 1) IS NOT NULL"},
 		{"CAST", "SELECT CAST((SELECT x FROM tpch.t2 LIMIT 1) AS SIGNED) FROM t1"},
+		{"COLLATE", "SELECT (SELECT x FROM tpch.t2 LIMIT 1) COLLATE utf8mb4_bin FROM t1"},
 		{"func arg", "SELECT coalesce((SELECT x FROM tpch.t2 LIMIT 1), 0) FROM t1"},
 		{"tuple", "SELECT * FROM t1 WHERE (a,b) IN (SELECT x,y FROM tpch.t2)"},
 	}
@@ -619,10 +620,15 @@ func TestWalkExprForSubqueries_MoreTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
+			defer stmts[0].Free()
 			sel := stmts[0].(*tree.Select)
 			rewriteSelectStmt(sel.Select, "default_db", "http://mo:6060", nil)
 			result := tree.String(sel, dialect.MYSQL)
 			assert.Contains(t, result, "tae_scan(", "should rewrite subquery table in: %s", tc.name)
+			if tc.name == "COLLATE" {
+				assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.t2')")
+				assert.NotContains(t, result, "from tpch.t2")
+			}
 		})
 	}
 }

@@ -39,6 +39,10 @@ func TestLoadSetRejectsUnsupportedExpressions(t *testing.T) {
 		{"valid then unsupported", "n_name=nullif(n_name,'NULL'),n_comment='CONSTVAL'"},
 		{"unsupported then valid", "n_comment='CONSTVAL',n_name=nullif(n_name,'NULL')"},
 		{"same target", "n_comment=nullif(n_comment,'NULL'),n_comment='CONSTVAL'"},
+		{"collated constant", "n_comment='CONSTVAL' COLLATE utf8mb4_bin"},
+		{"collated unsupported function", "n_comment=upper(@v) COLLATE utf8mb4_bin"},
+		{"collated then unsupported", "n_comment=nullif(@v,'NULL') COLLATE utf8mb4_bin,n_name='CONSTVAL'"},
+		{"unsupported then collated", "n_name='CONSTVAL',n_comment=nullif(@v,'NULL') COLLATE utf8mb4_bin"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testLoadSetRejectedWithoutMutation(t, tc.assignment, moerr.ErrNotSupported)
@@ -58,6 +62,38 @@ func TestLoadSetMalformedNullIfDoesNotConsumeEarlierAssignments(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testLoadSetRejectedWithoutMutation(t, "n_name=nullif(n_name,'NULL'),"+tc.assignment, moerr.ErrInvalidInput)
+		})
+	}
+}
+
+func TestLoadSetCollatedNullIfValidation(t *testing.T) {
+	for _, tc := range []struct {
+		expression string
+		wantError  bool
+	}{
+		{expression: "NULLIF(@v,'NULL') COLLATE utf8mb4_bin"},
+		{expression: "(NULLIF(@v,'NULL')) COLLATE utf8mb4_unicode_ci"},
+		{expression: "((NULLIF(@v,'NULL') COLLATE utf8mb4_bin)) COLLATE utf8mb4_bin"},
+		{expression: "NULLIF(n_name,'NULL') COLLATE utf8mb4_bin", wantError: true},
+	} {
+		t.Run(tc.expression, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			statement, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+				"LOAD DATA INLINE FORMAT='csv', DATA='x,y' INTO TABLE nation SET n_name=nullif(n_name,'NULL'),n_name="+tc.expression, 1)
+			require.NoError(t, err)
+			defer statement.Free()
+			load := statement.(*tree.Load)
+			original := tree.String(load, dialect.MYSQL)
+			for range 2 {
+				err := validateLoadSetAssignments(load.Param, ctx)
+				if tc.wantError {
+					require.ErrorContains(t, err, "COLLATE on column NULLIF")
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, original, tree.String(load, dialect.MYSQL))
+				require.Nil(t, load.Param.NullMap, "validation must not consume earlier assignments")
+			}
 		})
 	}
 }

@@ -32,6 +32,7 @@ func TestInitNullMapRebindReturnsSameRules(t *testing.T) {
 		want              map[string][]string
 	}{
 		{"single", "a=nullif(a,'null')", map[string][]string{"a": {"null"}}},
+		{"parenthesized", "a=(nullif(a,'null'))", map[string][]string{"a": {"null"}}},
 		{"multiple sentinels", "a=nullif(a,'null'),a=nullif(a,'')", map[string][]string{"a": {"null", ""}}},
 		{"multiple columns", "a=nullif(a,'null'),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
 		{"skip non-nullif on same column", "a=nullif(a,'null'),a=upper(a),b=nullif(b,'nil')", map[string][]string{"a": {"null"}, "b": {"nil"}}},
