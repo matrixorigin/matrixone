@@ -738,12 +738,15 @@ func (flusher *flushImpl) fireFlushTabletail(
 
 	metaChunks := slices.Chunk(metas, 400)
 	firstChunk := true
+	deferred := false
 
-nextChunk:
 	for chunk := range metaChunks {
-		if len(chunk) == 1 && chunk[0] == nil {
+		tombstoneOnly := len(chunk) == 1 && chunk[0] == nil
+		if tombstoneOnly {
 			chunk = chunk[:0] // remove the placeholder
 		}
+		// The factory captures this slice; keep each admitted chunk immutable.
+		ready := make([]*catalog.ObjectEntry, 0, len(chunk))
 		scopes := make([]common.ID, 0, len(chunk))
 		for _, meta := range chunk {
 			if !meta.GetObjectData().PrepareCompact() {
@@ -752,9 +755,14 @@ nextChunk:
 					zap.String("table", tableDesc),
 					zap.String("obj", meta.ID().String()),
 				)
-				break nextChunk
+				deferred = true
+				continue
 			}
+			ready = append(ready, meta)
 			scopes = append(scopes, *meta.AsCommonID())
+		}
+		if len(ready) == 0 && !tombstoneOnly {
+			continue
 		}
 		if firstChunk {
 			for _, meta := range tombstoneMetas {
@@ -773,14 +781,14 @@ nextChunk:
 		}
 		var factory tasks.TxnTaskFactory
 		if firstChunk {
-			factory = jobs.FlushTableTailTaskFactory(chunk, tombstoneMetas, flusher.rt)
+			factory = jobs.FlushTableTailTaskFactory(ready, tombstoneMetas, flusher.rt)
 			firstChunk = false
 		} else {
 			logutil.Info("flusher.table.tail.fire.chunk",
 				zap.String("table", tableDesc),
-				zap.Int("chunk-size", len(chunk)),
+				zap.Int("chunk-size", len(ready)),
 			)
-			factory = jobs.FlushTableTailTaskFactory(chunk, nil, flusher.rt)
+			factory = jobs.FlushTableTailTaskFactory(ready, nil, flusher.rt)
 		}
 
 		_, err := flusher.rt.Scheduler.ScheduleMultiScopedTxnTask(
@@ -796,6 +804,10 @@ nextChunk:
 		}
 	}
 
+	if deferred {
+		// Partial admission must not postpone retries by resetting the deadline.
+		return moerr.GetOkExpectedEOB()
+	}
 	return nil
 }
 
