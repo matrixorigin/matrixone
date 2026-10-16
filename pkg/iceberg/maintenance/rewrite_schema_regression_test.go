@@ -164,26 +164,80 @@ func TestRewriteDataFilesProjectionRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+func TestRewriteDataFilesProjectionIdentity(t *testing.T) {
+	long := parquet.FieldID(parquet.Int(64), 1)
+	optional := parquet.FieldID(parquet.Optional(parquet.Int(64)), 1)
+	other := parquet.FieldID(parquet.Int(64), 2)
+	for _, tc := range []struct {
+		name              string
+		source, target    parquet.Group
+		identity, invalid bool
+	}{
+		{"required", parquet.Group{"id": long}, parquet.Group{"id": long}, true, false},
+		{"optional", parquet.Group{"id": optional}, parquet.Group{"id": optional}, true, false},
+		{"rename", parquet.Group{"id": long}, parquet.Group{"renamed": long}, true, false},
+		{"plain_signed_equivalent", parquet.Group{"id": parquet.FieldID(parquet.Leaf(parquet.Int64Type), 1)}, parquet.Group{"id": long}, true, false},
+		{"reorder", parquet.Group{"a": long, "z": other}, parquet.Group{"a": other, "z": long}, false, false},
+		{"reused_name", parquet.Group{"id": optional}, parquet.Group{"id": parquet.FieldID(parquet.Optional(parquet.Int(64)), 2)}, false, false},
+		{"added", parquet.Group{"id": long}, parquet.Group{"id": long, "new": parquet.FieldID(parquet.Optional(parquet.Int(64)), 2)}, false, false},
+		{"dropped", parquet.Group{"id": long, "old": other}, parquet.Group{"id": long}, false, false},
+		{"promotion", parquet.Group{"id": parquet.FieldID(parquet.Int(32), 1)}, parquet.Group{"id": long}, false, false},
+		{"relax_required", parquet.Group{"id": long}, parquet.Group{"id": optional}, false, false},
+		{"require_optional", parquet.Group{"id": optional}, parquet.Group{"id": long}, false, false},
+		{"missing_ids", parquet.Group{"id": parquet.Int(64)}, parquet.Group{"id": parquet.Int(64)}, false, true},
+		{"duplicate_ids", parquet.Group{"a": long, "z": long}, parquet.Group{"a": long, "z": long}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := newRewriteDataFilesProjection(nil, parquet.NewSchema("target", tc.target), parquet.NewSchema("source", tc.source))
+			if tc.invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.identity, plan.identity)
+		})
+	}
+}
+
 func TestRewriteDataFilesProjectionAcrossRowBatches(t *testing.T) {
-	// 129 rows are the minimum that reuses the 128-row projection scratch. The
-	// byte-array value must remain valid after both input and output are reused.
-	source := parquet.NewSchema("old", parquet.Group{"a_text": parquet.FieldID(parquet.String(), 2), "z_id": parquet.FieldID(parquet.Int(64), 1)})
-	rows := make([]parquet.Row, 129)
-	for i := range rows {
-		rows[i] = parquet.Row{parquet.ByteArrayValue([]byte(fmt.Sprintf("row-%d", i))).Level(0, 0, 0), parquet.Int64Value(int64(i)).Level(0, 0, 1)}
-	}
-	result, err := compactEvolutionFiles(t, []api.SchemaField{{ID: 1, Name: "a_id", Type: api.IcebergType{Kind: api.TypeLong}}, {ID: 2, Name: "z_text", Type: api.IcebergType{Kind: api.TypeString}}}, []*parquet.Schema{source}, [][]parquet.Row{rows}, 0)
-	require.NoError(t, err)
-	reader := parquet.NewReader(bytes.NewReader(result.Objects[0].Payload))
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	output := make([]parquet.Row, len(rows))
-	n, err := reader.ReadRows(output)
-	if err != nil {
-		require.ErrorIs(t, err, io.EOF)
-	}
-	require.Equal(t, len(rows), n)
-	for i, row := range output {
-		require.Equal(t, int64(i), row[0].Int64())
-		require.Equal(t, fmt.Sprintf("row-%d", i), string(row[1].ByteArray()))
+	// 129 rows are the minimum that reuses the 128-row reader/projection
+	// scratch. Byte arrays and NULLs must survive reuse on both paths.
+	for _, identity := range []bool{false, true} {
+		t.Run(fmt.Sprintf("identity=%t", identity), func(t *testing.T) {
+			source := parquet.NewSchema("old", parquet.Group{"a_text": parquet.FieldID(parquet.String(), 2), "z_id": parquet.FieldID(parquet.Int(64), 1)})
+			if identity {
+				source = parquet.NewSchema("current", parquet.Group{"a_id": parquet.FieldID(parquet.Optional(parquet.Int(64)), 1), "z_text": parquet.FieldID(parquet.Optional(parquet.String()), 2)})
+			}
+			rows := make([]parquet.Row, 129)
+			for i := range rows {
+				if identity {
+					text := parquet.ByteArrayValue([]byte(fmt.Sprintf("row-%d", i))).Level(0, 1, 1)
+					if i%2 == 0 {
+						text = parquet.NullValue().Level(0, 0, 1)
+					}
+					rows[i] = parquet.Row{parquet.Int64Value(int64(i)).Level(0, 1, 0), text}
+				} else {
+					rows[i] = parquet.Row{parquet.ByteArrayValue([]byte(fmt.Sprintf("row-%d", i))).Level(0, 0, 0), parquet.Int64Value(int64(i)).Level(0, 0, 1)}
+				}
+			}
+			result, err := compactEvolutionFiles(t, []api.SchemaField{{ID: 1, Name: "a_id", Type: api.IcebergType{Kind: api.TypeLong}}, {ID: 2, Name: "z_text", Type: api.IcebergType{Kind: api.TypeString}}}, []*parquet.Schema{source}, [][]parquet.Row{rows}, 0)
+			require.NoError(t, err)
+			reader := parquet.NewReader(bytes.NewReader(result.Objects[0].Payload))
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			output := make([]parquet.Row, len(rows))
+			n, err := reader.ReadRows(output)
+			if err != nil {
+				require.ErrorIs(t, err, io.EOF)
+			}
+			require.Equal(t, len(rows), n)
+			for i, row := range output {
+				require.Equal(t, int64(i), row[0].Int64())
+				if identity && i%2 == 0 {
+					require.True(t, row[1].IsNull())
+				} else {
+					require.Equal(t, fmt.Sprintf("row-%d", i), string(row[1].ByteArray()))
+				}
+			}
+		})
 	}
 }
