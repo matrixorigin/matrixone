@@ -153,10 +153,10 @@ func (proc *Process) RequireDependentProtocol() error {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			raw, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := raw.(int64)
-			if ok && valid && version >= defines.MORPCVersion117 {
+			if ok && valid && version >= defines.MORPCVersion118 {
 				return nil
 			}
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("dependent subqueries require coordinator protocol version 117")
+	return moerr.NewNotSupportedNoCtx("dependent subqueries require coordinator protocol version 118")
 }

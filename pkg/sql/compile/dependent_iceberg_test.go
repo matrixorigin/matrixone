@@ -52,7 +52,7 @@ func TestDependentIcebergInsert(t *testing.T) {
 			defer proc.Free()
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
 			proc.SetStmtProfile(process.NewStmtProfile(uuid.Nil, uuid.New()))
-			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion118)
 			sqlExec := &dependentIcebergCatalog{t: t, proc: proc}
 			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.InternalSQLExecutor, sqlExec)
 			var coordinators []*dependentIcebergCoordinator

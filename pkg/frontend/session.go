@@ -2557,9 +2557,16 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.invalidateRewriteRuleCacheLocked()
 }
 
-func (ses *Session) invalidateRewriteRuleCache() {
+func (ses *Session) invalidateRewriteRuleCache(accountID uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	// Check identity under the same lock as invalidation. A SessionManager
+	// snapshot may still contain a session that has since been closed; nil is
+	// not the sys account (ID zero). Account-local metadata cannot change
+	// another tenant's rewrite policy, even when their role IDs coincide.
+	if ses.tenant == nil || ses.tenant.GetTenantID() != accountID {
+		return
+	}
 	ses.invalidateRewriteRuleCacheLocked()
 	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
 	// session cache may be unloaded or may describe the old role state, so every

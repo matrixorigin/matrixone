@@ -10,8 +10,7 @@ SELECT 1 COLLATE utf8mb4_general_ci AS legacy_numeric;
 legacy_numeric
 1
 SELECT NULL COLLATE utf8mb4_general_ci AS legacy_null;
-legacy_null
-null
+COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'
 CREATE TABLE native_column (name VARCHAR(20) COLLATE utf8mb4_0900_bin);
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 CREATE TABLE native_default (id INT) COLLATE utf8mb4_0900_bin;

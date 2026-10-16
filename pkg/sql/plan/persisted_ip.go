@@ -145,6 +145,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}
 	if features.DependentPrograms {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
+	}
+	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
 	if features.DecimalStatisticalResultContracts {

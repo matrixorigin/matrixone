@@ -177,6 +177,30 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 	return result, nil
 }
 
+// CompileDependentSingleInputExpressions adapts the native single-batch ABI.
+// Callers must supply exactly one input batch when creating a frame.
+// Relation coordinates are ignored, but column positions remain strict.
+// Compile first so malformed/cyclic expressions retain normal validation.
+// Copy only column instructions; never mutate the bound query or a reducer's
+// tuple comparison. Already-normalized columns retain their original AST.
+// Adaptation allocates only during compilation, not for each execution row.
+func CompileDependentSingleInputExpressions(ctx context.Context, roots []*plan.Expr) (*DependentExpressionProgram, error) {
+	program, err := CompileDependentExpressions(ctx, roots)
+	if err != nil {
+		return nil, err
+	}
+	for i := range program.instructions {
+		instruction := &program.instructions[i]
+		if col := instruction.expr.GetCol(); col != nil && col.RelPos != 0 {
+			expr, reference := *instruction.expr, *col
+			reference.RelPos = 0
+			expr.Expr = &plan.Expr_Col{Col: &reference}
+			instruction.expr = &expr
+		}
+	}
+	return program, nil
+}
+
 // DependentInput names a real stage row, including each side of a JOIN pair.
 // Its batch is borrowed under the stage's input lease until Frame.Close.
 type DependentInput struct {

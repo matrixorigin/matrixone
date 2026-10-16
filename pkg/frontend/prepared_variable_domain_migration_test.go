@@ -59,7 +59,7 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	require.Empty(t, resp.PrepareStmts)
 	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true))
 	require.Len(t, resp.PrepareStmts, 1)
-	require.Equal(t, defines.MORPCVersion117, resp.PrepareStmts[0].RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion118, resp.PrepareStmts[0].RequiredProtocolVersion)
 	require.Equal(t, prepared.Sql, resp.PrepareStmts[0].SQL)
 
 	// The protocol capability cannot override an invalidated rewrite policy.
@@ -81,17 +81,17 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 		}
 	}()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	ses.SetLastFoundRows(23)
 	ses.SetLastInsertID(7)
 	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
 		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
-		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion117}},
+		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion118}},
 	})
-	require.ErrorContains(t, err, "requires protocol version 117")
+	require.ErrorContains(t, err, "requires protocol version 118")
 	require.Equal(t, uint64(23), ses.GetLastFoundRows())
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
 	ses.mu.Lock()

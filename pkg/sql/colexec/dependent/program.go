@@ -287,7 +287,10 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 
 func (n *nodeTemplate) compileExpressions(ctx context.Context, roots []*plan.Expr) error {
 	var err error
-	n.expressions, err = colexec.CompileDependentExpressions(ctx, roots)
+	// rowTask evaluates these projections/filters over one materialized node
+	// output, including native-kernel and virtual input projections. JOIN's
+	// two-input condition and reducer comparisons use their own namespaces.
+	n.expressions, err = colexec.CompileDependentSingleInputExpressions(ctx, roots)
 	if err != nil {
 		return err
 	}

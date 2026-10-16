@@ -196,6 +196,59 @@ func TestCoveredFulltext2ScoreLimitOnlyForEquivalentSort(t *testing.T) {
 	}
 }
 
+func TestCoveredFulltext2ScoreLimitFromSortShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		innerSort  bool
+		ascending  bool
+		innerLimit bool
+		wantLimit  bool
+	}{
+		{name: "overwritten implicit sort", wantLimit: true},
+		{name: "retained equivalent sort", innerSort: true, wantLimit: true},
+		{name: "non-equivalent inner sort", innerSort: true, ascending: true},
+		{name: "bounded inner sort", innerSort: true, innerLimit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scoreType := plan.Type{Id: int32(types.T_float32)}
+			search := &plan.Node{
+				NodeType: plan.Node_INDEX_SEARCH_SCAN, BindingTags: []int32{7},
+				IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()}},
+			}
+			inner := &plan.Node{
+				NodeType: plan.Node_SORT, Children: []int32{0},
+				OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(scoreType, 7, 1), Flag: plan.OrderBySpec_DESC}},
+			}
+			project := &plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{0}, BindingTags: []int32{8},
+				ProjectList: []*plan.Expr{GetColExpr(scoreType, 7, 1)},
+			}
+			if tc.innerSort {
+				project.Children[0] = 1
+			}
+			if tc.ascending {
+				inner.OrderBy[0].Flag = plan.OrderBySpec_ASC
+			}
+			if tc.innerLimit {
+				inner.Limit = makePlan2Uint64ConstExprWithType(1)
+			}
+			outer := &plan.Node{
+				NodeType: plan.Node_SORT, Children: []int32{2},
+				OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(scoreType, 8, 0), Flag: plan.OrderBySpec_DESC}},
+				Limit:   makePlan2Uint64ConstExprWithType(2), Offset: makePlan2Uint64ConstExprWithType(1),
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{search, inner, project}}}
+			builder.pushCoveredFulltext2ScoreLimitFromSort(outer)
+			if tc.wantLimit {
+				require.NotNil(t, search.IndexSearchScan.CandidateLimit)
+				assert.Equal(t, uint64(3), search.IndexSearchScan.CandidateLimit.GetLit().GetU64Val())
+			} else {
+				assert.Nil(t, search.IndexSearchScan.CandidateLimit)
+			}
+		})
+	}
+}
+
 func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

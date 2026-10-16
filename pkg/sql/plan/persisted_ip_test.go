@@ -1220,14 +1220,14 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 	}
 }
 
-func TestPersistedDependentProgramRequiresV117(t *testing.T) {
+func TestPersistedDependentProgramRequiresV118(t *testing.T) {
 	for _, expr := range []*planpb.Expr{
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
 	} {
 		version, err := RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion117, version)
+		require.Equal(t, defines.MORPCVersion118, version)
 	}
 	dateExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int32)},
@@ -1251,12 +1251,23 @@ func TestPersistedDependentProgramRequiresV117(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion113, statisticalVersion)
 	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: statistical}})
+	// Upstream owns 117 independently; dependent programs compose above it.
+	textType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	textType.CollationVersion = 1
+	col := &planpb.Expr{Typ: textType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	least, err := BindFuncExprImplByPlanExpr(context.Background(), "least", []*planpb.Expr{col, DeepCopyExpr(col)})
+	require.NoError(t, err)
+	leastVersion, err := RequiredPersistedExpressionProtocolVersion(least)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion117, leastVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: least}})
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 	require.NoError(t, err)
 	require.True(t, features.DateNumericResultContracts)
 	require.True(t, features.DependentPrograms)
 	require.True(t, features.DecimalStatisticalResultContracts)
+	require.True(t, features.LeastGreatestCollationSemantics)
 	version, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion117, version, "compose independent capabilities by maximum")
+	require.Equal(t, defines.MORPCVersion118, version, "compose independent capabilities by maximum")
 }
