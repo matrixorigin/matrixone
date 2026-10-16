@@ -5098,9 +5098,10 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 		cws[0].Free()
 	}
 
-	// This branch only snapshots optional fingerprint metadata. A prior
-	// protocol lookup owns execution validity; wrapper construction itself must
-	// not turn an absent snapshot into an error-level runtime diagnostic.
+	// Binary EXECUTE must still have a live prepared-statement owner before its
+	// plan can reach privilege checks or Compile. The optional fingerprint
+	// lookup below that guard is only a snapshot, not an execution-validity
+	// check.
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 	execCtx.input = &UserInput{
@@ -5109,11 +5110,11 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 		preparePlan:         preparePlan,
 		isBinaryProtExecute: true,
 	}
-	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
-	require.NoError(t, err)
-	require.Len(t, cws, 1)
-	cws[0].Free()
-	require.Empty(t, logs.FilterMessage("prepared statement 'missing' does not exist on connection 0").All())
+	_, err = GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.ErrorContains(t, err, "prepared statement 'missing' does not exist")
+	missingStmtLogs := logs.FilterMessage("prepared statement 'missing' does not exist on connection 0").All()
+	require.Len(t, missingStmtLogs, 1)
+	require.Equal(t, zap.ErrorLevel, missingStmtLogs[0].Level)
 }
 
 func TestGetComputationWrapperCapturesFingerprintAfterRemap(t *testing.T) {
