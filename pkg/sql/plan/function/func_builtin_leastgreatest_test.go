@@ -243,6 +243,37 @@ func TestLeastGreatestPromoteVarcharMetadataWhenWidthsDiffer(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestNativeCollationPreservesValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(typ, []string{"a", "Á", "a "}, []bool{false, false, false}),
+		NewFunctionTestInput(typ, []string{"B", "a", "a"}, []bool{false, false, false}),
+	}
+	for _, tc := range []struct {
+		name     string
+		id       int32
+		overload int32
+		want     []string
+	}{
+		{"collated least", LEAST, LeastGreatestCollationOverload, []string{"a", "Á", "a "}},
+		{"collated greatest", GREATEST, LeastGreatestCollationOverload, []string{"B", "Á", "a "}},
+		{"legacy least", LEAST, 0, []string{"B", "a", "a"}},
+		{"legacy greatest", GREATEST, 0, []string{"a", "Á", "a "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionById(t.Context(), EncodeOverloadID(tc.id, tc.overload))
+			require.NoError(t, err)
+			result := NewFunctionTestResult(typ, false, tc.want, []bool{false, false, false})
+			fc := NewFunctionTestCase(proc, inputs, result, fn.newOp())
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func initGreatestTestCase() []tcTemp {
 	return []tcTemp{
 		// Test int8

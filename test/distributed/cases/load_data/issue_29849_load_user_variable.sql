@@ -36,5 +36,43 @@ select id, region_id, label,
 from load_user_variable
 order by id;
 
+-- 行变量 SET 的 COLLATE 包装必须保留 NULLIF 赋值，不能退回列默认值。
+create table load_collated_nullif (
+    id int primary key,
+    payload varchar(32) default 'fallback'
+);
+load data inline format='csv', data='1,keep\n2,sentinel'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel');
+load data inline format='csv', data='3,keep\n4,sentinel'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate utf8mb4_bin;
+select id, payload, payload is null as is_sql_null
+from load_collated_nullif order by id;
+
+-- 无效 COLLATE 必须报错，不能成功并插入默认值。
+-- @regex("Unknown collation", true)
+load data inline format='csv', data='5,keep'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate no_such_load_collation;
+-- @regex("COLLATION.*not valid for CHARACTER SET", true)
+load data inline format='csv', data='6,keep'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate utf8_unicode_ci;
+-- 传统列 NULLIF 的原始字段映射没有表达式 owner，不能吞掉 COLLATE。
+-- @regex("not supported: COLLATE on column NULLIF", true)
+load data inline format='csv', data='7,keep'
+into table load_collated_nullif fields terminated by ','
+set payload = nullif(payload, 'sentinel') collate utf8mb4_bin;
+select count(*) as rows_after_rejected_assignments from load_collated_nullif;
+-- CREATE EXTERNAL TABLE 共用 NullMap 归一化，同样不能保存丢弃了 COLLATE 的定义。
+-- @regex("not supported: COLLATE on column NULLIF", true)
+create external table rejected_collated_external(payload varchar(32))
+infile{'filepath'='$resources/load_data/issue_29849_user_variables.csv'}
+fields terminated by ','
+set payload = nullif(payload, 'sentinel') collate utf8mb4_bin;
+select count(*) as rejected_external_count from information_schema.tables
+where table_schema = database() and table_name = 'rejected_collated_external';
+
 drop database issue_29849;
 show databases like 'issue_29849';
