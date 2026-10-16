@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -27,6 +28,158 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExplicitCastRangeDiagnostics(t *testing.T) {
+	for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
+		t.Run(sqlMode, func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				target   types.Type
+				values   []string
+				want     any
+				warnings []numericWarning
+			}{
+				{"signed", types.T_int64.ToType(),
+					[]string{"9223372036854775807", "9223372036854775808", "-9223372036854775809", "-9223372036854775808", "0", "-0"},
+					[]int64{math.MaxInt64, math.MinInt64, math.MinInt64, math.MinInt64, 0, 0},
+					[]numericWarning{
+						{1105, "Cast to signed converted positive out-of-range integer to its negative complement"},
+						{1292, "Truncated incorrect INTEGER value: '-9223372036854775809'"},
+					}},
+				{"unsigned", types.T_uint64.ToType(),
+					[]string{"18446744073709551615", "-1", "18446744073709551616", "0", "-9223372036854775808", "-9223372036854775809", "-18446744073709551615", "-18446744073709551616"},
+					[]uint64{math.MaxUint64, math.MaxUint64, math.MaxUint64, 0, uint64(1) << 63, math.MaxInt64, 1, 0},
+					[]numericWarning{
+						{1105, "Cast to unsigned converted negative integer to its positive complement"},
+						{1292, "Truncated incorrect INTEGER value: '18446744073709551616'"},
+						{1105, "Cast to unsigned converted negative integer to its positive complement"},
+						{1292, "Truncated incorrect INTEGER value: '-9223372036854775809'"},
+						{1292, "Truncated incorrect INTEGER value: '-18446744073709551615'"},
+						{1292, "Truncated incorrect INTEGER value: '-18446744073709551616'"},
+					}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					sink := &numericWarningSession{}
+					proc.WarningSink = sink
+					proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), tc.values, nil),
+						NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+					}, NewFunctionTestResult(tc.target, false, tc.want, nil), NewExplicitCast)
+					ok, info := fc.RunAndFree()
+					require.True(t, ok, info)
+					require.Equal(t, tc.warnings, sink.warnings)
+				})
+			}
+		})
+	}
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			target := types.New(oid, 5, 2)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"999.995", "999.994", "-999.995", "999.99", "0"}, []bool{false, false, false, false, true}),
+				NewFunctionTestInput(target, emptyCastTargetValues(target), nil),
+			}, NewFunctionTestResult(target, false, nil, nil), NewExplicitCast)
+			t.Cleanup(fc.Free)
+			got, err := fc.DebugRun()
+			require.NoError(t, err)
+			for row, want := range []string{"999.99", "999.99", "-999.99", "999.99"} {
+				require.Equal(t, want, explicitCastDecimalTestValue(got, row))
+			}
+			require.True(t, got.IsNull(4))
+			require.Equal(t, []numericWarning{
+				{1264, "Out of range value for column 'decimal' at row 1"},
+				{1264, "Out of range value for column 'decimal' at row 3"},
+			}, sink.warnings)
+		})
+	}
+}
+
+func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, source := range []struct {
+			name    string
+			input   FunctionTestInput
+			control string
+		}{
+			{"integer", NewFunctionTestInput(types.T_int64.ToType(), []int64{1000, 999, -1000, 1000, 1000}, []bool{false, false, false, true, false}), "999.00"},
+			{"float", NewFunctionTestInput(types.T_float64.ToType(), []float64{1000, 999.994, -1000, math.Inf(1), math.Inf(1)}, []bool{false, false, false, true, false}), "999.99"},
+			{"decimal", NewFunctionTestInput(types.New(types.T_decimal64, 7, 3), []types.Decimal64{999995, 999994, types.Decimal64(999995).Minus(), 0, 999995}, []bool{false, false, false, true, false}), "999.99"},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", oid, source.name), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				target := types.New(oid, 5, 2)
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{source.input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)},
+					NewFunctionTestResult(target, false, nil, nil), NewExplicitCast).
+					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+				t.Cleanup(fc.Free)
+				got, err := fc.DebugRun()
+				require.NoError(t, err)
+				for row, want := range []string{"999.99", source.control, "-999.99"} {
+					require.Equal(t, want, explicitCastDecimalTestValue(got, row))
+				}
+				require.True(t, got.IsNull(3))
+				require.True(t, got.IsNull(4), "unselected nonfinite/overflow operand must not be evaluated")
+				require.Equal(t, []numericWarning{
+					{1264, "Out of range value for column 'decimal' at row 1"},
+					{1264, "Out of range value for column 'decimal' at row 3"},
+				}, sink.warnings)
+			})
+		}
+	}
+}
+
+func explicitCastDecimalTestValue(vec *vector.Vector, row int) string {
+	switch vec.GetType().Oid {
+	case types.T_decimal64:
+		return vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[row].Format(vec.GetType().Scale)
+	case types.T_decimal128:
+		return vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[row].Format(vec.GetType().Scale)
+	default:
+		return vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[row].Format(vec.GetType().Scale)
+	}
+}
+
+func TestExplicitCastRangeDiagnosticsSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		target types.Type
+		code   uint16
+	}{
+		{"signed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"9223372036854775808"}, nil), types.T_int64.ToType(), 1105},
+		{"unsigned", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"18446744073709551616"}, nil), types.T_uint64.ToType(), 1292},
+		{"string_decimal", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"999.995"}, nil), types.New(types.T_decimal64, 5, 2), 1264},
+		{"numeric_decimal", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1000}, nil), types.New(types.T_decimal64, 5, 2), 1264},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)},
+				NewFunctionTestResult(tc.target, false, nil, nil), NewExplicitCast).
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+			t.Cleanup(fc.Free)
+			fc.fnLength = 3
+			got, err := fc.DebugRun()
+			require.NoError(t, err)
+			require.Equal(t, 3, got.Length())
+			require.False(t, got.IsNull(0))
+			require.True(t, got.IsNull(1))
+			require.False(t, got.IsNull(2))
+			require.Len(t, sink.warnings, 2)
+			for _, warning := range sink.warnings {
+				require.Equal(t, tc.code, warning.code)
+			}
+		})
+	}
+}
 
 func TestExplicitCastStringIntegerOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -275,6 +428,8 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 	runSigned := func(name string, kind vector.PrepareParamKind, values []string, want []int64) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
 			testCase := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
@@ -284,12 +439,17 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 			testCase.parameters[0].SetPrepareParamKind(kind)
 			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
+			if kind != vector.PrepareParamNone {
+				require.Empty(t, sink.warnings)
+			}
 		})
 	}
 
 	runUnsigned := func(name string, kind vector.PrepareParamKind, values []string, want []uint64) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
 			testCase := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
@@ -299,6 +459,9 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 			testCase.parameters[0].SetPrepareParamKind(kind)
 			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
+			if kind != vector.PrepareParamNone {
+				require.Empty(t, sink.warnings)
+			}
 		})
 	}
 
@@ -793,6 +956,8 @@ func TestExplicitCastFloatToDecimalPreservesInRangeValues(t *testing.T) {
 
 func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
 	target := types.New(types.T_decimal128, 38, 6)
 	base := types.Decimal128{B0_63: 1000000000001000000}
 	lower := types.Decimal128{B0_63: 1000000000000000000}
@@ -816,10 +981,13 @@ func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testi
 	)
 	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
+	require.Empty(t, sink.warnings)
 }
 
 func TestExplicitCastFloat64ToDecimal128ClampsRoundedOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
 	target := types.New(types.T_decimal128, 5, 2)
 	max := types.Decimal128{B0_63: 99999}
 	inputs := []float64{999.995, -999.995}
@@ -835,6 +1003,10 @@ func TestExplicitCastFloat64ToDecimal128ClampsRoundedOverflow(t *testing.T) {
 	)
 	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
+	require.Equal(t, []numericWarning{
+		{1264, "Out of range value for column 'decimal' at row 1"},
+		{1264, "Out of range value for column 'decimal' at row 2"},
+	}, sink.warnings)
 }
 
 func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {
