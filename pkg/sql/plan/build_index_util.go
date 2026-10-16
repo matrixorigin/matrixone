@@ -96,6 +96,18 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	return nil
 }
 
+// Inline column constraints are built immediately by COPY, before deferred
+// table-level indexes. Share their naming policy with constraint resolution.
+func newAlterColumnUniqueIndex(tableDef *TableDef, column *tree.ColumnTableDef) *tree.UniqueIndex {
+	index := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: column.Name}}}
+	names := make(map[string]bool, len(tableDef.Indexes))
+	for _, existing := range tableDef.Indexes {
+		names[indexNameKey(existing.IndexName)] = true
+	}
+	setEmptyUniqueIndexName(names, index)
+	return index
+}
+
 // setEmptyUniqueIndexName Set name for unqiue index constraint with an empty name
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
