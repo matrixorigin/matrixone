@@ -2859,6 +2859,7 @@ func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 		{name: "double", sql: "select cast(12.3 as double) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: mysqlDecimalNotSpecified},
 		{name: "fixed float", sql: "select cast(12.3 as float(6, 2)) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: 2},
 		{name: "fixed double", sql: "select cast(12.3 as double(6, 2)) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: 2},
+		{name: "decimal MOD with string", sql: "select mod(cast(1.234 as decimal(10,3)),cast('2' as char)) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: 3},
 	}
 
 	for _, test := range tests {

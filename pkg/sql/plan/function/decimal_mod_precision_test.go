@@ -99,22 +99,37 @@ func TestDecimalModDecimalDomainsAndExclusions(t *testing.T) {
 		{"null exclusion", types.New(types.T_decimal64, 10, 3), types.T_any.ToType(), types.New(types.T_decimal64, 10, 3)},
 		{"float exclusion", types.New(types.T_decimal64, 10, 3), types.T_float64.ToType(), types.New(types.T_float64, 0, 3)},
 		{"string exclusion", types.New(types.T_decimal64, 10, 3), types.T_varchar.ToType(), types.New(types.T_float64, 0, 3)},
+		{"reverse string exclusion", types.T_varchar.ToType(), types.New(types.T_decimal64, 10, 3), types.New(types.T_float64, 0, -1)},
 		{"integer only", types.T_int32.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(context.Background(), "mod", []types.Type{tc.left, tc.right})
 			require.NoError(t, err)
 			require.Equal(t, tc.want, resolved.GetReturnType())
+			targets, needed := resolved.ShouldDoImplicitTypeCast()
 			switch tc.name {
+			case "string exclusion", "reverse string exclusion":
+				require.True(t, needed)
+				require.Equal(t, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}, targets)
 			case "time exclusion":
-				casts, needed := resolved.ShouldDoImplicitTypeCast()
 				require.True(t, needed)
-				require.Equal(t, []types.Type{tc.left, types.New(types.T_decimal64, 18, 6)}, casts)
+				require.Equal(t, []types.Type{tc.left, types.New(types.T_decimal64, 18, 6)}, targets)
 			case "reverse time exclusion":
-				casts, needed := resolved.ShouldDoImplicitTypeCast()
 				require.True(t, needed)
-				require.Equal(t, []types.Type{types.New(types.T_decimal64, 18, 6), tc.right}, casts)
+				require.Equal(t, []types.Type{types.New(types.T_decimal64, 18, 6), tc.right}, targets)
 			}
+			speculative, ok := GetFunctionByNameWithoutError("mod", []types.Type{tc.left, tc.right})
+			require.True(t, ok)
+			require.Equal(t, resolved.GetReturnType(), speculative.GetReturnType())
+			speculativeTargets, speculativeNeedsCast := speculative.ShouldDoImplicitTypeCast()
+			require.Equal(t, needed, speculativeNeedsCast)
+			require.Equal(t, targets, speculativeTargets)
+			selected, err := GetFunctionByNameWithOverload(context.Background(), "mod", []types.Type{tc.left, tc.right}, 0)
+			require.NoError(t, err)
+			require.Equal(t, resolved.GetReturnType(), selected.GetReturnType())
+			selectedTargets, selectedNeedsCast := selected.ShouldDoImplicitTypeCast()
+			require.Equal(t, needed, selectedNeedsCast)
+			require.Equal(t, targets, selectedTargets)
 		})
 	}
 }
