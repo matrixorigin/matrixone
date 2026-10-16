@@ -116,10 +116,14 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 				Func: &ObjectRef{Obj: function.EncodeOverloadID(function.VAR_POP, 0)},
 				Args: []*Expr{{Typ: Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}}},
 			}}}
+			calendarExpr := &Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &ObjectRef{Obj: function.EncodeOverloadID(function.TO_CALENDAR_INTERVAL, 0)},
+			}}}
 			owner := &planpb.TableDef{Cols: []*planpb.ColDef{
 				{GeneratedCol: &planpb.GeneratedCol{Expr: expr}},
 				{GeneratedCol: &planpb.GeneratedCol{Expr: dateExpr}},
 				{GeneratedCol: &planpb.GeneratedCol{Expr: statisticalExpr}},
+				{GeneratedCol: &planpb.GeneratedCol{Expr: calendarExpr}},
 			}}
 			required, err = RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
@@ -139,7 +143,7 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 			expr.GetF().Func.Obj = function.EncodeOverloadID(id, 0)
 			required, err = RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion113, required, "historical ordering keeps main's independent decimal contract")
+			require.Equal(t, defines.MORPCVersion115, required, "historical ordering keeps main's independent calendar and decimal contracts")
 		})
 		for _, selection := range []string{
 			name + "(cast('a' as char(1)),cast('B' as char(1))) as v",
