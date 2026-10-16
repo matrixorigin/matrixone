@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,16 +34,18 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
-		open := func(index int) *sql.DB {
+		open := func(index int) (*sql.DB, client.TxnTimestampAware) {
 			cn, err := c.GetCNService(index)
 			require.NoError(t, err)
+			service, ok := cn.RawService().(cnservice.Service)
+			require.True(t, ok)
 			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
-			return db
+			return db, service.GetTxnClient()
 		}
-		db := open(0)
+		db, writer := open(0)
 		defer db.Close()
-		peer := open(1)
+		peer, reader := open(1)
 		defer peer.Close()
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -69,6 +73,15 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 		defer mysql.DeregisterLocalFile(sharedKeyCSV)
 		read := func(t *testing.T, table, generated string) [][3]int {
 			t.Helper()
+			// Order the peer's next autocommit snapshot after the writer's
+			// commit before checking durable rows on another CN.
+			frontier := writer.GetLatestCommitTS()
+			require.False(t, frontier.IsEmpty(), "writer must publish a commit before the peer reads")
+			waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+			snapshotTS, err := reader.WaitLogTailAppliedAt(waitCtx, frontier)
+			stop()
+			require.NoError(t, err, "peer must apply logtail through the writer commit")
+			require.True(t, frontier.Less(snapshotTS), "peer snapshot must advance past the writer commit")
 			rows, err := peer.QueryContext(ctx, "select id,coalesce(v,999),coalesce("+generated+",999) from "+table+" order by id")
 			require.NoError(t, err)
 			defer rows.Close()
