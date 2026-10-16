@@ -2303,6 +2303,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
+	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")
 	}
@@ -2392,9 +2395,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 117",
+			"seven-argument JSON_VALUE plans require MORPC protocol version 118",
 		)
 	}
 	if (features.JSONInputContracts || features.YearBitCast) &&

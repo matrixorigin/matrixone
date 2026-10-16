@@ -80,6 +80,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
+	case *tree.CollateExpr:
+		expr, err = b.bindCollateExpr(exprImpl, depth)
 
 	case *tree.OrExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -1027,6 +1029,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if source, ok := collationForExpression(subCtx.results[0]); ok {
+			source.apply(&returnExpr.Typ)
+		}
 	}
 
 	return returnExpr, nil
@@ -3535,15 +3540,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 117",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 118",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion117 {
+	if !ok || !valid || version < defines.MORPCVersion118 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 117",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 118",
 		)
 	}
 	return nil
@@ -7222,6 +7227,10 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	args, err = normalizeExpressionCollations(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -8601,6 +8610,13 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 				typ := makePlan2Type(&castType)
+				if castType.Oid.IsMySQLString() && args[idx].Typ.CollationCoercibilitySet {
+					// Overload adaptation (including width promotion) is transparent
+					// to provenance. Runtime types do not carry these plan fields.
+					typ.CollationCoercibility = args[idx].Typ.CollationCoercibility
+					typ.CollationCoercibilitySet = true
+					typ.CollationMergeConflict = args[idx].Typ.CollationMergeConflict
+				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
@@ -8652,6 +8668,9 @@ func bindFuncExprImplByPlanExpr(
 		Typ.Enumvalues = args[2].Typ.Enumvalues
 	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
+		return nil, err
+	}
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
@@ -11269,6 +11288,17 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 }
 
 func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if types.T(expr.Typ.Id).IsMySQLString() && types.T(toType.Id).IsMySQLString() &&
+		expr.Typ.Charset == toType.Charset && expr.Typ.CollationVersion == toType.CollationVersion &&
+		expr.Typ.CollationCoercibilitySet && !toType.CollationCoercibilitySet {
+		// Comparison canonicalization changes representation, not collation
+		// priority. PAD SPACE and window adapters rebuild targets from runtime
+		// types, which omit these plan-only fields. Keep an already resolved
+		// target's provenance when the caller supplies one.
+		toType.CollationCoercibility = expr.Typ.CollationCoercibility
+		toType.CollationCoercibilitySet = true
+		toType.CollationMergeConflict = expr.Typ.CollationMergeConflict
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
@@ -12366,6 +12396,13 @@ func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool
 		return true
 	}
 	fn := arg.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast &&
+		len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		arg.Typ.CollationCoercibilitySet && arg.Typ.CollationCoercibility == 0 {
+		// COLLATE binds as a cast with explicit collation provenance. Validate
+		// its operand recursively instead of admitting arbitrary foldable code.
+		return validNameConstValueExpr(fn.Args[0], allowCanonicalStringCast)
+	}
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
 		return false
 	}
@@ -12398,6 +12435,8 @@ func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CollateExpr:
+		return validNameConstLiteralValueAst(value.Expr, allowCanonicalStringCast)
 	case *tree.CastExpr:
 		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:

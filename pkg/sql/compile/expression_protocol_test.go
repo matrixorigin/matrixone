@@ -55,11 +55,14 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		DateNumericResultContracts:        true,
 		DecimalStatisticalResultContracts: true,
 		CalendarIntervalNormalization:     true,
+		LeastGreatestCollationSemantics:   true,
 	}
-	require.Equal(t, defines.MORPCVersion117, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion118, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+	features.LeastGreatestCollationSemantics = false
 	require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
 }
 
@@ -67,13 +70,13 @@ func TestJSONValueDestinationRequiresItsOwnProtocolFloor(t *testing.T) {
 	for _, mixed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("mediumint=%t", mixed), func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
-			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed, DateNumericResultContracts: mixed}
+			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed, DateNumericResultContracts: mixed, LeastGreatestCollationSemantics: mixed}
 			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-			client.version = defines.MORPCVersion116
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 117")
+			client.version = defines.MORPCVersion117
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 118")
 			require.Equal(t, 1, client.calls)
 			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion117
+			client.version = defines.MORPCVersion118
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 			require.Equal(t, 2, client.calls)
 			require.Equal(t, client.calls, client.releases)
@@ -106,17 +109,82 @@ func TestJSONValueAndDateNumericProtocolPlacement(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, features.DateNumericResultContracts)
 				require.Equal(t, combined, features.JSONValueContract)
-				for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117} {
+				for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118} {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 					client.version = version
 					c.execType = plan2.ExecTypeAP_MULTICN
 					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 					require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 					want := plan2.ExecTypeAP_MULTICN
-					if combined && version < defines.MORPCVersion117 {
+					if combined && version < defines.MORPCVersion118 {
 						want = plan2.ExecTypeAP_ONECN
 					}
 					require.Equal(t, want, c.execType)
+				}
+			}
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+			typ.CollationVersion = 1
+			collated, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, name, []*planpb.Expr{
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			})
+			require.NoError(t, err)
+			args := make([]*planpb.Expr, 7)
+			for i := range args {
+				args[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+			}
+			jsonValue := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: args,
+			}}}
+			op := projection.NewArgument()
+			defer op.Release()
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			for _, combined := range []bool{false, true} {
+				op.ProjectList = []*planpb.Expr{collated}
+				floor := defines.MORPCVersion117
+				if combined {
+					op.ProjectList = append(op.ProjectList, jsonValue)
+					floor = defines.MORPCVersion118
+				}
+				qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: op.ProjectList}}, Steps: []int32{0}}
+				p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}}
+				data, err := p.Marshal()
+				require.NoError(t, err)
+				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+				require.NoError(t, err)
+				require.True(t, features.LeastGreatestCollationSemantics)
+				require.Equal(t, combined, features.JSONValueContract)
+				require.Equal(t, floor, remoteExpressionProtocolVersion(features))
+				for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion117} {
+					// Reuse the same plan/scope after capability changes: placement
+					// and final send must not retain the prior successful admission.
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+					client.version = version
+					c.execType = plan2.ExecTypeAP_MULTICN
+					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+					require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+					_, sendErr := encodeRemoteScope(scope, c.proc)
+					decoded, receiveErr := decodeScope(data, c.proc, true, nil)
+					if version < floor {
+						require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+						require.ErrorContains(t, sendErr, "version 118")
+						require.ErrorContains(t, receiveErr, "version 118")
+					} else {
+						require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+						require.NoError(t, sendErr)
+						require.NoError(t, receiveErr)
+						decoded.release()
+					}
 				}
 			}
 			require.Equal(t, client.calls, client.releases)
@@ -183,10 +251,10 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 				features, err = planpb.RequiredRemoteExpressionFeatures(owner)
 				require.NoError(t, err)
 				require.True(t, features.JSONValueContract)
-				require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+				require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 117")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 117")
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 118")
+				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 118")
 			}
 			qry := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
 			c.execType = plan2.ExecTypeAP_MULTICN
@@ -194,8 +262,8 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-			client.version = defines.MORPCVersion117
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+			client.version = defines.MORPCVersion118
 			c.execType = plan2.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))

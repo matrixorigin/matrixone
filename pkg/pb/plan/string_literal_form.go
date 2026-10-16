@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion117JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion118JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion117JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion118JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -369,8 +369,8 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// JSONValueContract provisionally requires MORPC v117; the independently gated
-// main capabilities retain their existing MORPC v111-v116 allocations.
+// JSONValueContract provisionally requires MORPC v118; the independently gated
+// main capabilities retain their existing MORPC v111-v117 allocations.
 // DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
 // literals are normalized and kept exact by the new planner, while older
 // binders can round or reject the same persisted SQL at the Decimal128
@@ -441,6 +441,9 @@ type RemoteExpressionFeatures struct {
 	DateNumericResultContracts              bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
+	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
+	// Released overload 0 retains its historical byte-order contract.
+	LeastGreatestCollationSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -473,7 +476,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.LeastGreatestCollationSemantics
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -933,6 +937,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
+					features.LeastGreatestCollationSemantics = true
+				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
 				}

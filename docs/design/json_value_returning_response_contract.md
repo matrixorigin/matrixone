@@ -3,12 +3,12 @@
 Issue: #28037
 
 Base-sync note (2026-10-16): upstream main at
-`b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7` owns MORPC v113-v116.
-The provisional seven-argument JSON_VALUE contract now uses v117, with v116
+`b3d6b21fe9d260c91e1777529a48a9d93061af33` owns MORPC v113-v117,
+including collation-aware LEAST/GREATEST at v117.
+The provisional seven-argument JSON_VALUE contract now uses v118, with v117
 as its immediate predecessor. Binder, sender/receiver and persisted admission
-use that floor; existing upstream capability floors remain unchanged. References
-to v113 JSON_VALUE candidates below describe earlier revisions and are not the
-current allocation. This maintenance merge does not close the benchmark,
+use that floor; existing upstream capability floors remain unchanged.
+This maintenance merge does not close the benchmark,
 mixed-version, durable recovery, QA or independent approval obligations below.
 
 ## Contract
@@ -72,18 +72,18 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 8, 2026-10-13)
+### Versioned compatibility decision (candidate revision 9, 2026-10-16)
 
 Status: independent maintainer approval pending. This candidate updates revision
-7 after an intervening main allocation, retaining shutdown-upgrade acceptance;
+8 after intervening main allocations, retaining shutdown-upgrade acceptance;
 superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current source is a provisional MORPC v113 validation candidate for
+The current source is a provisional MORPC v118 validation candidate for
 JSON_VALUE function ID 462, overload 2, based on
-`1b66ff135c64ef1c642a297105bf599cd3173dee` (v112). It preserves main's
+`b3d6b21fe9d260c91e1777529a48a9d93061af33` (v117). It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
 isolated user-variable NULL regexp migration history at v108, plus native Unicode
 collation identities in persisted information_schema.COLUMNS metadata at v109;
@@ -93,16 +93,21 @@ at v111. The actual IndexSearchScan implementation and its independent v111
 placement, transport and receiver gates remain intact, including rejection of
 the older representation without algo_options. Signed INT WEEK/DAYOFYEAR
 result vectors and their independent sender, receiver and persisted-expression
-gates landed at v112 in #30101 and remain intact. Main's v112 capability must
-still reject this candidate's seven-argument JSON_VALUE contract; the cumulative
-latest version is provisionally v113. Algorithm-expression-only owners participate in the
+gates landed at v112 in #30101 and remain intact. Main also owns decimal
+variance/stddev DOUBLE results at v113, native Unicode UNIQUE keys at v114,
+calendar DAY/SECOND intervals at v115, SELECT division diagnostics at v116,
+and collation-aware LEAST/GREATEST at v117. These independent capabilities and
+their gates remain intact. Main's actual v117 capability must still reject this
+candidate's seven-argument JSON_VALUE contract; the cumulative latest version is
+provisionally v118. Algorithm-expression-only owners participate in the
 same expression feature walk; an ordinary projection is not required.
 It is not the final landing
 build. The [maintainer landing decision](https://github.com/matrixorigin/matrixone/pull/28275#issuecomment-6054197734)
 ordered #28935, #28947, then this PR against the former v106 base. Its conditional
 v107/v108/v109 assignments are superseded by the actual functional-index landing
 in #29472 and the subsequently landed v108 migration, v109 Unicode, v110
-MEDIUMINT, v111 IndexSearchScan and v112 signed WEEK/DAYOFYEAR capabilities.
+MEDIUMINT, v111 IndexSearchScan, v112 signed WEEK/DAYOFYEAR and v113-v117
+capabilities listed above.
 The independently proposed CRC candidate in #28935
 is not landed and is not included in this executable. If it lands first, the
 actual cumulative allocation and all corresponding gates must be reconciled
@@ -115,12 +120,12 @@ binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 113
+The planner requires the deployment-wide MOProtocolVersion to be at least 118
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v113 before remote
+Both current sender and receiver validate overload 2 against v118 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -139,7 +144,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v113 CNs after committing a v113 durable floor. The existing
+Do not admit pre-v118 CNs after committing a v118 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -247,17 +252,19 @@ at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
 new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
 generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-Current source tests the merged grammar and provisional protocol113 predecessor112
-boundaries separately. Final cumulative integration, predecessor-data shutdown
+Current source includes tests for the merged grammar and provisional v118/v117
+boundary, including independent LEAST/GREATEST v117 controls and combined
+expression floors. Those updated tests await execution on this candidate.
+Predecessor-data shutdown
 upgrade, durable floor restart/restore, deployment QA and independent approval
 remain required and are not claimed complete. A focused base/head ingestion/unmarshal
 and legacy two-argument JSON_VALUE comparison must include actual measurements,
 equivalent inputs, environment and variation, plus a retained-cost decision.
 Preserve structural and canonical JSON safety checks while that evidence is pending.
 
-The main-v112 conflict repair and v113 gates are unvalidated local candidate
+The main-v117 conflict repair and v118 gates are unvalidated local candidate
 content until their applicable planner, sender/receiver, persisted-owner and
-functional-index/migration/Unicode/MEDIUMINT/IndexSearchScan/signed-date preservation checks
+functional-index/migration/Unicode/MEDIUMINT/IndexSearchScan/signed-date/LEAST-GREATEST preservation checks
 actually run. Prior v111 runtime and BVT receipts and v108 JSON_VALUE measurements
 remain bound to their historical source; they do not prove the final
 cumulative executable, final predecessor-data compatibility or durable recovery.

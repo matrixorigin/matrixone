@@ -24,7 +24,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -78,6 +80,47 @@ func TestFrontendTaskServiceConcurrentPublication(t *testing.T) {
 		goruntime.Gosched()
 	}
 	writer.Wait()
+	got, err = getSQLTaskService(ctx, ses)
+	require.NoError(t, err)
+	require.Same(t, ts, got)
+}
+
+func TestGetSQLTaskServicePublication(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	pu := &config.ParameterUnit{}
+	setPu(service, pu)
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	ctx := context.Background()
+
+	got, err := getSQLTaskService(ctx, ses)
+	require.Nil(t, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.EqualError(t, err, "internal error: task service not ready yet, please try again later.")
+
+	ts := &testTaskService{}
+	start := make(chan struct{})
+	published := make(chan struct{})
+	go func() {
+		<-start
+		pu.SetTaskService(ts)
+		close(published)
+	}()
+	defer func() { <-published }()
+
+	// The publisher and this frontend read have no ordering until the join.
+	// Either readiness result is valid; both accesses must use the same lock.
+	close(start)
+	got, err = getSQLTaskService(ctx, ses)
+	if got == nil {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	} else {
+		require.NoError(t, err)
+		require.Same(t, ts, got)
+	}
+
+	<-published
 	got, err = getSQLTaskService(ctx, ses)
 	require.NoError(t, err)
 	require.Same(t, ts, got)

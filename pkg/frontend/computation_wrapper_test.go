@@ -5623,6 +5623,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
 		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion30},
 		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
+		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion117, to: defines.MORPCVersion118},
+		{name: "JSON_VALUE rollback", from: defines.MORPCVersion118, to: defines.MORPCVersion117},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
