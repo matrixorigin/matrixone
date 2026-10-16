@@ -408,13 +408,15 @@ func (l *localLockTable) unlockWithContext(
 	var handoffs []handoffSpec
 	units := make(map[string]*handoffUnit)
 	destinations := make(map[*handoffUnit]map[string]struct{})
-	cleanupMutations := make(map[string]bool, len(mutations))
-	for key, idx := range mutationByKey {
-		cleanupMutations[key] = mutations[idx].Skip
-	}
+	var cleanupMutations map[string]bool
 	getMutation := func(key []byte) (skip, conditional bool) {
-		skip, conditional = cleanupMutations[util.UnsafeBytesToString(key)]
-		return
+		if skip, conditional = cleanupMutations[util.UnsafeBytesToString(key)]; conditional {
+			return
+		}
+		if idx, ok := mutationByKey[util.UnsafeBytesToString(key)]; ok {
+			return mutations[idx].Skip, true
+		}
+		return false, false
 	}
 	resolveUnit := func(key []byte) ([][]byte, Lock, error) {
 		foundKey, lock, ok := l.mu.store.Seek(key)
@@ -442,11 +444,7 @@ func (l *localLockTable) unlockWithContext(
 		}
 		return [][]byte{pairedKey, foundKey}, lock, nil
 	}
-	sourceKeys := make(map[string]struct{}, locks.len())
-	locks.iter(func(key []byte) bool {
-		sourceKeys[string(key)] = struct{}{}
-		return true
-	})
+	var sourceKeys map[string]struct{}
 	l.mu.Lock()
 	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
 	if l.mu.closed {
@@ -457,6 +455,14 @@ func (l *localLockTable) unlockWithContext(
 		if mutationByKey[string(mutation.Key)] != idx {
 			continue
 		}
+		// Ordinary proxy cleanup names exact rows and has no ownership to
+		// transfer. Keep its conditional marker without grouping or cloning
+		// keys. Logical rows inside a physical range still need normalization.
+		if mutation.Skip || len(mutation.ReplaceTo) == 0 {
+			if lock, ok := l.mu.store.Get(mutation.Key); ok && lock.isLockRow() {
+				continue
+			}
+		}
 		keys, lock, err := resolveUnit(mutation.Key)
 		if err != nil {
 			l.mu.Unlock()
@@ -464,6 +470,13 @@ func (l *localLockTable) unlockWithContext(
 		}
 		if len(keys) == 0 {
 			continue
+		}
+		if sourceKeys == nil {
+			sourceKeys = make(map[string]struct{}, locks.len())
+			locks.iter(func(key []byte) bool {
+				sourceKeys[string(key)] = struct{}{}
+				return true
+			})
 		}
 		tracked := false
 		for _, key := range keys {
@@ -503,9 +516,21 @@ func (l *localLockTable) unlockWithContext(
 		})
 	}
 	for _, unit := range units {
+		if cleanupMutations == nil {
+			cleanupMutations = make(map[string]bool)
+		}
 		for _, key := range unit.keys {
 			cleanupMutations[string(key)] = unit.skip
 		}
+	}
+	if len(handoffs) == 0 {
+		if err := ctx.Err(); err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		l.unlockLocksWithMutationsLocked(txn, locks, commitTS, b, getMutation)
+		l.mu.Unlock()
+		return nil
 	}
 	l.mu.Unlock()
 
