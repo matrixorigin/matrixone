@@ -2638,6 +2638,59 @@ func TestStackedWindowBooleanResultsKeepWireMetadata(t *testing.T) {
 	}
 }
 
+func TestStackedWindowBooleanResultsKeepMixedOutputOrder(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []struct {
+			kind   plan2.ResultColumnKind
+			length uint32
+		}
+	}{
+		{
+			name: "stored then computed",
+			sql: "select first_value(with_grant_option) over (order by role_id), " +
+				"first_value(role_id is null) over (order by role_id desc) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+			},
+		},
+		{
+			name: "computed then stored",
+			sql: "select first_value(role_id is null) over (order by role_id desc), " +
+				"first_value(with_grant_option) over (order by role_id) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, want.kind, columns[i].ResultColumnKind)
+				column, err := colDef2MysqlColumn(context.Background(), columns[i])
+				require.NoError(t, err)
+				require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+				require.Equal(t, want.length, column.Length())
+			}
+		})
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string
