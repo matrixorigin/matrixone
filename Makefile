@@ -621,7 +621,7 @@ UT_EMBEDDED_BATCHES ?= 4
 # the prebuild policy for rollback modes; overlapping compilation remains an
 # explicit opt-in for the bounded issues pool.
 UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
-# On the full Linux eight-task profile, overlap one-core plan/heavy companions
+# On the full Linux eight-task profile, overlap bounded plan/heavy companions
 # with embedded tests and drain both before engine. Other profiles reuse released
 # engine slots for plan/heavy overlap. Set 0 to keep all three waves sequential.
 UT_OVERLAP_PLAN ?= 1

@@ -660,9 +660,9 @@ function run_embedded_tests() {
 function run_plan_race_shards() {
  mkdir "$CASE_DIR/plan-once" || return 97
  if [[ "$EXPECT_EARLY" == 1 ]]; then
-  [[ "$GOMAXPROCS" == 1 && ! -e "$CASE_DIR/engine-once" && -e "$CASE_DIR/issues-finished" ]] || return 98
+  [[ "$GOMAXPROCS" == 2 && "${2:-}" == "-test.parallel=$UT_PARALLEL" && ! -e "$CASE_DIR/engine-once" && -e "$CASE_DIR/issues-finished" ]] || return 98
  else
-  [[ -e "$CASE_DIR/engine-once" ]] || return 99
+  [[ -e "$CASE_DIR/engine-once" && "$#" == 1 ]] || return 99
  fi
  printf 'plan\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-started"

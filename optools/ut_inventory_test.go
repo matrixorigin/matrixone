@@ -6,6 +6,7 @@
 package optools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -609,7 +610,7 @@ func TestRaceInventoryPreservesRunnableRootsAndStress(t *testing.T) {
 	root := t.TempDir()
 	writeScopeFixture(t, root, "go.mod", "module inventoryfixture\n\ngo 1.27.0\n")
 	writeScopeFixture(t, root, "inventory_test.go", `package inventoryfixture
-import ("fmt"; "os"; "testing")
+import ("context"; "flag"; "fmt"; "os"; "runtime"; "sync/atomic"; "testing"; "time")
 func record(name string) {
  f, err := os.OpenFile(os.Getenv("INVENTORY_RECORD"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
  if err != nil { panic(err) }; defer f.Close()
@@ -618,6 +619,21 @@ func record(name string) {
 func TestOne(t *testing.T) { record("one") }
 func TestTwentyRounds(t *testing.T) {
  for i:=0;i<20;i++ { t.Run(fmt.Sprint(i),func(t *testing.T) { record("round") }) }
+}
+func TestParallelResolvers(t *testing.T) {
+ if want := os.Getenv("MO_UT_FIXTURE_CPUS"); want != "" && fmt.Sprint(runtime.GOMAXPROCS(0)) != want { t.Fatal("CPU budget changed") }
+ if want := os.Getenv("MO_UT_FIXTURE_PARALLEL"); want != "" && flag.Lookup("test.parallel").Value.String() != want { t.Fatal("test admission budget changed") }
+ var started atomic.Int32
+ ready := make(chan struct{})
+ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+ t.Cleanup(cancel)
+ for worker:=0;worker<4;worker++ {
+  t.Run(fmt.Sprint(worker),func(t *testing.T) {
+   t.Parallel()
+   if started.Add(1)==4 { close(ready) }
+   select { case <-ready: record("parallel"); case <-ctx.Done(): t.Fatal("four resolvers were serialized") }
+  })
+ }
 }
 func FuzzSeeds(f *testing.F) {
  for _,s:=range []string{"a","b","c"} { f.Add(s) }
@@ -673,10 +689,86 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	}
 	control := run(filepath.Join(root, "control"), []string{".*"})
 	batched := run(filepath.Join(root, "batched"), strings.Split(strings.TrimSpace(string(patterns)), "\n"))
-	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1}
+	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1, "parallel": 4}
 	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) {
 		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v want=%v", control, batched, want)
 	}
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []struct{ name, cpus, parallel string }{
+		{"capped-early", "1", "8"}, {"legacy-default", "4", "4"},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			recordPath := filepath.Join(root, mode.name)
+			mock := `#!/bin/bash
+case "$1" in
+ version) exit 0 ;;
+ tool) shift; exec "$MO_UT_REAL_GO" tool "$@" ;;
+esac
+# Execution-only test flags must not leak into metadata or compilation.
+for argument in "$@"; do [[ "$argument" != -test.parallel=* ]] || exit 90; done
+case "$1" in
+ list) printf '%s\t%s\n' "$MO_UT_FIXTURE_DIR" inventoryfixture ;;
+ test)
+  while (( $# > 0 )); do
+   if [[ "$1" == -o ]]; then cp "$MO_UT_FIXTURE_BINARY" "$2"; exit $?; fi
+   shift
+  done
+  exit 91 ;;
+ *) exit 92 ;;
+esac
+`
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+trap handle_ut_termination TERM
+if [[ "$MODE" == capped-early ]]; then
+ GOMAXPROCS=1 start_plan_race inventoryfixture -test.parallel=8
+else
+ GOMAXPROCS=4 start_plan_race inventoryfixture
+fi
+finish_plan_race || exit 93
+[[ -z "$PLAN_RACE_JOB_PID$PLAN_RACE_REPORT" ]] || exit 94
+# A second consume must be an empty no-op, not duplicate published events.
+consume_plan_race_report || exit 95
+cp "$UT_REPORT" "$INVENTORY_RECORD.events"
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"MO_UT_REAL_GO="+realGo, "MO_UT_FIXTURE_DIR="+root, "MO_UT_FIXTURE_BINARY="+binary,
+				"INVENTORY_RECORD="+recordPath, "MODE="+mode.name, "MO_UT_FIXTURE_CPUS="+mode.cpus,
+				"MO_UT_FIXTURE_PARALLEL="+mode.parallel, "GOTOOLCHAIN=local", "GOPROXY=off")
+			if err != nil {
+				t.Fatalf("plan runtime concurrency %s: %v\n%s", mode.name, err, out)
+			}
+			events, err := os.ReadFile(recordPath + ".events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			passed := 0
+			for _, line := range strings.Split(strings.TrimSpace(string(events)), "\n") {
+				var event struct{ Action, Test string }
+				if err := json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatalf("invalid plan event: %v: %s", err, line)
+				}
+				if event.Action == "pass" && strings.HasPrefix(event.Test, "TestParallelResolvers/") {
+					passed++
+				}
+			}
+			data, err := os.ReadFile(recordPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts := make(map[string]int)
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				counts[line]++
+			}
+			if passed != 4 || !reflect.DeepEqual(counts, want) {
+				t.Fatalf("lost concurrency or coverage: passes=%d counts=%v want=%v", passed, counts, want)
+			}
+		})
+	}
+
 }
 
 func TestKilledIndependentHelperRetainsEvidence(t *testing.T) {

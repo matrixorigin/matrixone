@@ -494,6 +494,7 @@ function finish_background_race(){
 function start_plan_race(){
     ut_drain_failed && return 125
     local package=$1
+    shift
     local saved_term_trap
     local term_pending=0
     PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
@@ -502,7 +503,7 @@ function start_plan_race(){
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
     set -m
-    invoke_ut_helper PLAN_RACE_JOB_PID run_plan_race_shards "${package}" &
+    invoke_ut_helper PLAN_RACE_JOB_PID run_plan_race_shards "${package}" "$@" &
     PLAN_RACE_JOB_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
@@ -1569,6 +1570,7 @@ function run_vet(){
 
 function run_plan_race_shards(){
     local plan_package=$1
+    shift
     local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
     local build_log="${G_WKSP}/${G_TS}-plan-race-build.out"
     local metadata_file="${G_WKSP}/${G_TS}-plan-race-package.out"
@@ -1753,7 +1755,7 @@ function run_plan_race_shards(){
                     "${plan_test_binary}" -test.short=true -test.v=test2json \
                     -test.paniconexit0=true -test.count=1 \
                     -test.timeout="${UT_TIMEOUT}m" \
-                    -test.run="${shard_patterns[shard]}"
+                    -test.run="${shard_patterns[shard]}" "$@"
             ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
             shard_pids[shard]=$!
             restore_ut_term_trap "${plan_term_trap}"
@@ -3047,6 +3049,7 @@ function run_tests(){
         # Only the measured full eight-core profile admits companions. Keep
         # explicit CPU overrides and smaller/partial runs on their legacy path.
         # Issues and light linking have finished; engine remains exclusive.
+        # CPU limits must not silently serialize t.Parallel regression workers.
         if [[ "${UT_SHARD}" == all && -z "${GOMAXPROCS+x}" && -z "${GOFLAGS:-}" &&
               "${UT_PREBUILD_EMBEDDED}" == 0 &&
               "${UT_EMBEDDED_BATCHES}" == 4 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" == 4 &&
@@ -3065,8 +3068,8 @@ function run_tests(){
             done
         fi
         if (( early_heavy_plan == 1 )); then
-            logger "INF" "Overlap serial plan/heavy companions with embedded tests; one Go core per companion"
-            GOMAXPROCS=1 start_plan_race "${plan_package}" || handle_ut_termination "$?"
+            logger "INF" "Overlap serial plan/heavy companions with embedded tests; two Go cores for plan, one for heavy; preserve test parallelism"
+            GOMAXPROCS=2 start_plan_race "${plan_package}" "-test.parallel=${UT_PARALLEL}" || handle_ut_termination "$?"
             start_background_race heavy "resource-heavy race-test packages" \
                 env GOMAXPROCS=1 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
                 go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
