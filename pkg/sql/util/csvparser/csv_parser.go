@@ -38,6 +38,14 @@ var (
 	ReadBlockSize              int64 = 64 * 1024
 )
 
+// IsSyntaxError reports malformed CSV framing, excluding configuration, storage,
+// cancellation and resource-limit errors. Callers may use it for tolerant framing.
+func IsSyntaxError(err error) bool {
+	return errors.Is(err, errUnterminatedQuotedField) ||
+		errors.Is(err, errDanglingBackslash) ||
+		errors.Is(err, errUnexpectedQuoteField)
+}
+
 type Field struct {
 	Val            string
 	IsNull         bool
