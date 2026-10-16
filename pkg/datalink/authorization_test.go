@@ -232,10 +232,19 @@ func TestRemoteStageDatalinkKeepsOrdinaryReadWrite(t *testing.T) {
 	require.Equal(t, []byte("remote content"), data)
 }
 
+type borrowedDatalinkService struct {
+	fileservice.ETLFileService
+	closes int
+}
+
+func (f *borrowedDatalinkService) Close(context.Context) { f.closes++ }
+
 func TestDatalinkNamedReadRechecksCurrentIdentity(t *testing.T) {
 	ctx := context.Background()
-	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { memory.Close(ctx) })
+	fs := &borrowedDatalinkService{ETLFileService: memory}
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: "owned.txt",
 		Entries:  []fileservice.IOEntry{{Data: []byte("owned"), Size: 5}},
@@ -281,6 +290,7 @@ func TestDatalinkNamedReadRechecksCurrentIdentity(t *testing.T) {
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 	_, err = writeDL.NewWriter(proc)
 	require.ErrorContains(t, err, "only the sys account moadmin role")
+	require.Zero(t, fs.closes, "readers, stat and writers must leave the borrowed service open")
 }
 
 func TestInternalStageDatalinkRequiresServerAuthority(t *testing.T) {
@@ -322,6 +332,7 @@ func TestDatalinkStageReuseRechecksServerAuthority(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, r.Close())
 	require.Equal(t, "stage content", string(data))
+	require.NoError(t, r.Close(), "the owned reader/service pair closes only once")
 
 	// Retain the old administrator context while changing the current role.
 	// Every I/O owner must rebind from current identity before acquisition.

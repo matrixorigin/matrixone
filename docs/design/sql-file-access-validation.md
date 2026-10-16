@@ -1,6 +1,48 @@
 # SQL file access validation record
 
-## Validation-only parsing optimization
+## Validated snapshot on main `97415db10bd`
+
+The rebase adds ALTER TABLE CHECK support. All 172 existing delivery files
+remain byte-identical before the following reader-ownership cleanup. The two
+consumer-local reader/service wrappers now share one fileservice owner, keeping
+the same close order, error and owned/borrowed contracts. No policy or DML work
+is added by this cleanup.
+
+The final requested rebase onto `8669eedae682f7aea093c6cab3d1b8877f91a8dc`
+adds only window spill admission-error normalization. The tested reader,
+consumer and parser/planner contracts are unchanged; their evidence below
+retains base `97415db10bd` and is reused, not relabeled as fresh final-base runs.
+
+| Item | Status |
+| --- | --- |
+| Source design | Shared reader cleanup approved before implementation; final source-review decision is recorded separately in `sql-file-access-review.md`. |
+| Focused validation | Five owning/consumer packages pass the selected normal and once-only race checks (51 named race tests); the full Datalink package also passes normal. Six affected packages pass fresh vet, molint and incremental lint; format/err-check/diff checks pass. Earlier evidence below retains its tested revision. |
+| Same-binary −2.13% elapsed | Compares old/new complete validation within one candidate binary; not the whole PR against main. |
+| Whole-PR/main performance | **Unresolved; blocks merge acceptance.** Historical failed timing cells remain below and in the CSV. |
+| PR update | The existing explicit update-only exception allows rebase/push with this timing gate unresolved; it does not approve merging. |
+| GPU-native validation | Still unverified under the existing exception for PR update. |
+| Remote CI and review threads | Consult the live PR; local source fixes and replies do not imply passing CI or resolved threads. |
+
+The focused checks use Darwin arm64 / Go 1.27.1 and the existing qualified CPU
+native generation, with unchanged native/module inputs. No cluster or benchmark
+campaign was started. The first normal command passed fileservice/parser but
+stopped dependent packages on an unused import; the next passed function/plan
+but exposed the new test wrapper's missing ETL marker. Both were corrected, the
+complete Datalink package passed, and all five selected packages then passed
+race together. These earlier failures remain in the ledger and are not labeled
+green commands. The prior Darwin fileservice sync-dir baseline failure remains;
+these are focused passes, not a green whole-fileservice suite.
+
+Raw commands, source/test fingerprints, terminal logs and package-by-package
+normal reconciliation are in `revision-20261016/review-followup-97415/` under
+the issue30185 ledger. Unchanged public SQL/CDC/two-CN/BVT evidence is reused
+with its original scope. New helper/consumer and parser/planner checks replace
+only the conclusions affected by this cleanup/rebase.
+
+The sections below are revision-qualified historical evidence. No earlier result
+is relabeled as a new measurement on this base, and no failed sample is removed.
+
+## Parsing optimization on bases `6b081a1fcfe` / `85d03e833eb`
 
 Initial validation uses main `6b081a1fcfe`; the final requested rebase uses
 `85d03e833eb`. All eight optimization source/test files remain byte-identical.
@@ -62,7 +104,7 @@ those historical failed gates. Raw plans, controls, failed/fixed samples and
 terminal evidence are retained in `revision-20261016/systematic-opt/` and
 `source-cause/` under the issue30185 ledger. No heavy cohort was repeated.
 
-## Further allocation cleanup: scope and limits
+## Allocation cleanup on source `3465deb8298` / base `c2b990cd712`
 
 On parent `3465deb8298` / main `c2b990cd712`, the private Datalink resolver
 returns offset/size scalars; only the unchanged public ParseDatalink API creates
@@ -97,7 +139,7 @@ improvement, not proof that those SQL latency differences are fixed. Raw design,
 profiles, source overlays and normal/race/static receipts are under
 `revision-20261016/admission-opt/` in the issue30185 ledger.
 
-## Current CSV producer optimization and validation scope
+## CSV producer optimization on base `c2b990cd712`
 
 Rebased without conflicts onto main `c2b990cd712`. Fileservice now owns one
 service-record encoder used by Stage S3/HDFS and Datalink HDFS. Ordinary fields
@@ -134,7 +176,7 @@ credentials/query and Datalink HDFS ranges. Full generated-input fuzzing and
 cluster reruns are not repeated. Raw source overlays, commands and receipts:
 `revision-20261016/codec-light/` in the issue30185 ledger.
 
-## Previous amendment: UPDATE ownership and performance status
+## UPDATE ownership on base `ac55588b8d4`
 
 The 12 existing patches rebase unchanged onto main `ac55588b8d4` (prior-PR
 head `380740aac56`). This amendment selects async Datalink admission from the
@@ -195,9 +237,9 @@ Issue #30185, PR #30212. Earlier broad validation snapshot:
 Base: `461bc8e34920959e5fc141e3d1b37673a90894e1`.
 Each measurement below retains its actual source revision.
 
-## Latest amendment and rebase
+## Classic admission and cleanup on base `eb18dbfa030`
 
-Current delivery base: `eb18dbfa030`; main `8795f3699b4` reverted fulltext
+This historical snapshot uses delivery base `eb18dbfa030`; main `8795f3699b4` reverted fulltext
 planner change #30189. The obsolete test-call boolean amendment remains removed.
 The admission amendment began on `83222fa8371`, including JSONLine vector-array
 handling. The final delivery rebase adds only ADDTIME/SUBTIME fractional-precision
@@ -220,7 +262,7 @@ have distinct oracles. The serial generate_series source's 8192+1 batch layout
 is checked, avoiding an assumption about stored-table scan order. Public failed
 CREATE also checks hidden-table, index-catalog and CDC-task rollback.
 
-### Current focused results
+### Focused results for the classic admission amendment
 
 The pre-fix regression fails because 8193 source rows retain 8193 result rows.
 After the correction, empty, one-row and 8193-row sources each retain one row,

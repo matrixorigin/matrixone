@@ -4442,6 +4442,98 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestReadFromParsedPathOwnedService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.txt")
+	require.NoError(t, os.WriteFile(path, []byte("owned content"), 0o600))
+	proc := newSQLFileAccessTestProc(t)
+	parsed, err := fileservice.ParsePath(path)
+	require.NoError(t, err)
+	r, err := readFromParsedPath(proc.Ctx, path, parsed, proc.GetFileService(), 0, -1)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "owned content", string(data))
+	require.NoError(t, r.Close())
+	require.NoError(t, r.Close())
+}
+
+type borrowedSQLReadService struct {
+	*fileservice.MemoryFS
+	readErr, closeErr error
+	closes            int
+	readerCloses      int
+}
+
+func (f *borrowedSQLReadService) Close(context.Context) { f.closes++ }
+
+func (f *borrowedSQLReadService) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := f.MemoryFS.Read(ctx, v); err != nil {
+		return err
+	}
+	for _, entry := range v.Entries {
+		if entry.ReadCloserForRead != nil && *entry.ReadCloserForRead != nil {
+			*entry.ReadCloserForRead = &borrowedSQLReadCloser{ReadCloser: *entry.ReadCloserForRead, service: f}
+		}
+	}
+	return nil
+}
+
+type borrowedSQLReadCloser struct {
+	io.ReadCloser
+	service *borrowedSQLReadService
+}
+
+func (r *borrowedSQLReadCloser) Read(p []byte) (int, error) {
+	if r.service.readErr != nil {
+		return 0, r.service.readErr
+	}
+	return r.ReadCloser.Read(p)
+}
+
+func (r *borrowedSQLReadCloser) Close() error {
+	r.service.readerCloses++
+	return errors.Join(r.ReadCloser.Close(), r.service.closeErr)
+}
+
+func TestLoadFileBorrowedServiceLifetime(t *testing.T) {
+	readErr, closeErr := errors.New("read failed"), errors.New("reader close failed")
+	for _, tc := range []struct {
+		name                   string
+		readErr, closeErr, err error
+	}{
+		{name: "success"},
+		{name: "close error", closeErr: closeErr, err: closeErr},
+		{name: "read error", readErr: readErr, err: readErr},
+		{name: "read error takes precedence", readErr: readErr, closeErr: closeErr, err: readErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { memory.Close(t.Context()) })
+			service := &borrowedSQLReadService{MemoryFS: memory, readErr: tc.readErr, closeErr: tc.closeErr}
+			proc := testutil.NewProcess(t, testutil.WithFileService(service))
+			proc.Base.SessionInfo.Account = "sys"
+			proc.Base.SessionInfo.Role = "moadmin"
+			require.NoError(t, memory.Write(proc.Ctx, fileservice.IOVector{FilePath: "owned.txt", Entries: []fileservice.IOEntry{{Data: []byte("owned"), Size: 5}}}))
+			data, err := readLoadFileContents("shared:owned.txt", proc)
+			require.ErrorIs(t, err, tc.err)
+			if tc.err == nil {
+				require.Equal(t, "owned", string(data))
+			} else {
+				require.Nil(t, data)
+			}
+			require.Equal(t, 1, service.readerCloses)
+			require.Zero(t, service.closes, "load_file must close its reader, not the borrowed service")
+			service.readErr, service.closeErr = nil, nil
+			data, err = readLoadFileContents("shared:owned.txt", proc)
+			require.NoError(t, err)
+			require.Equal(t, "owned", string(data))
+			require.Zero(t, service.closes)
+		})
+	}
+}
+
 func TestReadLoadFileContentsHonorsContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owned.txt")
 	require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))

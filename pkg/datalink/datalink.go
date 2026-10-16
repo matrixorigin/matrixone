@@ -15,13 +15,11 @@
 package datalink
 
 import (
-	"context"
 	"io"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/datalink/docx"
@@ -299,11 +297,7 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if d.ownsService(path) {
-		return &readCloserWithFileService{
-			ReadCloser:  r,
-			FileService: fs,
-			Ctx:         proc.Ctx,
-		}, nil
+		return fileservice.NewReadCloserWithOwnedFileService(proc.Ctx, r, fs), nil
 	}
 	return r, nil
 }
@@ -331,22 +325,6 @@ func (d Datalink) StatFile(proc *process.Process) (*fileservice.DirEntry, error)
 
 func (d Datalink) ownsService(path fileservice.Path) bool {
 	return path.Service == "" || len(path.ServiceArguments) > 0
-}
-
-type readCloserWithFileService struct {
-	io.ReadCloser
-	FileService fileservice.FileService
-	Ctx         context.Context
-	once        sync.Once
-	err         error
-}
-
-func (r *readCloserWithFileService) Close() error {
-	r.once.Do(func() {
-		r.err = r.ReadCloser.Close()
-		r.FileService.Close(r.Ctx)
-	})
-	return r.err
 }
 
 func (d Datalink) parsedPath() (fileservice.Path, error) {

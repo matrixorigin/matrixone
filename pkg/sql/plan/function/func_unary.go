@@ -5878,29 +5878,9 @@ func readFromParsedPath(ctx context.Context, rawPath string, path fileservice.Pa
 		return nil, err
 	}
 	if ownsService {
-		return &readCloserWithFileService{
-			ReadCloser:  r,
-			FileService: fs,
-			Ctx:         ctx,
-		}, nil
+		return fileservice.NewReadCloserWithOwnedFileService(ctx, r, fs), nil
 	}
 	return r, nil
-}
-
-type readCloserWithFileService struct {
-	io.ReadCloser
-	FileService fileservice.FileService
-	Ctx         context.Context
-	once        sync.Once
-	err         error
-}
-
-func (r *readCloserWithFileService) Close() error {
-	r.once.Do(func() {
-		r.err = r.ReadCloser.Close()
-		r.FileService.Close(r.Ctx)
-	})
-	return r.err
 }
 
 func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {

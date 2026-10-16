@@ -4,7 +4,7 @@ Issue: #30185. Implementation PR: #30212.
 
 This records the distinct design-first decisions for the complete change. The
 current consolidated design is `sql-file-access.md`, blob
-`96fd5ecab87c549cf59751d81bb72161fb074b7c`, delivered with this record. These approvals permit implementation;
+`33a55262acebabd02c2bedbe90f8bfcabc43ac12`, delivered with this record. These approvals permit implementation;
 they do not turn missing runtime evidence into a pass.
 
 ## Recorded decisions
@@ -211,3 +211,32 @@ static checks pass. The separate final-base SQL cohort reports median elapsed
 historical unresolved performance gate remain visible. No additional heavy
 validation or zero-regression claim is requested or made. Evidence and actual
 model provenance: `systematic-opt/rebase-85d/` in the same ledger.
+
+## Shared reader ownership follow-up
+
+On base `97415db10bdb3d6ffdf53ff1810a7e80bd78ee11`, gpt-6.1-sol / xhigh
+accepted the narrow design before implementation: session
+`01a144f9-c58b-7c41-9f65-67ff7614585a`, turn
+`01a144f9-c614-7bf1-9c68-1f04cace19f4`. Actual CLI turn metadata verifies the
+model and effort; design artifact SHA256:
+`0632743444051c45eb2e8a071c79076f1075d7c8af5677162607f0040c9a4d54`.
+
+Fileservice owns the one reader/service close-once wrapper used by Datalink and
+raw load_file. Callers retain the existing owned/borrowed decision; reader close
+precedes owned-service close even on error, and repeated/concurrent close returns
+the first reader error. No state machine, policy, background work or normal-DML
+work is added. Historical evidence and failed performance samples remain intact.
+The whole-PR/main timing gate remains open for merge acceptance; only the
+previously authorized PR-update exception permits delivery with it unresolved.
+
+Final follow-up review: **SOURCE ACCEPT; DELIVERY ACCEPT under the existing
+update-only timing exception and GPU waiver; the whole-PR/main performance
+merge blocker remains.** Actual gpt-6.1-sol / xhigh, same session, turn
+`01a1450d-d8d1-7fd2-ae4a-42b7a6587663`. Reviewed the complete 174-file delivery map and
+8-file staged amendment SHA256
+`33857b49ca4c348a85e9e2d129b23ce4f5bc5488816eaa90ea4a18f75d2d417e`.
+Normal package results, once-only five-package race and six-package static
+receipts were reconciled with the unchanged evidence; initial failed commands
+remain visible. Review artifact SHA256:
+`b7b87b6eaef1090a03d3a8c76484f91f162e2ba7d9a9146ee57904053e91b014`. Raw proof and final Go fingerprints remain in
+`revision-20261016/review-followup-97415/` under the issue30185 ledger.
