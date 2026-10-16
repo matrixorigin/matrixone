@@ -1148,6 +1148,70 @@ func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
 	require.Same(t, target, c.lockTables[target.TableId])
 }
 
+func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		noWait bool
+		skip   bool
+	}{
+		{name: "NOWAIT", noWait: true},
+		{name: "SKIP LOCKED", skip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOp
+
+			source := newScope(Normal)
+			source.Proc = c.proc
+			source.setRootOperator(colexec.NewMockOperator())
+			t.Cleanup(func() {
+				source.FreeOperator(c)
+				source.release()
+			})
+			originalRoot := source.RootOp
+			target := &plan.LockTarget{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+				Mode: lockpb.LockMode_Shared, NoWait: tc.noWait, SkipLocked: tc.skip,
+			}
+
+			got, err := c.compileLock(&plan.Node{LockTargets: []*plan.LockTarget{target}}, []*Scope{source})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.Nil(t, got)
+			require.Same(t, originalRoot, source.RootOp,
+				"optimistic nonblocking plans must fail while scopes are only being compiled")
+			require.Empty(t, source.PreScopes)
+		})
+	}
+}
+
+func TestCompileRejectsOptimisticNonBlockingBeforeScopeConstruction(t *testing.T) {
+	c := NewMockCompile(t)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_LOCK_OP,
+			LockTargets: []*plan.LockTarget{{
+				TableId: 42, Mode: lockpb.LockMode_Shared, SkipLocked: true,
+			}},
+		}},
+	}}}
+
+	err := c.Compile(context.Background(), queryPlan, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Nil(t, c.scopes, "rejection must happen before constructing any source scopes")
+	require.Nil(t, c.cnList, "rejection must happen before scheduling remote workers")
+}
+
 func TestCompileLockPrePipelineTargetAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

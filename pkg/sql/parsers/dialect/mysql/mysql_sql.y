@@ -16900,6 +16900,37 @@ nth_value_from_first_opt:
     {
     }
 
+// Lock modifiers are contextual identifiers: ordinary identifier use stays intact.
+// Append productions to preserve existing production and token numbers.
+select_lock_opt:
+    FOR UPDATE ID
+    {
+        if !strings.EqualFold($3, "nowait") {
+            yylex.Error("expected NOWAIT after FOR UPDATE"); return 1
+        }
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForUpdateNoWait,
+        }
+    }
+|   FOR SHARE ID
+    {
+        if !strings.EqualFold($3, "nowait") {
+            yylex.Error("expected NOWAIT after FOR SHARE"); return 1
+        }
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShareNoWait,
+        }
+    }
+|   FOR SHARE CONFLICT_SKIP ID
+    {
+        if !strings.EqualFold($4, "locked") {
+            yylex.Error("expected LOCKED after FOR SHARE SKIP"); return 1
+        }
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShareSkipLocked,
+        }
+    }
+
 //mo_keywords:
 //    PROPERTIES
 //  BSI
