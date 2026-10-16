@@ -32,12 +32,14 @@ import (
 // TimestampWaiter. The task deliberately finishes a transaction after runner
 // cancellation, the same ownership boundary used by ISCP's commit cleanup.
 func TestCNCloseKeepsLogtailForDrainingTask(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	c, err := NewCluster(ctx, t, DefaultOptions().WithRootDataDir(t.TempDir()).WithLogLevel(zap.InfoLevel))
+	c, err := NewCluster(context.Background(), t, DefaultOptions().WithRootDataDir(t.TempDir()).WithLogLevel(zap.InfoLevel))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	require.NoError(t, c.Start())
+	// Start may wait for exclusive cluster admission. Give task readiness and
+	// shutdown their own budget after that wait, as the task-service tests do.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	cn, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
