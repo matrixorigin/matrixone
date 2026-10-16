@@ -143,6 +143,7 @@ printf 'authoritative\n'
 `
 
 func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
+	t.Parallel()
 	defaultScript := `unset UT_PREBUILD_EMBEDDED
 source ./run_ut.sh UT
 	[[ "$UT_PREBUILD_EMBEDDED" == 1 ]] || exit 80
@@ -233,6 +234,7 @@ fi
 }
 
 func TestEmbeddedPrebuiltExecutionUsesBoundedProcessPool(t *testing.T) {
+	t.Parallel()
 	script := embeddedSetup + `
 start_embedded_prebuild "$scope" 1
 artifact_dir=$CLUSTER_PREBUILD_DIR
@@ -452,6 +454,7 @@ exit 125
 }
 
 func TestEmbeddedPrebuildCancellation(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"build", "launch"} {
 		t.Run(phase, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -607,6 +610,7 @@ run_embedded_tests "$scope"
 }
 
 func TestEmbeddedPrebuiltExecutionCancellation(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"running", "active-publication", "watchdog-publication", "cleanup"} {
 		t.Run(phase, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -757,6 +761,7 @@ function ut_test_execution_spawned() {`, 1)
 }
 
 func TestEmbeddedPrebuiltExecutionHardTimeout(t *testing.T) {
+	t.Parallel()
 	script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
 start_embedded_prebuild "$scope" 1
@@ -778,6 +783,7 @@ grep -q 'prebuilt embedded package example/a failed' "$UT_STDERR" || exit 94
 }
 
 func TestEmbeddedPrebuiltTimeoutAddsFailureEvent(t *testing.T) {
+	t.Parallel()
 	script := embeddedSetup + `
 start_embedded_prebuild "$scope" 1
 status=0
@@ -794,6 +800,7 @@ grep -q 'UT runner hard timeout' "$UT_REPORT" || exit 92
 }
 
 func TestEmbeddedPrebuiltOuterCancellationKillsResistantGroup(t *testing.T) {
+	t.Parallel()
 	for _, parallel := range []string{"1", "2"} {
 		for _, drain := range []string{"complete", "failed", "helper-killed"} {
 			t.Run("parallel="+parallel+"/drain="+drain, func(t *testing.T) {
@@ -850,6 +857,7 @@ run_embedded_tests "$scope" 2
 }
 
 func TestEmbeddedPrebuiltKilledHelperKeepsOwnershipEvidence(t *testing.T) {
+	t.Parallel()
 	for _, signal := range []string{"KILL", "KILL-parallel2", "PIPE", "HUP", "EXIT", "UNSET", "SUCCESS", "FAILURE"} {
 		t.Run(signal, func(t *testing.T) {
 			parallel := "1"
@@ -916,6 +924,7 @@ printf 'REVIEW signal=%s status=%s flag=%s retained=%s live_groups=%s later=%s\n
 }
 
 func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
+	t.Parallel()
 	for _, parallel := range []string{"1", "2"} {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -970,6 +979,7 @@ func checkScheduleJSONReport(report []byte, expected map[string]string) error {
 }
 
 func TestScheduleJSONReportValidation(t *testing.T) {
+	t.Parallel()
 	expected := map[string]string{"example/a": "pass", "example/b": "fail"}
 	const pass = `{"Package":"example/a","Action":"pass"}`
 	const fail = `{"Package":"example/b","Action":"fail"}`
@@ -1010,6 +1020,7 @@ func TestScheduleJSONReportValidation(t *testing.T) {
 }
 
 func TestEmbeddedPrebuildReapsCompilerDescendants(t *testing.T) {
+	t.Parallel()
 	script := embeddedSetup + `
 function review_cleanup() {
  if [[ -f "$CASE_DIR/compiler-pids" ]]; then
@@ -1050,6 +1061,7 @@ kill -KILL $$
 // Scope policy and report ownership use the existing command/consume boundary;
 // the executor's real pool/deadline/drain behavior is covered separately.
 func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
+	t.Parallel()
 	const embed = "github.com/matrixorigin/matrixone/pkg/embed"
 	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
 	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
