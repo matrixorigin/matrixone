@@ -100,18 +100,61 @@ select id, hex(upper(coalesce(txt, bin))) from domains order by id;
 1  ¦  E4BDA061  𝄀
 2  ¦  E4BDA061  𝄀
 3  ¦  E4BDA061
-select id, hex(left(x, 1)), hex(reverse(x))
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
+select id, char_length(coalesce(x, '')), hex(left(coalesce(x, ''), 1)),
+hex(reverse(coalesce(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+➤ id[4,32,0]  ¦  char_length(coalesce(x, ))[-5,64,0]  ¦  hex(left(coalesce(x, ), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(x, )))[-1,16383,0]  𝄀
+1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
-➤ id[4,32,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
-1  ¦  E4  ¦  61A0BDE4  𝄀
-2  ¦  E4  ¦  61A0BDE4  𝄀
-3  ¦  E4  ¦  61A0BDE4
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  4  ¦  E4  ¦  61A0BDE4
 select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
 ➤ id[4,32,0]  ¦  hex(left(coalesce(x, 你a), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(x, 你a)))[-1,16383,0]  𝄀
 1  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  E4  ¦  61A0BDE4
+select id, char_length(coalesce(if(id = 2, bin, txt), '')),
+hex(left(coalesce(if(id = 2, bin, txt), ''), 1)),
+hex(reverse(coalesce(if(id = 2, bin, txt), ''))),
+hex(left(coalesce(case when id = 2 then bin else txt end, ''), 1)),
+hex(reverse(coalesce(case when id = 2 then bin else txt end, '')))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(coalesce(if(id = 2, bin, txt), ))[-5,64,0]  ¦  hex(left(coalesce(if(id = 2, bin, txt), ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(if(id = 2, bin, txt), )))[12,2040,0]  ¦  hex(left(coalesce(case when id = 2 then bin else txt end, ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(case when id = 2 then bin else txt end, )))[12,2040,0]  𝄀
+1  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4
+select id, hex(left(coalesce(ifnull(txt, bin), ''), 1)),
+hex(reverse(coalesce(ifnull(txt, bin), '')))
+from domains order by id;
+➤ id[4,32,0]  ¦  hex(left(coalesce(ifnull(txt, bin), ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(ifnull(txt, bin), )))[12,2040,0]  𝄀
+1  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  E4  ¦  61A0BDE4
+select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
+hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
+hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));
+➤ char_length((select coalesce(txt, bin) from domains where id = 1 limit 1))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1))[-1,16383,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)))[-1,16383,0]  𝄀
+2  ¦  E4BDA0  ¦  61E4BDA0
+select char_length((select distinct coalesce(txt, bin) from domains limit 1)),
+hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1)),
+char_length((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1)),
+hex(left((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1), 1)),
+char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1)),
+hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1));
+➤ char_length((select distinct coalesce(txt, bin) from domains limit 1))[-5,64,0]  ¦  hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1))[-1,16383,0]  ¦  char_length((select coalesce(txt, bin) as x from domains where id = 1 union all select  order by x desc limit 1))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) as x from domains where id = 1 union all select  order by x desc limit 1), 1))[-1,16383,0]  ¦  char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1))[-5,64,0]  ¦  hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1))[-1,16383,0]  𝄀
+4  ¦  E4  ¦  4  ¦  E4  ¦  4  ¦  E4
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
 char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;

@@ -244,6 +244,12 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select null) d where x<>'' limit 1)", false, true, true, false},
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select _binary '') d where x<>'' limit 1)", false, true, true, false},
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else _binary '' end x union all select '') d where x<>'' limit 1)", false, true, false, false},
+		{"ifnull(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"ifnull(null,case when ? then lower(coalesce(?,null)) else null end)", false, true, true, false},
+		{"ifnull(case when ? then lower(coalesce(?,null)) else null end,null)", false, true, true, false},
+		{"ifnull(case when ? then lower(coalesce(?,null)) else null end,_binary '')", false, true, true, false},
+		{"concat_ws('',ifnull(case when ? then lower(coalesce(?,null)) else null end,''))", false, false, true, false},
+		{"ifnull(case when ? then lower(coalesce(?,null)) else _binary '' end,'')", false, true, false, false},
 		{"coalesce(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
 		{"coalesce(null,case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
 		{"concat(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
@@ -317,6 +323,7 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 func TestPreparedFieldStringConsumerWithoutHistory(t *testing.T) {
 	for _, expr := range []string{
 		"lower(case when ? then lower(coalesce(?,null)) else null end)",
+		"lower(ifnull(case when ? then lower(coalesce(?,null)) else null end,''))",
 		"lower(case when ? then case when true then lower(coalesce(?,null)) else null end else null end)",
 	} {
 		for _, oid := range []types.T{types.T_any, types.T_varchar, types.T_blob} {

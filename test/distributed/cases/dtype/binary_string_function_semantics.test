@@ -71,11 +71,38 @@ select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
        hex(left(coalesce(txt, bin), 1)) from domains order by id;
 -- Case folding consumes declaration collation, unlike direct character slicing.
 select id, hex(upper(coalesce(txt, bin))) from domains order by id;
+-- Mergeable projections retain selected row domains, including through COALESCE.
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+select id, char_length(coalesce(x, '')), hex(left(coalesce(x, ''), 1)),
+       hex(reverse(coalesce(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
 -- Materialized declarations are consumed before any further value selection.
-select id, hex(left(x, 1)), hex(reverse(x))
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
 select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+-- Conditional results own their declarations before another value selector.
+select id, char_length(coalesce(if(id = 2, bin, txt), '')),
+       hex(left(coalesce(if(id = 2, bin, txt), ''), 1)),
+       hex(reverse(coalesce(if(id = 2, bin, txt), ''))),
+       hex(left(coalesce(case when id = 2 then bin else txt end, ''), 1)),
+       hex(reverse(coalesce(case when id = 2 then bin else txt end, '')))
+from domains order by id;
+select id, hex(left(coalesce(ifnull(txt, bin), ''), 1)),
+       hex(reverse(coalesce(ifnull(txt, bin), '')))
+from domains order by id;
+-- A scalar row limit is not a derived-table materialization boundary.
+select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
+       hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
+       hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));
+-- Intrinsic reconciliation remains a declaration boundary inside scalar queries.
+select char_length((select distinct coalesce(txt, bin) from domains limit 1)),
+       hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1)),
+       char_length((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1)),
+       hex(left((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1), 1)),
+       char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1)),
+       hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1));
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
        char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;
