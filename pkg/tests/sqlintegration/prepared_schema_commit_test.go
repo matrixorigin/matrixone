@@ -42,10 +42,10 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
-	t.Cleanup(cancel)
 	open := func(t *testing.T, index int) *sql.Conn {
 		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
 		cn, err := cluster.GetCNService(index)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -59,6 +59,8 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 	first := open(t, 0)
 	exec := func(t *testing.T, conn *sql.Conn, statement string) {
 		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
 		_, err := conn.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
@@ -66,15 +68,17 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stop()
-		_, err := first.ExecContext(cleanup, "rollback")
-		require.NoError(t, err)
-		_, err = first.ExecContext(cleanup, "drop database prepared_schema_commit")
+		// This setup session never starts a transaction; each scenario owns
+		// its transactional sessions and closes them before database teardown.
+		_, err := first.ExecContext(cleanup, "drop database prepared_schema_commit")
 		require.NoError(t, err)
 	})
 	exec(t, first, "use prepared_schema_commit")
 	for _, protocol := range []string{"text", "binary"} {
 		for _, scenario := range []string{"committed_before_execute", "empty_after_binding", "rows_after_binding"} {
 			t.Run(protocol+"/"+scenario, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
 				// A cancelled query may invalidate its driver connection. Each scenario
 				// owns both sessions; reuse and recovery are checked within that scenario.
 				first, second := open(t, 0), open(t, 1)
@@ -225,6 +229,8 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 	exec(t, second, "set save_query_result=on")
 	for _, limit := range []string{"0", "1"} {
 		t.Run("saved_result/limit_"+limit, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+			defer cancel()
 			rows, err := second.QueryContext(ctx, "/* save_result */ select b from text_rows_after_binding limit "+limit)
 			require.NoError(t, err)
 			defer rows.Close()
@@ -271,6 +277,8 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 		})
 	}
 	t.Run("saved_result/late_failure_and_same_connection_reuse", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
 		var before, after uint64
 		require.NoError(t, second.QueryRowContext(ctx, "select connection_id()").Scan(&before))
 		wasEnabled := fault.Status()
