@@ -82,8 +82,8 @@ class ControllerTest(unittest.TestCase):
             native = workspace / "sirius.yaml"
             native.write_text(controller.native_configuration(workspace, 1048576))
             (workspace / "cn-2.toml").write_text(
-                '[cn.sirius]\nenabled=true\nbackend="embedded"\ninput-mode="mo"\n'
-                'max-waiting-queries=16\ncleanup-timeout="30s"\n'
+                '[cn.sirius]\nenabled=true\n'
+                'max-waiting-queries=16\ncleanup-timeout="30s"\nrequest-timeout="1h"\ngpu-streams=2\n'
                 + "native-config-path="
                 + json.dumps(str(native))
                 + "\n"
@@ -173,8 +173,8 @@ while True: signal.pause()
                 controller.native_configuration(workspace)
             )
             (workspace / "cn-2.toml").write_text(
-                '[cn.sirius]\nenabled=true\nbackend="embedded"\ninput-mode="mo"\n'
-                'max-waiting-queries=16\ncleanup-timeout="30s"\ngpu-streams = 2\n'
+                '[cn.sirius]\nenabled=true\n'
+                'max-waiting-queries=16\ncleanup-timeout="30s"\nrequest-timeout="1h"\ngpu-streams = 2\n'
                 + "native-config-path="
                 + json.dumps(str(workspace / "native.yaml"))
                 + "\n"
@@ -264,7 +264,7 @@ while True: signal.pause()
                 )
             )
             restore = stack.enter_context(
-                patch.object(v2.legacy, "_set_child_subreaper")
+                patch.object(v2.common, "_set_child_subreaper")
             )
             for target, name, value in (
                 (controller, "Service", factory),
@@ -279,8 +279,8 @@ while True: signal.pause()
                 (controller, "PROFILE_FINALIZE_SECONDS", 2),
                 (resource, "MAX_LEDGER_BYTES", 0),
                 (resource, "MAX_SORT_FILE_BYTES", 0),
-                (v2.legacy, "_enter_exclusive_subreaper", lambda: False),
-                (v2.legacy, "_kill_and_reap_adopted_children", lambda *_: None),
+                (v2.common, "_enter_exclusive_subreaper", lambda: False),
+                (v2.common, "_kill_and_reap_adopted_children", lambda *_: None),
             ):
                 stack.enter_context(patch.object(target, name, value))
             stack.enter_context(
@@ -408,7 +408,7 @@ while True: signal.pause()
         # controller's child. v2's test caller bounds and owns this fixture too.
         script = """import json,subprocess,sys
 import sirius_campaign as c
-previous=c.v2.legacy._enter_exclusive_subreaper()
+previous=c.v2.common._enter_exclusive_subreaper()
 worker=subprocess.Popen([sys.executable,'-c',
     'import os,time; pid=os.fork(); '
     'os.setsid() if pid==0 else None; '
@@ -416,10 +416,10 @@ worker=subprocess.Popen([sys.executable,'-c',
     'time.sleep(30) if pid==0 else None'],stdout=subprocess.PIPE,text=True)
 escaped=int(worker.stdout.readline())
 worker.wait(timeout=5)
-assert escaped in c.v2.legacy._direct_child_pids()
+assert escaped in c.v2.common._direct_child_pids()
 c.close_services([],previous)
 worker.stdout.close()
-assert not c.v2.legacy._direct_child_pids()
+assert not c.v2.common._direct_child_pids()
 print(json.dumps({'joined':True}))
 """
         result = v2.BoundedExecutor([sys.executable, "-c", script], 10)({})
@@ -429,8 +429,8 @@ print(json.dumps({'joined':True}))
         service = MagicMock()
         service.close.side_effect = v2.CampaignError("injected close failure")
         with (
-            patch.object(v2.legacy, "_kill_and_reap_adopted_children") as join,
-            patch.object(v2.legacy, "_set_child_subreaper") as restore,
+            patch.object(v2.common, "_kill_and_reap_adopted_children") as join,
+            patch.object(v2.common, "_set_child_subreaper") as restore,
         ):
             with self.assertRaisesRegex(v2.CampaignError, "cleanup failed"):
                 controller.close_services([service], False)
@@ -505,6 +505,47 @@ print(json.dumps({'joined':True}))
             with self.assertRaises(FileExistsError):
                 controller.private_json(path, {})
 
+    def test_host_pool_growth_requires_exact_free_capacity_and_shutdown_proof(self):
+        block, reservation, external = 65536, 64 << 20, 41386248
+        config = {"native_host_block_bytes": block, "result_window_bytes": reservation, "native_host_memory_bytes": 16 << 30}
+        def record(identity, window, free):
+            return {"query_id": identity, "native_pools": {
+                "source": "sirius-tagged-pools", "scope": "query-window",
+                "public_query_id": identity, "window": window,
+                "pools": [{"tier": "host", "space": -1, "begin": {
+                    "allocated_bytes": reservation + 3 * block, "free_blocks": free,
+                }}],
+            }}
+        first, last = record("a" * 32, 23, 100), record("b" * 32, 44, 100)
+        after = {"source": "next-query-window-begin", "window": 45,
+                 "query_id": "c" * 32, "allocated_bytes": reservation + 3 * block,
+                 "free_blocks": 228}
+        last["native_pools"]["pools"][0]["after_close"] = after
+        allocation = {
+            "warmed_baseline_bytes": {"pinned": 103 * block + external, "device": 1},
+            "post_cleanup_bytes": {"pinned": 231 * block + external, "device": 1},
+            "final_bytes": {"pinned": external, "device": 1},
+        }
+        proof = resource.reconcile_host_pool(allocation, first, last, "c" * 32, config)
+        self.assertEqual(8 << 20, proof["free_capacity_growth_bytes"])
+        self.assertEqual(8 << 20, proof["physical_growth_bytes"])
+        self.assertEqual(0, proof["unexplained_growth_bytes"])
+        self.assertEqual(external, proof["external_pinned_baseline_bytes"])
+        for change in (
+            lambda a, f, l, c: a["post_cleanup_bytes"].update(pinned=a["post_cleanup_bytes"]["pinned"] + 1),
+            lambda a, f, l, c: a["final_bytes"].update(pinned=external + 1),
+            lambda a, f, l, c: a["post_cleanup_bytes"].update(device=2),
+            lambda a, f, l, c: l["native_pools"]["pools"][0]["after_close"].update(allocated_bytes=reservation + 4 * block),
+            lambda a, f, l, c: l["native_pools"]["pools"][0]["after_close"].update(query_id="d" * 32),
+            lambda a, f, l, c: l["native_pools"]["pools"][0]["after_close"].update(window=44),
+            lambda a, f, l, c: c.update(native_host_memory_bytes=230 * block),
+            lambda a, f, l, c: f["native_pools"]["pools"].clear(),
+        ):
+            values = copy.deepcopy((allocation, first, last, config))
+            change(*values)
+            with self.subTest(change=change), self.assertRaises(v2.CampaignError):
+                resource.reconcile_host_pool(*values[:3], "c" * 32, values[3])
+
     def test_window_accounting_is_bounded_and_rejects_extra_admissions(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sirius.log"
@@ -559,6 +600,9 @@ print(json.dumps({'joined':True}))
             self.assertEqual(768, gpu["end"]["allocated_bytes"])
             self.assertEqual(0, gpu["after_close"]["allocated_bytes"])
             self.assertEqual("b" * 32, gpu["after_close"]["query_id"])
+            host = next(pool for pool in rows[0]["native_pools"]["pools"] if pool["tier"] == "host")
+            self.assertEqual(4, host["after_close"]["free_blocks"])
+            self.assertEqual("b" * 32, host["after_close"]["query_id"])
             self.assertEqual({}, executor.pool_offsets)
 
     def test_profile_close_never_signals_reused_target_pid(self):

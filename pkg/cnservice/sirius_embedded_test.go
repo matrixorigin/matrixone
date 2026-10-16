@@ -55,20 +55,18 @@ func (r *embeddedRuntimeTestRecorder) Prepare(
 	return nil, r.err
 }
 
-func TestEmbeddedSiriusConfigurationDoesNotRequireFlight(t *testing.T) {
-	config := SiriusConfig{Backend: "embedded", NativeConfigPath: "sirius.conf"}
+func TestSiriusEmbeddedConfiguration(t *testing.T) {
+	config := SiriusConfig{NativeConfigPath: "sirius.conf"}
 	if err := validateSiriusEmbeddedConfig(&config); err != nil {
 		t.Fatal(err)
 	}
-	if config.InputMode != "mo" || config.GPUStreams != 2 || config.MaxWaitingQueries != 16 {
+	if config.GPUStreams != 2 || config.MaxWaitingQueries != 16 {
 		t.Fatalf("defaults: %+v", config)
 	}
 	for _, modify := range []func(*SiriusConfig){
-		func(c *SiriusConfig) { c.InputMode = "tae" },
 		func(c *SiriusConfig) { c.NativeConfigPath = "" },
 		func(c *SiriusConfig) { c.GPUStreams = 129 },
 		func(c *SiriusConfig) { c.MaxWaitingQueries = 17 },
-		func(c *SiriusConfig) { c.BenchmarkNoGC = true },
 	} {
 		invalid := config
 		modify(&invalid)
@@ -78,13 +76,11 @@ func TestEmbeddedSiriusConfigurationDoesNotRequireFlight(t *testing.T) {
 	}
 }
 
-func TestEmbeddedSiriusBackendMapsRequestAndDelegates(t *testing.T) {
+func TestEmbeddedSiriusEngineMapsRequestAndDelegates(t *testing.T) {
 	wantErr := errors.New("prepare failed")
 	recorder := &embeddedRuntimeTestRecorder{err: wantErr}
-	backend := &embeddedBackend{native: recorder}
+	backend := &siriusEngine{native: recorder}
 	require.True(t, backend.Accepting())
-	require.False(t, backend.CanFallbackBeforeVisibility(wantErr))
-	require.ErrorContains(t, backend.Reconcile(1, nil, nil), "no external execution")
 	require.NoError(t, backend.Close(t.Context()))
 	require.True(t, recorder.closed)
 

@@ -31,12 +31,29 @@ func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
 	require.NoError(t, applyRemapDb(ctx, stmts, remap, 1))
 	return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
 func TestApplyRemapDb(t *testing.T) {
 	remap := map[string]string{"dbxxx": "dbyyy"}
+
+	t.Run("collated expressions", func(t *testing.T) {
+		for _, sql := range []string{
+			"select (select s from dbxxx.t limit 1) collate utf8mb4_bin",
+			"select dbxxx.t.s collate utf8mb4_bin from dbxxx.t",
+			"select (select (select s from dbxxx.t limit 1) collate utf8mb4_bin) collate utf8mb4_bin",
+		} {
+			out := applyRemapDbToSQL(t, sql, remap)
+			require.Contains(t, out, "dbyyy.t", sql)
+			require.NotContains(t, out, "dbxxx", sql)
+			require.Contains(t, out, "collate utf8mb4_bin", sql)
+		}
+		out := applyRemapDbToSQL(t, "select (select s from otherdb.t limit 1) collate utf8mb4_bin", remap)
+		require.Contains(t, out, "otherdb.t")
+		require.NotContains(t, out, "dbyyy")
+	})
 
 	t.Run("analyze all qualified entries", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "analyze table dbxxx.a(x), dbxxx.b", remap)

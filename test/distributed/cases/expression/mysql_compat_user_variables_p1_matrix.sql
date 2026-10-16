@@ -95,6 +95,22 @@ set @uv_p1_bad_scalar = 0;
 select (select 1 into @uv_p1_bad_scalar);
 select @uv_p1_bad_scalar;
 
+-- COLLATE 不得隐藏无执行 owner 的嵌套 INTO，拒绝后变量与视图状态不变。
+set @uv_p1_collate_inner = 'before', @uv_p1_collate_outer = 'outer';
+-- @regex("Misplaced INTO clause", true)
+select (select 'a' into @uv_p1_collate_inner) collate utf8mb4_bin;
+-- @regex("Misplaced INTO clause", true)
+set @uv_p1_collate_outer = (select 'a' into @uv_p1_collate_inner) collate utf8mb4_bin;
+-- @regex("Misplaced INTO clause", true)
+create view uv_p1_collate_bad_view as select (select 'a' into @uv_p1_collate_inner) collate utf8mb4_bin;
+select @uv_p1_collate_inner, @uv_p1_collate_outer;
+select count(*) as rejected_view_count from information_schema.views
+where table_schema = database() and table_name = 'uv_p1_collate_bad_view';
+-- 顶层 INTO 有明确 owner，普通 COLLATE 标量子查询也仍然合法。
+select 'owned' collate utf8mb4_bin into @uv_p1_collate_inner;
+select @uv_p1_collate_inner;
+select (select 'ordinary') collate utf8mb4_bin as ordinary_collated;
+
 set @uv_p1_bad_derived = 0;
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
 select * from (select 1 into @uv_p1_bad_derived) as d;

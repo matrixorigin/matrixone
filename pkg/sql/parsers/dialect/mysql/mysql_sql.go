@@ -32189,7 +32189,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:13231
 		{
-			yyLOCAL = yyDollar[1].exprUnion()
+			yyLOCAL = &tree.CollateExpr{Expr: yyDollar[1].exprUnion(), Collation: yyDollar[3].str}
 		}
 		yyVAL.union = yyLOCAL
 	case 1956:
