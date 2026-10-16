@@ -136,7 +136,9 @@ func TestLoadTimeReaderPlacement(t *testing.T) {
 		checkScopes(t, c, ss)
 		require.Len(t, ss, 1)
 		require.Equal(t, 2, ss[0].NodeInfo.Mcpu)
-		require.Len(t, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset, 4)
+		// The fixture ends before the nominal split; worker placement stays
+		// parallel while only the final whole-file range is assigned.
+		require.Equal(t, []int64{0, -1}, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
 	})
 	for _, control := range []string{"non TIME", "foreign TIME", "Arrow", "omitted TIME", "user variable"} {
 		t.Run(control+" control", func(t *testing.T) {
