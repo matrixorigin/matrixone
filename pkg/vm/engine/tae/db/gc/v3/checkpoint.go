@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"go.uber.org/zap"
 )
 
@@ -1496,10 +1495,8 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 
 	gCkp := c.GetGCWaterMark()
-	testutils.WaitExpect(10000, func() bool {
-		gCkp = c.GetGCWaterMark()
-		return gCkp != nil
-	})
+	// Mutation ownership excludes the GC writers that publish this watermark.
+	// Inspect the current boundary instead of waiting for progress we block.
 	if gCkp == nil {
 		gCkp = c.checkpointCli.MaxGlobalCheckpoint()
 		if gCkp == nil {
