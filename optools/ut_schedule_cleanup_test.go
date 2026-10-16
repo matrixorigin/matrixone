@@ -979,3 +979,50 @@ kill -TERM "$$"
 		t.Fatalf("embedded/plan/heavy cancellation: %v\n%s", err, out)
 	}
 }
+
+func TestKilledCommandDriverDrainsTestChildren(t *testing.T) {
+	t.Parallel()
+	for _, owner := range []string{"foreground", "background"} {
+		t.Run(owner, func(t *testing.T) {
+			t.Parallel()
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+trap handle_ut_termination TERM
+command='bash -c '\''printf "%s\n" "$$" > "$CASE_DIR/test-child"; while :; do sleep 1; done'\'' & wait'
+if [[ "$OWNER" == foreground ]]; then
+ start_ut_command embedded 'cluster test driver' bash -c "$command"
+ driver=$CURRENT_UT_PID
+else
+ start_background_race heavy 'heavy test driver' bash -c "$command"
+ driver=$BACKGROUND_RACE_JOB_PID
+fi
+while [[ ! -s "$CASE_DIR/test-child" ]]; do sleep 0.01; done
+child=$(cat "$CASE_DIR/test-child")
+kill -KILL "$driver"
+status=0
+if [[ "$OWNER" == foreground ]]; then
+ finish_ut_command || status=$?
+else
+ finish_background_race || status=$?
+fi
+[[ "$status" == 137 ]] || exit 90
+# Inspect the known child independently of the runner's drainage helper.
+state=$(ps -o stat= -p "$child")
+case "$state" in ""|*Z*) ;; *) exit 91 ;; esac
+[[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID" ]] || exit 92
+printf 'TEST_CHILD_DRAINED\n'
+`
+			transform := func(source string) string {
+				const anchor = `wait_for_ut_process_group "${!pid_name}" 20 || join_status=125`
+				if strings.Count(source, anchor) != 1 {
+					t.Fatal("missing common owner drainage boundary")
+				}
+				return strings.Replace(source, anchor, strings.Replace(anchor, " 20 ", " 0 ", 1), 1)
+			}
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "OWNER="+owner)
+			if err != nil || !strings.Contains(string(out), "TEST_CHILD_DRAINED") {
+				t.Fatalf("killed %s driver: %v\n%s", owner, err, out)
+			}
+		})
+	}
+}

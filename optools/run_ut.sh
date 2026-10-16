@@ -286,10 +286,10 @@ function join_ut_owner(){
             trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
         fi
         wait "${!pid_name}" || join_status=$?
+        # A killed raw Go driver can leave test/link children in its group,
+        # just as a helper shell can. Reaping either leader is not drainage.
+        wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
         if (( requires_drain_ack )); then
-            # Preparation and ordinary fallback children share this helper's
-            # group. Reaping its shell must not release those descendants.
-            wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
             local completion_path="${G_WKSP}/${G_TS}-owner-complete.${pid_name}"
             if [[ ! -f "${completion_path}" ]] ||
                 [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
@@ -683,7 +683,7 @@ function start_ut_heartbeat(){
             # workspace instead of relying on those later parent-shell values.
             heartbeat_reports=(
                 "${UT_REPORT}"
-                "${G_WKSP}/${G_TS}-light-race-report.out"
+                "${G_WKSP}/${G_TS}-background-race-report.out"
                 "${G_WKSP}/${G_TS}-engine-race-report.out"
                 "${G_WKSP}/${G_TS}-engine-race-report.out".*
                 "${G_WKSP}/${G_TS}-plan-race-report.out"

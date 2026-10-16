@@ -557,6 +557,7 @@ func TestEmbeddedPlanHeavyOverlapPreservesStagesAndFailures(t *testing.T) {
 		failed       bool
 	}{
 		{name: "full-profile", early: true},
+		{name: "ordinary-cluster-owner", config: "CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/tests/arrowload", early: true},
 		{name: "new-cluster-owner", config: "CLUSTER_PACKAGE=unclassified/embed"},
 		{name: "heavy-failure", config: "export HEAVY_STATUS=7", early: true, failed: true},
 		{name: "plan-failure", config: "PLAN_STATUS=8", early: true, failed: true},
@@ -600,6 +601,7 @@ exit "$HEAVY_STATUS"
 			script := `source ./run_ut.sh UT
 trap handle_ut_termination TERM
 function logger() { :; }
+function uname() { echo Linux; }
 function make() { :; }
 function report_cgroup_memory_usage() { :; }
 function egrep() { echo fake.pb.go; }
@@ -620,7 +622,7 @@ export HEAVY_STATUS=0
 PLAN_STATUS=0
 EMBEDDED_STATUS=0
 ENGINE_STATUS=0
-CLUSTER_PACKAGE=example/embed
+CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/embed
 @CONFIG@
 function go() {
  if [[ "$1" == clean ]]; then return 0; fi
@@ -1183,7 +1185,7 @@ function ps() {
     printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
 }
 start_ut_heartbeat
-BACKGROUND_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
+BACKGROUND_RACE_REPORT="$G_WKSP/${G_TS}-background-race-report.out"
 cat > "$BACKGROUND_RACE_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
 EOF
