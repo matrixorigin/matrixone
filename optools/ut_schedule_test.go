@@ -585,7 +585,7 @@ if [[ "$1" == version ]]; then exit 0; fi
 [[ "$*" == *pkg/backup* && "$*" != *toolexec* ]] || exit 90
 mkdir "$CASE_DIR/heavy-once" || exit 91
 if [[ "$EXPECT_EARLY" == 1 ]]; then
- [[ "$GOMAXPROCS" == 1 && ! -e "$CASE_DIR/engine-once" ]] || exit 92
+ [[ "$GOMAXPROCS" == 2 && ! -e "$CASE_DIR/engine-once" ]] || exit 92
  case " $* " in *" -p 1 "*) ;; *) exit 93 ;; esac
 else
  [[ -e "$CASE_DIR/engine-once" ]] || exit 94

@@ -83,7 +83,7 @@ UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
 # Keep the constrained runner's existing three-slot heavy-stage budget. The
 # engine race wave runs exclusively. The legacy tail reserves one slot for
 # plan while heavy packages use two; the full eight-core profile instead
-# overlaps one-core plan/heavy companions with the embedded wave.
+# overlaps bounded two-core plan/heavy companions with the embedded wave.
 # This is a process/task budget, not a hard memory guarantee; stronger runners
 # may explicitly override it.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
@@ -3068,10 +3068,10 @@ function run_tests(){
             done
         fi
         if (( early_heavy_plan == 1 )); then
-            logger "INF" "Overlap serial plan/heavy companions with embedded tests; two Go cores for plan, one for heavy; preserve test parallelism"
+            logger "INF" "Overlap serial plan/heavy companions with embedded tests; two Go cores per companion; preserve plan test parallelism"
             GOMAXPROCS=2 start_plan_race "${plan_package}" "-test.parallel=${UT_PARALLEL}" || handle_ut_termination "$?"
             start_background_race heavy "resource-heavy race-test packages" \
-                env GOMAXPROCS=1 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+                env GOMAXPROCS=2 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
                 go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
                 -p 1 -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope || handle_ut_termination "$?"
         fi
