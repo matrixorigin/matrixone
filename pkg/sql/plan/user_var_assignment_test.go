@@ -110,6 +110,46 @@ func TestUserVariableAssignmentRejectsAmbiguousOrderAndLimit(t *testing.T) {
 	}
 }
 
+func TestUserVariableAssignmentRejectsTimeWindowAndSampleArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "time window fill",
+			sql:  "select _wstart, max(id) from src interval(ts, 1, second) fill(value, (@a := 42))",
+			want: "a time-window expression",
+		},
+		{
+			name: "sample projection",
+			sql:  "select sample(@a := id, 2 rows) from src",
+			want: "nested projection expression",
+		},
+		{
+			name: "sample view",
+			sql:  "create view v_sample_user_var as select sample(@a := id, 2 rows) from src",
+			want: "view definitions is not supported",
+		},
+		{
+			name: "sample insert",
+			sql:  "insert into dst(id) select sample(@a := id, 2 rows) from src",
+			want: "INSERT",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func TestUserVariableAssignmentRejectsParenthesizedUnion(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "(select @rank := 1) union all (select 2)", 1)
@@ -355,6 +395,13 @@ func TestUserVariableAssignmentScopeValidationBranches(t *testing.T) {
 	cycle := &cyclicNode{}
 	cycle.Next = cycle
 	require.False(t, containsUserVarAssignmentValue(reflect.ValueOf(cycle), make(map[assignmentVisit]struct{})))
+
+	sample, err := tree.NewSampleRowsFuncExpression(1, false,
+		tree.Exprs{assignment}, "row")
+	require.NoError(t, err)
+	require.True(t, containsUserVarAssignment(sample))
+	require.Equal(t, map[string]struct{}{"a": {}}, userVarAssignmentNames(sample))
+	require.Empty(t, userVariableReadsBeforeAssignment(sample))
 }
 
 func TestUserVariableAssignmentRejectsAggregateAndGeneratedColumn(t *testing.T) {
