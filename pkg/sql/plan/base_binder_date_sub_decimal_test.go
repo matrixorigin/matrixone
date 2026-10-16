@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -271,9 +270,9 @@ func TestResetDateFunctionArgsDecimalInterval(t *testing.T) {
 			require.Equal(t, dateExpr, args[0])
 
 			// Verify the interval value
-			intervalValue := extractInt64Value(args[1])
-			// After using math.Round, 1.000009 * 1000000 should be exactly 1000009
-			require.Equal(t, tc.expectedIntervalVal, intervalValue, "Interval value should match expected (math.Round handles precision)")
+			intervalValue := foldedIntervalInt64(t, args[1])
+			// Exact decimal spelling preserves the 1.000009-second boundary.
+			require.Equal(t, tc.expectedIntervalVal, intervalValue, "Interval value should match expected")
 
 			// Verify the interval type
 			intervalType := extractInt64Value(args[2])
@@ -310,27 +309,9 @@ func TestResetDateFunctionArgsDecimalIntervalWithCast(t *testing.T) {
 			}
 		}
 
-		// Create a cast function expression (simulating appendCastBeforeExpr)
-		return &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						Obj:     0, // cast function ID
-						ObjName: "cast",
-					},
-					Args: []*plan.Expr{
-						makeStringConst(val), // First arg: string literal
-						{
-							Typ: typ,
-							Expr: &plan.Expr_T{
-								T: &plan.TargetType{},
-							},
-						},
-					},
-				},
-			},
-			Typ: typ,
-		}
+		expr, err := appendCastBeforeExpr(ctx, makeStringConst(val), typ)
+		require.NoError(t, err)
+		return expr
 	}
 
 	// Test case: DATE_SUB(datetime, INTERVAL 1.1 SECOND) where 1.1 is wrapped in cast function
@@ -346,9 +327,8 @@ func TestResetDateFunctionArgsDecimalIntervalWithCast(t *testing.T) {
 		require.Len(t, args, 3, "Should return 3 arguments: dateExpr, interval value, interval type")
 
 		// Verify interval value is converted to microseconds
-		intervalValue := extractInt64Value(args[1])
-		// Use math.Round to match the implementation
-		expectedMicroseconds := int64(math.Round(1.1 * float64(types.MicroSecsPerSec)))
+		intervalValue := foldedIntervalInt64(t, args[1])
+		expectedMicroseconds := int64(1100000)
 		require.Equal(t, expectedMicroseconds, intervalValue, "Interval value should be converted to microseconds (1100000) even when wrapped in cast")
 
 		// Verify interval type is MicroSecond
@@ -365,10 +345,8 @@ func TestResetDateFunctionArgsDecimalIntervalWithCast(t *testing.T) {
 		args, err := resetDateFunctionArgs(ctx, dateExpr, intervalExpr)
 		require.NoError(t, err)
 
-		intervalValue := extractInt64Value(args[1])
-		val := float64(1.000009) * float64(types.MicroSecsPerSec)
-		// Use math.Round to match the implementation (1.000009 * 1000000 = 1000008.9999999999, rounds to 1000009)
-		expectedMicroseconds := int64(math.Round(val))
+		intervalValue := foldedIntervalInt64(t, args[1])
+		expectedMicroseconds := int64(1000009)
 		require.Equal(t, expectedMicroseconds, intervalValue, "Interval value should be converted to microseconds (1000009) even when wrapped in cast")
 
 		intervalType := extractInt64Value(args[2])
@@ -395,7 +373,7 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 	normalizeExpr := args[1].GetF()
 	require.NotNil(t, normalizeExpr, "dynamic interval expression must not be folded to a literal")
 	require.NotNil(t, normalizeExpr.Func)
-	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
+	require.Equal(t, "to_calendar_interval", normalizeExpr.Func.GetObjName())
 	require.Len(t, normalizeExpr.Args, 2)
 	require.Equal(t, literalFirstDynamicExpr, normalizeExpr.Args[0], "the complete row-dependent expression must be preserved")
 	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))
@@ -448,11 +426,11 @@ func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
 				}
 				args, err := resetDateFunctionArgs(context.Background(), makeDatetimeConst("2024-01-01 00:00:00"), makeIntervalExpr(literal, "SECOND"))
 				require.NoError(t, err)
-				want := int64(34410126831549)
+				want := int64(34410126831548)
 				if text[0] == '-' {
 					want = -want
 				}
-				require.Equal(t, want, extractInt64Value(args[1]), "decimal ties round exactly at binding")
+				require.Equal(t, want, foldedIntervalInt64(t, args[1]), "decimal seconds truncate sub-microsecond digits")
 				require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
 			}
 		})
@@ -473,7 +451,7 @@ func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
 	normalizeExpr := args[1].GetF()
 	require.NotNil(t, normalizeExpr, "VARCHAR column interval must be normalized at execution time, not folded to a literal")
 	require.NotNil(t, normalizeExpr.Func)
-	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
+	require.Equal(t, "to_calendar_interval", normalizeExpr.Func.GetObjName())
 	require.Len(t, normalizeExpr.Args, 2)
 	require.Equal(t, varcharColumn, normalizeExpr.Args[0])
 	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))

@@ -1172,8 +1172,8 @@ type boundColumn struct {
 type DefaultBinder struct {
 	baseBinder
 	typ           Type
-	cols          []string
-	colTypes      []Type
+	cols          []string // Name-only SHOW scope; mutually exclusive with columns.
+	columns       []*ColDef
 	allowSubquery bool
 }
 

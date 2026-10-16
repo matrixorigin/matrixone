@@ -66,6 +66,9 @@ func (p *watermarkRetirementProbeExecutor) Query(ctx context.Context, sql string
 }
 
 func TestCDCWatermarkUpdaterRuntimeRetirement(t *testing.T) {
+	// This scenario owns its cluster independently of earlier shared-fixture tests.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(WithTesting(), WithCNCount(1))
 	require.NoError(t, err)
 	defer func() { require.NoError(t, c.Close()) }()

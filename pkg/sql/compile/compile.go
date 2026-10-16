@@ -88,6 +88,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
@@ -563,6 +564,7 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
+	c.lastInsertIDBaseline = 0
 	c.disableLock = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
@@ -980,6 +982,11 @@ func closeMaterializedSourceGenerations(sources []*materialized.Source) {
 // after it returns, all submitted scope goroutines have quiesced and the
 // attempt closes both executed and statically planned-but-unstarted owners.
 func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	// Logical window arguments remain execution-time errors when LIMIT 0
+	// removes their physical operator. Check each retry before sources start.
+	if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
+		return err
+	}
 	startedSources, err := c.prePipelineInitializer()
 	defer closeMaterializedSourceGenerations(startedSources)
 	if err != nil {
@@ -8691,7 +8698,7 @@ func supportsRemotePartitionFulltextRoute(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion113
+	return ok && protocolVersion >= defines.MORPCVersion117
 }
 
 func supportsRemoteApproxPercentile(service string) bool {

@@ -44,7 +44,11 @@ func TestConvertToStarlarkValueNull(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
-	_, err := convertToStarlarkValue(context.Background(), []byte("text"))
+	// byte is the Go uint8 alias, so non-nil bytes use the SQL UINT8 vector path.
+	bytes, err := convertToStarlarkValue(context.Background(), []byte("text"))
+	require.NoError(t, err)
+	require.Equal(t, starlark.String("[116, 101, 120, 116]"), bytes)
+	_, err = convertToStarlarkValue(context.Background(), []int16{1, 2})
 	require.ErrorContains(t, err, "type slice is not a supported starlark type")
 	got, err := convertFromStarlarkValue(context.Background(), starlark.None)
 	require.NoError(t, err)

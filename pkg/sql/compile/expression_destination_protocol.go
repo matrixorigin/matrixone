@@ -39,6 +39,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
+			"SELECT division diagnostics require a versioned remote destination",
+			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
 			"checked integer arithmetic requires a versioned remote destination",
 			"remote destination does not support checked integer arithmetic (MORPC version %d)"},
@@ -48,6 +51,12 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.CalendarIntervalNormalization, defines.MORPCVersion115,
+			"calendar interval normalization requires a versioned remote destination",
+			"remote destination does not support calendar interval normalization (MORPC version %d)"},
+		{features.DecimalStatisticalResultContracts, defines.MORPCVersion113,
+			"decimal statistical DOUBLE results require a versioned remote destination",
+			"remote destination does not support decimal statistical DOUBLE results (MORPC version %d)"},
 		{features.DateNumericResultContracts, defines.MORPCVersion112,
 			"signed date result contracts require a versioned remote destination",
 			"remote destination does not support signed date result contracts (MORPC version %d)"},
@@ -78,7 +87,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion113,
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion117,
 			"partitioned FULLTEXT routing requires a versioned remote destination",
 			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 	}
