@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,11 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -127,7 +131,62 @@ func normalizeRewriteRulesWithSelected(
 	return normalized, originalKeys, nil
 }
 
+// roleRuleCacheVersion returns an opaque comparable catalog proof, or nil when
+// freshness cannot be proved. The latter requires a fresh, uncacheable read.
+func roleRuleCacheVersion(ctx context.Context, ses *Session) (any, error) {
+	tenant := ses.GetTenantInfo()
+	pu := getPuIfPresent(ses.GetService())
+	if tenant == nil || pu == nil {
+		return nil, nil
+	}
+	storage := pu.StorageEngine
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	eng, ok := storage.(*disttae.Engine)
+	if !ok {
+		return nil, nil
+	}
+	version, minimum, err := eng.GetPrivilegeCacheVersion(ctx, tenant.GetTenantID(), ses.getLastCommitTS())
+	if err != nil {
+		return nil, err
+	}
+	ses.updateLastCommitTS(minimum)
+	if version == (disttae.PrivilegeCacheVersion{}) {
+		return nil, nil
+	}
+	return version, nil
+}
+
+type rewriteRuleIdentity struct {
+	account, user, role uint32
+	secondary           bool
+}
+
+func rewriteRuleSessionIdentity(ses *Session) rewriteRuleIdentity {
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		return rewriteRuleIdentity{}
+	}
+	tenant.mu.Lock()
+	defer tenant.mu.Unlock()
+	return rewriteRuleIdentity{tenant.TenantID, tenant.UserID, tenant.DefaultRoleID, tenant.useAllSecondaryRole}
+}
+
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	versionOf := ses.ruleCacheVersionProvider
+	if versionOf == nil {
+		versionOf = roleRuleCacheVersion
+	}
+	return captureRewritePolicyWithVersion(ctx, ses, versionOf)
+}
+
+// The provider is passed explicitly so tests can use private comparable tokens
+// without exposing the engine's catalog identities or changing global state.
+func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
+	versionOf func(context.Context, *Session) (any, error),
+) (*rewritePolicySnapshot, error) {
+
 	sessionEnabled := ses.rewriteEnabled.Load()
 	policy := &rewritePolicySnapshot{
 		sessionEnabled:      sessionEnabled,
@@ -138,44 +197,80 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	// Role rules are mandatory access control: load them even when the
 	// optional enable_remap_hint switch is off, so a session SET cannot
 	// bypass the role-rule rewrite path (issue #29142).
+	//
+	// A loaded cache is reused only while the catalog proof still matches the
+	// stamped version. Role-rule commits through another CN never reach this
+	// session's local invalidation, so reuse without a proof would enforce a
+	// stale policy indefinitely (issue #29133).
 	cacheReloaded := false
-	for {
-		ses.ruleCacheMu.RLock()
-		cacheLoaded := ses.ruleCache != nil
-		policy.generation = ses.rewritePolicyGeneration
-		generation := policy.generation
-		if cacheLoaded {
-			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+	fail := func(err error) (*rewritePolicySnapshot, error) {
+		ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
+		return nil, err
+	}
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
 		}
+		if attempt == 3 {
+			return fail(moerr.NewInternalError(ctx, "rewrite rule cache changed during reload"))
+		}
+		identity := rewriteRuleSessionIdentity(ses)
+		ses.ruleCacheMu.RLock()
+		generation := ses.rewritePolicyGeneration
+		loaded := ses.ruleCache != nil
+		cachedRules := cloneRewriteMap(ses.ruleCache)
+		cachedVersion := ses.ruleCacheVersion
+		revision := ses.ruleCacheRevision
+		cachedIdentity := ses.ruleCacheIdentity
 		ses.ruleCacheMu.RUnlock()
-		if cacheLoaded {
+
+		version, err := versionOf(ctx, ses)
+		if err != nil {
+			return fail(err)
+		}
+		if loaded && identity == cachedIdentity && (ses.GetTenantInfo() == nil || (version != nil && version == cachedVersion)) {
+			if identity != rewriteRuleSessionIdentity(ses) {
+				continue
+			}
+			ses.ruleCacheMu.RLock()
+			unchanged := generation == ses.rewritePolicyGeneration && ses.ruleCache != nil && ses.ruleCacheRevision == revision
+			ses.ruleCacheMu.RUnlock()
+			if !unchanged {
+				continue
+			}
+			policy.generation, policy.roleRules = generation, cachedRules
 			break
 		}
 
-		cacheReloaded = true
+		// The proof precedes this independent snapshot read. A later commit can
+		// only make this stamp conservative; it cannot bless older rules as new.
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
-			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
-			ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
-			return nil, err
+			return fail(err)
 		}
-
+		if identity != rewriteRuleSessionIdentity(ses) {
+			continue
+		}
+		ses.mu.Lock()
 		ses.ruleCacheMu.Lock()
-		if ses.ruleCache == nil && ses.rewritePolicyGeneration == generation {
-			ses.ruleCache = rules
+		if generation != ses.rewritePolicyGeneration || ses.ruleCacheRevision != revision {
+			ses.ruleCacheMu.Unlock()
+			ses.mu.Unlock()
+			continue
 		}
-		if ses.ruleCache != nil {
-			policy.generation = ses.rewritePolicyGeneration
-			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		if loaded && !maps.Equal(cachedRules, rules) {
+			ses.rewritePolicyGeneration++
+			ses.invalidateAllPreparedRewriteStatementsLocked()
 		}
-		cacheLoaded = ses.ruleCache != nil
+		ses.ruleCache, ses.ruleCacheVersion = rules, version
+		ses.ruleCacheIdentity = identity
+		ses.ruleCacheRevision++
+		policy.generation = ses.rewritePolicyGeneration
+		policy.roleRules = cloneRewriteMap(rules)
 		ses.ruleCacheMu.Unlock()
-		if cacheLoaded {
-			break
-		}
-		// The cache was invalidated while this load was in flight. Retry so the
-		// request observes the catalog state after the invalidation instead of
-		// publishing or using a pre-invalidation snapshot.
+		ses.mu.Unlock()
+		cacheReloaded = true
+		break
 	}
 
 	// Optional session layers are still gated by enable_remap_hint.
@@ -790,14 +885,23 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
 // associated with the current user's active roles and returns them as a map.
-func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error) {
+func loadRuleCache(ctx context.Context, ses *Session) (_ map[string]string, retErr error) {
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		return map[string]string{}, nil
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{cancelTxnCreateWithRequest: true})
 	defer bh.Close()
+	// This executor owns its transaction; the user's existing data snapshot and
+	// isolation setting must not control mandatory authorization reads.
+	if back, ok := bh.(*backExec); ok {
+		back.backSes.GetTxnHandler().setSessionTxnIsolation(pbtxn.TxnIsolation_SI)
+	}
+	if err := bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	defer func() { retErr = finishTxn(ctx, bh, retErr) }()
 
 	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
 	if err != nil {

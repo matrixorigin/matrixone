@@ -26,9 +26,12 @@ import (
 // PrivilegeCacheVersion covers both grant contents and physical catalog/object
 // identity. It holds only small generation identities, never partition trees.
 // The zero version is deliberately not a reusable authorization proof.
+// The vector also covers mo_role_rule: role rewrite rules are mandatory access
+// control enforced before privilege evaluation (issue #29133), so the same
+// proof gates per-session rule-cache reuse across CNs.
 type PrivilegeCacheVersion struct {
 	account uint32
-	tables  [7]struct {
+	tables  [8]struct {
 		id      uint64
 		version logtailreplay.DataVersion
 	}
@@ -64,6 +67,7 @@ func (e *Engine) GetPrivilegeCacheVersion(
 	for i, name := range [...]string{
 		catalog.MO_DATABASE, catalog.MO_TABLES,
 		"mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs",
+		catalog.MO_ROLE_RULE,
 	} {
 		id := uint64(catalog.MO_DATABASE_ID)
 		partitionAccount := uint64(0)

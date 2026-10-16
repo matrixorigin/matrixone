@@ -3409,6 +3409,7 @@ func Test_mce(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		})
 		ses.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(ses)
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -5821,6 +5822,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)

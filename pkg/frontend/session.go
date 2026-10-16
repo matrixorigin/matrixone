@@ -259,7 +259,15 @@ type Session struct {
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache and rewritePolicyGeneration
+	ruleCacheMu sync.RWMutex      // protects ruleCache, ruleCacheVersion and rewritePolicyGeneration
+	// ruleCacheVersion is the catalog proof stamped when ruleCache was loaded.
+	// A loaded cache is reused only while a fresh proof still matches it, so a
+	// rule change committed through another CN is observed here (issue #29133).
+	// The zero version never authorizes reuse.
+	ruleCacheIdentity        rewriteRuleIdentity
+	ruleCacheVersion         any
+	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
+	ruleCacheRevision        uint64 // changes on every publication, including equal policy
 	// rewritePolicyGeneration changes whenever session policy state is
 	// invalidated. Prepared statements capture this generation at publication
 	// time so a request-frozen policy cannot be registered after a refresh.
@@ -2583,6 +2591,7 @@ func (ses *Session) invalidateRewriteRuleCacheLocked() {
 	ses.ruleCacheMu.Lock()
 	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
+	ses.ruleCacheVersion = nil
 	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 
@@ -3090,23 +3099,20 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
-	// Binary EXECUTE does not capture a COM_QUERY policy. A failed role switch
-	// can leave the cache unloaded and a previously disabled handle alive, so
-	// resolve the current mandatory rules before permitting that stale handle.
-	// Catalog I/O must stay outside ses.mu and ruleCacheMu.
+	// Binary EXECUTE has no COM_QUERY capture. Refresh through the same
+	// policy owner before looking up a live handle; cleanup never requires I/O.
 	if !allowInvalidated {
 		stmt := ses.prepareStmts[normalizedName]
-		ses.ruleCacheMu.RLock()
-		needsRefresh := stmt != nil && stmt.rewritePolicyCaptured &&
-			!stmt.rewritePolicyInvalidated.Load() &&
-			stmt.rewritePolicyGeneration != ses.rewritePolicyGeneration && ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		if needsRefresh {
+		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() {
 			ses.mu.Unlock()
-			ses.refreshRewritePolicyAndValidatePrepared(ctx)
+			_, err := captureRewritePolicy(ctx, ses)
+			if err != nil {
+				return nil, err
+			}
 			ses.mu.Lock()
 		}
 	}
+
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		if !allowInvalidated {
