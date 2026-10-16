@@ -136,12 +136,18 @@ type tlsConfig struct {
 
 type testCNServer struct {
 	sync.Mutex
-	ctx      context.Context
-	scheme   string
-	addr     string
-	listener net.Listener
-	started  bool
-	quit     chan interface{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	handlers    sync.WaitGroup
+	connections map[net.Conn]struct{}
+	stopping    bool
+	stopOnce    sync.Once
+	scheme      string
+	addr        string
+	listener    net.Listener
+	started     bool
+	quit        chan interface{}
 
 	globalVarsMu sync.RWMutex
 	globalVars   map[string]string
@@ -197,12 +203,16 @@ func withService(name string) option {
 }
 
 func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig, opts ...option) func() error {
+	serverCtx, cancel := context.WithCancel(ctx)
 	b := &testCNServer{
-		ctx:        ctx,
-		scheme:     "tcp",
-		addr:       addr,
-		quit:       make(chan interface{}),
-		globalVars: make(map[string]string),
+		ctx:         serverCtx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		connections: make(map[net.Conn]struct{}),
+		scheme:      "tcp",
+		addr:        addr,
+		quit:        make(chan interface{}),
+		globalVars:  make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -265,6 +275,7 @@ func (s *testCNServer) waitCNServerReady() bool {
 }
 
 func (s *testCNServer) Start() error {
+	defer close(s.done)
 	var err error
 	if s.tlsCfg.enabled {
 		s.tlsConfig, err = frontend.ConstructTLSConfig(
@@ -291,9 +302,6 @@ func (s *testCNServer) Start() error {
 			return nil
 		default:
 			conn, err := s.listener.Accept()
-			if conn == nil {
-				continue
-			}
 			if err != nil {
 				select {
 				case <-s.quit:
@@ -302,6 +310,15 @@ func (s *testCNServer) Start() error {
 					return err
 				}
 			} else {
+				s.Lock()
+				if s.stopping {
+					s.Unlock()
+					_ = conn.Close()
+					return nil
+				}
+				s.connections[conn] = struct{}{}
+				s.handlers.Add(1)
+				s.Unlock()
 				fp := config.FrontendParameters{
 					EnableTls: s.tlsCfg.enabled,
 				}
@@ -313,6 +330,11 @@ func (s *testCNServer) Start() error {
 				frontend.SetSessionAlloc("", frontend.NewSessionAllocator(pu))
 				ios, err := frontend.NewIOSession(c.RawConn(), pu, s.service)
 				if err != nil {
+					_ = c.Close()
+					s.Lock()
+					delete(s.connections, conn)
+					s.Unlock()
+					s.handlers.Done()
 					return err
 				}
 				h := &testHandler{
@@ -325,10 +347,17 @@ func (s *testCNServer) Start() error {
 					labels:      make(map[string]string),
 					server:      s,
 				}
-				if s.beforeHandle != nil {
-					s.beforeHandle()
-				}
 				go func(h *testHandler) {
+					defer func() {
+						h.close()
+						s.Lock()
+						delete(s.connections, conn)
+						s.Unlock()
+						s.handlers.Done()
+					}()
+					if s.beforeHandle != nil {
+						s.beforeHandle()
+					}
 					if s.handle != nil {
 						s.handle(h)
 						return
@@ -341,7 +370,6 @@ func (s *testCNServer) Start() error {
 }
 
 func testHandle(h *testHandler) {
-	defer h.close()
 	// read extra info from proxy.
 	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
@@ -559,9 +587,50 @@ func (h *testHandler) handleShowProcesslist() {
 }
 
 func (s *testCNServer) Stop() error {
-	close(s.quit)
-	_ = s.listener.Close()
+	s.stopOnce.Do(func() {
+		s.Lock()
+		s.stopping = true
+		close(s.quit)
+		s.cancel()
+		conns := make([]net.Conn, 0, len(s.connections))
+		for conn := range s.connections {
+			conns = append(conns, conn)
+		}
+		s.Unlock()
+		_ = s.listener.Close()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+	<-s.done
+	s.handlers.Wait()
 	return nil
+}
+
+func TestCNServerStopJoinsAcceptedHandlers(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	addr := fmt.Sprintf("%s/%d-stop.sock", os.TempDir(), time.Now().UnixNano())
+	defer os.Remove(addr)
+	entered := make(chan struct{})
+	var once sync.Once
+	var active atomic.Int32
+	stop := startTestCNServer(t, ctx, addr, nil, withHandle(func(h *testHandler) {
+		active.Add(1)
+		defer active.Add(-1)
+		once.Do(func() { close(entered) })
+		<-h.server.ctx.Done()
+	}))
+	defer stop()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readiness connection was not handled")
+	}
+	require.Positive(t, active.Load())
+	require.NoError(t, stop())
+	require.Zero(t, active.Load(), "Stop must join every accepted handler")
+	require.NoError(t, stop(), "Stop remains idempotent")
 }
 
 func TestCNServerGlobalVarsConcurrentAccess(t *testing.T) {
@@ -868,17 +937,14 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 		// protocol instead of relying on handler goroutine scheduling order.
 		rawConn := h.conn.RawConn()
 		if err := rawConn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
-			h.close()
 			return
 		}
 		reader := bufio.NewReader(rawConn)
 		extraInfo := proxy.ExtraInfo{}
 		if err := extraInfo.Decode(reader); err != nil {
-			h.close()
 			return
 		}
 		if err := rawConn.SetReadDeadline(time.Time{}); err != nil {
-			h.close()
 			return
 		}
 
@@ -887,7 +953,7 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 		case <-allowBackendClose:
 		case <-tp.ctx.Done():
 		}
-		h.close()
+		_ = rawConn.Close()
 		close(backendClosed)
 	}))
 	var releaseBackendOnce sync.Once
