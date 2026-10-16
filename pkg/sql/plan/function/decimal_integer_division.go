@@ -84,10 +84,14 @@ func (fr *FuncGetResult) applyDecimalIntegerDivMetadata(original []types.Type) {
 
 func decimalIntegerDivUnsignedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
 	shouldError := checkDivisionByZeroBehavior(proc, selection)
-	return decimalBatchArith[types.Decimal256, uint64](parameters, result, proc, length,
+	if err := decimalBatchArith[types.Decimal256, uint64](parameters, result, proc, length,
 		func(left, right []types.Decimal256, out []uint64, s0, s1 int32, ns *nulls.Nulls) error {
 			return decimalIntegerDivUnsigned(left, right, out, s0, s1, ns, shouldError)
-		}, selection)
+		}, selection); err != nil {
+		return err
+	}
+	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length, selection)
+	return nil
 }
 
 // decimalIntegerDivUnsigned borrows the wrapper's selected rows and NULL bitmap.
