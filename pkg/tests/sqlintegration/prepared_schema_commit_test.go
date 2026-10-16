@@ -44,7 +44,8 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	t.Cleanup(cancel)
-	open := func(index int) *sql.Conn {
+	open := func(t *testing.T, index int) *sql.Conn {
+		t.Helper()
 		cn, err := cluster.GetCNService(index)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -55,7 +56,7 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, conn.Close()) })
 		return conn
 	}
-	first, second := open(0), open(1)
+	first := open(t, 0)
 	exec := func(t *testing.T, conn *sql.Conn, statement string) {
 		t.Helper()
 		_, err := conn.ExecContext(ctx, statement)
@@ -71,10 +72,14 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 		require.NoError(t, err)
 	})
 	exec(t, first, "use prepared_schema_commit")
-	exec(t, second, "use prepared_schema_commit")
 	for _, protocol := range []string{"text", "binary"} {
 		for _, scenario := range []string{"committed_before_execute", "empty_after_binding", "rows_after_binding"} {
 			t.Run(protocol+"/"+scenario, func(t *testing.T) {
+				// A cancelled query may invalidate its driver connection. Each scenario
+				// owns both sessions; reuse and recovery are checked within that scenario.
+				first, second := open(t, 0), open(t, 1)
+				exec(t, first, "use prepared_schema_commit")
+				exec(t, second, "use prepared_schema_commit")
 				table := protocol + "_" + scenario
 				exec(t, first, "create table "+table+" (a int primary key,b int)")
 				exec(t, first, "begin")
@@ -162,17 +167,31 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 						_, _ = fault.RemoveFaultPoint(context.Background(), "prepared-result-metadata-bound")
 						stopQuery()
 						if !joined {
+							cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+							defer stop()
 							select {
 							case <-done:
-							case <-ctx.Done():
-								t.Errorf("query cleanup: %v", ctx.Err())
+							case <-cleanup.Done():
+								t.Errorf("query cleanup: %v", cleanup.Err())
 							}
 						}
 					}()
-					require.Eventually(t, func() bool {
+					poll := time.NewTicker(time.Millisecond)
+					defer poll.Stop()
+					for {
 						waiters, _, exists := fault.TriggerFault("prepared-result-metadata-waiters")
-						return exists && waiters == 1
-					}, 5*time.Second, time.Millisecond)
+						if exists && waiters == 1 {
+							break
+						}
+						select {
+						case early := <-done:
+							joined = true
+							t.Fatalf("prepared execution returned before metadata barrier: %v", early.err)
+						case <-ctx.Done():
+							t.Fatalf("waiting for metadata barrier: %v", ctx.Err())
+						case <-poll.C:
+						}
+					}
 					exec(t, first, "commit")
 					_, err := fault.RemoveFaultPoint(ctx, "prepared-result-metadata-bound")
 					require.NoError(t, err)
@@ -201,6 +220,8 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 		}
 	}
 	// Saved metadata has the same publication boundary, including zero rows.
+	second := open(t, 1)
+	exec(t, second, "use prepared_schema_commit")
 	exec(t, second, "set save_query_result=on")
 	for _, limit := range []string{"0", "1"} {
 		t.Run("saved_result/limit_"+limit, func(t *testing.T) {
