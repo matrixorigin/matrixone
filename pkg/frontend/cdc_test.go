@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -4129,27 +4130,29 @@ func TestCdcTaskCancelFromPausingStillStopsReaders(t *testing.T) {
 }
 
 func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
-	previous := make(chan struct{})
-	executor := &CDCTaskExecutor{
-		spec: &task.CreateCdcDetails{
-			TaskId: "task-reader-owner",
-		},
-		runningReaders: &sync.Map{},
-	}
-	executor.setReaderShutdownCompletion(previous)
+	// Exercise the real lifecycle timeout using the standard virtual clock.
+	synctest.Test(t, func(t *testing.T) {
+		previous := make(chan struct{})
+		executor := &CDCTaskExecutor{
+			spec: &task.CreateCdcDetails{
+				TaskId: "task-reader-owner",
+			},
+			runningReaders: &sync.Map{},
+		}
+		executor.setReaderShutdownCompletion(previous)
 
-	allStopped, allDone := executor.stopAllReaders()
-	require.False(t, allStopped)
-	select {
-	case <-allDone:
-		t.Fatal("a later empty snapshot must not hide an earlier reader still stopping")
-	default:
-	}
+		allStopped, allDone := executor.stopAllReaders()
+		require.False(t, allStopped)
+		select {
+		case <-allDone:
+			t.Fatal("a later empty snapshot must not hide an earlier reader still stopping")
+		default:
+		}
 
-	close(previous)
-	require.Eventually(t, func() bool {
-		return completionReady(allDone)
-	}, time.Second, time.Millisecond)
+		close(previous)
+		synctest.Wait()
+		require.True(t, completionReady(allDone))
+	})
 }
 
 func TestCdcTaskStopAllReadersReportsImmediateCompletion(t *testing.T) {

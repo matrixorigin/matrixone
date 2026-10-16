@@ -76,6 +76,66 @@ grant metadata_visibility_reader to metadata_visibility_middle;
 grant metadata_visibility_middle to metadata_visibility_primary;
 grant select on table metadata_visibility_db.hidden_parent to metadata_visibility_primary;
 
+-- #30279: current metadata SHOW uses the same object boundary as information_schema.
+create table metadata_visibility_show_db.allowed_table (id int);
+create view metadata_visibility_db.allowed_view as select id from metadata_visibility_db.allowed_table;
+grant select on table metadata_visibility_db.allowed_view to metadata_visibility_reader;
+set global enable_privilege_cache = on;
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+set session enable_privilege_cache = on;
+select @@session.enable_privilege_cache;
+select count(*) from metadata_visibility_db.allowed_table;
+show columns from metadata_visibility_db.allowed_table;
+show create table metadata_visibility_db.allowed_table;
+show full tables from metadata_visibility_db;
+show tables from metadata_visibility_db like 'allowed%';
+show tables from metadata_visibility_db where Tables_in_metadata_visibility_db = 'allowed_table';
+show full columns from metadata_visibility_db.allowed_table like 'id';
+show columns from metadata_visibility_db.hidden_table;
+show create table metadata_visibility_db.hidden_table;
+show columns from metadata_visibility_show_db.allowed_table;
+show create table metadata_visibility_show_db.allowed_table;
+show columns from metadata_visibility_db.allowed_view;
+show create table metadata_visibility_db.allowed_view;
+show create view metadata_visibility_db.allowed_view;
+use metadata_visibility_db;
+show columns from allowed_table;
+show create table allowed_table;
+prepare metadata_show from 'show tables';
+execute metadata_show;
+-- @session
+
+-- Same connected session and cache-enabled grant/revoke transitions.
+revoke select on table metadata_visibility_db.allowed_table from metadata_visibility_reader;
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+show columns from allowed_table;
+show create table allowed_table;
+execute metadata_show;
+-- @session
+
+grant insert on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+show columns from allowed_table;
+show create table allowed_table;
+execute metadata_show;
+deallocate prepare metadata_show;
+set role public;
+show columns from metadata_visibility_db.allowed_table;
+set secondary role all;
+show columns from metadata_visibility_db.allowed_table;
+set secondary role none;
+set role metadata_visibility_primary;
+set session enable_privilege_cache = off;
+-- @session
+
+revoke insert on table metadata_visibility_db.allowed_table from metadata_visibility_reader;
+grant select on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
+revoke select on table metadata_visibility_db.allowed_view from metadata_visibility_reader;
+drop view metadata_visibility_db.allowed_view;
+drop table metadata_visibility_show_db.allowed_table;
+set global enable_privilege_cache = off;
+
+
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
 select
     (select count(*) = 1 from information_schema.tables
@@ -210,6 +270,13 @@ where schema_name = 'metadata_visibility_show_db';
 -- @session
 
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
+grant show tables on database metadata_visibility_show_db to metadata_visibility_primary;
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+show tables from metadata_visibility_show_db;
+show full tables from metadata_visibility_db;
+show columns from metadata_visibility_db.hidden_table;
+-- @session
+
 
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
 select count(*) = 1 as database_schema_visible

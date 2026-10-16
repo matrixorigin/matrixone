@@ -11475,18 +11475,31 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
 		}
 	}
-	// DAY can carry a fractional day for these source types. Choose the
-	// result family from the static signature, including whole-valued rows;
-	// neither the spelling of a literal nor a row value may change metadata.
-	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+	// Calendar DAY uses integral days; SECOND truncates to microseconds.
+	// Preserve the evaluated source type so DECIMAL DAY can round while
+	// floating/text DAY truncate. TIME retains its separate raw contract above.
+	if dateExpr.Typ.Id != int32(types.T_time) && (intervalType == types.Day || intervalType == types.Second) {
 		switch types.T(firstExpr.Typ.Id) {
-		case types.T_float32, types.T_float64,
-			types.T_decimal64, types.T_decimal128, types.T_decimal256,
-			types.T_char, types.T_varchar, types.T_text, types.T_any:
-			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+		case types.T_char, types.T_varchar, types.T_text, types.T_any,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			number, err := BindFuncExprImplByPlanExpr(ctx, "to_calendar_interval", []*Expr{
+				firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+			})
 			if err != nil {
 				return nil, err
 			}
+			unit := intervalType
+			if intervalType == types.Second {
+				unit = types.MicroSecond
+				if dateExpr.Typ.Id == int32(types.T_date) {
+					dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime)})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			return []*Expr{dateExpr, number, makePlan2Int64ConstExprWithType(int64(unit))}, nil
 		}
 	}
 
