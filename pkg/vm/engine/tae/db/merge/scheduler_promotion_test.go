@@ -143,8 +143,11 @@ func TestPreparePromotionReconcilesStoppedScheduler(t *testing.T) {
 
 	sched.Start()
 	t.Cleanup(sched.Stop)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
+	// Reconciliation is ordered by ResumePromotion's query barrier. Use the
+	// test lifetime for these state assertions: race instrumentation and other
+	// packages may consume a short wall-clock budget before the barrier returns.
+	// Cancellation at the commit boundary is exercised separately below.
+	ctx := t.Context()
 	require.NoError(t, sched.ResumePromotion(ctx))
 	answer, err := sched.Query(ctx, late)
 	require.NoError(t, err)

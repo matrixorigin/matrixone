@@ -59,7 +59,9 @@ func (m *identityCapturingSQLExecutor) Exec(ctx context.Context, _ string, opts 
 	return executor.Result{}, nil
 }
 
-func (m *identityCapturingSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+func (m *identityCapturingSQLExecutor) ExecTxn(ctx context.Context, _ func(executor.TxnExecutor) error, opts executor.Options) error {
+	m.ctx = ctx
+	m.opts = opts
 	return nil
 }
 
@@ -88,6 +90,9 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	require.True(t, spy.opts.StatementOption().HasAccountID())
 	require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
 
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "publisher_db", spy.opts.Database())
 	streamCh := make(chan executor.Result, 1)
 	errCh := make(chan error, 1)
 	_, err = RunStreamingSql(subscriberCtx, sqlproc, "select 1", streamCh, errCh)
@@ -131,6 +136,8 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	proc.ReplaceTopCtx(subscriberCtx)
 	proc.Base.TxnOperator = txnOp
 	proc.Base.SessionInfo.Database = "subscriber_db"
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	proc.Base.SessionInfo.TimeZone = time.FixedZone("subscriber-zone", 8*60*60)
 	proc.Base.IsFrontend = true
 	resolveVariable := func(varName string, _, _ bool) (interface{}, error) {
@@ -153,10 +160,15 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 		require.Equal(t, "resolved:test_variable", value)
 		require.True(t, spy.opts.StatementOption().HasAccountID())
 		require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+		accountName, roleName := spy.opts.StatementOption().SessionIdentity()
+		require.Equal(t, "sys", accountName)
+		require.Equal(t, "moadmin", roleName)
 	}
 
 	_, err := RunSql(sqlproc, "select 1")
 	require.NoError(t, err)
+	assertExecutionIdentity("subscriber")
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
 	assertExecutionIdentity("subscriber")
 
 	streamCtx := context.WithValue(context.Background(), key, "stream")

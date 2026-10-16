@@ -867,13 +867,13 @@ const (
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 599
+	VECTOR_MATMUL = 600
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 600
+	VECBLOCK_JSON = 601
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 601
+	VECBLOCK_BINARY = 602
 
 	UUID_SHORT = 587
 
@@ -886,15 +886,18 @@ const (
 	FORMAT_BYTES     = 596
 	FORMAT_PICO_TIME = 597
 
-	TO_CALENDAR_INTERVAL = 598
+	TO_CALENDAR_INTERVAL        = 598
+	CHECK_ASYNC_DATALINK_SOURCE = 599
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 602
+	FUNCTION_END_NUMBER = 603
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,

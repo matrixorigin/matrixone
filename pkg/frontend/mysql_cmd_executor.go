@@ -4821,6 +4821,21 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	// SessionInfo is reused across statements.  Role changes update the
+	// session's TenantInfo, so refresh the trusted names at the same boundary
+	// as the other statement-scoped fields before planning or execution.
+	if ses != nil {
+		if tenant := ses.GetTenantInfo(); tenant != nil {
+			// Read both names under one lock. Besides avoiding two lock
+			// acquisitions on every statement, this keeps the account/role pair
+			// from being sampled across a concurrent role transition.
+			tenant.mu.Lock()
+			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			tenant.mu.Unlock()
+			proc.Base.SessionInfo.Account = account
+			proc.Base.SessionInfo.Role = role
+		}
+	}
 	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
 	if !ok {
 		limit, ok = resolveSessionWarningRetentionLimit(ses)
@@ -6247,9 +6262,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	if ses.GetTenantInfo() != nil {
-		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}

@@ -30,6 +30,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -3027,7 +3028,7 @@ func buildCreateTable(
 			return nil, err
 		}
 
-		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
+		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), ctx.GetProcess(), stmt, createTable); err != nil {
 			return nil, err
 		}
 
@@ -8501,7 +8502,7 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 
 // validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
 // normalizes partition column names, extracts column types, and strips hive keys from Option[].
-func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
+func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Process, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
 	raw := stmt.Param.Option
 
 	if err := rejectDuplicateKeys(ctx, raw, []string{"hive_partitioning", "hive_partition_columns"}); err != nil {
@@ -8532,7 +8533,12 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 
 	if len(hiveCols) == 0 || (len(hiveCols) == 1 && strings.EqualFold(strings.TrimSpace(hiveCols[0]), "auto")) {
 		prepareHiveInferenceParam(stmt.Param, raw)
-		hiveCols, err = inferHivePartitionColumns(ctx, stmt.Param)
+		if err := AuthorizeExternalFileAccess(stmt.Param, proc); err != nil {
+			return err
+		}
+		scoped := *stmt.Param
+		scoped.Ctx = process.SQLFileAccessContext(ctx, proc)
+		hiveCols, err = inferHivePartitionColumns(scoped.Ctx, &scoped)
 		if err != nil {
 			return err
 		}

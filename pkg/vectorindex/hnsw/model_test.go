@@ -24,10 +24,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -457,9 +463,8 @@ func TestModel(t *testing.T) {
 	fmt.Printf("%v\n", deletesqls)
 
 	// ToSql will release the index so index is nil
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	fmt.Printf("%v\n", sqls)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
 
 	// unload with nil index will output error
 	err = idx.Unload()
@@ -479,18 +484,51 @@ func TestModel(t *testing.T) {
 
 }
 
+func TestModelPersistenceValuesRemainData(t *testing.T) {
+	for _, tc := range []struct{ name, id, file string }{
+		{"plain", "model-id", "model.bin"},
+		{"quoted ID", "model'\\id", "model.bin"},
+		{"quoted path", "model-id", "model'\\file.bin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.file)
+			data := []byte{0, 255, '\'', '\\', 0}
+			require.NoError(t, os.WriteFile(path, data, 0600))
+			model := HnswModel[float32]{Id: tc.id, Path: path}
+			require.NoError(t, model.PreparePersistence())
+			txn := executortest.NewMockTxnExecutor(gomock.NewController(t))
+			txn.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				insert := stmt.(*tree.Insert)
+				require.Len(t, insert.Rows.Select.(*tree.ValuesClause).Rows, 1)
+				require.NotContains(t, sql, path)
+				mp := mpool.MustNewZero()
+				vec, err := opts.Params(mp)
+				require.NoError(t, err)
+				defer vec.Free(mp)
+				require.Equal(t, tc.id, string(vec.GetRawBytesAt(0)))
+				require.Equal(t, data, vec.GetRawBytesAt(1))
+				return executor.Result{}, nil
+			})
+			w, err := sqlexec.NewChunkInserter(t.Context(), txn, executor.StatementOption{}, "db", "store", 2000)
+			require.NoError(t, err)
+			require.NoError(t, model.PersistChunks(w))
+		})
+	}
+}
+
 func TestModelNil(t *testing.T) {
 
 	var err error
-	var tblcfg vectorindex.IndexTableConfig
 
 	idx := HnswModel[float32]{}
 	err = idx.SaveToFile()
 	require.Nil(t, err)
 
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	require.Equal(t, len(sqls), 0)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
+	require.Zero(t, idx.FileSize)
 
 	_, err = idx.Empty()
 	require.NotNil(t, err)

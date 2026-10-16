@@ -234,7 +234,7 @@ PRIMARY KEY (`col1`)
 );
 set @old_sql_mode = @@sql_mode;
 set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
-load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
+load data local infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
 set sql_mode = @old_sql_mode;
 drop table test_table;
@@ -475,15 +475,26 @@ create database test_load_db;
 use test_load_db;
 drop table if exists load_data_t8;
 create table load_data_t8(col1 int);
-LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t8;
 set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
-LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select count(*) as local_rows from load_data_t8;
 drop table load_data_t8;
 drop database test_load_db;
 
 -- @session
 drop account test_load;
+
+-- Keep the original server-side strict-width oracle under system authority.
+set @server_width_old_mode = @@sql_mode;
+set sql_mode = 'STRICT_TRANS_TABLES';
+create table server_width_rows(col1 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table server_width_rows FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select count(*) as server_rows from server_width_rows;
+drop table server_width_rows;
+set sql_mode = @server_width_old_mode;
+
 
 -- These historical LOAD fixtures intentionally load values wider than the target
 -- CHAR/VARCHAR columns and rely on the legacy lenient (truncating) behavior. Run

@@ -9345,7 +9345,7 @@ func strToDatalink(
 			}
 			continue
 		}
-		if _, _, err := datalink.ParseDatalink(convertByteSliceToString(value), proc); err != nil {
+		if err := datalink.ValidateDatalink(convertByteSliceToString(value), proc); err != nil {
 			return err
 		}
 		if err := to.AppendBytes(value, false); err != nil {
