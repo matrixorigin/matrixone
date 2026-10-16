@@ -1,6 +1,6 @@
 # Distributed ODKU Result Protocol
 
-Status: DRAFT — pending independent design review
+Status: approved by independent design review v1; see `20261016-odku-distributed-result-protocol-review-v1.md`
 
 - Design revision: r1, 2026-10-16.
 - Owner: VioletQwQ-0.
@@ -8,10 +8,11 @@ Status: DRAFT — pending independent design review
 - Implementation: [PR #28444](https://github.com/matrixorigin/matrixone/pull/28444).
 - Inspected implementation revision: `286b60837041d819573a260f7ab6e346125c6d3a`.
 - Design gate: [mo-bot assessment at the inspected revision](https://github.com/matrixorigin/matrixone/pull/28444#pullrequestreview-5543546119).
-- Reviewed design revision: PENDING. The independent reviewer must cite the
-  immutable commit permalink of this file, not only r1 or the moving PR branch.
-- Approval record: PENDING. Root will arrange independent review and link its
-  decision to that exact document revision. This draft supplies no approval.
+- Reviewed design revision: document blob `914d5ddd19635d07924ebbe22cbb5eaa6f192fa2`
+  at head `038207ff2e5fd84d79d7d6c851c467b68b05a4e8`.
+- Approval record: PASS with no conditions in
+  `20261016-odku-distributed-result-protocol-review-v1.md`, bound to document
+  SHA256 `ddff85b82ca7775ce492d68fb904a3bd5952c59e4f6390a8733ddf347953e756`.
 
 ## Background / Problem
 
