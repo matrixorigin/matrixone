@@ -150,6 +150,11 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err != nil {
 		return nil, err
 	}
+	// The Query RPC probe and the execution stream can reach different worker
+	// generations. Fence affected payloads on the bound stream as well.
+	if features.IncompleteTemporalStrings && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion118)
+	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
