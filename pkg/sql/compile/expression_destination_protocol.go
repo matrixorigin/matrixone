@@ -48,7 +48,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
-		{features.IncompleteTemporalStrings, defines.MORPCVersion117,
+		{features.IncompleteTemporalStrings, defines.MORPCVersion118,
 			"incomplete temporal strings require a versioned remote destination",
 			"remote destination does not support incomplete temporal strings (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,

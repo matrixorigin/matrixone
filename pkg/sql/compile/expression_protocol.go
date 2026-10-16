@@ -149,8 +149,12 @@ if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
 	}
 	if features.IncompleteTemporalStrings {
+<<<<<<< HEAD
 		required = max(required, defines.MORPCVersion117)
 }
+=======
+		required = max(required, defines.MORPCVersion118)
+>>>>>>> 51115e6e6a (fix(sql): advance incomplete temporal protocol to 118)
 	}
 	return required
 }

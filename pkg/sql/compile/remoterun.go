@@ -2416,8 +2416,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
-	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
-		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 117")
+	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 118")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
