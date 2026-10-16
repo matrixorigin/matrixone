@@ -4036,3 +4036,30 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		require.Equal(t, 7, c.TxnOffset)
 	})
 }
+
+func TestWindowIntervalValidationPrecedesSourceInitialization(t *testing.T) {
+	c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	// Source initialization must never acquire the table for an invalid bound.
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	c.e = eng
+	c.scopes = []*Scope{{Proc: c.proc, DataSource: &Source{node: &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "test"}, TableDef: &plan.TableDef{Name: "d"},
+	}}}}
+	bound := &plan.Expr{Typ: plan.Type{Id: int32(types.T_interval)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+		plan2.MakePlan2StringConstExprWithType("-1"), plan2.MakePlan2StringConstExprWithType("second"),
+	}}}}
+	c.pn.GetQuery().Steps = []int32{1}
+	c.pn.GetQuery().Nodes = []*plan.Node{
+		{WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: &plan.FrameClause{
+			Type: plan.FrameClause_RANGE, Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: bound}, End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}}}}}},
+		{Children: []int32{0}, Limit: plan2.MakePlan2Uint64ConstExprWithType(0)},
+	}
+	started := false
+	err := c.runPipelineAttempt(func() error { started = true; return nil })
+	require.ErrorContains(t, err, "frame start or end is negative, NULL")
+	require.False(t, started)
+	require.Nil(t, c.scopes[0].DataSource.R)
+}

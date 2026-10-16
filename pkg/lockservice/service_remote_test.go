@@ -103,14 +103,18 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
 
-		// v113 belongs to DECIMAL statistics and must not enable nonblocking locks.
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
-		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
-			err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
-				"old protocol peers must reject nonblocking lock admission before dispatch")
+		// v114-v116 already belong to Unicode keys, intervals and warnings.
+		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.False(t, supportsLockProtocolV117(""))
+			for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+				err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+					"old protocol peers must reject nonblocking lock admission before dispatch")
+			}
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+		require.True(t, supportsLockProtocolV117(""))
 		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
@@ -2686,14 +2690,16 @@ func TestInactiveRemoteRouteCacheDoesNotDriveHeartbeat(t *testing.T) {
 			// remove s1
 			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
 			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
-			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			futures, binds := keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Empty(t, futures)
+			require.Empty(t, binds)
 
-			// An inactive route may remain cached. It is validated lazily on the
-			// next use and must not keep an owner-side lease alive by itself.
+			// An idle route never keeps an owner-side lease alive. Once its CN
+			// leaves inventory, the background keeper also discards that route
+			// before the next transaction can record the departed generation.
 			v, err := s2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			require.NotNil(t, v)
-			require.Equal(t, s1.serviceID, v.getBind().ServiceID)
+			require.Nil(t, v)
 		},
 	)
 }
@@ -3152,7 +3158,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 			require.True(t, ok)
 			ownerRuntime.SetGlobalVariables(
 				moruntime.MOProtocolVersion,
-				defines.MORPCVersion114,
+				defines.MORPCVersion117,
 			)
 			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 
@@ -3192,7 +3198,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 					// admission but before row 1 is granted and row 2 conflicts.
 					ownerRuntime.SetGlobalVariables(
 						moruntime.MOProtocolVersion,
-						defines.MORPCVersion114-1,
+						defines.MORPCVersion117-1,
 					)
 				}
 			}
@@ -3232,7 +3238,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 
 			// The caller uses LockedOn only to register an unlock route. Unlock
 			// removes the partial owner prefix and retires both active transactions.
-			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 			_, found, err = owner.GetLockHolder(
 				ctx,
@@ -3282,7 +3288,7 @@ func TestAsyncRemoteLockCompletionUsesPooledRequestSnapshot(t *testing.T) {
 			require.NotNil(t, ownerRuntime)
 			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
 			require.True(t, ok)
-			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 
 			row := []byte{1}

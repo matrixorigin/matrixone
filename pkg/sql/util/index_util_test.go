@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -185,6 +186,35 @@ func TestBuildUniqueKeyBatchDecimal256(t *testing.T) {
 			[]types.Decimal256{values[0], values[2]},
 			vector.MustFixedColNoTypeCheck[types.Decimal256](got.Vecs[0]))
 	})
+}
+
+func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	native := types.New(types.T_varchar, 16, 0)
+	native.Charset = uint8(types.CharsetUTF8MB4UnicodeCI)
+	native.CollationVersion = uint8(collation.RevisionV1)
+
+	// Build the bytes under a legacy vector type, then attach the native type
+	// metadata. This simulates a decoded/corrupted batch and proves the
+	// composite unique-key boundary validates before serializing.
+	text := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(text, []byte{0xff, 0xfe}, false, proc.Mp()))
+	text.SetType(native)
+	other := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1})
+	defer text.Free(proc.Mp())
+	defer other.Free(proc.Mp())
+
+	packers := PackerList{}
+	defer packers.Free()
+	_, _, err := BuildUniqueKeyBatch(
+		[]*vector.Vector{text, other},
+		[]string{"v", "n"},
+		[]string{"v", "n"},
+		"",
+		proc,
+		&packers,
+	)
+	require.Error(t, err)
 }
 
 func mustParseDecimal256ForIndexTest(t *testing.T, typ types.Type, value string) types.Decimal256 {

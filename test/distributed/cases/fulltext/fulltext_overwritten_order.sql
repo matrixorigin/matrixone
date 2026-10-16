@@ -114,6 +114,20 @@ select id from covered where match(body) against('needle' in natural language mo
 -- covered/nested_relevance_page_barrier
 select id from (select id, prio from covered where match(body) against('needle' in natural language mode) limit 2 offset 1) as page order by prio, id;
 
+-- Python handlers have no purity declaration. Binding and EXPLAIN need no
+-- Python service, but must preserve relevance order before an order-sensitive
+-- UDF projection. The projected alias is reused so the projection stays below
+-- the explicit sort; check classic, ordinary FULLTEXT2 and covered FULLTEXT2.
+create function order_tick(x bigint) returns bigint language python as 'def tick(x, counter=[0]): counter[0] += 1; return counter[0]' handler 'tick';
+-- @regex("(?s)Sort Key:.*Sort Key:",true)
+explain select id, order_tick(id) as seq from classic where match(body) against('needle' in natural language mode) order by seq;
+-- @regex("(?s)Sort Key:.*Sort Key:",true)
+explain select id, order_tick(id) as seq from ft2 where match(body) against('needle' in natural language mode) order by seq;
+-- @regex("Fulltext Index Scan",true)
+-- @regex("(?s)Sort Key:.*Sort Key:",true)
+explain select id, order_tick(id) as seq from covered where match(body) against('needle' in natural language mode) order by seq;
+drop function order_tick(bigint);
+
 drop database mo30164_validation;
 set ft_relevancy_algorithm = @hybrid_old_ft;
 set ft2_relevancy_algorithm = @hybrid_old_ft2;

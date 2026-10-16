@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -151,6 +153,22 @@ func TestFullTextImplicitOrderConsumerBoundaries(t *testing.T) {
 	}
 }
 
+type fullTextOrderPythonUdfContext struct {
+	*fullTextJoinMockCompilerContext
+}
+
+func (c *fullTextOrderPythonUdfContext) ResolveUdf(name string, args []*planpb.Expr) (*function.Udf, error) {
+	if name != "py_tick" {
+		return c.fullTextJoinMockCompilerContext.ResolveUdf(name, args)
+	}
+	return &function.Udf{
+		Language: string(tree.PYTHON),
+		RetType:  "bigint",
+		Args:     []*function.Arg{{Name: "x", Type: "bigint"}},
+		ArgsType: []types.Type{types.T_int64.ToType()},
+	}, nil
+}
+
 // Parse/bind/optimize the public SQL shape as a separate reachability oracle.
 // No service or large corpus is needed to prove which sort owns the candidates;
 // execution/result equivalence has a separate SQL regression oracle.
@@ -166,6 +184,8 @@ func TestFullTextImplicitOrderSQLReachability(t *testing.T) {
 			{"nonvector order and score", "select id,match(title) against('needle') as score from ft_order where match(title) against('needle') order by base_id,id limit 2 offset 1", 1},
 			{"score threshold", "select id from ft_order where match(title) against('needle') > 0.04 order by base_id,id limit 2", 1},
 			{"stateful score projection", "select id,match(title) against('needle') as score,nextval('order_seq') as seq from ft_order where match(title) against('needle') order by id", 2},
+			{"python udf alias", "select id,py_tick(id) as seq from ft_order where match(title) against('needle') order by seq", 2},
+			{"nested python udf alias", "select id,abs(py_tick(id)) as seq from ft_order where match(title) against('needle') order by seq", 2},
 			{"nested relevance page", "select id from (select id,base_id from ft_order where match(title) against('needle') limit 2) q order by base_id,id", 2},
 		} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {
@@ -187,7 +207,7 @@ func TestFullTextImplicitOrderSQLReachability(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, stmts, 1)
 				defer stmts[0].Free()
-				p, err := BuildPlan(ctx, stmts[0], false)
+				p, err := BuildPlan(&fullTextOrderPythonUdfContext{ctx}, stmts[0], false)
 				require.NoError(t, err)
 				query := p.GetQuery()
 				require.NotNil(t, query)
@@ -197,7 +217,8 @@ func TestFullTextImplicitOrderSQLReachability(t *testing.T) {
 				scans := collectFullTextFunctionScans(planned, query.Steps[0])
 				require.Len(t, scans, 1)
 				require.Zero(t, countReachableFullTextMatches(query))
-				if kind == "covered fulltext2" && tc.name == "nonvector order and score" {
+				if kind == "covered fulltext2" && (tc.name == "nonvector order and score" ||
+					tc.name == "python udf alias" || tc.name == "nested python udf alias") {
 					require.Zero(t, countReachableNodeType(query, planpb.Node_JOIN), "the covered owner must actually be reached")
 				}
 				if tc.wantSorts == 1 && tc.name != "default relevance" {
