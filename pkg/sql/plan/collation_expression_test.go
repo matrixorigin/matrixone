@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,6 +28,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBinaryCollatePreservesBlobDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := oid.ToType()
+			if oid != types.T_blob {
+				typ.Width = 7
+			}
+			source := &Expr{Typ: makePlan2Type(&typ), Expr: &pb.Expr_Col{Col: &pb.ColRef{}}}
+			before := source.Typ
+			ast := &tree.CollateExpr{Expr: tree.NewUnresolvedName(tree.NewCStr("b", 1)), Collation: "binary"}
+			impl := NewMockBinder(gomock.NewController(t))
+			impl.EXPECT().BindExpr(ast.Expr, int32(0), false).Return(source, nil)
+			binder := baseBinder{sysCtx: context.Background(), impl: impl}
+			bound, err := binder.bindCollateExpr(ast, 0)
+			require.NoError(t, err)
+			expectedOID := types.T_varbinary
+			if oid == types.T_blob {
+				expectedOID = types.T_blob
+			}
+			require.Equal(t, int32(expectedOID), bound.Typ.Id)
+			require.Equal(t, before.Width, bound.Typ.Width)
+			require.Equal(t, before, source.Typ)
+			require.Equal(t, "binary", ast.Collation)
+			require.True(t, bound.Typ.CollationCoercibilitySet)
+			require.Zero(t, bound.Typ.CollationCoercibility)
+			for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+				aggregate, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*Expr{bound})
+				require.NoError(t, err)
+				expected := bound.Typ
+				expected.NotNullable = true
+				require.Equal(t, expected, aggregate.Typ)
+			}
+		})
+	}
+}
 
 func TestBitwiseAggregateCollationProvenance(t *testing.T) {
 	ctx := context.Background()

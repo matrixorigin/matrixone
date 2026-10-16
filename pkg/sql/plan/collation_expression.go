@@ -103,7 +103,10 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 		target.Id = int32(types.T_varchar)
 	}
 	if identity == collation.BinaryIdentity {
-		target.Id = int32(types.T_varbinary)
+		// BLOB 的未知宽度不能变成 VARBINARY 的默认最大宽度。
+		if types.T(target.Id) != types.T_blob {
+			target.Id = int32(types.T_varbinary)
+		}
 		target.PadSpace = false
 	}
 	selected := expressionCollation{charset: uint32(identity), version: version, rank: 0}
