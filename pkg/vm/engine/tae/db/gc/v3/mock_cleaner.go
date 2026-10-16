@@ -110,10 +110,6 @@ func (c *MockCleaner) GetScannedWindow() *GCWindow {
 func (c *MockCleaner) Stop() {
 }
 
-func (c *MockCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
-	return nil
-}
-
 func (c *MockCleaner) DoCheck(_ context.Context) error {
 	return nil
 }

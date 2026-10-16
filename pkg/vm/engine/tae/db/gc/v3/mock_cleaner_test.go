@@ -38,7 +38,6 @@ func TestNewMockCleaner_Default(t *testing.T) {
 	assert.Nil(t, c.GetScanWaterMark())
 	assert.Nil(t, c.GetCheckpointGCWaterMark())
 	assert.Nil(t, c.GetScannedWindow())
-	assert.Nil(t, c.GetMinMerged())
 	assert.Nil(t, c.GetMPool())
 	assert.Equal(t, 0, c.AddChecker(nil, "key"))
 	assert.False(t, c.GCEnabled())
