@@ -147,3 +147,16 @@ normal/race/public/static receipts and the retained failed performance cohort.
 No new material source blocker remains. End-to-end performance is still a
 mandatory unresolved gate; this source decision does not authorize a push or
 waive that gate.
+
+
+CSV producer amendment: **SOURCE ACCEPT; OVERALL DELIVERY BLOCKED by unresolved
+performance acceptance**, actual gpt-6.1-sol / xhigh, same session,
+turn `01a143d7-bd5b-71c0-b6bd-3a2ebd17b0cd`; artifact SHA256
+`c95aefd648b94273d256ae86cad00aa6757ad8e0fd68fdc01ef9f77193905fac`. The review reconciles all 13 equivalent
+patches rebased onto `c2b990cd712`, three producer changes, exact CSV oracle
+coverage and terminal focused normal/race/static receipts. The user explicitly
+cancelled further heavyweight validation. Component allocation/latency improves;
+quoted/long fallback costs and historical failed SQL timing gates remain
+visible. This scoped source acceptance does not claim end-to-end performance
+closure or waive those gates. Raw final review and receipts are retained under
+`revision-20261016/codec-light/` in the issue30185 ledger.

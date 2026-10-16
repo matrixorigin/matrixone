@@ -16,7 +16,6 @@ package stage
 
 import (
 	"context"
-	"encoding/csv"
 	"net/url"
 	"strings"
 
@@ -105,28 +104,24 @@ func (s StageDef) ToPath() (mopath string, query string, err error) {
 			return "", "", err
 		}
 
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + endpoint, "region=" + aws_region, "bucket=" + bucket, "key=" + aws_key_id, "secret=" + aws_secret_key}
 		if service == MINIO_SERVICE {
 			opts = append(opts, "is-minio=true")
 		}
 
-		if err = w.Write(opts); err != nil {
+		serviceCSV, err := fileservice.EncodeServiceCSV(opts)
+		if err != nil {
 			return "", "", err
 		}
-		w.Flush()
-		return fileservice.JoinPath(buf.String(), prefix), query, nil
+		return fileservice.JoinPath(serviceCSV, prefix), query, nil
 	} else if s.Url.Scheme == HDFS_PROTOCOL {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
 		opts := []string{"hdfs", "endpoint=" + s.Url.Host}
 
-		if err = w.Write(opts); err != nil {
+		serviceCSV, err := fileservice.EncodeServiceCSV(opts)
+		if err != nil {
 			return "", "", err
 		}
-		w.Flush()
-		return fileservice.JoinPath(buf.String(), s.Url.Path), s.Url.RawQuery, nil
+		return fileservice.JoinPath(serviceCSV, s.Url.Path), s.Url.RawQuery, nil
 	} else if s.Url.Scheme == FILE_PROTOCOL {
 		return s.Url.Path, s.Url.RawQuery, nil
 	}

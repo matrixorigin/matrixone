@@ -1,6 +1,43 @@
 # SQL file access validation record
 
-## Latest amendment: UPDATE ownership and performance status
+## Current CSV producer optimization and validation scope
+
+Rebased without conflicts onto main `c2b990cd712`. Fileservice now owns one
+service-record encoder used by Stage S3/HDFS and Datalink HDFS. Ordinary fields
+avoid the standard writer's 4 KiB streaming buffer; quoted/large records retain
+the standard writer. Exact CSV bytes, trailing LF, query/range handling and
+admission rules are preserved; no cache, pool or persistent state is introduced.
+
+At the user's explicit request, this revision uses focused tests and short
+microbenchmarks instead of another full SQL/race/performance campaign. Previous
+broad results below retain their original revisions. They are not current-base
+full-suite results, and failed performance gates are not erased.
+
+On Darwin arm64, the same-base real NewAsyncDatalink microbenchmark uses test-only
+overlays to compare original producer code with the shared encoder (three
+200 ms samples per case). One-stage admission medians are 1072 -> 906.2 ns;
+16-stage medians are 1097 -> 939.2 ns. Both reduce 5272 -> 1144 B/op and
+20 -> 18 allocations. These are isolated component observations, not SQL TPS/P99.
+The encoder-only ordinary case reduces median 306.5 -> 131.0 ns and
+4224 -> 96 B/op. Quoted fallback adds about 25 ns with unchanged allocations;
+long fallback has unchanged allocations and median 5865 -> 6222 ns in this
+short sample. The fallback preflight is bounded at 4096 bytes per field.
+
+The later complete Darwin bulk subset on base `ac55588b8d4` also remains
+**not accepted**: indexed one-stage source UPDATE had paired median +38.17%
+with 0/6 pairs within +10%; indexed INSERT medians were +8.90% (one stage) and
++6.88% (16 stages). All 18 bulk processes passed functional assertions; the
+ordinary portion was interrupted by its host-load guard. This producer change
+removes a measured allocation mechanism but has not demonstrated that it
+eliminates those end-to-end slowdowns. No no-regression claim is made.
+
+Targeted current-source normal/race tests cover exact writer differential tables,
+fuzz seeds, existing Stage S3/MinIO/HDFS success/failure fixtures, quoted
+credentials/query and Datalink HDFS ranges. Full generated-input fuzzing and
+cluster reruns are not repeated. Raw source overlays, commands and receipts:
+`revision-20261016/codec-light/` in the issue30185 ledger.
+
+## Previous amendment: UPDATE ownership and performance status
 
 The 12 existing patches rebase unchanged onto main `ac55588b8d4` (prior-PR
 head `380740aac56`). This amendment selects async Datalink admission from the
@@ -12,7 +49,7 @@ stage resolution reuse the already parsed URL, and the shared service parser
 avoids CSV buffering only for a proven single unquoted record. No new cache,
 worker, persistent state, identity grant or normal-query policy hook is added.
 
-Current-base normal tests pass all four owning packages (plan, Datalink,
+On base `ac55588b8d4`, normal tests pass all four owning packages (plan, Datalink,
 stageutil, fileservice); focused race tests include the real final-assignment
 producer. All 22 derived CPU packages pass vet, molint and configured incremental
 golangci-lint; formatting, err-check and diff checks pass. GPU-tag-only owning

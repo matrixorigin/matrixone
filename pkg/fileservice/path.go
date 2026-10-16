@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -42,6 +43,39 @@ func (p Path) String() string {
 
 func (p Path) ServiceString() string {
 	return strings.Join(append([]string{p.Service}, p.ServiceArguments...), ",")
+}
+
+// EncodeServiceCSV encodes a service record with the standard CSV writer's
+// quoting and trailing LF, avoiding its streaming buffer for simple fields.
+func EncodeServiceCSV(fields []string) (string, error) {
+	size := 1
+	for i, field := range fields {
+		first, _ := utf8.DecodeRuneInString(field)
+		// Bound the preflight scan; large or quoted fields use the standard writer.
+		if len(field) > 4096 || field == `\.` || strings.ContainsAny(field, ",\"\r\n") || unicode.IsSpace(first) {
+			var buf strings.Builder
+			w := csv.NewWriter(&buf)
+			if err := w.Write(fields); err != nil {
+				return "", err
+			}
+			w.Flush()
+			return buf.String(), w.Error()
+		}
+		size += len(field)
+		if i > 0 {
+			size++
+		}
+	}
+	var buf strings.Builder
+	buf.Grow(size)
+	for i, field := range fields {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(field)
+	}
+	buf.WriteByte('\n')
+	return buf.String(), nil
 }
 
 // ParseETLService parses the provider without certifying the file expression.
