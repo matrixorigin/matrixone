@@ -419,6 +419,17 @@ func validateUserVarAssignmentScope(
 			return userVarAssignmentNotSupported(ctx, "ORDER BY")
 		}
 	}
+	// LIMIT and OFFSET are bound independently from the projection list.  Check
+	// them before the no-projection-assignment fast path so an assignment in a
+	// pagination expression cannot bypass the SELECT-projection-only fence.
+	if astLimit != nil {
+		if astLimit.Count != nil && containsUserVarAssignment(astLimit.Count) {
+			return userVarAssignmentNotSupported(ctx, "LIMIT/OFFSET")
+		}
+		if astLimit.Offset != nil && containsUserVarAssignment(astLimit.Offset) {
+			return userVarAssignmentNotSupported(ctx, "LIMIT/OFFSET")
+		}
+	}
 	if !hasAssignment {
 		return nil
 	}
@@ -455,6 +466,14 @@ func selectContainsUserVarAssignment(selectStmt *tree.Select) bool {
 			return true
 		}
 	}
+	if selectStmt.Limit != nil {
+		if selectStmt.Limit.Count != nil && containsUserVarAssignment(selectStmt.Limit.Count) {
+			return true
+		}
+		if selectStmt.Limit.Offset != nil && containsUserVarAssignment(selectStmt.Limit.Offset) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -475,6 +494,11 @@ func containsUserVarAssignmentInSelectStatement(stmt tree.SelectStatement) bool 
 	case *tree.UnionClause:
 		return containsUserVarAssignmentInSelectStatement(selectStmt.Left) ||
 			containsUserVarAssignmentInSelectStatement(selectStmt.Right)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return false
+		}
+		return selectContainsUserVarAssignment(selectStmt.Select)
 	case *tree.ValuesClause:
 		for _, row := range selectStmt.Rows {
 			for _, expr := range row {
