@@ -4822,8 +4822,11 @@ func TestDiagnosticScalarValues(t *testing.T) {
 	bits := bindTestFunction(t, proc, "bit_count", text("3x"))
 	converted := bindTestCast(t, proc, 0, bits, types.T_varchar.ToType())
 	joined := bindTestFunction(t, proc, "concat", text("["), converted, text("]"))
+	decimal := bindTestCast(t, proc, 1, bits, types.New(types.T_decimal64, 18, 0))
+	decimalText := bindTestCast(t, proc, 0, decimal, types.T_varchar.ToType())
 	for _, expr := range []*plan.Expr{
 		joined,
+		bindTestFunction(t, proc, "concat", text("["), decimalText, text("]")),
 		bindTestFunction(t, proc, "if", makePlan2BoolConstExprWithType(true), joined, text("unused")),
 	} {
 		func() {

@@ -1439,9 +1439,9 @@ func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool
 	case *ParamExpressionExecutor, *VarExpressionExecutor:
 		return true, false
 	case *FunctionExpressionExecutor:
-		// String-to-numeric CAST volatility protects diagnostics, rather than
+		// CAST's row-evaluation flags protect diagnostics, rather than
 		// declaring its converted value nondeterministic.
-		if source.timeDependent || (source.volatile && !source.stringToNumericCast) {
+		if source.timeDependent || (source.volatile && !source.stringToNumericCast && !source.rowScopedDecimalCast) {
 			return false, false
 		}
 		diagnostic = source.rowScopedDiagnostics

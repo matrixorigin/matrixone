@@ -72,6 +72,7 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			t.Run("malformed", func(t *testing.T) {
 				for _, tc := range []struct{ name, query, want string }{
 					{"ceil", "select ceil(12.345,bit_count('3x')) = 12.35", "1"},
+					{"ceil_decimal", "select ceil(12.345,cast(bit_count('3x') as decimal(18,0))) = 12.35", "1"},
 					{"extractvalue", "select extractvalue('<a>x</a>',concat('/a[',bit_count('1x'),']'))", "x"},
 					{"updatexml", "select updatexml('<a>x</a>',concat('/a[',bit_count('1x'),']'),'<b/>')", "<b/>"},
 				} {
