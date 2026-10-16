@@ -1,0 +1,21 @@
+{
+  "base": "586d674988a619d9be7c0783f87c56800a8a6cb7",
+  "source_sha256": {
+    "pkg/tests/sqlintegration/ttl_test.go": "341a03981983a84a0ca8faa1b79ef35345689e51bca5918924932f7f0a07c1a1"
+  },
+  "log_sha256": {
+    "vet.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lint.txt": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "worker.txt": "01d7cfc4e76e6f87760974b23e7044b82ad9dbd9f80b410442bd6badec6511f0",
+    "repeat.txt": "7ef9a10883bbc5d8909fcd719f3f9a7d2c22fe1cb3228cfc7be8a891d1bd3cab",
+    "ci-failure.txt": "cd5415d3ac3d40cc664c640992b01c13a7a78954f8ea94fb83791822f13c5d88"
+  },
+  "focused_native_repetitions": 20,
+  "focused_native_exit": 0,
+  "ttl_unit_exit": 0,
+  "lint_exit": 0,
+  "vet_exit": 0,
+  "original_ci_job": 116498799305,
+  "original_ci_conclusion": "failure",
+  "original_rc_retry_failures": 8
+}
