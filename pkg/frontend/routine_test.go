@@ -1977,10 +1977,6 @@ func wireHandshakeResponse(username string) []byte {
 	return wireHandshakeResponseWithCollation(username, "", Utf8mb4CollationID)
 }
 
-func wireHandshakeResponseWithDatabase(username, database string) []byte {
-	return wireHandshakeResponseWithCollation(username, database, Utf8mb4CollationID)
-}
-
 func wireHandshakeResponseWithCollation(username, database string, collationID uint8) []byte {
 	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
 	if database != "" {

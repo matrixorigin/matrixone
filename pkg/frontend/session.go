@@ -4176,12 +4176,6 @@ func (ses *Session) inheritPhysicalConnection(prev *Session) {
 	ses.proxyAddr = prev.proxyAddr
 }
 
-// reset resets the ses instance and copy some fields of prev, then
-// close the prev.
-func (ses *Session) reset(ctx context.Context, prev *Session) error {
-	return ses.resetWith(ctx, prev, nil)
-}
-
 // resetWith rebuilds the candidate session from the account-global snapshot
 // and optionally lets the caller publish connection-specific state before the
 // previous generation is retired. Keeping that hook before closeForReset makes
