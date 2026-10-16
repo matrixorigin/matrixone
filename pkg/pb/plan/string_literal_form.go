@@ -397,7 +397,7 @@ type RemoteExpressionFeatures struct {
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
-	// ViewMetadataFunctions requires v116 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	// ViewMetadataFunctions requires v117 for MO_VIEW_DEFINITION/CHECK_OPTION.
 	ViewMetadataFunctions bool
 
 	JSONScalarLiteralContracts      bool
