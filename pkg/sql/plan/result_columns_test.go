@@ -277,6 +277,46 @@ func TestGetResultColumnsFromPlanPreservesComputedStackedWindowResult(t *testing
 	require.Equal(t, planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[2].ResultColumnKind)
 }
 
+func TestGetResultColumnsFromPlanPreservesTwoWindowOutputOrder(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []planpb.ResultColumnKind
+	}{
+		{
+			name: "stored then computed",
+			sql: "select first_value(with_grant_option) over (order by role_id), " +
+				"first_value(role_id is null) over (order by role_id desc) " +
+				"from mo_catalog.mo_role_privs",
+			want: []planpb.ResultColumnKind{
+				planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+				planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			},
+		},
+		{
+			name: "computed then stored",
+			sql: "select first_value(role_id is null) over (order by role_id desc), " +
+				"first_value(with_grant_option) over (order by role_id) " +
+				"from mo_catalog.mo_role_privs",
+			want: []planpb.ResultColumnKind{
+				planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+				planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := GetResultColumnsFromPlan(p)
+			require.Len(t, columns, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, want, columns[i].ResultColumnKind)
+			}
+		})
+	}
+}
+
 func TestResultColumnWindowProjectionUsesOutputSlot(t *testing.T) {
 	boolType := planpb.Type{Id: int32(types.T_bool)}
 	stored := func(col int32, name string) *planpb.Expr {

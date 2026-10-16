@@ -1149,6 +1149,22 @@ func resultColumnExpressionIsComputed(
 	expr *plan.Expr,
 	visited map[[3]int32]bool,
 ) bool {
+	return resultColumnExpressionIsComputedAtNode(query, nodeID, expr, visited, false)
+}
+
+// resultColumnExpressionIsComputedAtNode carries whether expr was already
+// selected from the current node's projection by its parent.  A WINDOW node
+// normally receives a local output slot, but once that slot has been resolved
+// to a projection expression its ColRef is the expression's source identity.
+// Treating that source ColPos as another local WINDOW slot can move to a
+// neighboring window result in a stacked-window plan.
+func resultColumnExpressionIsComputedAtNode(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	visited map[[3]int32]bool,
+	projectionResolved bool,
+) bool {
 	if expr == nil {
 		return false
 	}
@@ -1222,7 +1238,7 @@ func resultColumnExpressionIsComputed(
 	}
 
 	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
-	if node.NodeType == plan.Node_WINDOW {
+	if node.NodeType == plan.Node_WINDOW && !projectionResolved {
 		// A reference received from a parent PROJECT addresses this node's
 		// output slot.  Prefer that local ordinal over matching the defining
 		// source ColRef: stacked WINDOW nodes can expose an earlier passthrough
@@ -1275,11 +1291,14 @@ func resultColumnExpressionIsComputed(
 		}
 		if child != nil && !resolvedByWindowSlot && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
 			childExpr = child.ProjectList[projectIndex]
+			if child.NodeType == plan.Node_WINDOW {
+				resolvedByWindowSlot = true
+			}
 		}
 		if childExpr == nil {
 			childExpr = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: ref}}
 		}
-		if resultColumnExpressionIsComputed(query, childID, childExpr, visited) {
+		if resultColumnExpressionIsComputedAtNode(query, childID, childExpr, visited, resolvedByWindowSlot) {
 			return true
 		}
 	}
