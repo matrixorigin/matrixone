@@ -8038,12 +8038,20 @@ func TestSnapshotGC(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
 
-	fault.Enable()
-	defer fault.Disable()
-	fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false)
+	require.NotNil(t, db.BGCheckpointRunner.GetCompacted(), "replay failure requires a compacted checkpoint")
+	require.NoError(t, fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false))
 	defer fault.RemoveFaultPoint(ctx, "replay error UT")
+	hitsPoint := t.Name() + "/replay_error_hits"
+	require.NoError(t, fault.AddFaultPoint(ctx, hitsPoint, ":::", "getcount", 0, "replay error UT", false))
+	defer fault.RemoveFaultPoint(ctx, hitsPoint)
 	tae.Restart(ctx)
-	assert.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
+	// A nil window before the asynchronous replay starts is not evidence that
+	// a replay error discarded partially reconstructed state.
+	require.NoError(t, tae.DiskCleaner.FlushQueue(ctx))
+	hits, _, present := fault.TriggerFault(hitsPoint)
+	require.True(t, present)
+	require.Positive(t, hits, "checkpoint replay did not reach the injected error")
+	require.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
 }
 
 func TestSnapshotMeta(t *testing.T) {
