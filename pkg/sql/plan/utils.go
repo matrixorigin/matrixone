@@ -1947,7 +1947,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	return constantFoldWithPreparedExactSource(
-		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr))
+		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false)
 }
 
 func constantFoldWithPreparedExactSource(
@@ -1957,6 +1957,7 @@ func constantFoldWithPreparedExactSource(
 	varAndParamIsConst bool,
 	foldInExpr bool,
 	preservePreparedExactSource bool,
+	spatialChecked bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
@@ -1972,7 +1973,7 @@ func constantFoldWithPreparedExactSource(
 		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := constantFoldWithPreparedExactSource(
-				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
 			if err != nil {
 				return nil, err
 			}
@@ -2047,12 +2048,15 @@ func constantFoldWithPreparedExactSource(
 	if err != nil {
 		return nil, err
 	}
-	// View admission scans the optimized plan. Do not fold away a spatial
-	// distance expression before that scan can record its MORPC v90 floor; the
-	// original SQL is still rebound by older readers and must not lose its
-	// changed geodetic/overload semantics.
-	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
-		return expr, nil
+	// Keep spatial provenance visible to persisted-expression admission. Once
+	// the whole subtree is known to be spatial-free, its children need no scan:
+	// folding constants cannot introduce a spatial function. Rechecking every
+	// descendant would make folding a deep expression quadratic.
+	if !spatialChecked {
+		if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+			return expr, nil
+		}
+		spatialChecked = true
 	}
 	if f.CannotFold() {
 		return expr, nil
@@ -2072,7 +2076,7 @@ func constantFoldWithPreparedExactSource(
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
-			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
 		if errFold != nil {
 			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for
@@ -2095,9 +2099,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
-	// Skip constant folding for division/modulo by zero.
-	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if rule.IsDivisionByZeroConstant(fn) {
+	// Preserve diagnostic-bearing division subtrees through their parents;
+	// a later execution may use a different sql_mode or statement policy.
+	if rule.ContainsSqlModeDependentDivision(expr) {
 		return expr, nil
 	}
 

@@ -107,7 +107,7 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 			require.NoError(t, err)
 			required, err := RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion114, required)
+			require.Equal(t, defines.MORPCVersion117, required)
 			dateExpr := &Expr{Typ: Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0)},
 				Args: []*Expr{{Typ: Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
@@ -123,14 +123,16 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 			}}
 			required, err = RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion114, required, "mixed owner takes the maximum floor")
-			setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
-			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 114")
-			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 114")
-			setVersions(defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion113)
-			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 114")
-			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 114")
-			setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
+			require.Equal(t, defines.MORPCVersion117, required, "mixed owner takes the maximum floor")
+			for _, oldVersion := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
+				setVersions(oldVersion, defines.MORPCVersion117, defines.MORPCVersion117)
+				require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 117")
+				require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 117")
+				setVersions(defines.MORPCVersion117, oldVersion, oldVersion)
+				require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 117")
+				require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 117")
+			}
+			setVersions(defines.MORPCVersion117, defines.MORPCVersion117, defines.MORPCVersion117)
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 			require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 			id, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
@@ -146,20 +148,20 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 		} {
 			t.Run(selection, func(t *testing.T) {
 				sql := "create view v_least_protocol as select " + selection
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
+				setVersions(defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion117)
 				_, err := build(sql)
-				require.ErrorContains(t, err, "protocol version 114", "main-113 deployment cannot publish a view")
-				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion113)
+				require.ErrorContains(t, err, "protocol version 117", "main-116 deployment cannot publish a view")
+				setVersions(defines.MORPCVersion117, defines.MORPCVersion117, defines.MORPCVersion116)
 				_, err = build(sql)
-				require.ErrorContains(t, err, "protocol version 114", "read floor alone does not admit authoring")
-				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
+				require.ErrorContains(t, err, "protocol version 117", "read floor alone does not admit authoring")
+				setVersions(defines.MORPCVersion117, defines.MORPCVersion117, defines.MORPCVersion117)
 				created, err := build(sql)
 				require.NoError(t, err)
 				table := created.GetDdl().GetCreateView().GetTableDef()
 				var view ViewData
 				require.NoError(t, json.Unmarshal([]byte(table.GetViewSql().GetView()), &view))
 				require.NotNil(t, view.RequiredProtocolVersion)
-				require.Equal(t, defines.MORPCVersion114, *view.RequiredProtocolVersion, "even constant-folded views record the pre-fold contract")
+				require.Equal(t, defines.MORPCVersion117, *view.RequiredProtocolVersion, "even constant-folded views record the pre-fold contract")
 				// Catalog resolution supplies the relation kind, separately from
 				// the CREATE VIEW definition's properties.
 				table.TableType = catalog.SystemViewRel
@@ -167,13 +169,13 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 				ctx.objects["v_least_protocol"] = &ObjectRef{SchemaName: "tpch", ObjName: "v_least_protocol"}
 				defer delete(ctx.tables, "v_least_protocol")
 				defer delete(ctx.objects, "v_least_protocol")
-				setVersions(defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion114)
+				setVersions(defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion117)
 				_, err = build("select * from v_least_protocol")
-				require.ErrorContains(t, err, "protocol version 114")
-				setVersions(defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion114)
+				require.ErrorContains(t, err, "protocol version 117")
+				setVersions(defines.MORPCVersion117, defines.MORPCVersion116, defines.MORPCVersion117)
 				_, err = build("select * from v_least_protocol")
-				require.ErrorContains(t, err, "protocol version 114", "unfenced reader rejects saved metadata")
-				setVersions(defines.MORPCVersion114, defines.MORPCVersion114, defines.MORPCVersion114)
+				require.ErrorContains(t, err, "protocol version 117", "unfenced reader rejects saved metadata")
+				setVersions(defines.MORPCVersion117, defines.MORPCVersion117, defines.MORPCVersion117)
 				_, err = build("select * from v_least_protocol")
 				require.NoError(t, err)
 			})

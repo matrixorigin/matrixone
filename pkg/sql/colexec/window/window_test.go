@@ -2379,16 +2379,42 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestNtileBucketCountRejectsNull(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bucketVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
-	defer bucketVec.Free(mp)
-
-	ctr := container{
-		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}},
+func TestNtileBucketCountValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   int64
+		isNull  bool
+		message string
+	}{
+		{"null", 0, true, "ntile bucket count cannot be NULL"},
+		{"zero", 0, false, "ntile bucket count must be positive"},
+		{"negative", -5, false, "ntile bucket count must be positive"},
+		{"one", 1, false, ""},
+		{"positive", 3, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mp.Free(nil)
+			defer func() {
+				require.Zero(t, mp.CurrNB())
+			}()
+			bucketVec, err := vector.NewConstFixed(types.T_int64.ToType(), tc.value, 1, mp)
+			require.NoError(t, err)
+			defer bucketVec.Free(mp)
+			if tc.isNull {
+				require.NoError(t, vector.SetConstNull(bucketVec, 1, mp))
+			}
+			ctr := container{aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}}}
+			value, err := ctr.ntileBucketCount(0)
+			if tc.message == "" {
+				require.NoError(t, err)
+				require.Equal(t, tc.value, value)
+			} else {
+				require.ErrorContains(t, err, tc.message)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			}
+		})
 	}
-	_, err := ctr.ntileBucketCount(0)
-	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
 }
 
 func TestWindowReuseWithEmptyInput(t *testing.T) {

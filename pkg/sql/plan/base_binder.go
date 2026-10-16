@@ -5526,6 +5526,14 @@ func bindFuncExprAndConstFoldInternal(
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "ntile":
+		// The bucket count is execution configuration. Keep prepared parameters
+		// intact, but reject expressions whose value can vary with the input row.
+		args := retExpr.GetF().Args
+		if len(args) != 1 || !function.IsRuntimeConstant(args[0]) {
+			return nil, moerr.NewWrongArguments(ctx, "ntile")
+		}
+
 	case "nth_value":
 		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err
@@ -11143,9 +11151,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// Numeric aggregates consume ENUM ordinals and SET bitmaps. Resolve
-	// storage before the generic string-numeric conversion.
-	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
+	// Numeric aggregates and BIT_COUNT consume ENUM ordinals and SET bitmaps.
+	// Resolve storage even when a display string matches a string overload.
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11179,12 +11187,12 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	return result
 }
 
-func usesMySQLSpecialNumericAggregateInput(name string, argCount int) bool {
+func usesMySQLSpecialNumericInput(name string, argCount int) bool {
 	if argCount != 1 {
 		return false
 	}
 	switch name {
-	case "sum", "avg", "bit_and", "bit_or", "bit_xor":
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor", "bit_count":
 		return true
 	default:
 		return false
@@ -11486,18 +11494,31 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
 		}
 	}
-	// DAY can carry a fractional day for these source types. Choose the
-	// result family from the static signature, including whole-valued rows;
-	// neither the spelling of a literal nor a row value may change metadata.
-	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+	// Calendar DAY uses integral days; SECOND truncates to microseconds.
+	// Preserve the evaluated source type so DECIMAL DAY can round while
+	// floating/text DAY truncate. TIME retains its separate raw contract above.
+	if dateExpr.Typ.Id != int32(types.T_time) && (intervalType == types.Day || intervalType == types.Second) {
 		switch types.T(firstExpr.Typ.Id) {
-		case types.T_float32, types.T_float64,
-			types.T_decimal64, types.T_decimal128, types.T_decimal256,
-			types.T_char, types.T_varchar, types.T_text, types.T_any:
-			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+		case types.T_char, types.T_varchar, types.T_text, types.T_any,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			number, err := BindFuncExprImplByPlanExpr(ctx, "to_calendar_interval", []*Expr{
+				firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+			})
 			if err != nil {
 				return nil, err
 			}
+			unit := intervalType
+			if intervalType == types.Second {
+				unit = types.MicroSecond
+				if dateExpr.Typ.Id == int32(types.T_date) {
+					dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime)})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			return []*Expr{dateExpr, number, makePlan2Int64ConstExprWithType(int64(unit))}, nil
 		}
 	}
 

@@ -45,8 +45,10 @@ func TestLeastGreatestCollationProtocolPlacementSendAndReceive(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, features.LeastGreatestCollationSemantics)
 			features.DecimalStatisticalResultContracts = true
-			require.Equal(t, defines.MORPCVersion114, remoteExpressionProtocolVersion(features))
-			require.ErrorContains(t, validateRemoteExpressionFeatures(nil, features), "version 114")
+			features.CalendarIntervalNormalization = true
+			features.ScalarDivision = true
+			require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+			require.ErrorContains(t, validateRemoteExpressionFeatures(nil, features), "version 117")
 			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
 
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
@@ -61,42 +63,42 @@ func TestLeastGreatestCollationProtocolPlacementSendAndReceive(t *testing.T) {
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 				require.Equal(t, want, c.execType)
 			}
-			place(defines.MORPCVersion113, plan2.ExecTypeAP_ONECN)
+			place(defines.MORPCVersion116, plan2.ExecTypeAP_ONECN)
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 114")
-			place(defines.MORPCVersion114, plan2.ExecTypeAP_MULTICN)
+			require.ErrorContains(t, err, "version 117")
+			place(defines.MORPCVersion117, plan2.ExecTypeAP_MULTICN)
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 			// A final successful probe cannot prevent replacement immediately
 			// afterward. The appended ID is what the real old registry rejects.
-			client.onSend = func() { client.version = defines.MORPCVersion113 }
+			client.onSend = func() { client.version = defines.MORPCVersion116 }
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion113, client.version)
+			require.Equal(t, defines.MORPCVersion116, client.version)
 			client.onSend = nil
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 114", "selected endpoint was replaced by an older worker")
+			require.ErrorContains(t, err, "version 117", "selected endpoint was replaced by an older worker")
 			client.customResponse, client.response = true, &query.Response{}
-			place(defines.MORPCVersion114, plan2.ExecTypeAP_ONECN)
+			place(defines.MORPCVersion117, plan2.ExecTypeAP_ONECN)
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 114", "unknown actual capability must fail closed")
+			require.ErrorContains(t, err, "version 117", "unknown actual capability must fail closed")
 			require.Equal(t, client.calls, client.releases)
 
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			data, err := p.Marshal()
 			require.NoError(t, err)
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114} {
+			for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				validationErr := validateRemoteExpressionPipelineProtocol(c.proc, p)
 				_, decodeErr := decodeScope(data, c.proc, true, nil)
-				if version < defines.MORPCVersion114 {
+				if version < defines.MORPCVersion117 {
 					client.customResponse = false
-					client.version = defines.MORPCVersion114
+					client.version = defines.MORPCVersion117
 					destination := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-					require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, destination, features), "version 114", "coordinator rollout floor independently fences sends")
-					require.ErrorContains(t, validationErr, "version 114")
-					require.ErrorContains(t, decodeErr, "version 114")
+					require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, destination, features), "version 117", "coordinator rollout floor independently fences sends")
+					require.ErrorContains(t, validationErr, "version 117")
+					require.ErrorContains(t, decodeErr, "version 117")
 				} else {
 					require.NoError(t, validationErr)
 					require.NoError(t, decodeErr)

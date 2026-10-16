@@ -624,6 +624,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+		return nil, err
+	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
 	if err != nil {
 		return nil, err

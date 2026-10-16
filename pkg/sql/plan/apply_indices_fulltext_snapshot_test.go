@@ -255,10 +255,17 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		orderBy    string
 		pagination string
 		prefix     string
+		from       string
+		residual   string
+		wrap       bool
 		wantLimit  uint64
 	}{
+		{name: "implicit score order", pagination: "LIMIT 2", wantLimit: 2},
+		{name: "implicit score order offset", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
+		{name: "explicit match score", orderBy: "MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) DESC", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
+		{name: "nested score page", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wrap: true, wantLimit: 3},
 		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
 		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
 		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
@@ -266,28 +273,43 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		{name: "no limit", orderBy: "sc DESC"},
 		{name: "overflow", orderBy: "sc DESC", pagination: "LIMIT 18446744073709551615 OFFSET 1"},
 		{name: "found rows", prefix: "SQL_CALC_FOUND_ROWS ", orderBy: "sc DESC", pagination: "LIMIT 2"},
+		{name: "residual filter", residual: " AND title <> 'excluded'", orderBy: "sc DESC", pagination: "LIMIT 2"},
+		{name: "join", from: "ft JOIN t ON ft.id = t.id", orderBy: "sc DESC", pagination: "LIMIT 2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			optimizer := newIssue24822FullText2Optimizer(t)
 			for _, idx := range optimizer.ctx.tables["ft"].Indexes {
 				idx.IncludedColumns = []string{"base_id"}
 			}
-			statement := `SELECT ` + tc.prefix + `id, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
-				FROM ft WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
-				AND base_id IS NULL ORDER BY ` + tc.orderBy + ` ` + tc.pagination
+			from := tc.from
+			if from == "" {
+				from = "ft"
+			}
+			statement := `SELECT ` + tc.prefix + `ft.id, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+				FROM ` + from + ` WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
+				AND base_id IS NULL` + tc.residual
+			if tc.orderBy != "" {
+				statement += " ORDER BY " + tc.orderBy
+			}
+			statement += " " + tc.pagination
+			if tc.wrap {
+				statement = "SELECT id FROM (" + statement + ") AS page"
+			}
 			p, err := runOneStmt(optimizer, t, statement)
 			require.NoError(t, err)
-			var search *plan.Node
-			for _, node := range p.GetQuery().Nodes {
-				if isFulltext2SearchScan(node) {
-					require.Nil(t, search)
-					search = node
-				}
+			query := p.GetQuery()
+			planned := &QueryBuilder{qry: query}
+			scans := collectFullTextFunctionScans(planned, query.Steps[0])
+			require.Len(t, scans, 1)
+			search := scans[0]
+			if tc.residual == "" && tc.from == "" {
+				require.True(t, isFulltext2SearchScan(search), "the query must use the covered path")
+				opts, err := ft2plan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
+				require.NoError(t, err)
+				assert.Contains(t, opts.IncludePreds, `"op":"is_null"`)
+				require.Equal(t, 1, reachableFullTextOrderSorts(planned, query.Steps[0]),
+					"the explicit sort must replace, rather than duplicate, implicit relevance sorting")
 			}
-			require.NotNil(t, search)
-			opts, err := ft2plan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
-			require.NoError(t, err)
-			assert.Contains(t, opts.IncludePreds, `"op":"is_null"`)
 			if tc.wantLimit != 0 {
 				require.NotNil(t, fulltextScanLimit(search))
 				assert.Equal(t, tc.wantLimit, fulltextScanLimit(search).GetLit().GetU64Val())
@@ -295,6 +317,85 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 				require.Nil(t, fulltextScanLimit(search))
 			}
 		})
+	}
+}
+
+// The SQL tests prove reachability; these typed controls exercise each barrier
+// around the optional inner sort without constructing a service or corpus.
+func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {
+	type nodes struct{ outer, project, inner, search *plan.Node }
+	type testCase struct {
+		name   string
+		mutate func(nodes)
+	}
+	for _, withInner := range []bool{false, true} {
+		cases := []testCase{
+			{name: "equivalent"},
+			{name: "ascending", mutate: func(n nodes) { n.outer.OrderBy[0].Flag = plan.OrderBySpec_ASC }},
+			{name: "secondary key", mutate: func(n nodes) { n.outer.OrderBy = append(n.outer.OrderBy, n.outer.OrderBy[0]) }},
+			{name: "different score", mutate: func(n nodes) { n.project.ProjectList[1].GetCol().ColPos = 0 }},
+			{name: "expression projection", mutate: func(n nodes) { n.project.ProjectList[0] = makePlan2Uint64ConstExprWithType(1) }},
+			{name: "foreign projection", mutate: func(n nodes) { n.project.ProjectList[0].GetCol().RelPos++ }},
+			{name: "project filter", mutate: func(n nodes) { n.project.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(true)} }},
+			{name: "search filter", mutate: func(n nodes) { n.search.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(true)} }},
+			{name: "join", mutate: func(n nodes) { n.search.NodeType = plan.Node_JOIN }},
+			{name: "project limit", mutate: func(n nodes) { n.project.Limit = makePlan2Uint64ConstExprWithType(1) }},
+			{name: "search offset", mutate: func(n nodes) { n.search.Offset = makePlan2Uint64ConstExprWithType(1) }},
+			{name: "outer rank", mutate: func(n nodes) { n.outer.RankOption = &plan.RankOption{} }},
+			{name: "project rank", mutate: func(n nodes) { n.project.RankOption = &plan.RankOption{} }},
+			{name: "search rank", mutate: func(n nodes) { n.search.RankOption = &plan.RankOption{} }},
+			{name: "overflow", mutate: func(n nodes) { n.outer.Limit = makePlan2Uint64ConstExprWithType(^uint64(0)) }},
+		}
+		if withInner {
+			cases = append(cases,
+				testCase{name: "inner ascending", mutate: func(n nodes) { n.inner.OrderBy[0].Flag = plan.OrderBySpec_ASC }},
+				testCase{name: "inner different key", mutate: func(n nodes) { n.inner.OrderBy[0].Expr.GetCol().ColPos = 0 }},
+				testCase{name: "inner secondary key", mutate: func(n nodes) { n.inner.OrderBy = append(n.inner.OrderBy, n.inner.OrderBy[0]) }},
+				testCase{name: "inner filter", mutate: func(n nodes) { n.inner.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(true)} }},
+				testCase{name: "inner limit", mutate: func(n nodes) { n.inner.Limit = makePlan2Uint64ConstExprWithType(1) }},
+				testCase{name: "inner rank", mutate: func(n nodes) { n.inner.RankOption = &plan.RankOption{} }},
+			)
+		}
+		shape := "direct/"
+		if withInner {
+			shape = "implicit sort/"
+		}
+		for _, tc := range cases {
+			t.Run(shape+tc.name, func(t *testing.T) {
+				typ := plan.Type{Id: int32(types.T_float32)}
+				search := &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, BindingTags: []int32{1},
+					IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()}}}
+				b := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{search}}}
+				child := int32(0)
+				var inner *plan.Node
+				if withInner {
+					inner = &plan.Node{NodeType: plan.Node_SORT, Children: []int32{child},
+						OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(typ, 1, 1), Flag: plan.OrderBySpec_DESC}}}
+					child = int32(len(b.qry.Nodes))
+					b.qry.Nodes = append(b.qry.Nodes, inner)
+				}
+				project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{child}, BindingTags: []int32{2},
+					ProjectList: []*plan.Expr{GetColExpr(typ, 1, 0), GetColExpr(typ, 1, 1)}}
+				projectID := int32(len(b.qry.Nodes))
+				b.qry.Nodes = append(b.qry.Nodes, project)
+				outer := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{projectID},
+					OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(typ, 2, 1), Flag: plan.OrderBySpec_DESC}},
+					Limit:   makePlan2Uint64ConstExprWithType(2), Offset: makePlan2Uint64ConstExprWithType(1)}
+				if tc.mutate != nil {
+					tc.mutate(nodes{outer, project, inner, search})
+				}
+				b.pushCoveredFulltext2ScoreLimitFromSort(outer)
+				if tc.mutate == nil {
+					require.NotNil(t, search.IndexSearchScan.CandidateLimit)
+					require.Equal(t, uint64(3), search.IndexSearchScan.CandidateLimit.GetLit().GetU64Val())
+				} else {
+					require.Nil(t, search.IndexSearchScan.CandidateLimit)
+				}
+				// Pagination still belongs to the outer sort in either outcome.
+				require.NotNil(t, outer.Limit)
+				require.Equal(t, uint64(1), outer.Offset.GetLit().GetU64Val())
+			})
+		}
 	}
 }
 
