@@ -428,7 +428,10 @@ func TestTableChangeStream_HandleSnapshotNoProgress_WarningThrottle(t *testing.T
 func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	runningReaders := &sync.Map{}
 
-	h1 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	h1 := newTableStreamHarness(t,
+		withHarnessRunningReaders(runningReaders),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
 	defer h1.Close()
 
 	ready := make(chan struct{})
@@ -440,21 +443,22 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	errCh1, done1 := h1.RunStreamAsync(ar1)
 	defer done1()
 
-	require.Eventually(t, func() bool {
-		select {
-		case <-ready:
-			return true
-		default:
-			_, ok := runningReaders.Load(h1.Stream().runningReaderKey)
-			return ok
-		}
-	}, time.Second, 10*time.Millisecond, "first stream should register as running")
+	// Registration precedes watermark initialization. Wait for the collector
+	// to block so cancellation exercises an active reader, not startup timing.
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reader did not reach the collector")
+	}
 
 	stored, ok := runningReaders.Load(h1.Stream().runningReaderKey)
 	require.True(t, ok, "first stream should occupy running readers slot")
 	require.Equal(t, h1.Stream(), stored)
 
-	h2 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	h2 := newTableStreamHarness(t,
+		withHarnessRunningReaders(runningReaders),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
 	defer h2.Close()
 
 	ar2 := h2.NewActiveRoutine()
@@ -473,9 +477,9 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first stream did not exit after cancellation")
 	}
-	if runErr != nil {
-		require.ErrorIs(t, runErr, context.Canceled)
-	}
+	require.ErrorIs(t, runErr, context.Canceled)
+	_, ok = runningReaders.Load(h1.Stream().runningReaderKey)
+	require.False(t, ok, "first reader should release its slot after cancellation")
 }
 
 func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
