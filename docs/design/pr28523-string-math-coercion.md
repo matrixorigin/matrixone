@@ -213,7 +213,7 @@ function-wide zonemap optimization is included.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | v109-v116 local fallback plus destination and receiver rejection; v117 placement/send/receive acceptance; upstream JSON/YearBit v101 and Unicode-collation v109 controls; default/MySQL/native modes; legacy-session rejection |
+| Mixed-version admission | v109-v117 local fallback plus destination and receiver rejection; v118 placement/send/receive acceptance; upstream JSON/YearBit v101 and Unicode-collation v109 controls; default/MySQL/native modes; legacy-session rejection |
 | SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
