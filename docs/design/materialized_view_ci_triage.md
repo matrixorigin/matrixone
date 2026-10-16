@@ -664,3 +664,79 @@ there is no surviving native fixture. Source/self-review found no new blocker
 in this maintenance scope. New-head multi-CN SQL BVT and full CI remain remote
 checks, separately from the green parent-head evidence and external design
 approval.
+
+### 2026-10-16: follow-up main merge preserves SELECT division protocol
+
+While exact-head ALL CI `38835654106` was running for
+`6e5cffc74fd47905b0807a5f99ea63681b724a55`, main advanced from a85d90ef to
+`76deafc8062f9a7e33a31a4df858ebcdb9477cb5`. GitHub then reported a new
+content conflict. The existing run had passed shared build, SCA, coverage UT,
+Connector/J and Iceberg; ordinary UT and both BVT jobs were still running.
+This is a new protocol allocation collision, not a failed CI assertion.
+
+Preserve upstream SELECT scalar division diagnostics at protocol 116 and
+move all MV authoring/scan/registration/4.0.15 upgrade gates together to 117.
+Existing typed tests now reject MV protocol/floor 116 and admit 117, retaining
+the ordinary-scan control at 116. The previous temporary-table/MV truncate
+predicate conjunction and its identity regression are unchanged. Upstream's
+ProcessInfo outer-SELECT classification and generated protobuf are accepted
+unchanged, as is its checkpoint object-data sharing fix. There is no new
+feature or design scope in this maintenance merge.
+
+Evidence reuse is scoped: the exact FK lifecycle test and its fixture are
+unchanged from 6e5cffc7, including its cancellable waiter, original deadline,
+cross-CN fences, cleanup owners and all 17 assertion scenarios. The new division
+policy only affects division expressions, which that root does not issue;
+checkpoint-version replay is not entered by its fresh, non-restarting fixture.
+The prior race PASS (38.540 s, 17 subcases, no race report) remains evidence
+for that unchanged waiter/holder cancellation closure, not new diagnostic or
+checkpoint behavior. Fresh normal-root validation and focused division codec/
+protocol consumers validate the new base; full new-head CI remains required.
+
+The 6e5cffc7 native service was built with `vcs.modified=false` and passed
+`view/materialized_view.sql` 58/58 under both optimistic and pessimistic modes,
+twice on each instance. SQL plus ISCP readiness was observed. After each run,
+the database and MV definition/dependency/run/task records were absent; both
+owned services exited. Those observations are parent-head evidence; the new
+merged source receives separate validation below.
+
+Parent-head ALL CI subsequently completed successfully on 6e5cffc7:
+[38835654106](https://github.com/matrixorigin/matrixone/actions/runs/38835654106),
+2026-10-16 01:32:17–02:35:57 UTC. Ordinary UT, coverage UT, SCA, shared build,
+both multi-CN BVT groups, coverage aggregation and CI Required all PASS.
+Connector/J and Iceberg also completed successfully. Explicit optional skips
+remain skips. This closes the original CI failure on that revision; the new
+main merge still needs separate exact-head CI.
+
+Fresh merged-source validation (Go 1.27.1, linux/amd64):
+
+- Focused MV/temporary DELETE/division diagnostic/SQL-mode/codec tests PASS:
+  plan 0.311 s, compile 0.113 s, frontend 0.142 s, v4_0_15 0.039 s and process
+  0.052 s. This includes upstream division warning send/receive admission.
+- Full owning suites PASS: frontend 15.464 s, compile 10.591 s, plan 28.136 s,
+  v4_0_15 0.047 s and process 1.152 s.
+- Exact FK concurrency root freshly rerun: normal PASS 9.930 s, race PASS
+  40.260 s, all 17 subcases PASS in both modes, no failure/skip/race report.
+  B=30 s gives N=clamp(floor(30/40.260),1,100)=1. Race build time is excluded;
+  `-vet=off` avoids repeating the separate seven-package successful vet check.
+- Seven-package vet PASS; configured incremental lint 2.14.0: 0 issues.
+- Production service build PASS. Native SQL normal comparison PASS 58/58 in
+  optimistic and pessimistic modes, twice per instance, zero ignored/failed/
+  abnormal statements. SQL plus ISCP readiness observed. Every run verifies
+  zero test database, MV definitions, dependencies, refresh history and
+  executor-17 task records before repetition. Both services exited.
+
+The pre-delivery native binary reports baseline 6e5cffc7 with `vcs.modified=true`,
+because it includes this staged main merge and protocol fix. It is not a clean
+6e5cffc7 build. All 11,039 tracked non-documentation input blob identities were
+recorded before the native run and checked against the final delivery index;
+only this documentation/evidence changed afterward. Commit metadata and these
+documentation edits do not affect the tested SQL behavior. CGo/thirdparty sources
+and native build flags/artifacts are unchanged by this main merge.
+
+Logs: `/workspace/mv-ci/main-76de-{focused,owning,vet,lint}.log`,
+`main-76de-{root,race}.jsonl`, `main-76de-native-build{,info}.log`,
+`main-76de-bvt.json` and `main-76de-production-inputs.json`. Formatting,
+whitespace, unresolved entries and final non-documentation input identity checks
+PASS. No new blocker was found in this maintenance scope; external RFC review
+and new-head remote CI remain separate gates.
