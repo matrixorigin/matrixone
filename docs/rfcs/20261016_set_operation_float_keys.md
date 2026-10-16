@@ -1,6 +1,6 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 4
+- Revision: 5
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
@@ -18,7 +18,8 @@ expression admission trigger the design-first gate. The earlier ordinary-fix
 exemption does not cover this expansion. Revision 3 supplied the missing design;
 revision 4 retains that architecture and mechanically advances set-key admission
 after official main allocated version 116;
-it does not assert repository approval or advance implementation approval.
+revision 5 adds the local capacity protocol, receipt and composed lifecycle tests.
+These revisions do not assert repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
 wire field, worker, queue, persisted occurrence identity or recovery protocol.
@@ -190,7 +191,8 @@ automatic admission limit is introduced here.
 Before accepting this design for rollout, planner/execution reviewers must record
 a named deployment profile and supported envelope: outer/candidate sizes, widths,
 selectivity, distinctness/skew, concurrency, CN placement and numerical latency,
-peak-memory and spill/disk budgets. No measured envelope is currently asserted.
+peak-memory and spill/disk budgets. Revision 5 records a measured local proposal below; an independently accepted
+production envelope remains outstanding.
 
 Validation must inspect the actual compiled plan while independently varying
 `O`, `I`, `M/(O*I)`, `U/M`, outer width, skew and concurrency. Include both a tiny
@@ -209,6 +211,125 @@ and file oracles, rather than sleeps or a large stress fixture. The evidence mus
 identify source SHA, commands, settings, topology, inputs and terminal outcomes.
 If the envelope or evidence is missing, design/capacity acceptance remains pending;
 this documentation delivery does not waive it or require an unrelated runtime fix.
+
+### Revision 5 local qualification proposal and receipt
+
+Revision 5 supplies an executable capacity harness and a measured **local
+qualification proposal**, not an independently accepted production envelope.
+Targets were fixed before measurement: Apple M4 / 16 GiB, Darwin arm64,
+Go 1.27.1, CPU/CGo, one CN; `O <= 64`, total retained candidates across both
+arms `I <= 256`, carried outer payload `W_o <= 256` bytes excluding metadata,
+and `C <= 2`. Proposed limits are first-invocation completion <= 10 seconds,
+maximum warm completion <= 5 seconds, whole-process lifetime RSS high-water
+<= 4 GiB, maximum reported operator MemorySize <= 256 MiB, and sum of reported
+operator spill bytes per analyzed query <= 64 MiB. These limits are measurement
+acceptance targets. They do not install admission limits, qualify larger inputs,
+or authorize production rollout.
+
+The opt-in `BenchmarkScalarSetFallbackCapacity` in
+`pkg/tests/sqlintegration/scalar_set_capacity_bench_test.go` uses the existing
+canonical single-CN fixture. Its SQL carries `o.pad` through the result and
+retains a hidden integer correlation column with `i.id > o.id`. Both ordinary
+multirow arms return DOUBLE signed zero. Thus candidate cardinality is retained
+before matching; selecting constant zero does not turn this into the selective
+set-filter path. Each successful analyzed plan contains global `row_number`,
+LEFT JOIN, two aggregates, COUNT/ANY_VALUE and the SINGLE cardinality check.
+
+The [machine-readable receipt](validation/20261016_scalar_set_capacity.json)
+records source and native hashes, settings, all samples and complete logical
+EXPLAIN ANALYZE output. Reproduce with:
+
+```sh
+MO_SCALAR_SET_CAPACITY_REPORT="$TMPDIR/scalar-set-capacity.json" \
+  .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=240s \
+  -run '^$' -bench '^BenchmarkScalarSetFallbackCapacity$' -benchtime=1x \
+  ./pkg/tests/sqlintegration
+```
+
+Each profile runs a separately labeled first invocation, one excluded warm-up,
+then three measured rounds on identical inputs/settings. Two-client profiles use
+separate sessions and a start barrier; measured client intervals overlap. Table
+entries are maximum milliseconds across clients and measured rounds. The first
+invocation follows data loading and is **not** cold OS/storage-cache evidence.
+
+| Profile | O / total I / payload bytes / C | First invocation completion ms | Warm first row ms | Warm completion ms |
+| --- | --- | --- | --- | --- |
+| baseline | 8 / 16 / 0 / 1 | 1.514 | 0.761 | 0.764 |
+| outer | 64 / 16 / 0 / 1 | 1.483 | 1.240 | 1.254 |
+| candidates | 8 / 256 / 0 / 1 | 1.710 | 1.297 | 1.301 |
+| sparse | 8 / 16 / 0 / 1 | 1.305 | 0.889 | 0.892 |
+| distinct-cardinality-error | 8 / 16 / 0 / 1 | 1.242 | unavailable | 0.807 |
+| width | 8 / 16 / 256 / 1 | 1.125 | 0.873 | 0.879 |
+| concurrency | 8 / 16 / 0 / 2 | 1.758 | 1.151 | 1.154 |
+| combined | 64 / 256 / 256 / 2 | 6.559 | 6.301 | 6.327 |
+| forced-spill | 64 / 256 / 0 / 1 | 70.672 | 64.593 | 64.611 |
+
+Baseline/dense inputs yield `M = O*I` but one distinct membership per outer
+occurrence. Sparse input yields one qualifying outer occurrence and seven NULL
+results despite comparison work. The all-distinct profile returns expected 1242,
+including during EXPLAIN ANALYZE; first-row and runtime analyze quantities are
+unavailable for it, not zero. A separate profiling execution sets
+`agg_spill_mem=1` and observes spill at both aggregate stages. Normal profiles
+explicitly use `agg_spill_mem=0`, `max_dop=1`; resolved join/sort settings are in
+the receipt. The combined timed profile overlaps two queries, while its EXPLAIN
+ANALYZE is a **separate serial execution**, not concurrent memory evidence.
+
+All available quantities meet the proposed local numerical targets. Reported
+MemorySize is an operator statistic, not a query peak; human-readable values
+and their byte conversions are rounded. RSS is the entire process's lifetime
+high-water, including startup and preceding profiles, not incremental or
+per-query resident memory. Shared-host scheduling is uncontrolled. The receipt
+does not measure capacity-scale query-accounted peak, merge/network volume,
+spill file/reload counts, independent skew variation, the high-distinctness
+boundary of the envelope, or multi-CN capacity. These remain explicit protocol
+items; the local experiment does not close the full rollout acceptance gate.
+
+### Revision 5 deterministic failure and reuse evidence
+
+`TestScalarSetFallbackResourceLifecycle` compiles the actual fallback from two
+outer occurrences and two literal inner members per arm, with no storage/network
+fixture. It asserts WINDOW/LEFT JOIN/two logical AGGs, signed-zero/NULL output
+and exact outer identities. Private generations share one 64 MiB aggregate
+budget, so a later normal generation also proves the budget/registry can admit
+work after the preceding failures.
+
+The 4 KiB generation rejects a group allocation with typed
+`ErrAllocationAccountCapacity` (`used=424 requested=32768 limit=4096`) after
+partial initialization and produces no output. This account-level rejection
+precedes the shared controller; the controller's RejectCount remains zero and
+is not presented as rejection evidence. Normal execution and cancellation from
+the output callback both exercise real cached TP `Compile.Reset` with a fresh
+top context and then return the exact original rows. Cancellation is injected
+after fallback materialization, not during merge/build/group. The normal
+accounted generation peak in this tiny fixture is approximately 633 kB; that
+is not an estimate of the capacity benchmark's query peak.
+
+After Run, reservations and live allocation metadata must already be zero,
+before fixture destruction. Prepared operators are explicitly freed before
+Compile.Release; then MPool bytes, memory-growth participants, spill disk and FD
+reservations must be zero before generation Close. The final fresh execution
+uses the same aggregate budget and registry. The race-enabled test passes.
+
+Existing owner tests provide additional, separate evidence:
+
+- Group: `TestAccountedGroupSpillResourceAdmissionCleans`,
+  `TestAccountedGroupCancellationResetAndReuse`,
+  `TestAccountedGroupShortSpillWriteCleans`, and
+  `TestAccountedGroupCorruptSpillRecordCleans` cover admission, cancellation,
+  partial spill writes and corrupted spill reload cleanup.
+- WINDOW: `TestWindowCallHonorsPreCancellation` and
+  `TestWindowResetReleasesInheritedAccountedBuffers` cover its cancellation
+  boundary and inherited-buffer Reset ownership.
+- LoopJoin: `TestLoopJoinResetReleasesGenerationJoinBatch` and
+  `TestResetRebuildsExpressionForNextAllocationGeneration` cover generation
+  ownership and expression recreation.
+
+Owner tests do not establish composed in-flight merge/build/group cancellation
+or composed corrupt-spill recovery. Those boundaries and capacity-scale metrics
+above remain pending. No production fault hook or unrelated executor change is
+introduced to hide those gaps. Independent acceptance must name this exact
+revision and the agreed supported envelope; this author-supplied evidence is
+not that approval.
 
 ## Alternatives
 
@@ -286,11 +407,11 @@ acceptance or a capacity benchmark.
 | Historical CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
 | Selective typed-key filter work | Earlier unchanged-path receipt: 4,096 rows, one scan row per arm, two aggregation input rows, reported memory 262,270 bytes | A selective set-operation observation only; does not measure occurrence-based scalar fallback latency, concurrency or resident peak. | Separate from fallback acceptance |
 | Rebased capability allocation | Set-key placement/send/receive/Prepare/persisted tests at 116/117, plus division-only and combined-feature controls | Focused compile/colexec/planner boundary checks pass (3.073s/2.088s/1.517s); full planner, compile, colexec, function and protobuf-plan packages also pass. Fresh receipts are recorded in the implementation PR; historical 115/116 receipts above retain their original provenance. | Independent implementation review |
-| Global merge and reaggregation capacity | Source model and protocol above | Full outer buffering and candidate multiplication are explicit. No supported numerical envelope or completed fallback benchmark is claimed. | Planner/execution reviewers: envelope, measured evidence and decision |
-| Composed partial failure/cancel/reset/spill recovery | Existing cleanup owners mapped above | Delegation is documented; successful SQL/CI is not proof of every forced-budget failure path. | Execution reviewers: deterministic failure-path acceptance |
+| Global merge and reaggregation capacity | Revision 5 opt-in benchmark and linked receipt above | Nine actual fallback profiles, one excluded warm-up plus three measured rounds; local targets met for available metrics. Missing capacity-scale peaks/skew/volume/reload and topology evidence are listed explicitly. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
+| Composed partial failure/cancel/reset/spill recovery | Revision 5 composed compile test plus named owner fault tests above | Typed 4 KiB group rejection, post-materialization cancellation, TP Reset and same-budget fresh generation cleanup. Composed in-flight phase cancellation/corrupt-spill recovery remains unproven. | Execution reviewers: remaining composed boundaries |
 | Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
 
 Record any later acceptance with the immutable revision/commit link, reviewer,
 decision, supported capacity envelope and evidence links. Advance status to
 `in progress` only after independent approval; the author does not self-approve
-or infer acceptance from CI. Until then, revision 4 remains a reviewable draft.
+or infer acceptance from CI. Until then, revision 5 remains a reviewable draft.
