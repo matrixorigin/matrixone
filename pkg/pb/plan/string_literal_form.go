@@ -1718,7 +1718,9 @@ func RequiresMORPCVersion118JSONStringConsumerOverload(owner any) (bool, error) 
 }
 
 const (
-	remoteJSONStringConsumerELTFunctionID int32 = 384
+	remoteJSONStringConsumerELTFunctionID int32  = 384
+	remoteJSONStringGroupConcatFunctionID int32  = 185
+	remoteAggregateDistinctFlag           uint64 = 1 << 63
 )
 
 func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
@@ -1743,6 +1745,17 @@ func isJSONOpaqueTextContract(expr *Expr, fn *Function, id int32) bool {
 			return true
 		}
 		return false
+	}
+	// GROUP_CONCAT and its LISTAGG alias carry JSON arguments in the serialized
+	// aggregate descriptor. Older finalizers render stored opaque JSON
+	// differently, including at the truncation boundary.
+	if fn != nil && fn.Func != nil &&
+		int32((uint64(fn.Func.Obj)&^remoteAggregateDistinctFlag)>>32) == remoteJSONStringGroupConcatFunctionID {
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
 	}
 	switch id {
 	case 21, mediumIntStrictCastFunctionID, mediumIntAssignmentCastFunctionID, mediumIntIgnoreCastFunctionID:

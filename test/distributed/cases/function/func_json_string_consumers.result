@@ -129,6 +129,9 @@ insert into opaque_stored values (cast(cast(repeat('a',58) as blob) as json));
 select elt(1,j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_elt, concat('',j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_stored from opaque_stored;
 ➤ wrapped_elt[-7,1,0]  ¦  wrapped_stored[-7,1,0]  𝄀
 1  ¦  1
+select (select group_concat(j) from opaque_stored) = (select concat('',j) from opaque_stored) as group_concat_json_visible, (select listagg(j, '') within group (order by 1) from opaque_stored) = (select concat('',j) from opaque_stored) as listagg_json_visible;
+➤ group_concat_json_visible[-7,1,0]  ¦  listagg_json_visible[-7,1,0]  𝄀
+1  ¦  1
 select json_schema_valid('{"type":"string","maxLength":95}',j) as rejects_compact_length, json_schema_valid('{"type":"string","maxLength":96}',j) as accepts_visible_length from opaque_stored;
 ➤ rejects_compact_length[-7,1,0]  ¦  accepts_visible_length[-7,1,0]  𝄀
 0  ¦  1
