@@ -114,16 +114,17 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv        int                            // spill level
-	name      string                         // spill bucket name
-	cnt       int64                          // number of rows in this spill bucket
-	file      *os.File                       // spill file
-	writer    io.Writer                      // file writer; tests may inject a failing writer
-	fileFS    fileservice.MutableFileService // owns the named file until free
-	fdToken   *process.ExecutionSpillFDReservation
-	diskToken *process.ExecutionSpillDiskReservation
-	path      [spillMaxPass]uint8
-	pathLen   int
+	lv           int                            // spill level
+	name         string                         // spill bucket name
+	cnt          int64                          // number of rows in this spill bucket
+	file         *os.File                       // spill file
+	writer       io.Writer                      // file writer; tests may inject a failing writer
+	fileFS       fileservice.MutableFileService // owns the named file until free
+	fdToken      *process.ExecutionSpillFDReservation
+	diskToken    *process.ExecutionSpillDiskReservation
+	cleanupToken *spillcleanup.Reservation
+	path         [spillMaxPass]uint8
+	pathLen      int
 }
 
 type reusableSpillBuffer interface {
@@ -249,6 +250,8 @@ func (bkt *spillBucket) free() error {
 		bkt.diskToken.Release()
 		bkt.diskToken = nil
 	}
+	bkt.cleanupToken.Release()
+	bkt.cleanupToken = nil
 	return err
 }
 
@@ -702,11 +705,12 @@ func (ctr *container) freeSpillBucket(bkt *spillBucket) error {
 		logutil.Errorf("group spill file cleanup failed: %v", err)
 	}
 	if bkt != nil && bkt.fileFS != nil {
-		pending := &spillBucket{name: bkt.name, fileFS: bkt.fileFS, diskToken: bkt.diskToken}
+		pending := &spillBucket{name: bkt.name, fileFS: bkt.fileFS, diskToken: bkt.diskToken, cleanupToken: bkt.cleanupToken}
 		bkt.fileFS = nil
 		bkt.diskToken = nil
+		bkt.cleanupToken = nil
 		if ctr == nil {
-			spillcleanup.Enqueue(pending.free)
+			pending.cleanupToken.Enqueue(pending.free)
 		} else {
 			ctr.spillCleanupPending = append(ctr.spillCleanupPending, pending)
 		}
@@ -737,7 +741,7 @@ func (ctr *container) freeSpillBkts() {
 
 func (ctr *container) deferSpillCleanup() {
 	for _, bucket := range ctr.spillCleanupPending {
-		spillcleanup.Enqueue(bucket.free)
+		bucket.cleanupToken.Enqueue(bucket.free)
 	}
 	ctr.spillCleanupPending = nil
 }

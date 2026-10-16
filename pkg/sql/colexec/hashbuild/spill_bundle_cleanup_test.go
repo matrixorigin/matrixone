@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -64,6 +65,9 @@ func TestHashBuildTeardownRetriesWhileOperatorRetained(t *testing.T) {
 				baseFS, err := proc.GetSpillFileService()
 				require.NoError(t, err)
 				path := "cached_hashbuild_" + uuid.NewString()
+				cleanupToken, err := spillcleanup.Reserve()
+				require.NoError(t, err)
+				t.Cleanup(cleanupToken.Release)
 				fd, err := baseFS.CreateFile(context.Background(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = fd.Close() })
@@ -76,7 +80,7 @@ func TestHashBuildTeardownRetriesWhileOperatorRetained(t *testing.T) {
 				fault := &terminalBundleRemoveFS{MutableFileService: baseFS}
 				fault.blocked.Store(removeError)
 				bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
-					0: {fs: fault, name: path, created: true, diskToken: disk, file: fd, fdToken: fdToken},
+					0: {fs: fault, name: path, created: true, cleanupToken: cleanupToken, diskToken: disk, file: fd, fdToken: fdToken},
 				}}
 				op := &HashBuild{ctr: container{spillBundle: bundle}, JoinMapTag: 91904}
 				t.Cleanup(func() {
@@ -130,6 +134,9 @@ func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	baseFS, err := proc.GetSpillFileService()
 	require.NoError(t, err)
 	name := "terminal_hashbuild_" + uuid.NewString()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
 	fd, err := baseFS.CreateFile(context.Background(), name)
 	require.NoError(t, err)
 	require.NoError(t, fd.Close())
@@ -139,7 +146,7 @@ func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	fault.blocked.Store(true)
 	op := NewArgument()
 	op.ctr.spillBundle = &spillFileBundle{entries: map[int]*spillFileEntry{
-		0: {fs: fault, name: name, created: true, diskToken: token},
+		0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, diskToken: token},
 	}}
 	op.ctr.spillBundle.release() // Error cleanup before Reset/Free; Release is a fallback.
 	require.True(t, op.ctr.spillBundle.cleanupPending())
@@ -181,6 +188,9 @@ func TestHashBuildHandedOffFileRetriesTransientRemoval(t *testing.T) {
 	baseFS, err := proc.GetSpillFileService()
 	require.NoError(t, err)
 	name := "hashbuild_handoff_cleanup_" + uuid.NewString()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
 	fd, err := baseFS.CreateFile(context.Background(), name)
 	require.NoError(t, err)
 	_, err = fd.Write([]byte{1})
@@ -191,7 +201,7 @@ func TestHashBuildHandedOffFileRetriesTransientRemoval(t *testing.T) {
 	require.NoError(t, err)
 	fault := &blockedBundleRemoveFS{MutableFileService: baseFS, failRemaining: 2}
 	bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
-		0: {fs: fault, name: name, created: true, rows: 1, bytes: 1, diskToken: token},
+		0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, rows: 1, bytes: 1, diskToken: token},
 	}}
 	defer bundle.release()
 	files, err := bundle.accountedFiles(context.Background(), generation)
@@ -217,6 +227,9 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			baseFS, err := proc.GetSpillFileService()
 			require.NoError(t, err)
 			name := "hashbuild_bundle_cleanup_" + uuid.NewString()
+			cleanupToken, err := spillcleanup.Reserve()
+			require.NoError(t, err)
+			t.Cleanup(cleanupToken.Release)
 			fd, err := baseFS.CreateFile(context.Background(), name)
 			require.NoError(t, err)
 			defer fd.Close()
@@ -231,7 +244,7 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			defer fdToken.Release()
 			fault := &blockedBundleRemoveFS{MutableFileService: baseFS, blocked: blocked}
 			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
-				0: {fs: fault, name: name, created: true, file: fd, diskToken: token, fdToken: fdToken},
+				0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, file: fd, diskToken: token, fdToken: fdToken},
 				1: nil,
 			}}
 			defer func() { fault.blocked = false; bundle.release() }()

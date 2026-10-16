@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -61,6 +62,9 @@ func TestRightDedupJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
 				generation, err := budget.OpenGeneration(1)
 				require.NoError(t, err)
 				t.Cleanup(generation.Close)
+				cleanupToken, err := spillcleanup.Reserve()
+				require.NoError(t, err)
+				t.Cleanup(cleanupToken.Release)
 				fd, err := os.CreateTemp(t.TempDir(), "cached-rightdedupjoin-*")
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = fd.Close() })
@@ -80,7 +84,7 @@ func TestRightDedupJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
 							return errors.New("injected cached operator remove failure")
 						}
 						return os.Remove(path)
-					}, 1, 1, func() { disk.Release(); releases.Add(1) },
+					}, 1, 1, func() { disk.Release(); releases.Add(1) }, cleanupToken,
 				)
 				op := &RightDedupJoin{}
 				t.Cleanup(func() {
@@ -161,6 +165,9 @@ func TestRightDedupJoinSpillFailureKeepsCleanupOwner(t *testing.T) {
 				upstreamErr := errors.New("injected probe failure")
 				op.AppendChild(&spillCleanupErrorChild{MockOperator: colexec.NewMockOperator(), err: upstreamErr})
 
+				cleanupToken, err := spillcleanup.Reserve()
+				require.NoError(t, err)
+				t.Cleanup(cleanupToken.Release)
 				fd, err := os.CreateTemp(t.TempDir(), "spill-owner-*")
 				require.NoError(t, err)
 				path := fd.Name()
@@ -188,7 +195,7 @@ func TestRightDedupJoinSpillFailureKeepsCleanupOwner(t *testing.T) {
 						}
 						return os.Remove(path)
 					},
-					1, 1, func() { disk.Release(); releases.Add(1) },
+					1, 1, func() { disk.Release(); releases.Add(1) }, cleanupToken,
 				)
 				defer func() {
 					blocked.Store(false)

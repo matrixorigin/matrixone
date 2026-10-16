@@ -163,16 +163,17 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	file       *os.File
-	fdToken    *process.ExecutionSpillFDReservation
-	diskToken  *process.ExecutionSpillDiskReservation
-	fs         fileservice.MutableFileService
-	name       string
-	created    bool
-	rows       int64
-	bytes      uint64
-	bucket     int
-	writeCache spillio.SequentialWriteCache
+	file         *os.File
+	fdToken      *process.ExecutionSpillFDReservation
+	diskToken    *process.ExecutionSpillDiskReservation
+	cleanupToken *spillcleanup.Reservation
+	fs           fileservice.MutableFileService
+	name         string
+	created      bool
+	rows         int64
+	bytes        uint64
+	bucket       int
+	writeCache   spillio.SequentialWriteCache
 }
 
 func (b *spillFileBundle) release() {
@@ -187,37 +188,58 @@ func (b *spillFileBundle) release() {
 			delete(b.entries, bucket)
 			continue
 		}
-		if entry.file != nil {
-			_ = entry.file.Close()
-			entry.file = nil
-		}
-		if entry.fdToken != nil {
-			entry.fdToken.Release()
-			entry.fdToken = nil
-		}
-		if entry.created && entry.fs != nil && entry.name != "" {
-			if err := spillio.RemoveFileWithRetry(entry.fs, entry.name); err != nil {
-				logutil.Errorf("hash build spill cleanup failed: %v", err)
-				continue
-			}
-		}
-		if entry.diskToken != nil {
-			entry.diskToken.Release()
-			entry.diskToken = nil
+		if err := entry.cleanup(); err != nil {
+			logutil.Errorf("hash build spill cleanup failed: %v", err)
+			continue
 		}
 		delete(b.entries, bucket)
 	}
 }
 
-// cleanupPending is checked only after release. A failed remove keeps the
-// entry and its disk reservation until a later release can retry it.
 func (b *spillFileBundle) cleanupPending() bool {
 	if b == nil {
 		return false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return len(b.entries) > 0
+	return len(b.entries) != 0
+}
+
+// Transfer each file separately: a blocked remove cannot stall an entire
+// bundle, and a callback cannot retain a bundle's already-deleted siblings.
+func (b *spillFileBundle) deferCleanup() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for bucket, entry := range b.entries {
+		if entry != nil {
+			entry.cleanupToken.Enqueue(entry.cleanup)
+		}
+		delete(b.entries, bucket)
+	}
+}
+
+func (entry *spillFileEntry) cleanup() error {
+	if entry.file != nil {
+		_ = entry.file.Close()
+		entry.file = nil
+	}
+	if entry.fdToken != nil {
+		entry.fdToken.Release()
+		entry.fdToken = nil
+	}
+	if entry.created {
+		if err := spillio.RemoveFileWithRetry(entry.fs, entry.name); err != nil {
+			return err
+		}
+		entry.created = false
+	}
+	if entry.diskToken != nil {
+		entry.diskToken.Release()
+		entry.diskToken = nil
+	}
+	entry.cleanupToken.Release()
+	entry.cleanupToken = nil
+	return nil
 }
 
 func (b *spillFileBundle) openFile(
@@ -258,7 +280,16 @@ func (b *spillFileBundle) openFile(
 			_, err = file.Seek(0, io.SeekEnd)
 		}
 	} else {
+		entry.cleanupToken, err = spillcleanup.Reserve()
+		if err != nil {
+			token.Release()
+			return nil, err
+		}
 		file, err = fs.CreateFile(ctx, name)
+		if err != nil {
+			entry.cleanupToken.Release()
+			entry.cleanupToken = nil
+		}
 	}
 	if err != nil {
 		if file != nil {
@@ -408,6 +439,7 @@ func (b *spillFileBundle) accountedFiles(
 					e.diskToken = nil
 				}
 			},
+			entry.cleanupToken,
 		)
 		files[bucket] = accounted
 	}
@@ -885,15 +917,7 @@ func (hashBuild *HashBuild) cleanupSpillFiles() {
 	if bundle := hashBuild.ctr.spillBundle; bundle != nil {
 		hashBuild.ctr.spillBundle = nil
 		bundle.release()
-		if bundle.cleanupPending() {
-			spillcleanup.Enqueue(func() error {
-				bundle.release()
-				if bundle.cleanupPending() {
-					return moerr.NewInternalErrorNoCtx("hash build spill cleanup pending")
-				}
-				return nil
-			})
-		}
+		bundle.deferCleanup()
 	}
 }
 

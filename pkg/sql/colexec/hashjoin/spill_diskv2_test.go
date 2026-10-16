@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"io"
 	"os"
 	"testing"
@@ -99,10 +100,14 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	info, err := buildFile.Stat()
 	require.NoError(t, err)
 	require.NoError(t, buildFile.Close())
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	file := message.NewReopenableSpillFile(
 		func(ctx context.Context) (*os.File, error) { return spillfs.OpenFile(ctx, "diskv2_build") },
 		func() error { return spillfs.RemoveFile(context.Background(), "diskv2_build") },
-		100, uint64(info.Size()), nil,
+		100, uint64(info.Size()), nil, metadata,
 	)
 	defer file.Close()
 

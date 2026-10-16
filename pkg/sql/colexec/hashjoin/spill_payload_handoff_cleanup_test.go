@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
@@ -50,6 +51,9 @@ func TestHashJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
 				generation, err := budget.OpenGeneration(1)
 				require.NoError(t, err)
 				t.Cleanup(generation.Close)
+				cleanupToken, err := spillcleanup.Reserve()
+				require.NoError(t, err)
+				t.Cleanup(cleanupToken.Release)
 				fd, err := os.CreateTemp(t.TempDir(), "cached-hashjoin-*")
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = fd.Close() })
@@ -69,7 +73,7 @@ func TestHashJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
 							return errors.New("injected cached operator remove failure")
 						}
 						return os.Remove(path)
-					}, 1, 1, func() { disk.Release(); releases.Add(1) },
+					}, 1, 1, func() { disk.Release(); releases.Add(1) }, cleanupToken,
 				)
 				op := &HashJoin{}
 				t.Cleanup(func() {
@@ -113,6 +117,9 @@ func TestHashJoinTeardownRetriesWhileOperatorRetained(t *testing.T) {
 func TestHashJoinReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
 	fd, err := os.CreateTemp(t.TempDir(), "terminal-hashjoin-*")
 	require.NoError(t, err)
 	name := fd.Name()
@@ -127,7 +134,7 @@ func TestHashJoinReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 				return errors.New("injected terminal removal failure")
 			}
 			return os.Remove(name)
-		}, 1, 1, func() { released.Add(1) },
+		}, 1, 1, func() { released.Add(1) }, cleanupToken,
 	)
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
 	engine.InitFromSpilledFiles([]*message.SpillFile{file})
@@ -163,6 +170,9 @@ func TestHashJoinSpillConstructorFailureRetainsCleanup(t *testing.T) {
 			payloadGeneration, err := payloadBudget.OpenGeneration(1)
 			require.NoError(t, err)
 			defer payloadBudget.Close()
+			cleanupToken, err := spillcleanup.Reserve()
+			require.NoError(t, err)
+			t.Cleanup(cleanupToken.Release)
 			fd, err := os.CreateTemp(t.TempDir(), "spill-handoff-*")
 			require.NoError(t, err)
 			name := fd.Name()
@@ -178,7 +188,7 @@ func TestHashJoinSpillConstructorFailureRetainsCleanup(t *testing.T) {
 					}
 					return os.Remove(name)
 				},
-				1, 1, func() { releases.Add(1) },
+				1, 1, func() { releases.Add(1) }, cleanupToken,
 			)
 			defer func() { _ = file.Close() }()
 			jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
@@ -210,6 +220,9 @@ func TestHashJoinResetRetriesSpillCleanupOnFree(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			proc.BuildPipelineContext(ctx)
 			cancel() // teardown must still remove files after query cancellation
+			cleanupToken, err := spillcleanup.Reserve()
+			require.NoError(t, err)
+			t.Cleanup(cleanupToken.Release)
 			fd, err := os.CreateTemp(t.TempDir(), "spill-reset-*")
 			require.NoError(t, err)
 			name := fd.Name()
@@ -225,7 +238,7 @@ func TestHashJoinResetRetriesSpillCleanupOnFree(t *testing.T) {
 					}
 					return os.Remove(name)
 				},
-				1, 1, func() { releases.Add(1) },
+				1, 1, func() { releases.Add(1) }, cleanupToken,
 			)
 			defer func() { _ = file.Close() }()
 			engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -247,6 +260,9 @@ func TestHashJoinResetRetriesSpillCleanupOnFree(t *testing.T) {
 func TestHashJoinPrepareDoesNotOverwritePendingSpillCleanup(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
 	fd, err := os.CreateTemp(t.TempDir(), "spill-reuse-*")
 	require.NoError(t, err)
 	name := fd.Name()
@@ -262,7 +278,7 @@ func TestHashJoinPrepareDoesNotOverwritePendingSpillCleanup(t *testing.T) {
 			}
 			return os.Remove(name)
 		},
-		1, 1, func() { releases.Add(1) },
+		1, 1, func() { releases.Add(1) }, cleanupToken,
 	)
 	defer func() { _ = file.Close() }()
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -297,6 +313,9 @@ func TestHashJoinProbeScatterFailureRetainsSpillCleanup(t *testing.T) {
 	join.AppendChild(&terminalBudgetAdmissionChild{
 		MockOperator: colexec.NewMockOperator(), err: upstreamErr,
 	})
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
 	fd, err := os.CreateTemp(t.TempDir(), "spill-scatter-*")
 	require.NoError(t, err)
 	name := fd.Name()
@@ -312,7 +331,7 @@ func TestHashJoinProbeScatterFailureRetainsSpillCleanup(t *testing.T) {
 			}
 			return os.Remove(name)
 		},
-		1, 1, func() { releases.Add(1) },
+		1, 1, func() { releases.Add(1) }, cleanupToken,
 	)
 	defer func() { _ = file.Close() }()
 	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())

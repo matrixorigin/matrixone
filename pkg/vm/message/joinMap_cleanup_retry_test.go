@@ -17,6 +17,7 @@ package message
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,10 @@ func TestJoinMapTerminalFreeRetriesAfterFilesystemRecovery(t *testing.T) {
 	var blocked atomic.Bool
 	blocked.Store(true)
 	var released atomic.Int32
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	file := NewReopenableSpillFile(
 		func(context.Context) (*os.File, error) { return os.Open(name) },
 		func() error {
@@ -44,7 +49,7 @@ func TestJoinMapTerminalFreeRetriesAfterFilesystemRecovery(t *testing.T) {
 				return errors.New("injected remove error")
 			}
 			return os.Remove(name)
-		}, 1, 1, func() { released.Add(1) },
+		}, 1, 1, func() { released.Add(1) }, metadata,
 	)
 	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 	jm.IncRef(1)
@@ -67,6 +72,10 @@ func newRetryCleanupSpillFile(t *testing.T, failures int32, releases *atomic.Int
 	require.NoError(t, err)
 	require.NoError(t, fd.Close())
 	calls := new(atomic.Int32)
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	file := NewReopenableSpillFile(
 		func(context.Context) (*os.File, error) { return os.Open(name) },
 		func() error {
@@ -75,7 +84,7 @@ func newRetryCleanupSpillFile(t *testing.T, failures int32, releases *atomic.Int
 			}
 			return os.Remove(name)
 		},
-		1, 1, func() { releases.Add(1) },
+		1, 1, func() { releases.Add(1) }, metadata,
 	)
 	return file, name, calls
 }
@@ -117,7 +126,11 @@ func TestSpillFileCloseRetriesRemovalBeforeReleasingDisk(t *testing.T) {
 
 func TestSpillFileCloseReleasesDiskWhenFileAlreadyGone(t *testing.T) {
 	var released atomic.Int32
-	file := NewReopenableSpillFile(nil, func() error { return os.ErrNotExist }, 1, 1, func() { released.Add(1) })
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
+	file := NewReopenableSpillFile(nil, func() error { return os.ErrNotExist }, 1, 1, func() { released.Add(1) }, metadata)
 	require.NoError(t, file.Close())
 	require.NoError(t, file.Close())
 	require.Equal(t, int32(1), released.Load())
