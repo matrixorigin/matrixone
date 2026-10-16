@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1184,6 +1185,11 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 			newBind := oldBind
 			newBind.ServiceID = "s3"
 			newBind.Version = 2
+			// The allocator's replacement is a live owner in this protocol
+			// fixture, rather than a late route to an undiscovered service.
+			address, lookupErr := c.(*client).lookupLockServiceAddress(context.Background(), "s2")
+			require.NoError(t, lookupErr)
+			c.(*client).cluster.AddCN(metadata.CNService{ServiceID: "s3", LockServiceAddress: address})
 
 			server.RegisterMethodHandler(
 				pb.Method_KeepRemoteLock,
@@ -1885,6 +1891,9 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			newBind := oldBind
 			newBind.ServiceID = "s3"
 			newBind.Version = 2
+			address, lookupErr := c.(*client).lookupLockServiceAddress(context.Background(), "s2")
+			require.NoError(t, lookupErr)
+			c.(*client).cluster.AddCN(metadata.CNService{ServiceID: "s3", LockServiceAddress: address})
 
 			var keepCalls atomic.Int64
 			server.RegisterMethodHandler(
@@ -2059,6 +2068,9 @@ func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing
 			currentBind.ServiceID = "s4"
 			currentBind.Version = newAllocator.version
 			currentBind.AllocatorID = newAllocator.id
+			address, lookupErr := c.(*client).lookupLockServiceAddress(context.Background(), "s2")
+			require.NoError(t, lookupErr)
+			c.(*client).cluster.AddCN(metadata.CNService{ServiceID: "s4", LockServiceAddress: address})
 
 			keepEntered := make(chan struct{})
 			releaseKeep := make(chan struct{})
