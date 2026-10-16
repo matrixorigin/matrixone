@@ -710,14 +710,23 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
 
 	for i := 1; i < mcpu; i++ {
-		vec.Entries[0].Offset = offsets[i-1] + batchSize
-		if vec.Entries[0].Offset >= fileSize {
+		guess := offsets[i-1] + batchSize
+		if guess >= fileSize {
 			break
 		}
+		if !param.Strict {
+			boundary, err := getNonStrictBoundary(param, fs, readPath, offsets[i-1], guess)
+			if err != nil {
+				return nil, err
+			}
+			offsets = append(offsets, boundary)
+			continue
+		}
+		vec.Entries[0].Offset = guess
 		if err = fs.Read(param.Ctx, &vec); err != nil {
 			return nil, err
 		}
-		tailSize, err := getTailSize(param, visibleCols, r)
+		tailSize, err := getTailSizeStrict(param, visibleCols, r)
 		closeErr := r.Close()
 		if err != nil {
 			// Strict scanning retains its existing parser-resynchronization
@@ -873,6 +882,82 @@ func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
 			matched = prefix[matched-1]
 		}
 	}
+}
+
+// getNonStrictBoundary returns the smallest file offset >= guess that ends a
+// CSV record, so every parallel range starts at a record start and stays
+// parseable by CsvReader — even when a quoted field spans multiple lines.
+//
+// The guessed split can land inside a quoted field, where the remaining bytes
+// are indistinguishable from a fresh record start; scanning forward from the
+// guess alone therefore cannot tell an embedded newline from a record end.
+// Instead the scan replays the production CSV parser from start (the previous
+// confirmed boundary, a known record start) and stops at the first record end
+// at or after guess. No legality filtering applies: non-strict loads tolerate
+// malformed rows, so every syntactic record counts.
+//
+// A file that is not even syntactically scannable (e.g. a genuinely
+// unbalanced quote) falls back to the historical next-physical-newline
+// boundary so corrupt files keep their previous behavior.
+func getNonStrictBoundary(param *tree.ExternParam, fs fileservice.ETLFileService, readPath string, start, guess int64) (int64, error) {
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:            start,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	if err := fs.Read(param.Ctx, &vec); err != nil {
+		return 0, err
+	}
+	defer r.Close()
+	need := guess - start
+	csvReader, err := newCSVParserFromReader(param, r)
+	if err != nil {
+		return getNonStrictFallbackBoundary(param, fs, readPath, guess)
+	}
+	var fields []csvparser.Field
+	for {
+		fields, err = csvReader.Read(fields)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return getNonStrictFallbackBoundary(param, fs, readPath, guess)
+		}
+		if csvReader.Pos() >= need {
+			break
+		}
+	}
+	return start + csvReader.Pos(), nil
+}
+
+// getNonStrictFallbackBoundary keeps the historical non-strict split: the end
+// of the physical line containing the guessed offset.
+func getNonStrictFallbackBoundary(param *tree.ExternParam, fs fileservice.ETLFileService, readPath string, guess int64) (int64, error) {
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:            guess,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	if err := fs.Read(param.Ctx, &vec); err != nil {
+		return 0, err
+	}
+	defer r.Close()
+	line, _ := bufio.NewReader(r).ReadString('\n')
+	return guess + int64(len(line)), nil
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
