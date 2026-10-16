@@ -1,0 +1,3 @@
+using platform-matched CGo artifacts (libmo.so) from primary worktree: /workspace/matrixone
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	0.480s
+ok  	github.com/matrixorigin/matrixone/pkg/tests/sqlintegration	52.106s

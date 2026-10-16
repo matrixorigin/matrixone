@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/ttl"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -2812,8 +2813,14 @@ func buildCreateTable(
 
 	// set option
 	seenAutoIDCache := false
+	var ttlOption *tree.TableOptionTTL
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
+		case *tree.TableOptionTTL:
+			if ttlOption != nil {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "TTL specified more than once")
+			}
+			ttlOption = opt
 		case *tree.TableOptionProperties:
 			properties := make([]*plan.Property, len(opt.Preperties))
 			for idx, property := range opt.Preperties {
@@ -3127,6 +3134,37 @@ func buildCreateTable(
 	if stmt.Temporary {
 		catalog.MarkTableDefTemporary(createTable.TableDef)
 	}
+	// Creation assigns physical sequence numbers in column order in
+	// catalog.GenColumnsFromDefs. Bind TTL to those future identities.
+	if ttlOption != nil {
+		for i, col := range createTable.TableDef.Cols {
+			col.Seqnum = uint32(i)
+		}
+	}
+	existingTTL, ttlErr := ttl.Get(createTable.TableDef)
+	if ttlErr != nil {
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "%s", ttlErr)
+	}
+	if (ttlOption != nil || existingTTL != nil) && !ttl.IsUserDatabase(createTable.Database) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "TTL on a system database")
+	}
+	if existingTTL != nil {
+		for i, col := range createTable.TableDef.Cols {
+			col.Seqnum = uint32(i)
+		}
+	}
+	if ttlOption != nil {
+		if existingTTL != nil {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "TTL specified more than once")
+		}
+		if err := applyTTLOption(ctx, createTable.TableDef, ttlOption); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateTTLTable(ctx, createTable.TableDef); err != nil {
+		return nil, err
+	}
+
 	if !isPrepareStmt {
 		asSelectQuery = nil
 	}
@@ -7226,6 +7264,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
+		case *tree.TableOptionTTL:
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+			if err := applyTTLOption(ctx, alterTable.CopyTableDef, opt); err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = nil
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
 				return nil, moerr.NewInvalidInputf(

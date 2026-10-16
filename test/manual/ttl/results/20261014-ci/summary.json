@@ -1,0 +1,36 @@
+{
+  "failed_head": "7dc0daf091ad43ee870470da14d2f1ea478c6745",
+  "failed_run": "https://github.com/matrixorigin/matrixone/actions/runs/38335739502",
+  "local_base": "3e50e1b32d8da61bbbf70c89989fb08b671809de",
+  "local_validation": "TTL error construction and whole-transaction lock-wait retry changes on the original PR base; no claim of a full repository CI pass",
+  "results": {
+    "ttl-unit": {
+      "terminal": "pass",
+      "entries": 48,
+      "top_level": 8,
+      "elapsed_seconds": 0.486,
+      "log_sha256": "f905e1d8acc6f053b6d631230e529f19d986d4644635b6e2870e0d0e9d0d1bef"
+    },
+    "ttl-integration": {
+      "terminal": "pass",
+      "entries": 33,
+      "top_level": 8,
+      "elapsed_seconds": 50.424,
+      "log_sha256": "cddf1ac0922227703310b899b2e7b8cccc9aac00e7f1ab69c172a393687673a1"
+    },
+    "ttl-race": {
+      "terminal": "pass",
+      "entries": 48,
+      "top_level": 8,
+      "elapsed_seconds": 1.808,
+      "log_sha256": "f4d35ec84bf41cc3f3818607fd4b655afa61ef81d23b61d37934fa7e56724548"
+    },
+    "ttl-retry-stress": {
+      "terminal": "pass",
+      "entries": 300,
+      "top_level": 100,
+      "elapsed_seconds": 27.488,
+      "log_sha256": "3dce2f54dffd831eaeafd59aa16e09f3cc797fbb985a5439e38707449389913f"
+    }
+  }
+}

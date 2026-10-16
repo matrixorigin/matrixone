@@ -1,0 +1,24 @@
+--- FAIL: TestTTLTemporalMatrix (5.54s)
+    testing.go:674: MO_UT_SETUP fixture=shared-cluster phase=cluster-start cn_count=1 duration=5.267269964s status=ready
+    testing.go:674: MO_UT_SETUP fixture=shared-cluster phase=task-services-ready cn_count=1 duration=111.796947ms status=ready
+    testing.go:229: MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=5.379172648s status=ready
+    --- FAIL: TestTTLTemporalMatrix/fractional_timestamp_0 (0.02s)
+        ttl_test.go:98:
+                Error Trace:    /workspace/matrixone-ttl-review/pkg/tests/sqlintegration/ttl_test.go:98
+                Error:          Not equal:
+                                expected: 0x1
+                                actual  : 0x2
+                Test:           TestTTLTemporalMatrix/fractional_timestamp_0
+    --- FAIL: TestTTLTemporalMatrix/fractional_timestamp_3 (0.01s)
+        ttl_test.go:98:
+                Error Trace:    /workspace/matrixone-ttl-review/pkg/tests/sqlintegration/ttl_test.go:98
+                Error:          Not equal:
+                                expected: 0x1
+                                actual  : 0x2
+                Test:           TestTTLTemporalMatrix/fractional_timestamp_3
+    fixture_test.go:47: MO_UT_SETUP fixture=sql-integration phase=scenario-body duration=152.378466ms status=error
+    testing.go:343: MO_UT_SETUP fixture=shared-cluster phase=failed-test-seal generation=1 status=ready
+    testing.go:394: MO_UT_SETUP fixture=shared-cluster phase=failed-test-quarantine generation=1 duration=6.947108ms status=ready complete=true
+FAIL
+FAIL    github.com/matrixorigin/matrixone/pkg/tests/sqlintegration  5.629s
+FAIL

@@ -1,0 +1,3 @@
+ok  	github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql	0.184s
+ok  	github.com/matrixorigin/matrixone/pkg/sql/plan	29.022s
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	0.555s

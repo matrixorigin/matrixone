@@ -35,6 +35,7 @@ import (
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/ttl"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -651,7 +652,7 @@ func constructCreateTableSQL(
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
 					comment = " COMMENT='" + kv.Value + "'"
-				} else if kv.Key != catalog.SystemRelAttr_Kind &&
+				} else if kv.Key != ttl.PropertyKey && kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
 					// Collect non-system properties (excluding Comment, Kind, CreateSQL, SchemaExtra)
@@ -663,6 +664,13 @@ func constructCreateTableSQL(
 	}
 
 	createStr += comment
+	ttlPolicy, ttlErr := ttl.Get(tableDef)
+	if ttlErr != nil {
+		return "", nil, ttlErr
+	}
+	if ttlPolicy != nil {
+		createStr += " " + ttl.Clause(ttlPolicy)
+	}
 	if tableDef.AutoIdCache != 0 {
 		createStr += fmt.Sprintf(" AUTO_ID_CACHE=%d", tableDef.AutoIdCache)
 	}

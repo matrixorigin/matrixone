@@ -1,0 +1,17 @@
+{
+  "parents": [
+    "38e336d9b30aa57887d347dc577b80791d2238ad",
+    "e8b3ed7f21c2b1966d74814adaa2bcd96d8c129f"
+  ],
+  "source_sha256": {
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "820be69fce8f506933c08170c19b11d68f8a361fbae9bbe62b510a613717e994",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "51e162193eb01f513b40596e257e297433207c9e94a20eeb1826c7355546a77f"
+  },
+  "log_sha256": {
+    "tests.txt": "9a77b0a4888133f6789a9aa16277e495f565d018be9c48e90fae9ed7535eb932",
+    "integration.txt": "aebe976c2850fd5236f951d73de72ea38547fd816407878a03717ce6cc5a0a15"
+  },
+  "parser_generation_exit": 0,
+  "tests_exit": 0,
+  "integration_exit": 0
+}
