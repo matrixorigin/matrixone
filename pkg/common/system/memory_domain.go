@@ -16,6 +16,7 @@ package system
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // MemoryDomainSource identifies the accounting domain used by a memory sample.
@@ -70,7 +73,7 @@ func (s MemoryDomainSnapshot) IsCgroup() bool {
 // headroom, but new work must stop at memory.high when the operator configured
 // one.
 func (s MemoryDomainSnapshot) AdmissionLimit() uint64 {
-	if s.SoftLimit > 0 && s.SoftLimit < s.Limit {
+	if s.SoftLimit > 0 && (s.Limit == 0 || s.SoftLimit < s.Limit) {
 		return s.SoftLimit
 	}
 	return s.Limit
@@ -367,7 +370,7 @@ func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
 
 	mem, err := hostMemoryStats()
 	if err != nil {
-		return MemoryDomainSnapshot{}, fmt.Errorf("read host memory domain: %w", err)
+		return MemoryDomainSnapshot{}, moerr.NewInternalErrorNoCtxf("read host memory domain: %v", err)
 	}
 	reclaimable := uint64(0)
 	if mem.ActualFree >= mem.Free {
@@ -487,22 +490,29 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		limit, state := readCgroupLimitState(filepath.Join(level.dir, level.limitFile))
 		if state == cgroupLimitUnavailable {
 			return MemoryDomainSnapshot{}, false,
-				fmt.Errorf("read memory limit for %s", level.dir)
+				moerr.NewInternalErrorNoCtxf("read memory limit for %s", level.dir)
 		}
-		if state == cgroupLimitUnlimited || limit == 0 {
+		softLimit, softState := readCgroupLimitState(filepath.Join(level.dir, level.softFile))
+		if softState != cgroupLimitFinite || softLimit == 0 {
+			softLimit = 0
+		}
+		hasHardLimit := state == cgroupLimitFinite && limit > 0
+		if !hasHardLimit && softLimit == 0 {
 			continue
 		}
 		usage, ok := readCgroupUint(filepath.Join(level.dir, level.usageFile))
 		if !ok {
 			return MemoryDomainSnapshot{}, false,
-				fmt.Errorf("read memory usage for %s", level.dir)
+				moerr.NewInternalErrorNoCtxf("read memory usage for %s", level.dir)
 		}
 		reclaimable, kernel, nonGo := readCgroupAccounting(filepath.Join(level.dir, level.statFile))
-		softLimit, _ := readCgroupLimit(filepath.Join(level.dir, level.softFile))
-		if softLimit == 0 || softLimit > limit {
+		if hasHardLimit && softLimit >= limit {
 			softLimit = 0
 		}
-		admissionLimit := limit
+		admissionLimit := uint64(math.MaxUint64)
+		if hasHardLimit {
+			admissionLimit = limit
+		}
 		if softLimit > 0 && softLimit < admissionLimit {
 			admissionLimit = softLimit
 		}
@@ -511,8 +521,12 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 			headroom = admissionLimit - usage
 		}
 		if !found || headroom < selectedHeadroom {
+			snapshotLimit := uint64(math.MaxUint64)
+			if hasHardLimit {
+				snapshotLimit = limit
+			}
 			selected = MemoryDomainSnapshot{
-				Used: usage, Limit: limit, SoftLimit: softLimit, Reclaimable: reclaimable,
+				Used: usage, Limit: snapshotLimit, SoftLimit: softLimit, Reclaimable: reclaimable,
 				Kernel: kernel, NonGo: nonGo, Source: level.source, Measured: true,
 				ObservedAt: time.Now(),
 			}

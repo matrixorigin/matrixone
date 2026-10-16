@@ -16,6 +16,7 @@ package system
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -745,4 +746,34 @@ func TestReadCgroupMemoryDomainRetainsBindingLimitOnReadFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, measured)
 	require.Equal(t, uint64(200), snapshot.Limit)
+}
+
+func TestReadCgroupMemoryDomainKeepsSoftOnlyLimit(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "max")
+	write(parent, "memory.high", "100")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "max")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(math.MaxUint64), snapshot.Limit)
+	require.Equal(t, uint64(100), snapshot.SoftLimit)
+	require.Equal(t, uint64(100), snapshot.AdmissionLimit())
+	require.Equal(t, uint64(5), snapshot.AdmissionReclaimableHeadroom())
 }
