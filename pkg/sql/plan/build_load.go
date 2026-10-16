@@ -1110,18 +1110,8 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
-		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
-		if !ok {
-			param.Tail.Assignments[i].Expr = nil
-			continue
-		}
-		if len(expr.Exprs) != 2 {
-			param.Tail.Assignments[i].Expr = nil
-			continue
-		}
-
-		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || !strings.EqualFold(expr2.ColName(), "nullif") {
+		expr, collated := loadNullIfFunction(param.Tail.Assignments[i].Expr)
+		if expr == nil {
 			param.Tail.Assignments[i].Expr = nil
 			continue
 		}
@@ -1133,6 +1123,13 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 				continue
 			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
+		}
+
+		// NullMap stores raw field sentinels, not expression metadata. Row
+		// variables above have a projection owner that binds the full wrapper;
+		// column mappings cannot safely discard COLLATE's type validation.
+		if collated {
+			return moerr.NewNotSupported(ctx.GetContext(), "COLLATE on column NULLIF in LOAD/external SET requires an expression projection")
 		}
 
 		expr4, ok := expr.Exprs[1].(*tree.NumVal)
