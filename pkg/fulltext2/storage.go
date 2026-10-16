@@ -584,7 +584,7 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 	if after >= 0 {
 		where += fmt.Sprintf(" AND %s > %d", catalog.FullText2Index_TblCol_Storage_Chunk_Id, after)
 	}
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s",
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		where)
 	var sqlStart time.Time
@@ -613,13 +613,13 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 	// the SUM passes. Conservative (may reject a borderline load that would just fit); a
 	// clear "compact/add memory" error beats a node-killing OOM.
 	const tailLoadPeakFactor = 3
-	need *= tailLoadPeakFactor
-	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
-	if need > avail {
+	avail := int64(system.MemoryTotal()/10*8) - int64(system.MemoryGolang())
+	// Compare before multiplying: an overflowing estimate must never admit a load.
+	if need < 0 || (need > 0 && (avail <= 0 || need > avail/tailLoadPeakFactor)) {
 		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
-			"fulltext2 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
+			"fulltext2 CDC tail for %s.%s has ~%d MB of stored bytes (up to %dx while loading) but only ~%d MB is free "+
 				"(MemoryTotal*0.8 - Go heap); compact it (ALTER ... REINDEX) or increase CN memory",
-			cfg.DbName, cfg.IndexTable, need>>20, avail>>20))
+			cfg.DbName, cfg.IndexTable, need>>20, tailLoadPeakFactor, avail>>20))
 	}
 	return nil
 }
@@ -979,7 +979,7 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the
 // dead-doc estimate (compared to the live source row count).
 func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(%s), 0) FROM %s",
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	return scanInt64(sqlproc, sql)
 }

@@ -156,7 +156,16 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false)
+		allAsyncSources := false
+		if len(tblInfo.tableDefs) > 1 && len(tableDef.Indexes) > 0 {
+			for j, other := range tblInfo.tableDefs {
+				if i != j && other.TblId == tableDef.TblId && len(tblInfo.updateKeys[j]) > 0 {
+					allAsyncSources = true
+					break
+				}
+			}
+		}
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false, allAsyncSources)
 		if err != nil {
 			return nil, err
 		}

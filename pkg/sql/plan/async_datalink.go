@@ -91,6 +91,31 @@ func asyncDatalinkUpdateColumns(dmlCtx *DMLContext, target int, finalColumns map
 	return assigned
 }
 
+// Legacy UPDATE rewrites ON UPDATE values in their original slots; explicit
+// and generated assignments have separate entries in assigned.
+func legacyAsyncDatalinkUpdateColumns(table *plan.TableDef, assigned map[string]int, all bool) ([]string, error) {
+	columns, err := asyncDatalinkColumns(table)
+	if err != nil || all || len(columns) == 0 {
+		return columns, err
+	}
+	selected := columns[:0]
+	for _, name := range columns {
+		_, updated := assigned[name]
+		if !updated {
+			for _, col := range table.Cols {
+				if col.Name == name {
+					updated = col.OnUpdate != nil && col.OnUpdate.Expr != nil
+					break
+				}
+			}
+		}
+		if updated {
+			selected = append(selected, name)
+		}
+	}
+	return selected, nil
+}
+
 // appendAsyncDatalinkAdmission checks already computed final values. The scalar
 // owns eligibility masking before stage resolution; a boolean OR is insufficient.
 func appendAsyncDatalinkAdmission(builder *QueryBuilder, bindCtx *BindContext, table *TableDef, columns []string, nodeID, inputTag int32, lookup func(string) (int32, bool), eligible *plan.Expr) (int32, error) {

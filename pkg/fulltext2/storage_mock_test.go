@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,10 @@ func TestScanHelpers(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "SUM(") {
+			require.Contains(t, sql, " AS SIGNED)")
+		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 13)}}, nil
 	})
 
@@ -202,6 +206,17 @@ func TestLoadBudgetGates(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<50)}}, nil
 	})
 	require.Error(t, checkTailLoadBudget(sp, cfg))
+	for _, total := range []int64{0, -1, math.MaxInt64 / 2, math.MaxInt64} {
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			require.Contains(t, sql, " AS SIGNED)")
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, total)}}, nil
+		})
+		if total == 0 {
+			require.NoError(t, checkTailLoadBudget(sp, cfg))
+		} else {
+			require.Error(t, checkTailLoadBudget(sp, cfg), "invalid or overflowing byte total %d", total)
+		}
+	}
 }
 
 func TestLoadAllBasesEmpty(t *testing.T) {

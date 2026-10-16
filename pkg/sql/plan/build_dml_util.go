@@ -243,7 +243,7 @@ func buildInsertPlans(
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
+func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows, allAsyncSources bool) error {
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
@@ -260,6 +260,35 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
+	}
+	// Legacy DML is appended after column remapping. Admit final target values
+	// before the shared delete/insert sink, preserving its positional row layout.
+	asyncColumns, err := legacyAsyncDatalinkUpdateColumns(updatePlanCtx.tableDef, updatePlanCtx.updateColPosMap, allAsyncSources)
+	if err != nil {
+		return err
+	}
+	if len(asyncColumns) > 0 {
+		var projection []*Expr
+		if builder.sinkColRef != nil {
+			projection = getProjectionByLastNode(builder, lastNodeId)
+		}
+		lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, updatePlanCtx.tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
+			if pos, ok := updatePlanCtx.updateColPosMap[name]; ok {
+				return int32(pos), true
+			}
+			for i, col := range updatePlanCtx.tableDef.Cols {
+				if col.Name == name {
+					return int32(i), true
+				}
+			}
+			return 0, false
+		}, nil)
+		if err != nil {
+			return err
+		}
+		if builder.sinkColRef != nil {
+			builder.qry.Nodes[lastNodeId].ProjectList = projection
+		}
 	}
 	if updatePlanCtx.preserveUpdateSourceProjection {
 		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
@@ -338,21 +367,6 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		builder.preservePreInsertProjection[lastNodeId] = struct{}{}
 	}
 
-	asyncColumns, err := asyncDatalinkColumns(updatePlanCtx.tableDef)
-	if err != nil {
-		return err
-	}
-	lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, updatePlanCtx.tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
-		for i, col := range updatePlanCtx.tableDef.Cols {
-			if col.Name == name {
-				return int32(i), true
-			}
-		}
-		return 0, false
-	}, nil)
-	if err != nil {
-		return err
-	}
 	//append sink node
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	if updatePlanCtx.preserveUpdateSourceProjection {
@@ -1220,7 +1234,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.isFkRecursionCall = true
 					upPlanCtx.updatePkCol = false
 					upPlanCtx.preserveUpdateSourceProjection = true
-					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
 						return err
@@ -1640,7 +1654,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
 
-						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
@@ -1689,7 +1703,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
 
-								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
 								putDmlPlanCtx(upPlanCtx)
 								if err != nil {
 									return err

@@ -109,6 +109,64 @@ func TestAsyncDatalinkUpdateColumns(t *testing.T) {
 	require.Empty(t, asyncDatalinkUpdateColumns(ctx, 1, nil))
 }
 
+func TestAsyncDatalinkReplaceChildAdmission(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	child := ctx.tables["replace_fk_sc"]
+	ensureName2ColIndexForReplace(child)
+	pathType := planpb.Type{Id: int32(types.T_datalink)}
+	automatic, err := forceCastExpr(ctx.GetContext(), makePlan2StringConstExprWithType("stage://owned/content.txt"), pathType)
+	require.NoError(t, err)
+	rowID := child.Cols[len(child.Cols)-1]
+	child.Cols = append(child.Cols[:len(child.Cols)-1], &planpb.ColDef{Name: "path", ColId: 3, Typ: pathType, OnUpdate: &planpb.OnUpdate{Expr: automatic}})
+	child.Cols = append(child.Cols, rowID)
+	child.Name2ColIndex["path"] = 2
+	child.Name2ColIndex[rowID.Name] = 3
+	child.Indexes = []*planpb.IndexDef{{IndexAlgo: "fulltext2", IndexName: "ft", Parts: []string{"path"}}}
+	p, err := runOneStmt(mock, t, "replace into replace_fk_sp values(1,'changed')")
+	require.NoError(t, err)
+	checks := 0
+	for _, node := range p.GetQuery().Nodes {
+		for _, filter := range node.FilterList {
+			if f := filter.GetF(); f != nil && f.Func.GetObjName() == "_check_async_datalink_source" {
+				checks++
+				childNode := p.GetQuery().Nodes[node.Children[0]]
+				require.LessOrEqual(t, len(node.ProjectList), len(childNode.ProjectList), "pre-remap admission must not duplicate the output projection")
+			}
+		}
+	}
+	require.Equal(t, 1, checks)
+}
+
+func TestLegacyAsyncDatalinkUpdateColumns(t *testing.T) {
+	table := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "path", Typ: planpb.Type{Id: int32(types.T_datalink)}},
+		{Name: "derived", Typ: planpb.Type{Id: int32(types.T_datalink)}},
+	}, Indexes: []*planpb.IndexDef{{IndexAlgo: "fulltext2", Parts: []string{"path", "derived"}}}}
+	for _, tc := range []struct {
+		name           string
+		assigned       map[string]int
+		all, automatic bool
+		want           []string
+	}{
+		{"carried", map[string]int{"status": 3}, false, false, nil},
+		{"explicit source", map[string]int{"path": 3}, false, false, []string{"path"}},
+		{"generated source", map[string]int{"derived": 3}, false, false, []string{"derived"}},
+		{"automatic source", nil, false, true, []string{"path"}},
+		{"repeated writable target", nil, true, false, []string{"path", "derived"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table.Cols[0].OnUpdate = nil
+			if tc.automatic {
+				table.Cols[0].OnUpdate = &planpb.OnUpdate{Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_datalink)}}}
+			}
+			got, err := legacyAsyncDatalinkUpdateColumns(table, tc.assigned, tc.all)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, append([]string(nil), got...))
+		})
+	}
+}
+
 func TestAsyncDatalinkColumnsAndFinalBinding(t *testing.T) {
 	table := &TableDef{Name: "docs", Cols: []*planpb.ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "path", Typ: planpb.Type{Id: int32(types.T_datalink)}}}, Indexes: []*planpb.IndexDef{
 		{IndexAlgo: "fulltext2", Parts: []string{"path"}},

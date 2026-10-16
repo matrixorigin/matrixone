@@ -147,6 +147,27 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	stable := "stage://async_source_stable/content.txt"
 	exec("create table changed_sources(id bigint primary key,p1 datalink,p2 datalink,status int,fulltext2 changed_ft(p1,p2))")
 	exec("insert into changed_sources values(1," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0),(2," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0)")
+	exec("create table unchanged_peer(id bigint primary key,status int)")
+	exec("insert into unchanged_peer values(1,0)")
+	exec("alter stage async_source_remote set enable=false")
+	exec("update changed_sources d join unchanged_peer p on d.id=p.id set d.status=2,p.status=2 where d.id=1")
+	var carriedSource string
+	var docStatus, peerStatus int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select d.p2,d.status,p.status from changed_sources d join unchanged_peer p on d.id=p.id where d.id=1").Scan(&carriedSource, &docStatus, &peerStatus))
+	require.Equal(t, remote, carriedSource)
+	require.Equal(t, 2, docStatus)
+	require.Equal(t, 2, peerStatus, "unchanged disabled-stage sources do not prevent unrelated updates")
+	// An admitted source assignment must also preserve the complete legacy row.
+	exec("update changed_sources d join unchanged_peer p on d.id=p.id set d.p1=" + sqlquote.String(stable) + ",d.status=3,p.status=3 where d.id=1")
+	var assignedSource string
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select d.p1,d.p2,d.status,p.status from changed_sources d join unchanged_peer p on d.id=p.id where d.id=1").Scan(&assignedSource, &carriedSource, &docStatus, &peerStatus))
+	require.Equal(t, stable, assignedSource)
+	require.Equal(t, remote, carriedSource)
+	require.Equal(t, 3, docStatus)
+	require.Equal(t, 3, peerStatus)
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from changed_sources").Scan(&count))
+	require.Equal(t, 2, count)
+	exec("alter stage async_source_remote set enable=true")
 	var changedStorage string
 	require.NoError(t, conn.QueryRowContext(t.Context(), "select index_table_name from mo_catalog.mo_indexes where name='changed_ft' and algo_table_type='ftv2_index' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='changed_sources') limit 1").Scan(&changedStorage))
 	changedTailSQL := "select coalesce(max(chunk_id),-1) from " + sqlquote.QualifiedIdent(database, changedStorage) + " where index_id='cdc_tail' and tag=1"
