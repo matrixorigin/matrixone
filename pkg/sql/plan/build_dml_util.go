@@ -1058,7 +1058,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
 	// we have build SK using UK code path. So we might see UK in function signature even thought it could be for
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
-	canTruncate := delCtx.isUnrestrictedDelete && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
+	// Temporary DELETE is transactional row DML. A physical replacement would
+	// enter the persistent-table lifecycle using its private physical name.
+	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
 
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
@@ -7061,7 +7063,9 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	canTruncate := delCtx.isUnrestrictedDelete && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
+	// Keep temporary index maintenance on the same row-delete path as its base
+	// table; skipping it would leave stale index entries after DELETE.
+	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
 
 	accountId, err := ctx.GetAccountId()
 	if err != nil {

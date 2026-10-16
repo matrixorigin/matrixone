@@ -22,10 +22,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMaterializedViewRefreshDeleteRetainsRelation(t *testing.T) {
+	for _, kind := range []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedViewRel} {
+		t.Run(kind, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(true, proc)
+			table := ctx.tables["nation"]
+			table.TableType = kind
+			ctx.SetContext(defines.WithMaterializedViewWrite(
+				defines.AttachAccountId(proc.Ctx, 0), 0, table.TblId, []byte("refresh")))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "delete from tpch.nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			// Unrestricted DELETE reaches the legacy planner, which must keep
+			// the MV's physical identity for the refresh publication transaction.
+			p, err := buildDelete(stmt.(*tree.Delete), ctx, false)
+			require.NoError(t, err)
+			found := false
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == pb.Node_DELETE && node.DeleteCtx.TableDef.TblId == table.TblId {
+					found = true
+					require.Equal(t, kind == catalog.SystemOrdinaryRel, node.DeleteCtx.CanTruncate)
+				}
+			}
+			require.True(t, found, "expected an origin-table DELETE node")
+		})
+	}
+}
 
 func TestMaterializedViewSelectContract(t *testing.T) {
 	ctx := NewMockCompilerContext2(gomock.NewController(t))
@@ -94,8 +123,8 @@ func TestMaterializedViewCreatePlan(t *testing.T) {
 			base := NewMockCompilerContext(false, proc)
 			base.SetContext(proc.Ctx)
 			ctx := &materializedViewPlanContext{base, true}
-			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion115))
-			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion115))
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion116))
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion116))
 			query := "create materialized view stored refresh manual as select n_regionkey,sum(n_nationkey) as s,count(*) as n from nation group by n_regionkey"
 			switch scenario {
 			case "star":
@@ -103,9 +132,9 @@ func TestMaterializedViewCreatePlan(t *testing.T) {
 			case "gate disabled":
 				ctx.enabled = false
 			case "old protocol":
-				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion114))
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion115))
 			case "old authoring floor":
-				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion114))
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion115))
 			case "temporary source":
 				base.tables["nation"].IsTemporary = true
 			case "view source":

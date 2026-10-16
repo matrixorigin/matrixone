@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"bytes"
 	"math"
 	"testing"
 )
@@ -28,46 +29,51 @@ func testAllocator(
 	t.Run("allocate", func(t *testing.T) {
 		allocator := newAllocator()
 		for i := uint64(1); i < 8*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
-			// allocate
-			slice, dec, err := allocator.Allocate(i, NoHints)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// len
-			if len(slice) != int(i) {
-				t.Fatal()
-			}
-			// read
-			for _, i := range slice {
-				if i != 0 {
-					t.Fatal("not zeroed")
+			func() {
+				slice, dec, err := allocator.Allocate(i, NoHints)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			// write
-			for i := range slice {
-				slice[i] = byte(i)
-			}
-			// read
-			for i := range slice {
-				if slice[i] != byte(i) {
-					t.Fatal()
+				defer dec.Deallocate()
+				if len(slice) != int(i) {
+					t.Fatalf("allocation length: got %d, want %d", len(slice), i)
 				}
-			}
-			// slice
-			slice = slice[:len(slice)/2]
-			for i := range slice {
-				if slice[i] != byte(i) {
-					t.Fatal()
+				testAllocationContents(t, slice)
+				var freeze Freezer
+				if dec.As(&freeze) {
+					freeze.Freeze()
 				}
-			}
-			// free
-			var freeze Freezer
-			if dec.As(&freeze) {
-				freeze.Freeze()
-			}
-			// deallocate
-			dec.Deallocate()
+			}()
 		}
 	})
 
+}
+
+// Check every byte at the original allocation sizes without adding one race
+// detector call per byte. The pattern still matches byte(offset), including
+// the shortened slice used by ManagedAllocator's deallocation contract.
+func testAllocationContents(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var pattern [4096]byte
+	for offset := 0; offset < len(data); offset += len(pattern) {
+		n := min(len(pattern), len(data)-offset)
+		if !bytes.Equal(data[offset:offset+n], pattern[:n]) {
+			t.Fatalf("allocation is not zeroed at offset %d", offset)
+		}
+	}
+	for i := range pattern {
+		pattern[i] = byte(i)
+	}
+	for offset := 0; offset < len(data); offset += len(pattern) {
+		copy(data[offset:], pattern[:])
+	}
+	for _, view := range [][]byte{data, data[:len(data)/2]} {
+		for offset := 0; offset < len(view); offset += len(pattern) {
+			n := min(len(pattern), len(view)-offset)
+			if !bytes.Equal(view[offset:offset+n], pattern[:n]) {
+				t.Fatalf("allocation contents differ at offset %d (slice length %d)", offset, len(view))
+			}
+		}
+	}
+	return data[:len(data)/2]
 }

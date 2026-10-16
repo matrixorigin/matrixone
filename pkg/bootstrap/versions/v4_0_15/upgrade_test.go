@@ -27,7 +27,7 @@ import (
 
 func TestMaterializedViewUpgrade(t *testing.T) {
 	require.Equal(t, "4.0.15", Handler.Metadata().Version)
-	require.Equal(t, defines.MORPCVersion115, Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion116, Handler.Metadata().RequiredProtocolVersion)
 	for _, failure := range []bool{false, true} {
 		calls := 0
 		injected := errors.New("catalog creation failed")

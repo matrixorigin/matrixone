@@ -75,7 +75,7 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		require.NoError(t, state.CloseIfActive())
 	})
 	state.Run(t, func() (Cluster, error) {
-		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount), adjustCDCGenerationContractService)
+		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount))
 	}, func(cluster Cluster) {
 		for i := 0; i < cnCount; i++ {
 			cn, err := cluster.GetCNService(i)
@@ -84,16 +84,6 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		}
 		fn(cluster)
 	})
-}
-
-// The test covers task transitions, not the production polling cadence.
-// Configure before CN construction; leave heartbeat and capacity unchanged.
-func adjustCDCGenerationContractService(service ServiceOperator) {
-	if service.ServiceType() == metadata.ServiceType_CN {
-		service.Adjust(func(config *ServiceConfig) {
-			config.CN.TaskRunner.FetchInterval.Duration = time.Second
-		})
-	}
 }
 
 func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
@@ -110,7 +100,7 @@ func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
 			if kind == metadata.ServiceType_CN {
 				expected.FetchInterval.Duration = time.Second
 			}
-			adjustCDCGenerationContractService(service)
+			adjustTestingClusterTiming(service)
 			require.Equal(t, expected, service.GetServiceConfig().CN.TaskRunner)
 		})
 	}

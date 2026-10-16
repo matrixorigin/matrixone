@@ -103,4 +103,26 @@ select * from t3 order by col1;
 null  ¦  world  𝄀
 null  ¦  world  𝄀
 Hello  ¦  WORLD
+delete from t3;
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' set col2='CONSTVAL';
+not supported: LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)
+select count(*) as rejected_rows from t3;
+➤ rejected_rows[-5,64,0]  𝄀
+0
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' (@v,col2) set col1=upper(@v);
+not supported: LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)
+select count(*) as rejected_rows from t3;
+➤ rejected_rows[-5,64,0]  𝄀
+0
+load data inline format='csv', data='x,fileval' into table t3 fields terminated by ',' set col1=nullif(col1,'x'),col2=concat(col2,'!');
+not supported: LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)
+select count(*) as rejected_rows from t3;
+➤ rejected_rows[-5,64,0]  𝄀
+0
+load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello');
+select * from t3 order by col1;
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+null  ¦  world  𝄀
+HELLO  ¦  world  𝄀
+Hello  ¦  WORLD
 drop table t3;

@@ -597,3 +597,70 @@ test closure; unrelated issue roots are left to full CI. Normal/race timing is
 functional evidence, not a performance comparison to the slow CI runner.
 No new blockers were found in final-scope self-review. The new remote CI result
 and the existing external design/re-review gates remain separate.
+
+### 2026-10-16: preserve calendar protocol and temporary DELETE on main merge
+
+Head `065e4d77dd0cbccfbd686a3bb362721ba82a0f09` completed ALL CI
+[38760090521](https://github.com/matrixorigin/matrixone/actions/runs/38760090521)
+successfully, including ordinary UT, coverage UT, SCA, shared build, both
+multi-CN BVT groups, coverage aggregation and CI Required. Exact-head
+Connector/J Pool Reset E2E `38760095747` and Iceberg Connector E2E
+`38760095799` also completed successfully. Optional jobs explicitly skipped by
+their workflows are not counted as passing tests.
+
+Main then advanced to `a85d90efc996dfa2621211ec592be4721fd3cb61`.
+The two conflicted source files cover independent contracts:
+
+- R3 compatibility: preserve upstream calendar DAY/SECOND normalization at
+  protocol 115; move MV authoring, scan, registration and 4.0.15 upgrade
+  admission together to 116. Update the existing typed boundary cases so 115
+  rejects MV operations and 116 admits them, while ordinary scans still admit
+  at 115. Calendar-expression gates remain 115. No persisted definition format,
+  task executor ID, catalog version or generated parser/protobuf changes.
+- R2 DELETE planning: both base-table and index-maintenance truncate eligibility
+  require an unrestricted DELETE, a persistent target and a non-MV target.
+  Keeping only either side of the conflict would respectively lose temporary
+  table rollback safety or MV identity preservation during atomic refresh.
+  Keep both predicates. A lightweight planner regression asserts the typed
+  origin DELETE node retains the MV relation, with ordinary-table truncate as
+  the nearest control; reuse upstream's temporary DELETE regression. No new
+  cluster, rows, timers, retries, hooks or stateful mechanism is introduced.
+
+Automatic merges retain upstream metadata SHOW authorization, LAST_INSERT_ID
+retry baselines and final ALTER/FK names alongside the existing MV guards.
+Upstream's added cross-CN SYNCCOMMIT fences in the previously failing
+`TestIssue29400CopyAlterRetainedGatePromotionFastFails` are retained; its FK
+publication waiter keeps the explicit child cancellation fix under the existing
+outer deadline. Because that fixture changed, its earlier normal/race results
+are historical evidence and the exact root is selected again.
+
+This is conflict-resolution maintenance of the existing contracts, with no new
+feature/design scope. External RFC revision 3 review and the existing Request
+changes remain separate release/merge gates. New-head remote CI is required;
+the green 065e4d77 run does not establish success after this merge.
+
+Validation on the merged source (Go 1.27.1, linux/amd64, repository CGo wrapper,
+`matrixone_test`, `-short`, `-count=1`):
+
+- MV/calendar/temporary-DELETE focused tests: plan 0.160 s, compile 0.102 s,
+  frontend 0.078 s and v4_0_15 0.048 s, all PASS. The new MV origin-DELETE
+  identity oracle and ordinary-table control are selected and PASS.
+- Full owning suites: frontend 17.079 s, compile 10.092 s, plan 26.073 s and
+  v4_0_15 0.073 s, all PASS.
+- Exact formerly failing concurrency root: normal PASS 10.460 s, race PASS
+  38.540 s. All 17 subcases PASS in each mode; zero failures/skips and no race
+  report. B=30 s yields N=clamp(floor(30/38.540),1,100)=1, supplied by the
+  measured race run. Build time is excluded. Test-local synchronization needs
+  this exact root; unrelated issue roots remain the full-CI responsibility.
+- Six-package vet PASS and configured incremental lint 2.14.0 reports 0 issues.
+  Formatting, whitespace and unresolved-index checks PASS. Main's Makefile
+  changes affect UT scheduling only; CGo/thirdparty sources, build flags and
+  native artifacts remain unchanged. No benchmark is needed for the constant
+  protocol allocation and constant-cost planner predicate conjunction.
+
+Logs: `/workspace/mv-ci/main-a85-{focused,owning,vet,lint}.log` and
+`main-a85-{root,race}.jsonl`. Both test processes terminated successfully;
+there is no surviving native fixture. Source/self-review found no new blocker
+in this maintenance scope. New-head multi-CN SQL BVT and full CI remain remote
+checks, separately from the green parent-head evidence and external design
+approval.

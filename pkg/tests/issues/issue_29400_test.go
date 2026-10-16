@@ -93,6 +93,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					parent, child := fmt.Sprintf("parent_%t", dropped), fmt.Sprintf("child_%t", dropped)
 					execSQLRequire(t, ctx, db0, "create table "+database+"."+parent+"(id int primary key, v int)")
 					oldID := idOf(parent)
+					// CN1 must resolve the parent created on CN0 before joining the gate.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 					holder, err := db0.BeginTx(ctx, nil)
 					require.NoError(t, err)
 					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
@@ -155,6 +157,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 						require.Zero(t, n)
 					} else {
 						require.NoError(t, err)
+						// The child CREATE committed on CN1; later CN0 statements consume it.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 						require.NotEqual(t, oldID, idOf(parent))
 						execSQLRequire(t, ctx, db0, "insert into "+database+"."+parent+" values(1,7)")
 						execSQLRequire(t, ctx, db0, "insert into "+database+"."+child+" values(1,1)")
@@ -169,6 +173,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					execSQLRequire(t, ctx, db0, "create table "+database+"."+table+"(id int primary key,v int)")
 					execSQLRequire(t, ctx, db0, "insert into "+database+"."+table+" values(1,7)")
 					oldID := idOf(table)
+					// Establish CN0 -> CN1 visibility before the negative preflight.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 					rt := moruntime.ServiceRuntime(cn1.GetServiceConfig().CN.UUID)
 					original, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 					require.True(t, ok)
@@ -218,6 +224,9 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					var n int
 					if protection == "snapshot" {
 						require.NoError(t, err)
+						// TRUNCATE committed on CN1. CN0 has no cross-session freshness
+						// guarantee until it consumes that commit through the existing fence.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 						require.NotEqual(t, oldID, idOf(table))
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table).Scan(&n))
 						require.Zero(t, n)
