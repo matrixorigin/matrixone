@@ -89,7 +89,7 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 	t.Run("exact native scalar result", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		var started, released atomic.Int32
+		var started atomic.Int32
 		request := nativeIntegrationRequest(t, "go-native-data", func(ctx context.Context, input *Input) (err error) {
 			started.Add(1)
 			values := []int64{7, -9, 42}
@@ -104,7 +104,6 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 			}
 			return lease.Publish(ctx, uint32(len(values)), []Vector{{Data: data}})
 		})
-		request.Release = func(context.Context) error { released.Add(1); return nil }
 		query, err := runtime.Prepare(ctx, request)
 		if err != nil {
 			t.Fatal(err)
@@ -146,8 +145,8 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 			stats.MOInputUnits == 0 || stats.MOInputRetainedBytes != 0 || stats.ResultRetainedBytes != 0 {
 			t.Fatalf("terminal native execution statistics: ready=%v stats=%+v", ready, stats)
 		}
-		if started.Load() != 1 || released.Load() != 1 {
-			t.Fatalf("producer/release counts: %d/%d", started.Load(), released.Load())
+		if started.Load() != 1 {
+			t.Fatalf("producer count: %d", started.Load())
 		}
 	})
 
@@ -218,16 +217,6 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		})
-		var released atomic.Int32
-		request.Release = func(context.Context) error {
-			select {
-			case <-exited:
-				released.Add(1)
-				return nil
-			default:
-				return errors.New("native ownership released before producer joined")
-			}
-		}
 		query, err := runtime.Prepare(ctx, request)
 		if err != nil {
 			t.Fatal(err)
@@ -252,8 +241,10 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 			t.Fatal("native cancellation did not join")
 		}
 		closeNativeQuery(t, query)
-		if released.Load() != 1 {
-			t.Fatalf("release count: %d", released.Load())
+		select {
+		case <-exited:
+		default:
+			t.Fatal("native cancellation returned before producer joined")
 		}
 	})
 }

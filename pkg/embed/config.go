@@ -186,10 +186,11 @@ func parseConfigFromFile(
 }
 
 func parseFromString(data string, cfg any) error {
-	if _, err := toml.Decode(data, cfg); err != nil {
+	metadata, err := toml.Decode(data, cfg)
+	if err != nil {
 		return err
 	}
-	return nil
+	return cnservice.ValidateSiriusConfigKeys(metadata)
 }
 
 func (c *ServiceConfig) validate() error {

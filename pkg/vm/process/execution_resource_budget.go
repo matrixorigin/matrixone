@@ -1294,9 +1294,10 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
-// ExecutionTransientMemoryReservation owns a bounded Go-heap scratch charge.
+// ExecutionTransientMemoryReservation owns a bounded non-MPool memory charge,
+// including temporary Go buffers and explicitly retained spill page cache.
 // Physical MPool allocations continue to use AllocationAccount as their sole
-// owner; this token is only for temporary buffers that cannot carry one.
+// owner; this token is only for temporary memory that cannot carry one.
 type ExecutionTransientMemoryReservation struct {
 	budget     *ExecutionResourceBudget
 	generation *ExecutionResourceGeneration

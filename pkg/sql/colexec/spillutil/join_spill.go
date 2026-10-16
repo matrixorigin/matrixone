@@ -1927,6 +1927,7 @@ func shouldReSpillBeforeRetain(
 	bat *batch.Batch,
 	threshold int64,
 	participant *process.ExecutionMemoryGrowthParticipant,
+	groupingSeen *bool,
 ) (spill bool, adaptive bool, err error) {
 	if builder == nil {
 		return false, false, nil
@@ -1959,9 +1960,10 @@ func shouldReSpillBeforeRetain(
 	if err != nil {
 		return false, false, err
 	}
-	projectedBuild, err := builder.EstimatedResidentBuildBytes(
+	projectedBuild, err := builder.EstimatedResidentBuildBytesForInput(
 		uint64(predictedBytes),
 		predictedRows,
+		bat, groupingSeen,
 	)
 	if err != nil {
 		return false, false, err
@@ -2038,6 +2040,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		return nil, BucketSkip, err
 	}
 	var memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
+	var groupingSeen bool // local to this bucket, including its pending input
 	if e.cfg.AdaptiveMemory && bucket.Depth < SpillMaxPass {
 		var registerErr error
 		memoryGrowthParticipant, registerErr = e.cfg.Budget.RegisterMemoryGrowthParticipant()
@@ -2110,7 +2113,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if bucket.Depth < SpillMaxPass {
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
-					builder, bat, e.cfg.SpillThreshold, memoryGrowthParticipant,
+					builder, bat, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen,
 				)
 			if decisionErr != nil {
 				return nil, BucketSkip, decisionErr
@@ -2150,7 +2153,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if bucket.Depth < SpillMaxPass {
 			shouldReSpill, adaptiveReSpill, decisionErr :=
 				shouldReSpillBeforeRetain(
-					builder, nil, e.cfg.SpillThreshold, memoryGrowthParticipant,
+					builder, nil, e.cfg.SpillThreshold, memoryGrowthParticipant, &groupingSeen,
 				)
 			if decisionErr != nil {
 				return nil, BucketSkip, decisionErr

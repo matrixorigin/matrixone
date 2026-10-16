@@ -409,3 +409,33 @@ func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {
 	assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
 	assert.Equal(t, 200*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
 }
+
+func TestSiriusConfigurationUsesOnlyCurrentSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		invalid     bool
+	}{
+		{"minimal", "[cn.sirius]\nenabled=true\nnative-config-path='sirius.yaml'", false},
+		{"disabled", "[cn.sirius]\nenabled=false", false},
+		{"backend", "[cn.sirius]\nbackend='embedded'", true},
+		{"input mode", "[cn.sirius]\ninput-mode='mo'", true},
+		{"empty address", "[cn.sirius]\nflight-address=''", true},
+		{"zero limit", "[cn.sirius]\nmax-batch-bytes=0", true},
+		{"false benchmark", "[cn.sirius]\nbenchmark-no-gc=false", true},
+		{"unknown", "[cn.sirius]\nunused=1", true},
+		{"inline", "[cn]\nsirius={enabled=false, backend='flight'}", true},
+		{"empty table", "[cn.sirius.backend]", true},
+		{"case folded", "[CN.SIRIUS]\nbackend='flight'", true},
+		{"unrelated", "[unrelated]\nunknown=1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg ServiceConfig
+			err := parseFromString(tc.input, &cfg)
+			if tc.invalid {
+				require.ErrorContains(t, err, "unknown Sirius configuration key")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

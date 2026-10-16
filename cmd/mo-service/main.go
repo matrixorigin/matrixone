@@ -243,11 +243,6 @@ func startService(
 	if err != nil {
 		return err
 	}
-	if st == metadata.ServiceType_CN {
-		if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
-			return err
-		}
-	}
 
 	setupServiceRuntime(cfg, stopper)
 
@@ -365,9 +360,6 @@ func startCNService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 ) error {
-	if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
-		return err
-	}
 	c := cfg.getCNServiceConfig()
 	// start up system module to do some calculation.
 	system.Run(stopper)
@@ -426,10 +418,6 @@ func startCNService(
 		finishTask(err)
 	}
 	return err
-}
-
-func (c *Config) verifySiriusBenchmarkNoGC() error {
-	return cnservice.VerifySiriusBenchmarkNoGC(&c.CN, c.benchmarkTNNoGC)
 }
 
 func startTNService(

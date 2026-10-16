@@ -81,7 +81,7 @@ func exactScalarName(id int32) string {
 }
 
 func (e *exporter) hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) (bool, error) {
-	if e.embeddedMO && kind == semanticScalar && !decimalSignature(args, out) &&
+	if kind == semanticScalar && !decimalSignature(args, out) &&
 		(name == "add" || name == "subtract" || name == "multiply") {
 		// The embedded engine's ordinary integer operators use cuDF arithmetic
 		// without MO's checked overflow. The legacy registry label is not proof

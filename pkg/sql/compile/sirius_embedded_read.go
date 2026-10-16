@@ -35,7 +35,7 @@ func (c *Compile) compileEmbeddedSiriusRead(ctx context.Context, queryPlan *plan
 	if queryPlan == nil || queryPlan.GetQuery() == nil || !siriusPlanEligible(queryPlan) {
 		return false, moerr.NewNotSupported(ctx, "statement is not eligible for embedded Sirius")
 	}
-	capabilities := runtime.Backend.Capabilities()
+	capabilities := runtime.Engine.Capabilities()
 	query := queryPlan.GetQuery()
 	profile := substrait.NewEmbeddedExportProfile(capabilities)
 	candidate, err := substrait.ExportEmbeddedMO(query, profile)
@@ -111,7 +111,7 @@ func (c *Compile) compileEmbeddedSiriusRead(ctx context.Context, queryPlan *plan
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
 		deadline = parentDeadline
 	}
-	execution, err := runtime.Backend.Prepare(ctx, SiriusPrepareRequest{
+	execution, err := runtime.Engine.Prepare(ctx, SiriusPrepareRequest{
 		AccountID: uint64(account), QueryID: append([]byte(nil), id[:]...), Snapshot: snapshotID,
 		Plan: wire, OutputTypes: candidate.OutputTypes(), Headings: append([]string(nil), queryPlan.GetQuery().Headings...),
 		Reads: descriptors, Deadline: deadline,

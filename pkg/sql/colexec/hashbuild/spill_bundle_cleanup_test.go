@@ -159,6 +159,53 @@ func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSpillWriterCacheCleanupAfterRemoveFailure(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		name := "bundle-retry"
+		if detached {
+			name = "detached-retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { h.close(t) })
+			require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte{1}, 1, nil))
+			bundle := h.op.ctr.spillBundle
+			entry := bundle.entries[0]
+			require.NotNil(t, entry.cacheToken)
+			require.EqualValues(t, 4<<20, h.generation.Used())
+			fault := &terminalBundleRemoveFS{MutableFileService: entry.fs}
+			entry.fs = fault
+			t.Cleanup(func() {
+				fault.blocked.Store(false)
+				bundle.release()
+				require.Eventually(t, func() bool { return h.generation.Used() == 0 }, 3*time.Second, 10*time.Millisecond)
+			})
+			fault.blocked.Store(true)
+			bundle.release()
+			require.True(t, bundle.cleanupPending())
+			require.Zero(t, h.generation.SpillFDUsed())
+			require.EqualValues(t, 1, h.generation.SpillDiskUsed())
+			require.EqualValues(t, 4<<20, h.generation.Used(), "failed removal retains the admitted page-cache charge")
+			fault.blocked.Store(false)
+			if detached {
+				bundle.deferCleanup()
+			} else {
+				bundle.release()
+			}
+			require.Eventually(t, func() bool { return h.generation.Used() == 0 }, 3*time.Second, 10*time.Millisecond)
+			require.False(t, bundle.cleanupPending())
+			require.Zero(t, h.generation.SpillDiskUsed())
+			file, err := fault.OpenFile(context.Background(), entry.name)
+			if file != nil {
+				_ = file.Close()
+			}
+			require.Error(t, err)
+			bundle.release()
+			require.Zero(t, h.generation.Used(), "repeated release must not double-release cache memory")
+		})
+	}
+}
+
 type blockedBundleRemoveFS struct {
 	fileservice.MutableFileService
 	blocked       bool
