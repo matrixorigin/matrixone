@@ -35,7 +35,7 @@ not an active leak and is not required to disappear in the DROP statement.
 The upgrade handler must check the common protocol itself: its
 `UpgradeTenant=No` metadata means the framework's tenant-upgrade protocol check
 does not run. Installing persistent MV catalogs now fails closed before any DDL
-while an inventoried node is below protocol 117 or the inventory query fails.
+while an inventoried node is below protocol 118 or the inventory query fails.
 Creation/read/refresh gates and the existing persisted protocol startup fence
 retain their separate responsibilities.
 
@@ -56,15 +56,18 @@ CGO_ENABLED=0 go build -mod=readonly \
 python3 optools/materialized_view_recovery.py \
   --service /tmp/mo-service-mv-recovery \
   --old-service /absolute/path/to/4.0.14-mo-service \
+  --old-protocol 117 \
   --probe /tmp/mv-native-probe \
   --work-dir /tmp/a-new-mv-native-fixture
 ```
 
-The tested old binary is built from pre-feature commit
-`fcad62a8ff06000e682824802f1155cbeea02a2f`, with catalog 4.0.14 and protocol
-112. Use that exact revision for the frozen old-node assertions. The archived
-source's 11,132 tracked blobs were compared with the Git object tree, with zero
-mismatches. It has no MV implementation and no authentication bypass.
+The latest tested old binary is a clean build of upstream main
+`9f873692e0` (catalog 4.0.14, protocol 117), whose collation capability does not
+include MVs. The driver verifies its actual protocol inventory through normal
+SQL before testing the 118 fence. Earlier captures pinned pre-feature commit
+`fcad62a8ff06000e682824802f1155cbeea02a2f` (catalog 4.0.14, protocol 112);
+select `--old-protocol 112` for that binary. Both use normal authentication.
+The current result artifact identifies the exact old and new source/binaries.
 
 Run from the repository root with free local ports 32001, 19000–19019,
 18000–18019, 20000–20019, 6101–6102, 7301–7304 and 7603. The driver uses
@@ -103,11 +106,14 @@ implementation re-review and final-head CI are still required.
 
 The earlier 12-case capture passed its selected oracles but omitted mixed-version
 task-publication exclusion. Its raw old-CN log exposed a claimed unknown executor
-17. The corrected native execution passes 13/13 groups in 324.111 seconds,
+17. The current protocol-118 execution with a real protocol-117 old node passes
+13/13 groups in 324.495 seconds,
 including zero cron/async task metadata before migration. Three CN
 processes exited by the expected SIGKILLs; the old binary exited at the expected
-protocol fence; all remaining owned services exited cleanly. Current owning race suites pass for MV (1.219 s) and CN (9.961 s), with
-100 repetitions of each admission/retry root.
+protocol fence; all remaining owned services exited cleanly. The pre-merge
+admission/retry mechanism evidence includes owning race passes for MV (1.219 s)
+and CN (9.961 s), plus 100 repetitions of each root; these are not represented
+as new merge-head race executions.
 
 
 ## Normal CI consumer of the SQL bridge

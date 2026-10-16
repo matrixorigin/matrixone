@@ -887,3 +887,57 @@ each run and all services exit. Bridge counters remain 28/32 blocks; no
 coverage-policy change. All 11,042 frozen inputs match. The new source/result
 ledger supersedes the earlier consumer-only capture. Final-head remote CI
 remains separate.
+
+
+## Upstream protocol 117 allocation collision
+
+While cd5de147 ALL CI was running, upstream main 9f873692e0 added protocol
+117 for collation-aware LEAST/GREATEST semantics and made this PR conflict.
+Retain upstream's 117 contract and allocate 118 to native MVs across the
+4.0.15 migration, coordinator publication, frontend DDL, plan authoring and
+compile registration/scan consumers. A 117 node is the nearest unsupported
+MV consumer even though its collation feature is supported. Catalog version
+4.0.15, task executor 17, retry ownership and feature scope do not change.
+The combined parser is regenerated from grammar; its one changed action
+preserves upstream COLLATE expression nodes.
+
+R3 compatibility closure: typed tests reject MV protocol/floor 117 and admit
+118 while ordinary scans and collation's 117 contract retain their controls.
+Reuse the native destructive driver with a clean real upstream 117 binary
+and verify its actual protocol inventory via normal authenticated SQL. This
+changes no concurrency primitive, state owner or hot path; previous race
+proof remains evidence for those unchanged mechanisms. Final normal suites,
+static checks, new binaries and native/BVT results are recorded separately.
+Pre-merge 117 captures remain historical evidence for their source, not the
+new allocation. The old cd5 CI cannot establish the subsequent merge head.
+
+
+Final protocol-118 validation: eight complete owning suites pass (defines,
+4.0.15, MV, frontend, plan, compile, mysql parser and CN); upstream 117
+collation controls in function/PB plan pass. Six-package vet and configured
+incremental lint pass with zero issues. Clean real upstream 117 and tagged/
+normal 118 service builds succeed. The native run passes 13/13 groups in
+324.495 seconds, including actual 117 inventory, no premature catalog/tasks,
+interrupted/repeated upgrade, 118-vs-117 downgrade refusal and both commit/ack
+crash windows. Its committed JSON includes the upgrade wait stack and native
+protocol/admission diagnostic excerpts, not only local filesystem references.
+
+The exact covered BVT entry passes twice on the same two-CN production
+instance: each has 18 bridge requests plus 70/5/9 functional/failure/cross-CN
+checks, independent zero cleanup counts, and all service processes reaped.
+Bridge component counters are 28/32 regions and 50/56 statements; aggregate
+coverage is a separate remote gate. All 11,061 frozen tracked non-documentation
+inputs match. Pre-delivery new binaries report cd5de147 with modified=true;
+the real upstream old binary reports clean 9f873692.
+
+One focused local link attempt exhausted the author cache disk. Old generated
+cache entries were removed while protecting active import inputs, then full
+owning suites passed; no source/assertion workaround was made. The cd5 remote
+SCA/coverage-UT/Proxy results passed before this merge, but cannot establish
+its final-head CI. Whitespace checking uses upstream as the delta base; main's
+existing trailing-space CHAR collation golden values are preserved unchanged.
+
+The combined EXPLAIN consumer suite also passes (0.326 s), with its own
+vet and configured incremental lint reporting zero issues. This closes the
+additional auto-merged test consumer without changing source or existing
+semantic input fingerprints.

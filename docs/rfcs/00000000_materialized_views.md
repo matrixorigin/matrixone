@@ -26,6 +26,12 @@ MatrixOne's existing SQL planner, transaction-scoped SQL executor, task service,
 and native storage. Do not port StarRocks FE edit-log or partition-version
 protocols into MO.
 
+The MV capability requires protocol 118 at catalog migration, task publication,
+DDL authoring and relation execution. Protocol 117 belongs to upstream's
+collation-aware LEAST/GREATEST semantics and is insufficient for MV support.
+The protocol allocation follows main; catalog 4.0.15 and task executor 17 retain
+their existing identities.
+
 Transparent rewrite is a separate release. By default a base-table query must
 retain its current transactional semantics. An asynchronous MV is not safe for
 rewrite merely because its most recent refresh succeeded. Incremental refresh

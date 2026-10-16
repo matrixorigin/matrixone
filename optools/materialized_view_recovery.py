@@ -180,6 +180,10 @@ class Fixture:
         old = self.start("old-bootstrap", old=True)
         self.ready(old, old=True)
         assert self.q("select version,state from mo_catalog.mo_version order by create_at desc limit 1", old=True) == [["4.0.14", "2"]]
+        inventory = self.q("select mo_ctl('cn','GetProtocolVersion','')", old=True)
+        versions = json.loads(inventory[0][0])["result"]
+        assert versions and all(int(entry.rsplit(":", 1)[1]) == self.args.old_protocol for entry in versions.split(",")), inventory
+        self.report["old_protocol"] = self.args.old_protocol
         self.sql("create database mv_recovery", old=True)
         self.sql("create table mv_recovery.facts(id int primary key,v bigint)", old=True)
         self.sql("insert into mv_recovery.facts values(1,10),(2,20)", old=True)
@@ -188,7 +192,7 @@ class Fixture:
         # Retain the real old CN and LOG/TN while starting the new CN. Catalog
         # installation must wait for the protocol barrier across this topology.
         current = self.start("new-mixed", fault="mv_catalog_upgrade_after_ddl#2:2::#wait#0##false")
-        self.await_log("new-mixed", "requires all CNs to support protocol version 117", current)
+        self.await_log("new-mixed", "requires all CNs to support protocol version 118", current)
         self.await_log("new-mixed", "materialized view catalogs are not installed", current)
         control = self.q("select count(*) from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state')", old=True, allow_error=True)
         if not control["error"]:
@@ -313,7 +317,7 @@ class Fixture:
         wait_for("unsafe old-binary startup refused", lambda: old.poll() is not None, seconds=120)
         log = (self.root / "unsafe-downgrade.log").read_text(errors="replace")
         fences = ("cannot startup a old version 4.0.14 to join cluster, current version is 4.0.15",
-                  "requires persisted expression protocol version 117 (local version 112)")
+                  f"requires persisted expression protocol version 118 (local version {self.args.old_protocol})")
         reason = next((fence for fence in fences if fence in log), None)
         assert old.returncode != 0 and reason, log[-3000:]
         assert self.snapshot() == initial
@@ -370,6 +374,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--service", required=True)
     parser.add_argument("--old-service", required=True)
+    parser.add_argument("--old-protocol", type=int, default=112,
+                        help="expected protocol of the pinned old binary (112 by default)")
     parser.add_argument("--probe", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()

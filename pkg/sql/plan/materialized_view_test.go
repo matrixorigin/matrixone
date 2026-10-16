@@ -123,8 +123,8 @@ func TestMaterializedViewCreatePlan(t *testing.T) {
 			base := NewMockCompilerContext(false, proc)
 			base.SetContext(proc.Ctx)
 			ctx := &materializedViewPlanContext{base, true}
-			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion117))
-			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion117))
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion118))
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion118))
 			query := "create materialized view stored refresh manual as select n_regionkey,sum(n_nationkey) as s,count(*) as n from nation group by n_regionkey"
 			switch scenario {
 			case "star":
@@ -132,9 +132,9 @@ func TestMaterializedViewCreatePlan(t *testing.T) {
 			case "gate disabled":
 				ctx.enabled = false
 			case "old protocol":
-				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion116))
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion117))
 			case "old authoring floor":
-				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion116))
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion117))
 			case "temporary source":
 				base.tables["nation"].IsTemporary = true
 			case "view source":

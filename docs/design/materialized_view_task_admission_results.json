@@ -134,5 +134,6 @@
     "incremental_lint_issues": 0,
     "full_cn_race_environment_note": "Initial run inherited author-added GOMEMLIMIT=3GiB and failed the unrelated default-memory-limit assertion (actual 3221225472 vs expected MaxInt64). Same code passes the complete package with the normal unset memory limit; no test/source assertion was changed. Raw failed and successful logs retained."
   },
-  "new_head_ci": "pending publication"
+  "new_head_ci": "pending publication",
+  "evidence_generation": "pre-merge protocol 117 capture; superseded for current-head native proof by protocol-118 results"
 }

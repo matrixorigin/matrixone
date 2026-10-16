@@ -122,7 +122,7 @@ func buildCreateMaterializedView(stmt *tree.CreateMaterializedView, ctx Compiler
 	if enabled != int8(1) && enabled != int64(1) && enabled != uint64(1) && enabled != true {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "enable experimental_materialized_view before creating a materialized view")
 	}
-	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion117); err != nil {
+	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion118); err != nil {
 		return nil, err
 	}
 	if stmt.IntervalSeconds != 0 && stmt.IntervalSeconds < 60 {

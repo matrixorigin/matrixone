@@ -63,7 +63,7 @@ func (s *Service) RegisterCron(ctx context.Context, ts taskservice.TaskService) 
 		if !ready {
 			return moerr.NewInvalidStateNoCtx("materialized view catalogs are not installed")
 		}
-		return versions.CheckCommonProtocolVersion(tx, defines.MORPCVersion117)
+		return versions.CheckCommonProtocolVersion(tx, defines.MORPCVersion118)
 	}, executor.Options{}.WithAccountID(catalog.System_Account)); err != nil {
 		return err
 	}

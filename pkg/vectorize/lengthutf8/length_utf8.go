@@ -14,6 +14,8 @@
 
 package lengthutf8
 
+import "encoding/binary"
+
 var (
 	table [256]uint8
 )
@@ -45,12 +47,27 @@ func init() {
 func CountUTF8CodePoints(s []byte) uint64 {
 	var charSize uint8
 	var count uint64 = 0
-	length := len(s)
+	length := uint(len(s))
 
-	for i := 0; i < length; {
+	i := uint(0)
+	// Unsigned positions let the scalar loop prove its slice bound without a
+	// second per-character bounds branch. A table step is at most four, so
+	// even the last admitted position cannot overflow uint.
+	// Skip complete ASCII words, then retain the existing table walk for the
+	// remainder, including its behavior on malformed or truncated UTF-8.
+	if length >= 32 && s[0] < 0x80 {
+		for length-i >= 8 {
+			if binary.LittleEndian.Uint64(s[i:])&0x8080808080808080 != 0 {
+				break
+			}
+			i += 8
+			count += 8
+		}
+	}
+	for i < length {
 		charSize = table[s[i]]
 		count++
-		i = i + int(charSize)
+		i += uint(charSize)
 	}
 	return count
 }

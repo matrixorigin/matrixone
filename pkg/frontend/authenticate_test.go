@@ -10315,6 +10315,55 @@ func Test_doDropRole(t *testing.T) {
 	})
 }
 
+func TestDropRoleInvalidatesOnlyCommittedChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		present    bool
+		failureSQL string
+	}{
+		{name: "all absent"},
+		{name: "one absent one present", present: true},
+		{name: "delete failure", present: true, failureSQL: fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(10))},
+		{name: "commit failure", present: true, failureSQL: "commit;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ses := newSes(&privilege{}, ctrl)
+			ses.ruleCache = map[string]string{"db.t": "select * from db.t"}
+			stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true}
+			ses.prepareStmts = map[string]*PrepareStmt{"old": stmt}
+			for _, name := range []string{"missing", "role10"} {
+				lookup, err := getSqlForRoleIdOfRole(context.Background(), name)
+				require.NoError(t, err)
+				var rows [][]interface{}
+				if name == "role10" && tc.present {
+					rows = [][]interface{}{{int64(10)}}
+				}
+				bh.sql2result[lookup] = newMrsForRoleIdOfRole(rows)
+			}
+			if tc.failureSQL != "" {
+				bh.sql2err[tc.failureSQL] = fmt.Errorf("injected SQL failure")
+			}
+			err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.DropRole{
+				IfExists: true, Roles: []*tree.Role{{UserName: "missing"}, {UserName: "role10"}},
+			})
+			if tc.failureSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "injected SQL failure")
+			}
+			changed := tc.present && tc.failureSQL == ""
+			require.Equal(t, changed, stmt.rewritePolicyInvalidated.Load())
+			require.Equal(t, changed, ses.ruleCache == nil)
+		})
+	}
+}
+
 func Test_doDropUser(t *testing.T) {
 	convey.Convey("drop user succ", t, func() {
 		ctrl := gomock.NewController(t)

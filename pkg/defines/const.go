@@ -152,8 +152,9 @@ const (
 	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
 	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
-	MORPCVersion117    int64 = 117 // native read-only materialized views and atomic refresh
-	MORPCLatestVersion       = MORPCVersion117
+	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
+	MORPCVersion118    int64 = 118 // native read-only materialized views and atomic refresh
+	MORPCLatestVersion       = MORPCVersion118
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
