@@ -18,8 +18,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -39,6 +41,7 @@ func TestFileServicesCloseEachOwnerOnce(t *testing.T) {
 		cnLocalFSs: []fileservice.FileService{shared, etl},
 		s3FS:       shared,
 		etlFS:      etl,
+		tmpFS:      etl,
 	}
 
 	owned.Close(context.Background())
@@ -68,4 +71,24 @@ func TestClusterCloseBeforeStartRetiresFileServices(t *testing.T) {
 	require.NoError(t, c.Close())
 	require.Equal(t, 1, shared.closes)
 	require.Equal(t, 1, etl.closes)
+}
+
+func TestClusterCloseRetiresOnlyOwnedRuntimeRegistrations(t *testing.T) {
+	c := &testCluster{logger: zap.NewNop(), stopper: stopper.NewStopper(t.Name())}
+	c.opt.keepData = true
+	ownedID, replacedID := t.Name()+"-owned", t.Name()+"-replaced"
+	owned := c.newRuntime(metadata.ServiceType_CN, ownedID)
+	c.newRuntime(metadata.ServiceType_TN, replacedID)
+	foreign := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(replacedID, foreign)
+	t.Cleanup(func() {
+		runtime.CompareAndDeleteServiceBasedRuntime(ownedID, owned)
+		runtime.CompareAndDeleteServiceBasedRuntime(replacedID, foreign)
+		c.stopper.Stop()
+	})
+	require.Same(t, owned, runtime.ServiceRuntime(ownedID))
+	require.NoError(t, c.Close())
+	require.Nil(t, runtime.ServiceRuntime(ownedID))
+	require.Same(t, foreign, runtime.ServiceRuntime(replacedID))
+	require.NoError(t, c.Close())
 }
