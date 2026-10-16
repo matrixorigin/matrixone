@@ -125,6 +125,7 @@ func killScheduleProcess(root string, process *scheduleProcess) (bool, error) {
 
 func cleanupScheduleFixture(root string) (result string, cleanupErr error, survivors bool) {
 	var diagnostic strings.Builder
+	observations := 0
 	defer func() {
 		reports, err := scheduleFixtureDiagnostics(root)
 		result += reports
@@ -159,6 +160,13 @@ func cleanupScheduleFixture(root string) (result string, cleanupErr error, survi
 			}
 			live++
 			survivors = true
+			// The broad pre-cleanup snapshot can exhaust its budget before
+			// reaching this PID. Preserve bounded signal evidence for the
+			// already identified owner before killing it.
+			if observations < 32 {
+				diagnostic.WriteString(scheduleProcessSignalDiagnostics(root, process))
+				observations++
+			}
 			killed, err := killScheduleProcess(root, process)
 			if err != nil {
 				return diagnostic.String(), err, survivors
@@ -176,6 +184,32 @@ func cleanupScheduleFixture(root string) (result string, cleanupErr error, survi
 		time.Sleep(10 * time.Millisecond)
 	}
 	return diagnostic.String(), nil, survivors
+}
+
+// Capture only signal metadata for a still-owned process generation. This is
+// also used after a truncated global snapshot, immediately before cleanup.
+func scheduleProcessSignalDiagnostics(root string, process *scheduleProcess) string {
+	file, err := os.Open(fmt.Sprintf("/proc/%d/status", process.pid))
+	if err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(file, 4096))
+	_ = file.Close()
+	if err != nil {
+		return ""
+	}
+	current, err := scheduleOwnedProcess(process.pid, root)
+	if err != nil || current == nil || current.start != process.start {
+		return ""
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "process signals before-cleanup pid=%d start=%s\n", process.pid, process.start)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "Sig") || strings.HasPrefix(line, "ShdPnd:") {
+			fmt.Fprintln(&out, line)
+		}
+	}
+	return out.String()
 }
 
 // Failure paths collect bounded observations before emergency cleanup destroys
@@ -404,6 +438,9 @@ func TestScheduleCleanupRejectsStaleIdentity(t *testing.T) {
 		t.Fatalf("missing live fixture identity: %v %v", process, err)
 	}
 	process.start += "-stale"
+	if got := scheduleProcessSignalDiagnostics(root, process); got != "" {
+		t.Fatalf("stale generation exposed signal metadata: %s", got)
+	}
 	killed, err := killScheduleProcess(root, process)
 	if err != nil || killed {
 		t.Fatalf("stale identity signalled: %v %v", killed, err)
@@ -776,6 +813,8 @@ func TestIssuesRootDispatchDrainsHeartbeat(t *testing.T) {
 		{"failed-drain-prebuild", "prebuild", "125", "2", "2", 125},
 		{"ordinary-failure", "none", "7", "2", "2", 1},
 		{"success", "none", "0", "2", "2", 0},
+		{"four-process-success", "none", "0", "4", "2", 0},
+		{"four-process-failed-drain", "none", "125", "4", "2", 125},
 		{"serial-budget-rollback", "none", "0", "1", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

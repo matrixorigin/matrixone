@@ -829,7 +829,8 @@ func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 					ctrl := gomock.NewController(t)
 					defer ctrl.Finish()
 					ls := mock_lock.NewMockLockService(ctrl)
-					ls.EXPECT().Close().Return(nil).Times(1)
+					var lockCloses atomic.Int32
+					ls.EXPECT().Close().DoAndReturn(func() error { lockCloses.Add(1); return nil }).AnyTimes()
 
 					incrCloseStarted := make(chan struct{})
 					releaseIncrClose := make(chan struct{})
@@ -900,11 +901,17 @@ func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 					}
 					require.Equal(t, engineErr == nil, s.CloseComplete())
 					require.Equal(t, err, s.Close(), "repeat Close must not replay engine retirement")
+					if engineErr == nil {
+						require.Equal(t, int32(1), lockCloses.Load())
+					} else {
+						require.Zero(t, lockCloses.Load(), "failed engine drain must retain lock service")
+					}
 					require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
 					select {
 					case <-txnClientClosed:
+						require.NoError(t, engineErr, "failed engine drain must retain transaction dependencies")
 					default:
-						t.Fatal("transaction client was not closed")
+						require.Error(t, engineErr, "transaction client was not closed after successful engine drain")
 					}
 				},
 			)

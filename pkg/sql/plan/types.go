@@ -390,6 +390,9 @@ type QueryBuilder struct {
 
 	qry     *plan.Query
 	compCtx CompilerContext
+	// Only buildValueScan owns this borrowed scope. Ordinary VALUES keep ctx nil;
+	// the actual subquery binder initializes it once and the owner restores it.
+	valuesSubqueryBinding valuesSubqueryBinding
 	// queryingSubscriptionMetadata is scoped to binding one account-wide
 	// subscription metadata branch. It complements CompilerContext's publisher
 	// routing state with subscriber-local table visibility.
@@ -506,7 +509,6 @@ type QueryBuilder struct {
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
-	isSkipResolveTableDef bool
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
