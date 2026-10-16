@@ -3164,6 +3164,26 @@ func iscpWaitBudget(ctx context.Context, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+// iscpWaitBudget must never silently shrink back to the fallback when the
+// caller meant to wait on the test's deadline context: passing a context that
+// carries no deadline (a common WithCancel/WithValue root in these tests)
+// would otherwise reintroduce #30350 undetected by passing smoke runs.
+func TestISCPWaitBudgetHonorsContextDeadline(t *testing.T) {
+	fallback := 10 * time.Second
+
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	require.Greater(t, iscpWaitBudget(deadlineCtx, fallback), fallback)
+
+	plainCtx, cancelPlain := context.WithCancel(context.Background())
+	defer cancelPlain()
+	require.Equal(t, fallback, iscpWaitBudget(plainCtx, fallback))
+
+	shortDeadlineCtx, cancelShort := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShort()
+	require.Equal(t, fallback, iscpWaitBudget(shortDeadlineCtx, fallback))
+}
+
 func waitForISCPWatermark(
 	t require.TestingT,
 	getWatermark func() (types.TS, bool),
@@ -5341,7 +5361,7 @@ func TestStaleRead(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		iscpWaitBudget(ctx, 10*time.Second),
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -5459,7 +5479,7 @@ func TestInitSql(t *testing.T) {
 			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
 		target,
-		iscpWaitBudget(ctx, 10*time.Second),
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		tableAccountID,
 		tableID,
@@ -5485,7 +5505,7 @@ func TestInitSql(t *testing.T) {
 			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
 		target,
-		iscpWaitBudget(ctx, 10*time.Second),
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		tableAccountID,
 		tableID,
@@ -5613,7 +5633,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		iscpWaitBudget(ctx, 10*time.Second),
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
