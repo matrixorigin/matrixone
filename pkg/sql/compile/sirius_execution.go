@@ -22,12 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 )
 
-// SiriusPrepareRequest transfers admitted read ownership to Prepare. The backend
+// SiriusPrepareRequest transfers admitted read ownership to Prepare. The engine
 // must either return an execution owner or finish/retain cleanup on failure. It
-// may call Release only after its consumer has quiesced. The deadline includes
+// must join its consumer before relinquishing query ownership. The deadline includes
 // neither a new transaction nor permission to replay an externally visible query.
 type SiriusPrepareRequest struct {
 	AccountID          uint64
@@ -36,7 +35,6 @@ type SiriusPrepareRequest struct {
 	OutputTypes        []planpb.Type
 	Headings           []string
 	Deadline           time.Time
-	Release            func(context.Context) error
 	Snapshot           [12]byte
 	Reads              []SiriusReadDescriptor
 	NativeCapabilities uint64
@@ -89,46 +87,11 @@ type SiriusExecution interface {
 	CleanupAfterRun(context.Context, error) error
 }
 
-// SiriusBackend is the service-owned execution boundary. It has no registry or
-// global mutable selector: a CN publishes exactly its configured backend.
-// Reconcile retains cleanup ownership by statement identity until the previous
-// consumer is quiescent. Close stops admission and drains that ownership.
-type SiriusBackend interface {
+// SiriusEngine is the active native execution and ownership boundary.
+// Close seals admission and joins all work before releasing engine resources.
+type SiriusEngine interface {
 	Capabilities() uint64
+	Accepting() bool
 	Prepare(context.Context, SiriusPrepareRequest) (SiriusExecution, error)
-	Reconcile(uint64, []byte, func(context.Context) error) error
 	Close(context.Context) error
-	CanFallbackBeforeVisibility(error) bool
 }
-
-func (*siriusFlightBackend) Capabilities() uint64 { return 0 }
-
-type siriusFlightBackend struct {
-	*sidecarflight.Runtime
-}
-
-// NewSiriusFlightBackend preserves Flight's existing execution, recovery and
-// fallback contracts while keeping its concrete types out of compiler owners.
-// A nil runtime returns a nil interface, not a non-nil typed-nil backend.
-func NewSiriusFlightBackend(runtime *sidecarflight.Runtime) SiriusBackend {
-	if runtime == nil {
-		return nil
-	}
-	return &siriusFlightBackend{Runtime: runtime}
-}
-
-func (b *siriusFlightBackend) Prepare(ctx context.Context, request SiriusPrepareRequest) (SiriusExecution, error) {
-	execution, err := b.Runtime.Prepare(ctx, request.AccountID, request.QueryID,
-		request.Plan, request.OutputTypes, request.Headings, request.Deadline, request.Release)
-	if err != nil {
-		return nil, err
-	}
-	return execution, nil
-}
-
-func (*siriusFlightBackend) CanFallbackBeforeVisibility(err error) bool {
-	return sidecarflight.IsPreVisibilityFallback(err)
-}
-
-var _ SiriusBackend = (*siriusFlightBackend)(nil)
-var _ SiriusExecution = (*sidecarflight.Execution)(nil)
