@@ -103,7 +103,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	requiredVersion := int64(0)
 	if features.JSONFunctionalIndexSemantics {
-		requiredVersion = defines.MORPCVersion120
+		requiredVersion = defines.MORPCVersion121
 	}
 	if features.IPFunctionSemantics && requiredVersion < defines.MORPCVersion72 {
 		requiredVersion = defines.MORPCVersion72
@@ -145,16 +145,19 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion120)
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.JSONMinMaxTypedComparison {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.LeastGreatestCollationSemantics {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)

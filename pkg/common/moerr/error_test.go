@@ -158,6 +158,38 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, "Prepared statement needs to be re-prepared", err.Error())
 }
 
+func TestCollationErrorCodeContracts(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		err     *Error
+		code    uint16
+		mysql   uint16
+		state   string
+		message string
+	}{
+		{NewIllegalMixOfCollations(ctx, "utf8mb4_bin", "EXPLICIT", "utf8mb4_unicode_ci", "EXPLICIT", "="),
+			20338, ER_CANT_AGGREGATE_2COLLATIONS, MySQLDefaultSqlState,
+			"Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_unicode_ci,EXPLICIT) for operation '='"},
+		{NewUnknownCollation(ctx, "no_such_collation"), 20339, ER_UNKNOWN_COLLATION, MySQLDefaultSqlState,
+			"Unknown collation: 'no_such_collation'"},
+		{NewCollationCharsetMismatch(ctx, "utf8mb4_general_ci", "binary"), 20341, ER_COLLATION_CHARSET_MISMATCH, "42000",
+			"COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'"},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			require.Equal(t, tc.code, tc.err.ErrorCode())
+			require.NotEqual(t, ErrInvalidJSONPathWildcard, tc.err.ErrorCode())
+			require.Equal(t, tc.mysql, tc.err.MySQLCode())
+			require.Equal(t, tc.state, tc.err.SqlState())
+			require.Equal(t, tc.message, tc.err.Error())
+			data, err := tc.err.MarshalBinary()
+			require.NoError(t, err)
+			decoded := new(Error)
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			require.Equal(t, tc.err, decoded)
+		})
+	}
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

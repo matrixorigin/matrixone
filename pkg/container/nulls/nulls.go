@@ -486,13 +486,7 @@ func (nsp *Nulls) CountRange(start, end uint64) int {
 		if end > uint64(nsp.validityLength) {
 			end = uint64(nsp.validityLength)
 		}
-		count := 0
-		for row := start; row < end; row++ {
-			if nsp.validityContainsNull(row) {
-				count++
-			}
-		}
-		return count
+		return nsp.countValidityNulls(int(start), int(end))
 	}
 	return nsp.np.CountRange(start, end)
 }

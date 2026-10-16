@@ -239,7 +239,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, capabili
 		// Admission must still see JSON ELT after optimization; selected-subtree
 		// constant evaluation belongs to its lazy expression executor. A JSON-free
 		// subtree stays JSON-free while folding, just as for spatial expressions.
-		if requiresJSON, err := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); err != nil || requiresJSON {
+		if requiresJSON, err := plan.RequiresMORPCVersion118JSONStringConsumerOverload(expr); err != nil || requiresJSON {
 			return expr
 		}
 		capabilitiesChecked = true

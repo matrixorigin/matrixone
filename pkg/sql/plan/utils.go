@@ -2059,7 +2059,7 @@ func constantFoldWithPreparedExactSource(
 		// Keep ELT identity visible to admission and its selected subtree lazy.
 		// Propagate a negative scan: folding cannot introduce JSON ELT, and
 		// rescanning every descendant would make an arithmetic chain quadratic.
-		if requiresJSON, jsonErr := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
+		if requiresJSON, jsonErr := plan.RequiresMORPCVersion118JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
 			return expr, nil
 		}
 		capabilitiesChecked = true
