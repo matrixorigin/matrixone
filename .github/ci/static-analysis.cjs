@@ -19,7 +19,7 @@ const { category, immutableChanges } = require('./change-scope.cjs');
 
 // Emit one bounded record per main-module package/variant. Go owns import and
 // build-tag resolution, including test-only importers; no source import parser.
-const inventoryFields = 'ImportPath,Dir,Module,Imports,TestImports,XTestImports,ForTest';
+const inventoryFields = 'ImportPath,Dir,Module,Imports,TestImports,XTestImports';
 
 // go list emits adjacent JSON objects rather than an array. Frame the objects;
 // JSON.parse remains the decoder (including escaped strings and nested values).
@@ -28,6 +28,10 @@ function inventory(text) {
   let depth = 0, start = 0, quoted = false, escaped = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    if (depth === 0 && !quoted) {
+      if (/\s/.test(c)) continue;
+      if (c !== '{') throw new Error('Invalid Go inventory');
+    }
     if (quoted) {
       if (escaped) escaped = false;
       else if (c === '\\') escaped = true;
@@ -39,7 +43,7 @@ function inventory(text) {
       if (depth === 0) {
         const p = JSON.parse(text.slice(start, i + 1));
         if (p.Module?.Main) records.push({ id: p.ImportPath, dir: p.Dir,
-          forTest: p.ForTest || '', imports: p.Imports || [],
+          imports: p.Imports || [],
           testImports: p.TestImports || [], xTestImports: p.XTestImports || [] });
       }
     } else if (depth === 0 && !/\s/.test(c)) throw new Error('Invalid Go inventory');

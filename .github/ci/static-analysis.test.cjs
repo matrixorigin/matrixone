@@ -28,7 +28,7 @@ const records = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(name => ({
 }));
 records[1].imports = [records[0].id];
 records.push({ id: `${records[2].id}_test [${records[2].id}.test]`, dir: records[2].dir,
-  forTest: records[2].id, imports: [records[0].id] });
+  imports: [records[0].id] });
 const file = (filename, status = 'M') => ({ filename, status });
 
 test('complete package selection follows production and test imports, not test reverse imports', () => {
@@ -55,7 +55,7 @@ test('Go JSON inventory is framed without interpreting braces inside strings', (
   const parsed = inventory(`${JSON.stringify({ ImportPath: 'fmt' })}\n${JSON.stringify(p)}\n`);
   assert.equal(parsed.length, 1);
   assert.deepEqual(parsed[0].imports, p.Imports);
-  for (const malformed of ['', '{', JSON.stringify(p) + 'junk', JSON.stringify(p) + '}']) {
+  for (const malformed of ['', '{', JSON.stringify(p) + 'junk', JSON.stringify(p) + '}', '"prefix"' + JSON.stringify(p)]) {
     assert.throws(() => inventory(malformed));
   }
 });
@@ -99,7 +99,7 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const dir = temporary(t), repo = path.join(dir, 'repo'), bin = path.join(dir, 'bin');
   fs.mkdirSync(repo); fs.mkdirSync(bin);
   const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  fs.writeFileSync(path.join(repo, 'go.mod'), 'module example.org/project\n\ngo 1.27.1\n');
+  fs.writeFileSync(path.join(repo, 'go.mod'), 'module example.org/project\n\ngo 1.23.0\n');
   for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
     const p = path.join(repo, 'pkg', name); fs.mkdirSync(p, { recursive: true });
     fs.writeFileSync(path.join(p, `${name}.go`), `package ${name}\n${name === 'b' ? 'import _ "example.org/project/pkg/a"\n' : ''}func Value() int { return 1 }\n`);

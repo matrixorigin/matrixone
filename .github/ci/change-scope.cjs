@@ -141,7 +141,7 @@ function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) 
         git(['rev-parse', 'HEAD']).trim() !== head) return null;
     // Local edits cannot use a committed-input exemption. Include untracked
     // inputs too; ignored native outputs and runner reports are not source.
-    if (git(['status', '--porcelain', '--untracked-files=all']).trim()) return null;
+    if (git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']).trim()) return null;
     try {
       git(['cat-file', '-e', `${base}^{commit}`]);
     } catch {
@@ -152,7 +152,7 @@ function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) 
     }
     // Tree comparison also works when a shallow checkout lacks ancestry. Both
     // sides of a rename are roots; do not hide removals behind rename matching.
-    const raw = git(['diff', '--no-ext-diff', '--no-renames', '--name-status', '-z', base, head]);
+    const raw = git(['diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-status', '-z', base, head]);
     const fields = raw.split('\0');
     if (fields.pop() !== '' || fields.length === 0 || fields.length % 2) return null;
     const files = [];
