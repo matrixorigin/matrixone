@@ -9461,6 +9461,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			return nil, err
 		}
 
+		// Writers own the logical input; the flush consumes their metadata.
+		multiUpdateArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
