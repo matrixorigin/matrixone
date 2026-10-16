@@ -85,7 +85,7 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarInt64(3, 3, proc.Mp()),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, proc.Mp()),
 			testutil.MakeScalarVarchar("d", 3, proc.Mp()),
-			testutil.MakeScalarNull(t, types.T_int64, 3, proc.Mp()),
+			vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp()),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 	}
