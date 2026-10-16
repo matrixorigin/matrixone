@@ -287,28 +287,43 @@ func (p *SpillBuildPayload) Close() error {
 // message -> process import cycle while still keeping physical cleanup with the
 // move-only payload.
 type SpillFile struct {
-	mu      sync.Mutex
-	fd      *os.File
-	open    func(context.Context) (*os.File, error)
-	remove  func() error
-	rows    int64
-	bytes   uint64
-	release func()
+	mu           sync.Mutex
+	cleanupToken *spillcleanup.Reservation
+	fd           *os.File
+	open         func(context.Context) (*os.File, error)
+	remove       func() error
+	rows         int64
+	bytes        uint64
+	release      func()
 }
 
 // NewReopenableSpillFile creates a dormant spill payload. open must return the
 // complete file from offset zero. remove owns the stable name and must be safe
 // to invoke after a failed open or an already-removed path.
+// cleanupToken must be the reservation acquired before creating this file.
 func NewReopenableSpillFile(
 	open func(context.Context) (*os.File, error),
 	remove func() error,
 	rows int64,
 	bytes uint64,
 	release func(),
+	cleanupToken *spillcleanup.Reservation,
 ) *SpillFile {
 	return &SpillFile{
 		open: open, remove: remove, rows: rows, bytes: bytes, release: release,
+		cleanupToken: cleanupToken,
 	}
+}
+
+// DeferCleanup transfers only this file, never its payload's query references.
+// Its metadata reservation was acquired before physical file creation.
+func (f *SpillFile) DeferCleanup() {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanupToken.Enqueue(f.Close)
 }
 
 // NeedsOpen reports whether this payload is dormant. The caller uses this to
@@ -436,6 +451,8 @@ func (f *SpillFile) Close() error {
 		f.release()
 		f.release = nil
 	}
+	f.cleanupToken.Release()
+	f.cleanupToken = nil
 	return closeErr
 }
 
@@ -633,7 +650,9 @@ func (jm *JoinMap) FreeMemory() {
 		// Detach the payload so retries do not depend on another FreeMemory.
 		pending := jm.spillPayload
 		jm.spillPayload = SpillBuildPayload{}
-		spillcleanup.Enqueue(pending.Close)
+		for _, file := range pending.Files {
+			file.DeferCleanup()
+		}
 	}
 	jm.spillPayloadTaken = true
 	jm.spillMu.Unlock()

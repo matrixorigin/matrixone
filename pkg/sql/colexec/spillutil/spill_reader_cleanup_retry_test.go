@@ -16,6 +16,7 @@ package spillutil
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -106,6 +107,10 @@ func TestSpillEngineDeferredCleanupOutlivesEngine(t *testing.T) {
 			var blocked atomic.Bool
 			blocked.Store(true)
 			var released atomic.Int32
+			metadata, reserveErr := spillcleanup.Reserve()
+			if reserveErr != nil {
+				panic(reserveErr)
+			}
 			file := message.NewReopenableSpillFile(
 				func(context.Context) (*os.File, error) { return os.Open(name) },
 				func() error {
@@ -113,7 +118,7 @@ func TestSpillEngineDeferredCleanupOutlivesEngine(t *testing.T) {
 						return os.ErrPermission
 					}
 					return os.Remove(name)
-				}, 1, 1, func() { released.Add(1) },
+				}, 1, 1, func() { released.Add(1) }, metadata,
 			)
 			require.Error(t, file.Close())
 			engine := &SpillEngine{}
@@ -184,6 +189,10 @@ func TestBucketReaderRejectedFileRetainsFailedRemoval(t *testing.T) {
 	var blocked atomic.Bool
 	blocked.Store(true)
 	var releases atomic.Int32
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	file := message.NewReopenableSpillFile(
 		func(context.Context) (*os.File, error) { return os.Open(name) },
 		func() error {
@@ -192,7 +201,7 @@ func TestBucketReaderRejectedFileRetainsFailedRemoval(t *testing.T) {
 			}
 			return os.Remove(name)
 		},
-		0, 1, func() { releases.Add(1) },
+		0, 1, func() { releases.Add(1) }, metadata,
 	)
 	reader := BucketReader{}
 	err = reader.ResetForSpillFile(nil, nil, file)

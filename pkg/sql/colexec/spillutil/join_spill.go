@@ -424,6 +424,7 @@ type BucketWriter struct {
 	created         bool
 	writeCache      spillio.SequentialWriteCache
 	diskReservation *process.ExecutionSpillDiskReservation
+	cleanupToken    *spillcleanup.Reservation
 }
 
 // spillFileServiceCache is shared by every writer created by one SpillEngine.
@@ -465,6 +466,8 @@ func (w *BucketWriter) Close() error {
 	}
 	w.created = false
 	w.fileFS = nil
+	w.cleanupToken.Release()
+	w.cleanupToken = nil
 	if w.diskReservation != nil {
 		w.diskReservation.Release()
 		w.diskReservation = nil
@@ -499,7 +502,9 @@ func (w *BucketWriter) handOffSpillFile(
 	fs := w.fileFS
 	name := w.Name
 	disk := w.diskReservation
+	metadata := w.cleanupToken
 	w.diskReservation = nil
+	w.cleanupToken = nil
 	w.created = false
 	w.fileFS = nil
 	release := func() {
@@ -510,7 +515,7 @@ func (w *BucketWriter) handOffSpillFile(
 	return message.NewReopenableSpillFile(
 		func(ctx context.Context) (*os.File, error) { return fs.OpenFile(ctx, name) },
 		func() error { return spillio.RemoveFileWithRetry(fs, name) },
-		w.Rows, w.Bytes, release,
+		w.Rows, w.Bytes, release, metadata,
 	), nil
 }
 
@@ -659,9 +664,17 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 	}
 	w.fileFS = fs
 	if !w.created {
+		w.cleanupToken, err = spillcleanup.Reserve()
+		if err != nil {
+			rollbackDisk()
+			return err
+		}
 		fd, err = fs.CreateFile(proc.Ctx, w.Name)
 		if err == nil {
 			w.created = true
+		} else {
+			w.cleanupToken.Release()
+			w.cleanupToken = nil
 		}
 	} else {
 		fd, err = fs.OpenFile(proc.Ctx, w.Name)
@@ -2668,7 +2681,7 @@ func (e *SpillEngine) DeferCleanup() {
 		return
 	}
 	for _, file := range e.orphanFiles {
-		spillcleanup.Enqueue(file.Close)
+		file.DeferCleanup()
 	}
 	e.orphanFiles = nil
 	for i := range e.orphanWriters {
@@ -2678,14 +2691,15 @@ func (e *SpillEngine) DeferCleanup() {
 		writer := BucketWriter{
 			Name: source.Name, fileFS: source.fileFS,
 			created: source.created, diskReservation: source.diskReservation,
+			cleanupToken: source.cleanupToken,
 		}
 		*source = BucketWriter{}
-		spillcleanup.Enqueue(writer.Close)
+		writer.cleanupToken.Enqueue(writer.Close)
 	}
 	e.orphanWriters = nil
 	for _, reader := range []*BucketReader{&e.buildReader, &e.probeReader} {
 		if reader.spillFile != nil {
-			spillcleanup.Enqueue(reader.spillFile.Close)
+			reader.spillFile.DeferCleanup()
 			reader.spillFile = nil
 		}
 	}

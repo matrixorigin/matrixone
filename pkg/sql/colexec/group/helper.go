@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -727,10 +728,18 @@ func (ctr *container) openSpillBucket(
 	if bkt.file != nil {
 		return nil
 	}
+	metadata, err := spillcleanup.Reserve()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if metadata != nil {
+			metadata.Release()
+		}
+	}()
 	var (
 		fdToken   *process.ExecutionSpillFDReservation
 		diskToken *process.ExecutionSpillDiskReservation
-		err       error
 	)
 	if ctr.budget != nil {
 		fdToken, err = ctr.budget.ReserveSpillFD(1)
@@ -757,6 +766,8 @@ func (ctr *container) openSpillBucket(
 	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.cleanupToken = metadata
+	metadata = nil // the bucket now owns admission, including writer-init errors
 	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
 	if err != nil {
 		_ = ctr.freeSpillBucket(bkt)
