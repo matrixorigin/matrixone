@@ -1120,13 +1120,13 @@ sleep() {
 ut_test_before_heartbeat_sleep_registration() {
     printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
     printf '%s\n' "$1" >&7
-    while ! read -r _ <&8; do
+    while (( heartbeat_stop_requested == 0 )) && ! read -r _ <&8; do
         :
     done
+    (( heartbeat_stop_requested != 0 )) || exit 100
 }
 ut_test_heartbeat_stop_requested() {
     printf '%s\n' "$heartbeat_stop_requested" >&6
-    printf 'release\n' >&8
 }
 
 UT_HEARTBEAT_INTERVAL=60
@@ -1139,6 +1139,9 @@ if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
     kill -INT "$$" || exit 92
 else
     kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+    # A trapped signal may be deferred while Bash is blocked in read. The
+    # sender releases that read; the handler must not own its own wakeup.
+    printf 'release\n' >&8
 fi
 read -r -t 10 stop_state <&6 || exit 93
 [[ "$stop_state" == 1 ]] || exit 94
@@ -1175,8 +1178,13 @@ exit 0
 		if got := strings.Count(text, stopAnchor); got != 1 {
 			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, stopAnchor,
+		text = strings.Replace(text, stopAnchor,
 			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
+		const ownerStop = "    kill -TERM \"${UT_HEARTBEAT_PID}\" 2>/dev/null || true\n"
+		if got := strings.Count(text, ownerStop); got != 1 {
+			t.Fatalf("heartbeat owner stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, ownerStop, ownerStop+"    printf 'release\\n' >&8\n", 1)
 	}
 	for _, signal := range []string{"TERM", "INT"} {
 		t.Run(strings.ToLower(signal), func(t *testing.T) {
