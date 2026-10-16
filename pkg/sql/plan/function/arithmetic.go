@@ -573,7 +573,7 @@ func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResult
 	}
 }
 
-func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func divFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
@@ -611,7 +611,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
-func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if integerDivBitResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
 			return integerDivBitSigned(parameters, result, proc, length, selectList)
@@ -1110,7 +1110,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func modFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_bit:
