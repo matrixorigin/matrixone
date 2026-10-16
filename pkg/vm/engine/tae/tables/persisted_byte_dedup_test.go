@@ -201,3 +201,36 @@ func BenchmarkPersistedByteDedup(b *testing.B) {
 		})
 	}
 }
+
+func TestPersistedByteDedupConstantBlock(t *testing.T) {
+	for _, nullBlock := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null=%t", nullBlock), func(t *testing.T) {
+			key := []byte("pk")
+			var data containers.Vector
+			if nullBlock {
+				data = containers.NewConstNullVector(types.T_varchar.ToType(), 65, common.DefaultAllocator)
+				key = nil
+			} else {
+				data = containers.NewConstBytes(types.T_varchar.ToType(), key, 65)
+			}
+			defer data.Close()
+			keys := containers.NewConstBytes(types.T_varchar.ToType(), key, 33)
+			defer keys.Close()
+			rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
+			defer rows.Close()
+			for range 33 {
+				rows.Append(nil, true)
+			}
+			loader := &commitTSLoader{loaded: true, commitTS: containers.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 65)}
+			defer loader.close()
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+			op := containers.MakeForeachVectorOp(types.T_varchar, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			for i := range rows.Length() {
+				require.False(t, rows.IsNull(i))
+				rowID := rows.Get(i).(types.Rowid)
+				require.Equal(t, uint32(64), rowID.GetRowOffset())
+			}
+		})
+	}
+}
