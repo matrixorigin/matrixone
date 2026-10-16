@@ -10954,7 +10954,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
-                Format: $4,
+                Format: strings.ToLower($4),
                 Data: $8,
             },
             ExParam:tree.ExParam{
