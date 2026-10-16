@@ -1133,3 +1133,31 @@ func TestBuildProcessInfoBaselinePresenceRequiresActualOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, info.SessionInfo.LastInsertIdSet, "a missing owner cannot be advertised as authoritative0")
 }
+
+func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	info, err := proc.BuildProcessInfo("select 1/0")
+	require.NoError(t, err)
+	require.True(t, info.StatementRuntimeSelect)
+	data, err := info.Marshal()
+	require.NoError(t, err)
+	var decodedInfo pipeline.ProcessInfo
+	require.NoError(t, decodedInfo.Unmarshal(data))
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil).(*codecService)
+	for _, selectStatement := range []bool{true, false} {
+		func() {
+			decodedInfo.StatementRuntimeSelect = selectStatement
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), decodedInfo)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Equal(t, selectStatement, decoded.IsSelectStatement())
+			require.Equal(t, selectStatement, decoded.DivisionByZeroWarningsEnabled())
+			forwarded, err := decoded.BuildProcessInfo("select 1/0")
+			require.NoError(t, err)
+			require.Equal(t, selectStatement, forwarded.StatementRuntimeSelect)
+		}()
+	}
+}

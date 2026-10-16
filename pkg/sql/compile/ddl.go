@@ -2526,6 +2526,11 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
 				}
 			}
+			// The frontend has already parsed and remapped the policy on the
+			// outer CTAS source. Carry that typed policy into the generated
+			// INSERT instead of reparsing redacted diagnostic SQL.
+			ctxWithSession = attachInternalExecutorRewriteOption(
+				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -2546,6 +2551,14 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 	}
 
 	return nil
+}
+
+func (c *Compile) ctasRewriteOption() *tree.RewriteOption {
+	createTable, ok := c.stmt.(*tree.CreateTable)
+	if !ok || createTable.AsSource == nil {
+		return nil
+	}
+	return createTable.AsSource.RewriteOption
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
@@ -2925,6 +2938,22 @@ func (s *Scope) CreateView(c *Compile) error {
 	dbName := c.db
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
+	}
+	if qry.GetReplace() && c.isLifecycleRC() {
+		if dbName == "" {
+			return moerr.NewNoDB(c.proc.Ctx)
+		}
+		// The nested DROP VIEW participates in lifecycle admission. Enter C/G/D
+		// before taking the database lock; otherwise a fresh replacement appears
+		// to be a retained-lock transaction and spuriously FastFails on G.
+		// Admission still FastFails for locks retained by earlier statements.
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: dbName, mode: lock.LockMode_Shared}}, false); err != nil {
+			return err
+		}
 	}
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 		return err

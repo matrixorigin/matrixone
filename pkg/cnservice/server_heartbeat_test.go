@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -321,6 +322,32 @@ func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
 	})
 }
 
+func TestCNControlStartPublishesInitialHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "initial-heartbeat-cn"}
+	conf.HAKeeper.HeatbeatInterval.Duration = time.Hour
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Minute
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:      &testHAKClient{cfg: conf},
+		heartbeatEntered:   make(chan struct{}),
+		heartbeatRelease:   make(chan struct{}),
+		heartbeatReentered: make(chan struct{}),
+		pollEntered:        make(chan struct{}),
+	}
+	s := &service{
+		cfg: conf, _hakeeperClient: client, config: util.NewConfigData(nil),
+		logger: zap.NewNop(), stopper: stopper.NewStopper(t.Name()),
+	}
+	t.Cleanup(s.stopper.Stop)
+	require.NoError(t, s.startCNStoreHeartbeat())
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("constructed CN waited for the hourly heartbeat tick")
+	}
+	require.Equal(t, int32(1), client.heartbeatCalls.Load())
+	// Stop cancels the blocked RPC and joins both existing control workers.
+}
+
 func TestCNHeartbeatPublishesCatalogFenceWhileHeartbeatIsInFlight(t *testing.T) {
 	conf := &Config{UUID: "catalog-fence-wakeup-cn"}
 	conf.HAKeeper.HeatbeatInterval.Duration = time.Hour
@@ -592,6 +619,7 @@ func TestCNCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
 
 func TestCNCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatInterval.Duration = time.Hour
 	client := &blockingCNHeartbeatCommandClient{
 		testHAKClient:    &testHAKClient{cfg: conf},
 		heartbeatEntered: make(chan struct{}),
@@ -602,9 +630,13 @@ func TestCNCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 		_hakeeperClient: client,
 		config:          &util.ConfigData{},
 		logger:          logutil.GetPanicLogger(),
+		heartbeatWakeup: make(chan struct{}, 1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	service.notifyHeartbeat()
+	service.heartbeatTask(ctx)
+	require.Zero(t, client.heartbeatCalls.Load(), "cancellation must win over queued startup work")
 	service.commandTask(ctx)
 	select {
 	case <-client.pollEntered:

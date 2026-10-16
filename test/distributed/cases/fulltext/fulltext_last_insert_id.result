@@ -1,0 +1,31 @@
+drop table if exists id_probe;
+create table id_probe(id bigint unsigned auto_increment primary key, label varchar(40));
+create fulltext index label_ft on id_probe(label);
+insert into id_probe(label) values ('small');
+select id, last_insert_id() from id_probe;
+➤ id[-5,64,0]  ¦  last_insert_id()[-5,64,0]  𝄀
+1  ¦  1
+insert into id_probe(label) values ('second row here');
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+2
+drop table if exists id_probe_hi;
+create table id_probe_hi(id bigint unsigned auto_increment primary key, label varchar(40)) auto_increment = 1000;
+create fulltext index label_ft on id_probe_hi(label);
+insert into id_probe_hi(label) values ('alpha beta gamma');
+select id, last_insert_id() from id_probe_hi;
+➤ id[-5,64,0]  ¦  last_insert_id()[-5,64,0]  𝄀
+1000  ¦  1000
+drop table if exists id_probe_multi;
+create table id_probe_multi(id bigint unsigned auto_increment primary key, label varchar(40));
+create fulltext index label_ft on id_probe_multi(label);
+insert into id_probe_multi(label) values ('one one one'), ('two two'), ('three');
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select group_concat(id order by id) as ids from id_probe_multi;
+➤ ids[-1,16383,0]  𝄀
+1,2,3
+drop table if exists id_probe;
+drop table if exists id_probe_hi;
+drop table if exists id_probe_multi;

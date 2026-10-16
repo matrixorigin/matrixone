@@ -157,13 +157,13 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	// Reconfirm these contracts on the very stream that carries the scope,
 	// not only at an earlier inventory/capability observation.
 	if requiredVectorProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion115)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion119)
 	}
 	if requiredVectorProtocol != nil && features.JSONMinMaxTypedComparison {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion118)
 	}
 	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion117)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -810,7 +810,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 115")
+				"remote ODKU result tracking requires MORPC protocol version 119")
 		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
@@ -1158,7 +1158,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 115")
+				"remote ODKU result tracking requires MORPC protocol version 119")
 		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
@@ -2028,6 +2028,11 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isDecimalStatisticalAggregate(agg) {
+			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
+				return err
+			}
+		}
 		if isVarianceAggregate(agg) &&
 			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
 			return moerr.NewNotSupportedNoCtx(
@@ -2126,6 +2131,60 @@ func orderedSetPercentileDiscUsesExtendedType(
 	default:
 		return true
 	}
+}
+
+// Native aggregate lowering removes the function expression and its result type.
+// Merge their explicit wire contracts into the same source/destination gates used
+// by expressions, including descriptors in child pipelines.
+func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return features, err
+	}
+	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	return features, nil
+}
+
+func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+	if p == nil {
+		return
+	}
+	for _, in := range p.InstructionList {
+		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) || in.Agg == nil {
+			continue
+		}
+		for _, wire := range in.Agg.Aggs {
+			if wire == nil {
+				continue
+			}
+			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			if isDecimalStatisticalAggregate(agg) {
+				features.DecimalStatisticalResultContracts = true
+				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
+					wire.ResultType == nil || types.T(wire.ResultType.Id) != types.T_float64
+			}
+		}
+	}
+	for _, child := range p.Children {
+		collectDecimalStatisticalDescriptorFeatures(child, features)
+	}
+}
+
+func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
+	args := agg.GetArgExpressions()
+	return isVarianceAggregate(agg) && len(args) == 1 && args[0] != nil &&
+		(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128)
+}
+
+func requireRemoteDecimalStatisticalResults(proc *process.Process) error {
+	version, known := int64(0), false
+	if proc != nil {
+		version, known = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if !known || version < defines.MORPCVersion113 {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	return nil
 }
 
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2282,6 +2341,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if !features.Any() {
 		return nil
 	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
+	}
 	if features.InvalidTemporalResultContract {
 		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
 	}
@@ -2297,24 +2359,33 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
 	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 115")
+		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 119")
 	}
 	if features.SessionLastInsertIDBaseline {
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion115 {
-			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 115")
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion119 {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 119")
 		}
 	}
-	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
-		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 114")
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 118")
 	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 113")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 117")
+	}
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
+		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")
+	}
+	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
@@ -2578,13 +2649,13 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 				return moerr.NewNotSupportedNoCtx(
-					"remote ODKU result tracking requires MORPC protocol version 115")
+					"remote ODKU result tracking requires MORPC protocol version 119")
 			}
 		}
 		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
 			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 115")
+				"remote ODKU result tracking requires MORPC protocol version 119")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -2969,6 +3040,10 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 			Expr:       a.GetArgExpressions(),
 			Config:     a.GetExtraConfig(),
 			ConfigType: a.GetConfigType(),
+		}
+		if isDecimalStatisticalAggregate(a) {
+			typ := types.T_float64.ToType().PlanType()
+			result[i].ResultType = &typ
 		}
 	}
 	return result

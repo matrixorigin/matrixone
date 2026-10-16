@@ -3,6 +3,8 @@
 
 -- Basic construction, round-tripped through WKT.
 select st_astext(st_point(1, 2)) as p;
+-- POINT is the MySQL-compatible name for the existing ST_POINT constructor.
+select st_astext(point(1, 2)) as p;
 select st_astext(st_point(116.3975, 39.9087)) as beijing;
 select st_geometrytype(st_point(1, 2)) as gtype;
 
@@ -20,6 +22,7 @@ select st_astext(st_point32(116.3975, 39.9087)) as bj32;
 
 -- NULL propagation: a NULL ordinate yields NULL.
 select st_astext(st_point(NULL, 1)) as a, st_astext(st_point(1, NULL)) as b, st_astext(st_point32(NULL, NULL)) as c;
+select st_astext(point(NULL, 1)) as p;
 
 -- Stored in geometry / geometry32 columns.
 drop table if exists sp;

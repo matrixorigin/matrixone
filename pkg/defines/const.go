@@ -148,10 +148,14 @@ const (
 	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
-	MORPCVersion113    int64 = 113 // selected JSON ELT and canonical opaque visible-text contracts
-	MORPCVersion114    int64 = 114 // typed JSON MIN/MAX aggregate comparison
-	MORPCVersion115    int64 = 115 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
-	MORPCLatestVersion       = MORPCVersion115
+	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
+	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
+	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
+	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
+	MORPCVersion117    int64 = 117 // selected JSON ELT and canonical opaque visible-text contracts
+	MORPCVersion118    int64 = 118 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion119    int64 = 119 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	MORPCLatestVersion       = MORPCVersion119
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

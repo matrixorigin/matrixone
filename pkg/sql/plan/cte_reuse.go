@@ -338,11 +338,21 @@ func (builder *QueryBuilder) cteStorageOutputTypes(
 	required := make([]bool, len(occurrences[0].types))
 	requiredCount := 0
 	for _, consumerRequired := range requiredByOccurrence {
+		hasDemand := false
 		for colPos, keep := range consumerRequired {
-			if keep && !required[colPos] {
+			if !keep {
+				continue
+			}
+			hasDemand = true
+			if !required[colPos] {
 				required[colPos] = true
 				requiredCount++
 			}
+		}
+		// A reader with no explicit demand emits its full fallback projection.
+		// Admission must account for those materialized columns as well.
+		if !hasDemand {
+			return occurrences[0].types, false
 		}
 	}
 	if requiredCount == 0 || requiredCount == len(required) {
@@ -1885,6 +1895,13 @@ func (builder *QueryBuilder) appendSharedCTEScan(
 		node.ExtraOptions = materialized.CTEHashBuildScanOption
 	}
 	nodeID := builder.appendNode(node, occurrence.ctx)
+	// Readers keep original producer ordinals until all SINK outputs have been
+	// compacted. Their independently pruned output positions do not identify
+	// the corresponding slots in the materialized producer.
+	if builder.positionalSinkScans == nil {
+		builder.positionalSinkScans = make(map[int32]struct{})
+	}
+	builder.positionalSinkScans[nodeID] = struct{}{}
 	if len(occurrence.headingProvenance) > 0 {
 		if builder.headingProvenanceByNode == nil {
 			builder.headingProvenanceByNode = make(map[int32]headingProvenanceMap)

@@ -133,6 +133,9 @@ message Aggregate {
   repeated plan.Expr expr = 3;
   bytes config = 4;
   plan.AggregateConfigType config_type = 5;
+  // Required for decimal statistical descriptors whose final result ABI changed.
+  // Absence identifies a legacy sender; partial-state encoding is unchanged.
+  plan.Type result_type = 6;
 }
 
 message Group {
@@ -773,9 +776,12 @@ message ProcessInfo {
   // matching Shuffle wire opcode makes pre-v33 receivers reject the pipeline;
   // the pair prevents a rollout change from silently splitting key ownership.
   uint32 string_shuffle_hash_algorithm = 16;
+  // Positive outer SELECT classification for expression warning policy.
+  // Legacy senders omit this field and remain unclassified.
+  bool statement_runtime_select = 17;
   // Statement-local ODKU ordinal range reserved by the initiating CN before
   // this remote pipeline starts. Older senders leave it zero.
-  uint64 odku_ordinal_base = 17;
+  uint64 odku_ordinal_base = 18;
 }
 
 message SessionInfo {
