@@ -90,7 +90,7 @@ func (c *Candidate) BuildEmbedded(bindings map[int32]EmbeddedReadBinding) ([]byt
 	if err := c.validateEmbeddedBindings(bindings); err != nil {
 		return nil, err
 	}
-	e := exporter{query: c.query, embeddedBindings: bindings, embeddedMO: true, profile: c.profile}
+	e := exporter{query: c.query, embeddedBindings: bindings, profile: c.profile}
 	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
 	for step, rootID := range c.query.Steps {
 		e.stepOrdinal = int32(step)

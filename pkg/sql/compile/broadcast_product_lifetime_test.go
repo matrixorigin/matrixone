@@ -422,10 +422,25 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	done = make(chan struct{})
 	result := make(chan error, 1)
 	go func() { defer close(done); result <- root.MergeRun(c) }()
+	if tc.allSkipped {
+		// No live consumer needs the build. Exercise observation after the
+		// scheduler has finished as well as observation during execution.
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("scheduler did not finish after all consumers skipped")
+		}
+	}
 	select {
 	case <-retired:
-	case err := <-result:
-		t.Fatalf("scheduler stopped before the empty consumer retired: %v", err)
+	case <-done:
+		// Completion and retirement may both be ready. Check the durable
+		// retirement condition without consuming the final scheduler result.
+		select {
+		case <-retired:
+		default:
+			t.Fatalf("scheduler stopped before the empty consumer retired: %v", <-result)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("empty consumer did not retire")
 	}

@@ -109,10 +109,6 @@ func (e *exporter) substraitType(t *planpb.Type) (*spb.Type, error) {
 	return result, err
 }
 
-func (e *exporter) namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
-	return namedStructForProfile(t, e.profile)
-}
-
 func (e *exporter) extensionURNs() []*extensions.SimpleExtensionURN {
 	if !e.exactUsed {
 		return nil
