@@ -1,10 +1,20 @@
 # Materialized View Validation and Performance Plan
 
-- Status: local SQL, restart, failure rollback and four performance scenarios verified; broader topology/workload cases pending
-- Design: [Materialized Views RFC, revision 2](../rfcs/00000000_materialized_views.md)
-- Source baseline: `dd38098853ea197699ed3fac3e69dc53975ac061`
+- Status: experimental P1; SQL, publication, lifecycle and native upgrade/crash checks have separate evidence; broader workloads remain pending
+- Design: [Materialized Views RFC, revision 3](../rfcs/00000000_materialized_views.md)
+- Historical performance prototype: `dd38098853ea197699ed3fac3e69dc53975ac061`
 - User requirement: implement the feature, independently design cases from
   StarRocks documentation, then verify usability and actual performance benefit
+
+## Native upgrade and crash boundaries (C07/C10/C12)
+
+The [native recovery procedure](materialized_view_native_recovery.md) defines
+the isolated old/new binary topology, deterministic commit barriers and
+independent SQL oracles. Its [result ledger](materialized_view_native_recovery_results.json)
+retains binary/source identity, SQL state changes and process exit codes.
+This evidence supplements the older graceful restart and in-memory failure
+tests; those tests alone do not establish durable task replay or compatibility.
+General CI's skipped compatibility jobs are not relabeled as successful.
 
 ## Reference behavior and scope
 

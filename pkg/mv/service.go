@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 const RuntimeKey = "materialized-view-service"
@@ -344,8 +345,22 @@ func (s *Service) Refresh(ctx context.Context, key Key, expectedEpoch uint64) er
 		if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set populated=true,last_run=%s,source_physical=%d,source_logical=%d,last_success=current_timestamp(),next_due=%s where account_id=%d and mv_id=%d and epoch=%d", literal(runID), ts.PhysicalTime, ts.LogicalTime, nextDueSQL(st.Interval), key.Account, key.ID, epoch)); err != nil {
 			return err
 		}
-		return consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUCCEEDED',finished_at=current_timestamp(),source_physical=%d,source_logical=%d where account_id=%d and mv_id=%d and run_id=%s", ts.PhysicalTime, ts.LogicalTime, key.Account, key.ID, literal(runID)))
+		if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUCCEEDED',finished_at=current_timestamp(),source_physical=%d,source_logical=%d where account_id=%d and mv_id=%d and run_id=%s", ts.PhysicalTime, ts.LogicalTime, key.Account, key.ID, literal(runID))); err != nil {
+			return err
+		}
+		// Native recovery tests stop the CN with all replacement writes still
+		// uncommitted. Disabled fault injection is a single atomic pointer read.
+		fault.TriggerFaultWithContext(ctx, "mv_refresh_before_commit")
+		return nil
 	}, opts)
+	if err == nil {
+		// This boundary is after durable publication and before the task runner
+		// receives its acknowledgement. ECHO(1) models a lost commit response;
+		// WAIT lets a native test kill this CN without stopping the TN.
+		if lost, _, _ := fault.TriggerFaultWithContext(ctx, "mv_refresh_after_commit"); lost == 1 {
+			err = moerr.NewInternalErrorNoCtx("injected materialized view commit response loss")
+		}
+	}
 	if err != nil {
 		// Diagnostic failure recording never changes the last-good result. A
 		// conditional RUNNING update cannot overwrite a committed success.

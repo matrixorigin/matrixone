@@ -740,3 +740,56 @@ Logs: `/workspace/mv-ci/main-76de-{focused,owning,vet,lint}.log`,
 whitespace, unresolved entries and final non-documentation input identity checks
 PASS. No new blocker was found in this maintenance scope; external RFC review
 and new-head remote CI remain separate gates.
+
+
+### 2026-10-16: native upgrade and commit/ack crash evidence
+
+The exact previous head `d50c4c77513c08837cf6ba351fae047ff9728bd2` has
+completed ALL CI `38843251708` successfully, including ordinary UT, coverage
+UT/aggregation, arm64 SCA, shared build, both multi-CN BVT groups and CI Required.
+Connector/J `38843254257` and Iceberg `38843254214` also succeeded. Optional
+compatibility jobs were skipped. Review `5543067251` subsequently requested
+native upgrade/recovery validation rather than reporting a new CI failure.
+
+The 4.0.15 handler has no tenant-upgrade phase; the framework's tenant protocol
+check therefore does not consume its RequiredProtocolVersion. The handler now
+checks the existing inventory gate before its first catalog DDL, failing closed
+on an old node or inventory error. Existing creation/read/refresh gates remain.
+Two bounded, disabled refresh fault points surround native publication; a
+startup initializer exists only in an explicitly tagged instrumented binary.
+No production startup environment control, new scheduler, persistent state,
+protocol number, retry loop or catalog schema is introduced by this follow-up.
+
+The final isolated native run passes **12/12 groups in 288.732 seconds**, with
+normal authenticated 4.0.14 SQL, mixed-version gate refusal, SIGKILL after two
+staged catalog DDLs, automatic recovery/repetition, unsafe old-node refusal with
+a populated periodic MV, native lost commit-response resolution, and real
+periodic task crashes before commit and after commit/before acknowledgement.
+The first post-restart result is last-good before the uncommitted replay, and
+already-new after durable publication. Both actual queue identities acknowledge
+on restart. Post-commit replay retains the exact result/run/sequence/source-TS/
+SUCCEEDED tuple; each task has one durable run. Teardown asserts no active
+per-view tasks and observes completed-task GC reaching zero. All owned processes
+exit: three expected SIGKILLs, the expected old-node refusal, other services
+cleanly. No normal service failure is counted as a pass.
+
+Final normal MV/4.0.15 suites pass (0.057/0.044 s); complete bootstrap passes
+(12.835 s). The exact refresh-failure root passes 100 race repetitions, with
+zero failures/skips/race reports; measured T=0.010 s and B=30 s yield N=100.
+The full MV race package passes (1.223 s). Five-package vet and configured lint
+including the startup tag pass, with 0 lint issues. Tagged and ordinary native
+service builds pass. The Python driver syntax and its real terminal exit are
+checked separately. Baseline CI SQL/multi-CN evidence is not relabeled as a
+new-head pass; final-head remote CI must run again.
+
+See `materialized_view_native_recovery.md`, the complete committed SQL/process
+ledger `materialized_view_native_recovery_results.json`, and
+`materialized_view_recovery_self_review.md`. The current pre-delivery binaries
+report d50c4c77 with `vcs.modified=true`, not a pristine publication commit.
+All 11,041 frozen tracked/new non-documentation inputs match at delivery; the
+old archived source matches 11,132 tracked blobs of fcad62a8. Native service code
+was unchanged after its build; final changes outside that build are test-only
+cleanup, the process driver and documentation, separately validated. Logs and
+full source-input ledgers remain in `/workspace/mv-ci/recovery-*` and the owned
+`/tmp/mv-native-recovery-7` directory. No current-head performance result or
+arbitrary release-pair compatibility is claimed. External re-review remains.

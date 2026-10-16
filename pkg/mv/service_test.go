@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,6 +119,9 @@ func (e *refreshExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecut
 		e.rollbacks++
 	} else {
 		e.commits++
+		if e.publications > 0 {
+			e.state.LastRun = e.lastPublication
+		}
 		if e.changeEpoch && e.commits == 1 {
 			e.state.Epoch++
 		}
@@ -229,7 +233,7 @@ func TestMaterializedViewRefreshTransaction(t *testing.T) {
 }
 
 func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
-	for _, scenario := range []string{"metadata publication failure", "source snapshot drift", "definition changed", "lost commit response", "retry conflict", "task replay", "obsolete replay epoch", "invalid task account"} {
+	for _, scenario := range []string{"metadata publication failure", "source snapshot drift", "definition changed", "lost commit response", "injected post-commit response loss", "retry conflict", "task replay", "obsolete replay epoch", "invalid task account"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -254,6 +258,16 @@ func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
 				e.changeEpoch = true
 			case "lost commit response":
 				e.loseCommitResponse = true
+			case "injected post-commit response loss":
+				enabledHere := fault.Enable()
+				t.Cleanup(func() {
+					if enabledHere {
+						defer fault.Disable()
+					}
+					_, err := fault.RemoveFaultPoint(context.Background(), "mv_refresh_after_commit")
+					require.NoError(t, err)
+				})
+				require.NoError(t, fault.AddFaultPoint(context.Background(), "mv_refresh_after_commit", ":::", "echo", 1, "", false))
 			case "retry conflict":
 				e.conflictOnce = true
 			case "task replay":
@@ -270,7 +284,7 @@ func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
 			service := NewService(e)
 			err := service.Refresh(ctx, Key{7, 99}, 2)
 			switch scenario {
-			case "retry conflict", "lost commit response":
+			case "retry conflict", "lost commit response", "injected post-commit response loss":
 				require.NoError(t, err)
 				require.Equal(t, 2, e.dataWrites)
 				require.Equal(t, 1, e.publications)

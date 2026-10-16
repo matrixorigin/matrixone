@@ -1,0 +1,1021 @@
+{
+  "passed_cases": [
+    "ordinary authenticated 4.0.14 deployment",
+    "old nodes block MV catalog migration and new-CN login remains pending",
+    "SIGKILL after two catalog DDLs before migration commit",
+    "interrupted migration recovers atomically with ordinary data intact",
+    "repeated automatic upgrade has exactly four catalogs and one ready target",
+    "old binary refuses downgrade with populated periodic MV before SQL/task admission",
+    "native durable commit response loss resolves to success",
+    "SIGKILL periodic refresh before_commit",
+    "restart and same-run replay before_commit",
+    "SIGKILL periodic refresh after_commit",
+    "restart and same-run replay after_commit",
+    "native fixture removes MV rows, dependencies, history and per-view tasks"
+  ],
+  "observations": {
+    "ordinary authenticated 4.0.14 deployment": [
+      [
+        "30"
+      ]
+    ],
+    "old nodes block MV catalog migration and new-CN login remains pending": {
+      "new_login": {
+        "error": "context deadline exceeded",
+        "rows": null
+      },
+      "old_catalog_control": {
+        "error": "",
+        "rows": [
+          [
+            "0"
+          ]
+        ]
+      }
+    },
+    "old binary refuses downgrade with populated periodic MV before SQL/task admission": {
+      "exit_code": 2,
+      "fence": "requires persisted expression protocol version 117 (local version 112)"
+    },
+    "native durable commit response loss resolves to success": [
+      [
+        "2",
+        "50",
+        "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+        "2",
+        "1792132285233213565",
+        "1",
+        "SUCCEEDED",
+        "1792132285233213565",
+        "1"
+      ]
+    ],
+    "SIGKILL periodic refresh before_commit": {
+      "before": [
+        [
+          "2",
+          "50",
+          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "2",
+          "1792132285233213565",
+          "1",
+          "SUCCEEDED",
+          "1792132285233213565",
+          "1"
+        ]
+      ],
+      "at_barrier": [
+        [
+          "2",
+          "50",
+          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "2",
+          "1792132285233213565",
+          "1",
+          "SUCCEEDED",
+          "1792132285233213565",
+          "1"
+        ]
+      ],
+      "run": [
+        "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+        "3",
+        "RUNNING"
+      ],
+      "queue": [
+        [
+          "1",
+          "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+        ]
+      ]
+    },
+    "restart and same-run replay before_commit": {
+      "after_restart": [
+        [
+          "2",
+          "50",
+          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "2",
+          "1792132285233213565",
+          "1",
+          "SUCCEEDED",
+          "1792132285233213565",
+          "1"
+        ]
+      ],
+      "after_ack": [
+        [
+          "2",
+          "80",
+          "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+          "3",
+          "1792132375548443834",
+          "1",
+          "SUCCEEDED",
+          "1792132375548443834",
+          "1"
+        ]
+      ]
+    },
+    "SIGKILL periodic refresh after_commit": {
+      "before": [
+        [
+          "2",
+          "80",
+          "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+          "3",
+          "1792132375548443834",
+          "1",
+          "SUCCEEDED",
+          "1792132375548443834",
+          "1"
+        ]
+      ],
+      "at_barrier": [
+        [
+          "2",
+          "120",
+          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "4",
+          "1792132395526261333",
+          "1",
+          "SUCCEEDED",
+          "1792132395526261333",
+          "1"
+        ]
+      ],
+      "run": [
+        "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+        "4",
+        "SUCCEEDED"
+      ],
+      "queue": [
+        [
+          "1",
+          "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+        ]
+      ]
+    },
+    "restart and same-run replay after_commit": {
+      "after_restart": [
+        [
+          "2",
+          "120",
+          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "4",
+          "1792132395526261333",
+          "1",
+          "SUCCEEDED",
+          "1792132395526261333",
+          "1"
+        ]
+      ],
+      "after_ack": [
+        [
+          "2",
+          "120",
+          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "4",
+          "1792132395526261333",
+          "1",
+          "SUCCEEDED",
+          "1792132395526261333",
+          "1"
+        ]
+      ]
+    }
+  },
+  "binaries": {
+    "service": {
+      "path": "/tmp/mo-service-mv-recovery",
+      "sha256": "40b350b84955db699b3b0bcbe26f84b8504f2b25ad37bba67c0fd187dd4fd97c"
+    },
+    "old_service": {
+      "path": "/tmp/mo-service-pre-migration",
+      "sha256": "e61fef2d84d4563392c00db89ea11cbbbe7fcd115442fec3e7106b3cbc9c5150"
+    },
+    "probe": {
+      "path": "/tmp/mv-native-probe",
+      "sha256": "e00da3db2c5a0434ad350f39be42a804033a00fb21ba421817eb9fd0bd029296"
+    }
+  },
+  "sql_observations": {
+    "old: select 1": {
+      "attempts": 11,
+      "changes": [
+        {
+          "error": "dial tcp 127.0.0.1:6102: connect: connection refused",
+          "rows": null
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "old: select version,state from mo_catalog.mo_version order by create_at desc limit 1": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "4.0.14",
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "old: create database mv_recovery": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "old: create table mv_recovery.facts(id int primary key,v bigint)": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "old: insert into mv_recovery.facts values(1,10),(2,20)": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "old: select count(*) from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state')": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "old: select sum(v) from mv_recovery.facts": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "30"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select 1": {
+      "attempts": 14,
+      "changes": [
+        {
+          "error": "context deadline exceeded",
+          "rows": null
+        },
+        {
+          "error": "dial tcp 127.0.0.1:6101: connect: connection refused",
+          "rows": null
+        },
+        {
+          "error": "context deadline exceeded",
+          "rows": null
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "dial tcp 127.0.0.1:6101: connect: connection refused",
+          "rows": null
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "dial tcp 127.0.0.1:6101: connect: connection refused",
+          "rows": null
+        },
+        {
+          "error": "context deadline exceeded",
+          "rows": null
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "dial tcp 127.0.0.1:6101: connect: connection refused",
+          "rows": null
+        },
+        {
+          "error": "context deadline exceeded",
+          "rows": null
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select version,version_offset,state from mo_catalog.mo_version where version='4.0.15'": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "4.0.15",
+              "4",
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select relname,count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state') group by relname order by relname": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "mo_materialized_views",
+              "1"
+            ],
+            [
+              "mo_mv_account_state",
+              "1"
+            ],
+            [
+              "mo_mv_dependencies",
+              "1"
+            ],
+            [
+              "mo_mv_refresh_runs",
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select sum(v) from mv_recovery.facts": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "30"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: set experimental_materialized_view=1": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: create materialized view mv_recovery.result refresh every interval 1 day as select count(*) as n,sum(v) as s from mv_recovery.facts": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: refresh materialized view mv_recovery.result": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select m.n,m.s,v.last_run,v.successful_sequence,v.source_physical,v.source_logical,r.status,r.source_physical,r.source_logical from mv_recovery.result m,mo_catalog.mo_materialized_views v,mo_catalog.mo_mv_refresh_runs r where v.account_id=0 and v.database_name='mv_recovery' and v.name='result' and r.account_id=v.account_id and r.mv_id=v.mv_id and r.run_id=v.last_run": {
+      "attempts": 11,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "2",
+              "30",
+              "679d450d-2461-487e-bf72-b85a371c7d9b",
+              "1",
+              "1792132283396247414",
+              "1",
+              "SUCCEEDED",
+              "1792132283396247414",
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "2",
+              "50",
+              "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+              "2",
+              "1792132285233213565",
+              "1",
+              "SUCCEEDED",
+              "1792132285233213565",
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "2",
+              "80",
+              "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+              "3",
+              "1792132375548443834",
+              "1",
+              "SUCCEEDED",
+              "1792132375548443834",
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "2",
+              "120",
+              "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+              "4",
+              "1792132395526261333",
+              "1",
+              "SUCCEEDED",
+              "1792132395526261333",
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_task.sys_async_task where task_metadata_executor=17 and task_runner='ee1dccb4-4d3c-41f8-b482-5251dc7a41bf'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select mo_ctl('cn','GetProtocolVersion','')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "{\n  \"method\": \"GETPROTOCOLVERSION\",\n  \"result\": \"dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:117, dd4dccb4-4d3c-41f8-b482-5251dc7a41bf:117\"\n}\n"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: update mv_recovery.facts set v=25": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select enable_fault_injection()": {
+      "attempts": 3,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_refresh_after_commit',':::','echo',1,'')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_probe_waiters',':::','getwaiters',0,'mv_refresh_after_commit')": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_probe_count',':::','getcount',0,'mv_refresh_after_commit')": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select trigger_fault_point('mv_probe_count')": {
+      "attempts": 3,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where status='FAILED'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select disable_fault_injection()": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: update mv_recovery.facts set v=40": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_refresh_before_commit',':::','wait',0,'')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_probe_waiters',':::','getwaiters',0,'mv_refresh_before_commit')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_probe_count',':::','getcount',0,'mv_refresh_before_commit')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: update mo_catalog.mo_materialized_views set next_due=current_timestamp() where account_id=0 and database_name='mv_recovery' and name='result'": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select trigger_fault_point('mv_probe_waiters')": {
+      "attempts": 268,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select run_id,sequence,status from mo_catalog.mo_mv_refresh_runs where account_id=0 and mv_id=(select mv_id from mo_catalog.mo_materialized_views where account_id=0 and database_name='mv_recovery' and name='result') order by sequence desc limit 1": {
+      "attempts": 2,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+              "3",
+              "RUNNING"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+              "4",
+              "SUCCEEDED"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:afca36464f1d43fcfe0ae6f111b9d845759da533'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1",
+              "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:afca36464f1d43fcfe0ae6f111b9d845759da533'": {
+      "attempts": 41,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: update mv_recovery.facts set v=60": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select add_fault_point('mv_refresh_after_commit',':::','wait',0,'')": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:1ebdf54bad857a20da8493b4303477281bca44df'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1",
+              "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:1ebdf54bad857a20da8493b4303477281bca44df'": {
+      "attempts": 41,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f'": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: drop materialized view mv_recovery.result": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: drop database mv_recovery": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": null
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_materialized_views": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_mv_dependencies": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%' and task_status<>2": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "current: select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%'": {
+      "attempts": 7,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "1"
+            ]
+          ]
+        },
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "process_exits": {
+    "old-storage-log": 0,
+    "old-storage-tn": 0,
+    "old-bootstrap": 0,
+    "new-mixed": 0,
+    "new-storage-log": 0,
+    "new-storage-tn": 0,
+    "new-staged-migration": -9,
+    "new-migration-recovery": 0,
+    "new-migration-repeat": -9,
+    "unsafe-downgrade": 2,
+    "recovery-before_commit": -9,
+    "recovery-after_commit": 0
+  },
+  "elapsed_seconds": 288.7319877099944,
+  "scope": {
+    "baseline": "d50c4c77513c08837cf6ba351fae047ff9728bd2",
+    "old_source": "fcad62a8ff06000e682824802f1155cbeea02a2f",
+    "old_tracked_blob_count": 11132,
+    "old_source_mismatches": 0,
+    "current_build_tag": "matrixone_mv_faults",
+    "current_vcs_modified": true,
+    "normal_production_build": "pass",
+    "authentication_bypass": false,
+    "source_input_count": 11041,
+    "source_input_ledger_sha256": "6e84e8b44fd3ad9654d8ed289be72b02e4499a21993aa0bb84dc66c4345ad881",
+    "local_run_command": "python3 optools/materialized_view_recovery.py --service /tmp/mo-service-mv-recovery --old-service /tmp/mo-service-pre-migration --probe /tmp/mv-native-probe --work-dir /tmp/mv-native-recovery-7",
+    "not_claimed": [
+      "general CI compatibility jobs passed",
+      "arbitrary release pairs",
+      "all network/WAL failures",
+      "operator downgrade preflight",
+      "cold-cache latency or scheduler scale",
+      "current-head speedup"
+    ]
+  },
+  "source_sha256": {
+    "optools/materialized_view_recovery.py": "d232dd8943c368c3e3f150c38c6f13fa82812a69709831691a11dd98f333e4de",
+    "test/materialized_view/native_probe/main.go": "2030ccc5981c5c56b636a82ce8056e902483221411dcd60377184ee7fd1d5fee",
+    "cmd/mo-service/materialized_view_faults.go": "ce2a4779bd0b1fba7f89c30fdc3cea075a921debaf1bc59e1bdda9a2f1fab126",
+    "pkg/mv/service.go": "aa91a93269a8ddabb8f5c1e2de2fdf484ee0830a200ae08b537ffbdb02fe18ba",
+    "pkg/bootstrap/versions/v4_0_15/upgrade.go": "f1b02fc96a23c8b511aeca219e328361e3eb39adf6114646fbb0eee53ec42877"
+  },
+  "local_validation": {
+    "normal_mv_seconds": 0.057,
+    "normal_v4_0_15_seconds": 0.044,
+    "normal_bootstrap_seconds": 12.835,
+    "race_root_measure_seconds": 0.01,
+    "race_root_final_repetitions": 100,
+    "race_root_final_package_seconds": 2.107,
+    "race_owning_mv_seconds": 1.223,
+    "vet": "pass",
+    "configured_incremental_lint_issues": 0,
+    "prior_head_all_ci": {
+      "head": "d50c4c77513c08837cf6ba351fae047ff9728bd2",
+      "run": 38843251708,
+      "conclusion": "success"
+    },
+    "new_head_ci": "pending publication"
+  }
+}

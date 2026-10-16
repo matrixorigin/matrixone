@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -28,24 +30,51 @@ import (
 func TestMaterializedViewUpgrade(t *testing.T) {
 	require.Equal(t, "4.0.15", Handler.Metadata().Version)
 	require.Equal(t, defines.MORPCVersion117, Handler.Metadata().RequiredProtocolVersion)
-	for _, failure := range []bool{false, true} {
-		calls := 0
-		injected := errors.New("catalog creation failed")
-		tx := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-			calls++
-			require.True(t, strings.HasPrefix(sql, "create cluster table if not exists mo_catalog.mo_"))
-			if failure && calls == 2 {
-				return executor.Result{}, injected
+	for _, scenario := range []string{"ready", "DDL failure", "old CN", "protocol query failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			injected := errors.New("catalog creation failed")
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			tx := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+					if scenario == "protocol query failure" {
+						return executor.Result{}, injected
+					}
+					value := `{"result":"cn-a:117,cn-b:117"}`
+					if scenario == "old CN" {
+						value = `{"result":"cn-a:117,cn-b:116"}`
+					}
+					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					r.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendStringRows(r, 0, []string{value}))
+					return r.GetResult(), nil
+				}
+				calls++
+				require.True(t, strings.HasPrefix(sql, "create cluster table if not exists mo_catalog.mo_"))
+				if scenario == "DDL failure" && calls == 2 {
+					return executor.Result{}, injected
+				}
+				return executor.Result{}, nil
+			}, nil)
+			err := Handler.HandleClusterUpgrade(context.Background(), tx)
+			switch scenario {
+			case "old CN":
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 117")
+				require.Zero(t, calls, "old CN must block before the first catalog DDL")
+			case "protocol query failure":
+				require.ErrorIs(t, err, injected)
+				require.Zero(t, calls)
+			case "DDL failure":
+				require.ErrorIs(t, err, injected)
+				require.Equal(t, 2, calls)
+			default:
+				require.NoError(t, err)
+				require.Equal(t, 4, calls)
 			}
-			return executor.Result{}, nil
-		}, nil)
-		err := Handler.HandleClusterUpgrade(context.Background(), tx)
-		if failure {
-			require.ErrorIs(t, err, injected)
-			require.Equal(t, 2, calls)
-		} else {
-			require.NoError(t, err)
-			require.Equal(t, 4, calls)
-		}
+		})
 	}
 }

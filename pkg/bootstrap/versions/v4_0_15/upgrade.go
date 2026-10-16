@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 var Handler = &versionHandle{
@@ -53,7 +54,12 @@ func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, t
 	return nil
 }
 
-func (v *versionHandle) HandleClusterUpgrade(_ context.Context, tx executor.TxnExecutor) error {
+func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, tx executor.TxnExecutor) error {
+	// This version has no tenant-upgrade phase, so the framework's tenant
+	// protocol check does not run. Fence old CNs before installing MV catalogs.
+	if err := versions.CheckCommonProtocolVersion(tx, v.metadata.RequiredProtocolVersion); err != nil {
+		return err
+	}
 	for _, ddl := range catalog.MaterializedViewCatalogDDLs {
 		ddl = strings.Replace(ddl, "create cluster table ", "create cluster table if not exists ", 1)
 		result, err := tx.Exec(ddl, executor.StatementOption{}.WithAccountID(catalog.System_Account))
@@ -61,6 +67,7 @@ func (v *versionHandle) HandleClusterUpgrade(_ context.Context, tx executor.TxnE
 			return err
 		}
 		result.Close()
+		fault.TriggerFaultWithContext(ctx, "mv_catalog_upgrade_after_ddl")
 	}
 	return nil
 }
