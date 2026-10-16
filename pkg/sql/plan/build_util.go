@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -147,6 +148,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	ret, err := getTypeFromAstWithoutCharset(ctx, typ)
 	if err != nil {
 		return plan.Type{}, err
+	}
+	if astType, ok := typ.(*tree.T); ok && astType.InternalType.CastCharsetSpecified {
+		name := astType.InternalType.CastCharsetName
+		identity, ok := collation.ResolveCharset(name)
+		if !ok || (identity != collation.BinaryIdentity && identity != collation.UTF8MB4GeneralCIIdentity) {
+			return plan.Type{}, moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CHAR cast", name)
+		}
+		// This is an expression target, not a DDL column declaration. In
+		// particular, CHAR(N) CHARACTER SET binary must stay variable length;
+		// mapping it through the DDL CHAR->BINARY helper would pad short values.
+		if identity == collation.BinaryIdentity {
+			ret.Id = int32(types.T_varbinary)
+			ret.Charset = uint32(types.CharsetBinary)
+		} else {
+			// utf8 and utf8mb3 retain MatrixOne's existing utf8mb4 alias.
+			applyTextCharsetToPlanType(&ret, uint32(identity))
+		}
+		return ret, nil
 	}
 	// AST-authored types are new metadata. Assign their explicit charset here so
 	// CharsetLegacy remains reserved for types decoded from pre-collation catalogs.
@@ -1006,7 +1025,7 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
-	crc32Text, err := plan.RequiresMORPCVersion113CRC32JSONTextBytes(defaultExpr)
+	crc32Text, err := plan.RequiresMORPCVersion117CRC32JSONTextBytes(defaultExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -3057,4 +3076,20 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
+}
+
+// equalFoldKey produces the same equivalence classes used by strings.EqualFold
+// so callers can detect duplicates without pairwise comparisons.
+func equalFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }

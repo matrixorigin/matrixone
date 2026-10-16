@@ -3,53 +3,113 @@ create database pub_db_priv_test;
 use pub_db_priv_test;
 create table t1(a int, b varchar(50));
 insert into t1 values(1, 'hello'),(2, 'world'),(3, 'test');
-create publication pub_priv_test database pub_db_priv_test account all;
+create table hidden_publisher_table(a int);
+create view private_view as select a from t1;
+create publication pub_priv_test database pub_db_priv_test table t1, private_view account all;
+create cluster table mo_catalog.metadata_show_cluster(a int);
 create account acc_priv_test admin_name 'root' identified by '111';
 create database sub_db from sys publication pub_priv_test;
+show tables from mo_catalog like 'mo_tables';
+➤ Tables_in_mo_catalog[12,5000,0]  𝄀
+mo_tables
+show tables from mo_catalog like 'metadata_show_cluster';
+➤ Tables_in_mo_catalog[12,5000,0]  𝄀
+metadata_show_cluster
+create database pub_db_priv_test;
+create table pub_db_priv_test.t1(a int);
+create view pub_db_priv_test.private_view as select 1 as a;
 select * from sub_db.t1 order by a;
-a    b
-1    hello
-2    world
-3    test
+➤ a[4,32,0]  ¦  b[12,50,0]  𝄀
+1  ¦  hello  𝄀
+2  ¦  world  𝄀
+3  ¦  test
 create role sub_reader_role;
 create user if not exists sub_reader identified by '111' default role sub_reader_role;
 grant connect on account * to sub_reader_role;
 select count(*) from information_schema.tables where table_schema = 'sub_db';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from information_schema.columns where table_schema = 'sub_db';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
+show tables from sub_db;
+internal error: do not have privilege to execute the statement
+show columns from sub_db.t1;
+internal error: do not have privilege to execute the statement
+show create table sub_db.t1;
+internal error: do not have privilege to execute the statement
 grant show databases on account * to sub_reader_role;
-grant show tables on database sub_db to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
+grant select on table pub_db_priv_test.private_view to sub_reader_role;
 select * from sub_db.t1 order by a;
-a    b
-1    hello
-2    world
-3    test
+➤ a[4,32,0]  ¦  b[12,50,0]  𝄀
+1  ¦  hello  𝄀
+2  ¦  world  𝄀
+3  ¦  test
 use sub_db;
 select * from t1 order by a;
-a    b
-1    hello
-2    world
-3    test
+➤ a[4,32,0]  ¦  b[12,50,0]  𝄀
+1  ¦  hello  𝄀
+2  ¦  world  𝄀
+3  ¦  test
 show tables;
-Tables_in_sub_db
+➤ Tables_in_sub_db[12,5000,0]  𝄀
 t1
+show full tables from sub_db;
+➤ Tables_in_sub_db[12,5000,0]  ¦  Table_type[12,13,0]  𝄀
+t1  ¦  BASE TABLE
+show columns from sub_db.t1;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(50)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table sub_db.t1;
+➤ Table[12,2,0]  ¦  Create Table[12,76,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` varchar(50) DEFAULT NULL
+)
+show columns from sub_db.private_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table sub_db.private_view;
+internal error: do not have privilege to execute the statement
+show create view sub_db.private_view;
+internal error: do not have privilege to execute the statement
+show create table pub_db_priv_test.private_view;
+internal error: do not have privilege to execute the statement
+show create table private_view;
+internal error: do not have privilege to execute the statement
+prepare subscription_view_denied from 'show create table private_view';
+internal error: do not have privilege to execute the statement
+grant show tables on database sub_db to sub_reader_role;
+prepare subscription_view_definition from 'show create table private_view';
+revoke show tables on database sub_db from sub_reader_role;
+execute subscription_view_definition;
+internal error: do not have privilege to execute the statement
+deallocate prepare subscription_view_definition;
+show tables from sub_db like 'hidden%';
+➤ Tables_in_sub_db[12,5000,0]
+show columns from sub_db.hidden_publisher_table;
+no such table sub_db.hidden_publisher_table
+show columns from pub_db_priv_test.t1;
+internal error: do not have privilege to execute the statement
 select table_schema, table_name from information_schema.tables
 where table_schema = 'sub_db' order by table_name;
-table_schema    table_name
-sub_db    t1
+➤ table_schema[12,5000,0]  ¦  table_name[12,5000,0]  𝄀
+sub_db  ¦  private_view  𝄀
+sub_db  ¦  t1
 select table_schema, table_name, column_name, ordinal_position from information_schema.columns
 where table_schema = 'sub_db' order by table_name, ordinal_position;
-table_schema    table_name    column_name    ordinal_position
-sub_db    t1    a    1
-sub_db    t1    b    2
+➤ table_schema[12,256,0]  ¦  table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  ordinal_position[4,32,0]  𝄀
+sub_db  ¦  private_view  ¦  a  ¦  1  𝄀
+sub_db  ¦  t1  ¦  a  ¦  1  𝄀
+sub_db  ¦  t1  ¦  b  ¦  2
 drop user sub_reader;
 drop role sub_reader_role;
 drop database sub_db;
+drop database pub_db_priv_test;
 drop account acc_priv_test;
 drop publication pub_priv_test;
+drop table mo_catalog.metadata_show_cluster;
 drop database pub_db_priv_test;
 set global enable_privilege_cache = on;

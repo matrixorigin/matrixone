@@ -380,7 +380,8 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 					require.NotNil(t, fn)
 					require.Len(t, fn.GetF().Args, 1)
 					typ := fn.GetF().Args[0].Typ
-					require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, typ.Id)
+					require.Equal(t, int32(types.T_float64), typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
 					require.Empty(t, typ.Enumvalues)
 					require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
 					require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
@@ -395,8 +396,9 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(s) from (select distinct s from set_empty_member_t) d",
 		"select s, sum(s), avg(s) from set_empty_member_t group by s",
 	} {
-		_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 		require.NoError(t, err, sql)
+		require.Equal(t, int32(types.T_float64), sumAvgTestExpression(t, p, "sum").Typ.Id)
 	}
 	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select s + 0 from set_empty_member_t group by s")
 	require.ErrorContains(t, err, "without retained storage identity")
@@ -430,9 +432,218 @@ func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 			for _, name := range []string{"sum", "avg"} {
 				fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, name)
 				require.NotNil(t, fn)
-				require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+			}
+			prepared := p.GetDcl().GetPrepare()
+			if len(prepared.ParamTypes) > 0 {
+				for _, value := range []int64{1, 2} {
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(t.Context(), prepared.Plan, []any{value})
+					require.NoError(t, err)
+					for _, name := range []string{"sum", "avg"} {
+						fn := sumAvgTestExpression(t, filled, name)
+						require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+						require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+					}
+				}
 			}
 		})
+	}
+}
+
+func TestMySQLSpecialBitwiseAggregateIdentity(t *testing.T) {
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name   string
+			prefix string
+			suffix string
+		}{
+			{"direct", "select ", " from enum_order_t"},
+			{"grouped", "select id, ", " from enum_order_t group by id"},
+			{"window", "select ", " over (order by id rows between unbounded preceding and current row) from enum_order_t"},
+			{"derived", "select ", " from (select id, e, s from enum_order_t) d"},
+			{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+			{"prepared", "prepare stmt1 from 'select ", " from (select id, e, s from enum_order_t) d where id = ?'"},
+		} {
+			for _, operand := range []string{"e", "s"} {
+				t.Run(name+"/"+tc.name+"/"+operand, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+name+"("+operand+")"+tc.suffix)
+					require.NoError(t, err)
+					if p.GetDcl().GetPrepare() != nil {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					if tc.name == "window" {
+						fn = firstWindowSpec(t, p).WindowFunc
+					}
+					require.NotNil(t, fn)
+					require.Equal(t, name, fn.GetF().Func.ObjName)
+					require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+					arg := fn.GetF().Args[0]
+					want := types.T_uint16
+					if operand == "s" {
+						want = types.T_uint64
+					}
+					require.Equal(t, int32(want), arg.Typ.Id)
+					require.False(t, isEnumOrSetPlanType(&arg.Typ), "aggregate must consume an ordinary integer domain")
+					require.False(t, isBitwiseAggregatePrivateCast(arg))
+				})
+			}
+		}
+		for _, operand := range []string{"v", "cast(e as char)", "concat(e, '')"} {
+			t.Run(name+"/string/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select "+name+"("+operand+") from enum_order_t")
+				require.NoError(t, err)
+				fn := findPlanFunctionExpr(p, name)
+				require.NotNil(t, fn)
+				arg := fn.GetF().Args[0]
+				require.True(t, isBitwiseAggregatePrivateCast(arg))
+				require.Equal(t, int32(types.T_varchar), arg.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
+func TestBitCountMySQLSpecialIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		suffix string
+	}{
+		{"direct", "select ", " from enum_order_t"},
+		{"derived", "select ", " from (select e, s from enum_order_t) d"},
+		{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+		{"grouped", "select ", " from enum_order_t group by e, s"},
+		{"having", "select e, s from enum_order_t group by e, s having ", " > 0"},
+		{"prepared", "prepare bit_count_stmt from 'select ", " from enum_order_t where id = ?'"},
+	} {
+		for _, operand := range []string{"e", "s"} {
+			t.Run(tc.name+"/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+"bit_count("+operand+")"+tc.suffix)
+				require.NoError(t, err)
+				if p.GetDcl().GetPrepare() != nil {
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				fn := findPlanFunctionExpr(p, "bit_count")
+				require.NotNil(t, fn)
+				require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+				arg := fn.GetF().Args[0]
+				want := types.T_uint16
+				if operand == "s" {
+					want = types.T_uint64
+				}
+				require.Equal(t, int32(want), arg.Typ.Id)
+				require.False(t, isEnumOrSetPlanType(&arg.Typ), "BIT_COUNT must consume an ordinary integer domain")
+			})
+		}
+	}
+	for _, operand := range []string{"v", "cast(e as char)", "cast(s as char)", "concat(e, '')", "concat(s, '')"} {
+		t.Run("string/"+operand, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count("+operand+") from enum_order_t")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_varchar), fn.GetF().Args[0].Typ.Id)
+		})
+	}
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count(s) from set_empty_member_t group by s")
+	require.ErrorContains(t, err, "without retained storage identity")
+}
+
+func TestStatisticalAggregateNumericDomains(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+		for _, tc := range []struct {
+			label, operand, source string
+			want                   types.T
+		}{
+			{"enum", "e", "enum_order_t", types.T_uint16},
+			{"distinct enum", "distinct e", "enum_order_t", types.T_uint16},
+			{"derived enum", "e", "(select e from enum_order_t) d", types.T_uint16},
+			{"materialized enum", "e", "(select e from enum_order_t limit 2) d", types.T_uint16},
+			{"bool predicate", "id > 1", "enum_order_t", types.T_int8},
+			{"explicit enum label", "cast(e as char)", "enum_order_t", types.T_float64},
+		} {
+			for _, prepared := range []bool{false, true} {
+				sql := "select " + name + "(" + tc.operand + ") from " + tc.source
+				if prepared {
+					sql = "prepare stat_agg from '" + sql + "'"
+				}
+				t.Run(sql, func(t *testing.T) {
+					mock := newMySQLSpecialOrderMock(t)
+					mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+					p, err := runOneStmt(mock, t, sql)
+					require.NoError(t, err)
+					if prepared {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					require.NotNil(t, fn)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Len(t, fn.GetF().Args, 1)
+					require.Equal(t, int32(tc.want), fn.GetF().Args[0].Typ.Id, tc.label)
+					if tc.label == "materialized enum" {
+						// The existing label-to-ordinal recovery retains the ENUM
+						// definition on its numeric expression.
+						require.NotNil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+					} else {
+						require.Empty(t, fn.GetF().Args[0].Typ.Enumvalues)
+					}
+				})
+			}
+		}
+
+		for _, operand := range []struct {
+			sql  string
+			want types.T
+		}{{"e", types.T_uint16}, {"id > 1", types.T_int8}} {
+			t.Run(name+" window "+operand.sql, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
+					"select "+name+"("+operand.sql+") over (order by id rows between unbounded preceding and current row) from enum_order_t")
+				require.NoError(t, err)
+				var aggregate *planpb.Expr
+				for _, node := range p.GetQuery().Nodes {
+					for _, item := range node.WinSpecList {
+						if w := item.GetW(); w != nil && w.WindowFunc.GetF().Func.ObjName == name {
+							aggregate = w.WindowFunc
+						}
+					}
+				}
+				require.NotNil(t, aggregate)
+				require.Equal(t, int32(types.T_float64), aggregate.Typ.Id)
+				require.Len(t, aggregate.GetF().Args, 1)
+				require.Equal(t, int32(operand.want), aggregate.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
+func TestMySQLSpecialAggregateDoubleDomainBoundaries(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, operand := range []string{"e", "s"} {
+			for _, sql := range []string{
+				"select " + name + "(" + operand + ") from enum_order_t group by id",
+				"select " + name + "(" + operand + ") over () from enum_order_t",
+				"with c as (select e,s from enum_order_t) select " + name + "(" + operand + ") from c",
+			} {
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				})
+			}
+			for _, expression := range []string{operand + "+0", "cast(" + operand + " as unsigned)", "cast(" + operand + " as decimal(20,0))"} {
+				sql := "select " + name + "(" + expression + ") from enum_order_t"
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.NotEqual(t, int32(types.T_float64), fn.Typ.Id,
+						"explicit numeric expressions establish their own aggregate domain")
+				})
+			}
+		}
 	}
 }
 

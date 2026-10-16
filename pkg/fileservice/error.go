@@ -185,10 +185,36 @@ func wrapSizeMismatchErr(p *error) {
 
 }
 
-func isDiskFull(err error) bool {
+type diskFullKind int
+
+const (
+	notDiskFull diskFullKind = iota
+	// diskQuotaExceeded is EDQUOT: a quota on the cache's own directory or
+	// owner is exhausted, so freeing cache files always makes room.
+	diskQuotaExceeded
+	// diskNoSpace is ENOSPC: blocks or inodes of the filesystem are exhausted,
+	// or a structural per-directory limit was hit. Only the former is relieved
+	// by evicting cache files.
+	diskNoSpace
+)
+
+func classifyDiskFull(err error) diskFullKind {
 	if err == nil {
-		return false
+		return notDiskFull
 	}
+	if errors.Is(err, syscall.EDQUOT) {
+		return diskQuotaExceeded
+	}
+	if errors.Is(err, syscall.ENOSPC) {
+		return diskNoSpace
+	}
+	// Some layers flatten errors to strings.
 	str := err.Error()
-	return strings.Contains(str, "disk quota exceeded")
+	if strings.Contains(str, "disk quota exceeded") {
+		return diskQuotaExceeded
+	}
+	if strings.Contains(str, "no space left on device") {
+		return diskNoSpace
+	}
+	return notDiskFull
 }

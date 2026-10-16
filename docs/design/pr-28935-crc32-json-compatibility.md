@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v112. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v117. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v112; receiving checks the new identity. Old coordinators send identity
+worker at candidate v117; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,22 +39,24 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v111 and supported released versions, not
+Supported sources include main through v116 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
 upgrade source. The current maintenance candidate integrates main
-`cd8d5abf9665a97d13e50b04840fb74b877fd339`, preserving all contracts through v111,
+`b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7`, preserving all contracts through v116,
 including v101's JSON source domains, v107's functional-index contracts and
 v108's isolated user-variable NULL regexp history during migration and v109's
 native Unicode collation metadata, v110's MEDIUMINT assignment bounds, and v111's
-IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs.
-CRC32 uses candidate v112. This number is
+IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs,
+v112's signed date results, v113's DECIMAL statistical DOUBLE results,
+v114's Unicode UNIQUE keys, v115's calendar intervals, and v116's scalar division warnings.
+CRC32 uses candidate v117. This number is
 not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v112 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v117 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -89,7 +91,21 @@ Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
-## Current main integration candidate: merged IndexSearchScan prefix
+## Current main integration candidate on 2026-10-16
+
+The base-sync merge integrates actual main
+`b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7`. Main owns v113-v116;
+CRC32's independent capability moves from the old candidate v113 to v117
+across local execution, placement, actual destination, receiver, persisted read
+and durable authoring. The merge retains main's independent expression floors
+and its complete implementations. Existing overload identities remain stable.
+Predecessor tests reject v116 and admit v117, while preserving the independent
+DECIMAL-statistics, calendar-interval and IndexSearchScan controls. Validation
+for this exact merge is recorded in the base-sync worker handback; historical
+results below do not establish acceptance of this merge. Required CI,
+mixed-version/upgrade acceptance and review remain separate gates.
+
+## Historical main integration candidate: merged IndexSearchScan prefix
 
 Actual main `cd8d5abf9665a97d13e50b04840fb74b877fd339` now reserves v111 for
 the implemented IndexSearchScan contract. Resolving the real const.go conflict

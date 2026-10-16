@@ -39,6 +39,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
+			"SELECT division diagnostics require a versioned remote destination",
+			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
 			"checked integer arithmetic requires a versioned remote destination",
 			"remote destination does not support checked integer arithmetic (MORPC version %d)"},
@@ -48,6 +51,12 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.CalendarIntervalNormalization, defines.MORPCVersion115,
+			"calendar interval normalization requires a versioned remote destination",
+			"remote destination does not support calendar interval normalization (MORPC version %d)"},
+		{features.DecimalStatisticalResultContracts, defines.MORPCVersion113,
+			"decimal statistical DOUBLE results require a versioned remote destination",
+			"remote destination does not support decimal statistical DOUBLE results (MORPC version %d)"},
 		{features.DateNumericResultContracts, defines.MORPCVersion112,
 			"signed date result contracts require a versioned remote destination",
 			"remote destination does not support signed date result contracts (MORPC version %d)"},
@@ -66,7 +75,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
 			"versioned expression semantics require a remote destination",
 			"remote destination does not support versioned expression semantics (MORPC version %d)"},
-		{features.CRC32JSONTextBytes, defines.MORPCVersion113,
+		{features.CRC32JSONTextBytes, defines.MORPCVersion117,
 			"CRC32 JSON text-byte semantics require a versioned remote destination",
 			"remote destination does not support CRC32 JSON text-byte semantics (MORPC version %d)"},
 		{features.StringNumericResultContracts, defines.MORPCVersion80,

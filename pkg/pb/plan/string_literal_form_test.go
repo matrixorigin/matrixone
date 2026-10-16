@@ -1088,3 +1088,21 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
+	for _, id := range []int64{583, 598} {
+		expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32}}}}
+		owner := &TableDef{Cols: []*ColDef{{Default: &Default{Expr: expr}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded TableDef
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, id == 598, features.CalendarIntervalNormalization)
+		if id == 598 {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
+}
