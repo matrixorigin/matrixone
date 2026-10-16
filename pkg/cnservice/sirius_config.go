@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,29 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sidecarflight
+package cnservice
 
 import (
-	"errors"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func internalErrorf(format string, args ...any) error {
-	var cause error
-	if strings.Contains(format, "%w") {
-		format = strings.ReplaceAll(format, "%w", "%v")
-		for _, arg := range args {
-			if err, ok := arg.(error); ok {
-				cause = err
-				break
-			}
+// ValidateSiriusConfigKeys rejects settings outside the current Sirius schema.
+// Both service configuration loaders use the decoder's actual key metadata;
+// no removed setting or compatibility spelling is retained here.
+func ValidateSiriusConfigKeys(metadata toml.MetaData) error {
+	for _, key := range metadata.Undecoded() {
+		if len(key) >= 3 && strings.EqualFold(key[0], "cn") && strings.EqualFold(key[1], "sirius") {
+			return moerr.NewBadConfigNoCtxf("unknown Sirius configuration key: %s", key.String())
 		}
 	}
-	err := error(moerr.NewInternalErrorNoCtxf(format, args...))
-	if cause != nil {
-		err = errors.Join(err, cause)
-	}
-	return err
+	return nil
 }
