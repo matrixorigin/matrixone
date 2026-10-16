@@ -166,6 +166,10 @@ INSERT INTO t_utf8 VALUES (1, '😀', '😀');
 SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name)[12,800,0]  ¦  HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀
 F09F9880  ¦  F09F9880  ¦  4  ¦  1
+SELECT HEX('😀' COLLATE utf8_general_ci), HEX(name COLLATE utf8mb3_general_ci),
+HEX('😀' COLLATE utf8_bin), HEX(name_mb3 COLLATE utf8mb3_bin) FROM t_utf8;
+➤ HEX((😀) collate utf8_general_ci)[12,8,0]  ¦  HEX((name) collate utf8mb3_general_ci)[12,800,0]  ¦  HEX((😀) collate utf8_bin)[12,8,0]  ¦  HEX((name_mb3) collate utf8mb3_bin)[12,8,0]  𝄀
+F09F9880  ¦  F09F9880  ¦  F09F9880  ¦  F09F9880
 ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀

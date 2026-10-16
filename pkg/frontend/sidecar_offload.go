@@ -400,6 +400,8 @@ func walkExprForSubqueries(expr tree.Expr, defaultDB string, manifestBaseURL str
 		walkExprForSubqueries(e.Expr, defaultDB, manifestBaseURL, cteNames)
 	case *tree.CastExpr:
 		walkExprForSubqueries(e.Expr, defaultDB, manifestBaseURL, cteNames)
+	case *tree.CollateExpr:
+		walkExprForSubqueries(e.Expr, defaultDB, manifestBaseURL, cteNames)
 	case *tree.Tuple:
 		for _, item := range e.Exprs {
 			walkExprForSubqueries(item, defaultDB, manifestBaseURL, cteNames)
