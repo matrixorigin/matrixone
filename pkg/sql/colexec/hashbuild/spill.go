@@ -221,11 +221,14 @@ func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFile
 	return fs, nil
 }
 
-// ensureSpillFile reuses an admitted writer or opens a transient descriptor.
-// The bundle is the sole descriptor owner; files only describes bucket count.
+// ensureSpillFile opens one named bucket only for the current physical write.
+// closeSpillFile must follow before another bucket is opened.
 func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, bucket int) (*os.File, error) {
 	if bucket < 0 || bucket >= len(files) {
 		return nil, process.ErrExecutionResourceInvalid
+	}
+	if files[bucket] != nil {
+		return files[bucket], nil
 	}
 	if ctr.spillUUID == "" {
 		return nil, moerr.NewInternalErrorNoCtx("ensureSpillFile: spillUUID not initialized")
@@ -251,7 +254,18 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 	if err != nil {
 		return nil, err
 	}
+	files[bucket] = f
 	return f, nil
+}
+
+func (ctr *container) closeSpillFile(files []*os.File, bucket int) error {
+	if ctr == nil || ctr.spillBundle == nil ||
+		bucket < 0 || bucket >= len(files) || files[bucket] == nil {
+		return process.ErrExecutionResourceInvalid
+	}
+	err := ctr.spillBundle.closeFile(bucket)
+	files[bucket] = nil
+	return err
 }
 
 func (ctr *container) writeSpillPayload(
@@ -266,17 +280,17 @@ func (ctr *container) writeSpillPayload(
 	if err != nil {
 		return err
 	}
-	finished := false
+	closed := false
 	defer func() {
-		if !finished {
-			_ = ctr.spillBundle.finishWrite(bucket, true)
+		if !closed {
+			_ = ctr.closeSpillFile(files, bucket)
 		}
 	}()
 	writeErr := ctr.writeOpenSpillPayload(
 		proc, file, bucket, payload, rows, analyzer,
 	)
-	closeErr := ctr.spillBundle.finishWrite(bucket, writeErr != nil)
-	finished = true
+	closeErr := ctr.closeSpillFile(files, bucket)
+	closed = true
 	if writeErr != nil {
 		return writeErr
 	}
