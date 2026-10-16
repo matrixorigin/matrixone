@@ -26,6 +26,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,9 +99,22 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
+					c.proc.SetStmtProfile(&process.StmtProfile{})
+					c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+					c.proc.GetSessionInfo().SqlMode = ""
+					c.proc.SetResolveVariableFunc(nil)
+					if mode == "division_warning" {
+						c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+						division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
+							{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+							plan2.MakePlan2Int64ConstExprWithType(0),
+						})
+						require.NoError(t, err)
+						op.ProjectList = append(op.ProjectList, division)
+					}
 					if mode == "mixed" {
 						op.ProjectList = append(op.ProjectList, decimalDivisionProtocolExpr(types.T_decimal128))
 					}
@@ -136,19 +150,23 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.Equal(t, mode == "calendar", features.DateNumericResultContracts)
 					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
 					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
-					require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
+					require.Equal(t, mode == "mixed" || mode == "division_warning", features.ScalarDivision)
+					require.Equal(t, defines.MORPCVersion117, executionRemoteExpressionProtocolVersion(c.proc, features))
+					require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion116, persistedVersion)
+					require.Equal(t, defines.MORPCVersion117, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion117, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion116 {
+						if version == defines.MORPCVersion117 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
+						} else if version < defines.MORPCVersion116 && mode == "division_warning" {
+							require.ErrorContains(t, err, "remote destination does not support SELECT division diagnostics")
 						} else if version == 0 && mode == "mixed" {
 							require.ErrorContains(t, err, "remote destination does not support decimal division")
 						} else if version < defines.MORPCVersion112 && mode == "calendar" {
@@ -158,7 +176,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 116)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 117)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
