@@ -1683,6 +1683,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		incompatibleVersion int64
 		compatibleVersion   int64
 		errorContains       string
+		workerVersion       int64
 	}, 0, 10)
 	tests = append(tests, []struct {
 		name                string
@@ -1690,6 +1691,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		incompatibleVersion int64
 		compatibleVersion   int64
 		errorContains       string
+		workerVersion       int64
 	}{
 		{
 			name:                "ordinary cast",
@@ -1714,9 +1716,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		{
 			name:                "statement digest text",
 			expressions:         []*planpb.Expr{statementDigestText(cast(0))},
-			incompatibleVersion: defines.MORPCVersion101,
-			compatibleVersion:   defines.MORPCVersion102,
-			errorContains:       "STATEMENT_DIGEST_TEXT requires MORPC protocol version 102",
+			incompatibleVersion: defines.MORPCVersion116,
+			compatibleVersion:   defines.MORPCVersion117,
+			errorContains:       "STATEMENT_DIGEST_TEXT requires MORPC protocol version 117",
+			workerVersion:       defines.MORPCVersion117,
 		},
 		{
 			name:                "numeric prefix and JSON comparison",
@@ -1738,6 +1741,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				incompatibleVersion int64
 				compatibleVersion   int64
 				errorContains       string
+				workerVersion       int64
 			}{
 				name:                fmt.Sprintf("mixed equality %d %s", functionID, orientation),
 				expressions:         []*planpb.Expr{mixedJSONBooleanEquality(functionID, jsonOnLeft)},
@@ -1749,6 +1753,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			versionClient.version = test.workerVersion
+			if versionClient.version == 0 {
+				versionClient.version = defines.MORPCVersion102
+			}
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.incompatibleVersion)
 			incompatibleData, _, _, _, err := prepareRemoteRunSendingData(
 				"", makeScope(test.expressions...), proc, nil, uuid.Nil)
@@ -1805,16 +1813,16 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
-	t.Run("statement digest text requires v102", func(t *testing.T) {
+	t.Run("statement digest text requires v117", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{statementDigestText(cast(0))},
 		}}}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "STATEMENT_DIGEST_TEXT requires MORPC protocol version 102")
+		require.ErrorContains(t, err, "STATEMENT_DIGEST_TEXT requires MORPC protocol version 117")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion102)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 }

@@ -82,7 +82,13 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 	previousType := 0
 	for {
 		priorType := previousType
-		typ, value := scanner.Scan()
+		var typ int
+		var value string
+		if priorType == '.' {
+			typ, value = scanner.ScanAfterDot()
+		} else {
+			typ, value = scanner.Scan()
+		}
 		previousType = typ
 		scannedSource := digestSQL[lastScanPos:scanner.Pos]
 		lastScanPos = scanner.Pos

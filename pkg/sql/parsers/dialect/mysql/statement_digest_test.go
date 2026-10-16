@@ -31,6 +31,8 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "SELECT 1", max: 1024, want: "SELECT ?"},
 		{sql: "  select 2 /* comment */ where 10=20; -- tail\n", max: 1024, want: "SELECT ? WHERE ? = ?"},
 		{sql: "SELECT * FROM t WHERE id IN (1,2,3)", max: 1024, want: "SELECT * FROM `t` WHERE `id` IN (...)"},
+		{sql: "SELECT t.begin FROM src t", max: 1024, want: "SELECT `t` . `begin` FROM `src` `t`"},
+		{sql: "SELECT t.rank FROM src t", max: 1024, want: "SELECT `t` . `rank` FROM `src` `t`"},
 		{sql: "SELECT -1, +2", max: 1024, want: "SELECT ?, ..."},
 		{sql: `SELECT @'secret', @@session.sql_mode, @name`, max: 1024, want: "SELECT @? , @@SESSION . `sql_mode` , @?"},
 		{sql: `SELECT @'secret', @"name"`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT @? , @`name`"},
