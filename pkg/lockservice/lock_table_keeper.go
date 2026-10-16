@@ -55,6 +55,14 @@ type lockTableKeeper struct {
 	keepRemoteLockRefreshOffset uint64
 	keepRemoteLockBindOffsets   map[string]uint64
 	keepRemoteLockPeerScratch   []keepRemoteLockPeerWork
+	// The remote keeper owns this snapshot and its finite eviction worklist.
+	// Idle routes do not participate in remote-lock heartbeats.
+	routeOwnersKnown      bool
+	routeOwners           []string
+	routeOwnerScratch     []string
+	idleRouteScanPending  bool
+	idleRemoteRoutes      []pb.LockTable
+	idleRemoteRouteOffset int
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -111,6 +119,14 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 	defer k.service.logger.InfoAction("keep remote locks task")()
+	defer func() {
+		k.routeOwnersKnown = false
+		k.routeOwners = nil
+		k.routeOwnerScratch = nil
+		k.idleRouteScanPending = false
+		k.idleRemoteRoutes = nil
+		k.idleRemoteRouteOffset = 0
+	}()
 
 	timer := time.NewTimer(jitterKeeperInterval(k.keepRemoteLockInterval))
 	defer timer.Stop()
@@ -201,6 +217,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
+	k.keepIdleRemoteRoutes(ctx)
+
 	type bindKey struct {
 		group     uint32
 		table     uint64
@@ -488,6 +506,7 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	}
 	if newBind.Changed(bind) {
 		if err := k.service.handleBindChangedFromAllocator(
+			ctx,
 			"keep-remote-refresh",
 			bind,
 			newBind,

@@ -82,7 +82,7 @@ type remoteLockTable struct {
 	client                      Client
 	bindChangedHandler          func(pb.LockTable)
 	allocatorStateProvider      func() allocatorState
-	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
+	allocatorBindChangedHandler func(context.Context, string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -541,9 +541,9 @@ func (l *remoteLockTable) getLock(
 
 		// why use loop is similar to unlock
 		if err = l.handleErrorWithContext(ctx, err, false); err == nil {
-			// The bind-change handler replaces this table in service.tableGroups.
-			// Let the caller reacquire it instead of treating the stale snapshot as
-			// an empty waiting list.
+			// The handler retires this generation; its replacement may remain
+			// uncached. Let the caller reacquire the route instead of treating
+			// the stale snapshot as an empty waiting list.
 			return ErrLockTableBindChanged
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -567,9 +567,9 @@ func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wai
 			return pb.WaitTxn{}, false, err
 		}
 		if err = l.handleErrorWithContext(ctx, err, false); err == nil {
-			// The bind-change handler replaces the lock-table object in service.tableGroups.
-			// This in-flight remote table still carries the stale bind, so let the service
-			// reacquire the current table before retrying the holder lookup.
+			// This in-flight table is retired even if its replacement remains
+			// uncached. Let the service reacquire the route before retrying the
+			// holder lookup.
 			return pb.WaitTxn{}, false, ErrLockTableBindChanged
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -840,6 +840,7 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if new.Changed(l.bind) {
 		if l.allocatorBindChangedHandler != nil {
 			return l.allocatorBindChangedHandler(
+				ctx,
 				"remote-bind-refresh",
 				l.bind,
 				new,
@@ -905,6 +906,7 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 			return ErrLockTableBindChanged
 		}
 		if err := l.allocatorBindChangedHandler(
+			ctx,
 			"remote-new-bind",
 			l.bind,
 			refreshedBind,
