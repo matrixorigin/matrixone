@@ -56,7 +56,7 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
-# Only audited DML/SQL roots may use fresh bounded process generations.
+# Only audited packages may use fresh bounded process generations.
 UT_EMBEDDED_BATCHES=${UT_EMBEDDED_BATCHES:-"1"}
 # Direct invocation stays serial; Make supplies the validated CI issues pool.
 if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
@@ -683,6 +683,8 @@ function start_ut_heartbeat(){
                 "${G_WKSP}/${G_TS}-issues-race-report.out".*
                 "${G_WKSP}/${G_TS}-embedded-race-report.out"
                 "${G_WKSP}/${G_TS}-embedded-race-report.out".*
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out".*
             )
             # Own the finite scan as a group. A large first scan or fallback
             # must not outlive heartbeat cancellation or keep its pipes open.
@@ -2038,14 +2040,14 @@ function prebuilt_race_package_is_high_footprint(){
     case "$1" in
         github.com/matrixorigin/matrixone/pkg/embed|\
         github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
-        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration|\
-        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn)
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
             return 0
             ;;
         github.com/matrixorigin/matrixone/pkg/tests/arrowload|\
         github.com/matrixorigin/matrixone/pkg/tests/dml|\
         github.com/matrixorigin/matrixone/pkg/tests/partition|\
         github.com/matrixorigin/matrixone/pkg/tests/shard|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn|\
         github.com/matrixorigin/matrixone/pkg/tests/testutils|\
         github.com/matrixorigin/matrixone/pkg/tests/upgrade|\
         example/*)
@@ -2540,7 +2542,10 @@ function run_embedded_tests(){
     if [[ "${UT_EMBEDDED_BATCHES}" == 4 ]]; then
         for package in ${package_scope}; do
             case "${package}" in
-                github.com/matrixorigin/matrixone/pkg/tests/dml|github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
+                github.com/matrixorigin/matrixone/pkg/embed|\
+                github.com/matrixorigin/matrixone/pkg/tests/dml|\
+                github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
+                github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
                     batched_packages+=("${package}") ;;
             esac
         done
@@ -2548,13 +2553,25 @@ function run_embedded_tests(){
             ordinary_scope=$(remove_packages_from_scope "${ordinary_scope}" "${batched_packages[@]}")
         fi
     fi
-    # Keep one Go driver for the remaining scope, including the exact original
-    # command/order when batching is disabled. Never pass an empty package list.
+    # Reuse Go's package scheduler and the existing cluster lease pool. Keep
+    # the complete wave serial if any owner requires high-footprint exclusion,
+    # including unknown packages and the unbatched rollback scopes.
     if [[ -n "${ordinary_scope}" ]]; then
+        local ordinary_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
+        local -a ordinary_env=()
+        for package in ${ordinary_scope}; do
+            if prebuilt_race_package_is_high_footprint "${package}"; then
+                ordinary_parallel=1
+                break
+            fi
+        done
+        if (( ordinary_parallel > 1 )); then
+            ordinary_env=(MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${ordinary_parallel}" GOMAXPROCS=2)
+        fi
         run_ut_command embedded "embedded-cluster race-test packages" \
-            env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            env ${ordinary_env[@]+"${ordinary_env[@]}"} LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
             go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-            -p 1 -timeout "${UT_TIMEOUT}m" -race ${ordinary_scope}
+            -p "${ordinary_parallel}" -timeout "${UT_TIMEOUT}m" -race ${ordinary_scope}
         test_status=$?
         if (( test_status == 125 )); then return 125; fi
     fi
@@ -3119,6 +3136,7 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local analysis_tool
   local failed_output=""
   local setup_summary=""
   local setup_status=0
@@ -3150,11 +3168,11 @@ function ut_summary(){
     fi
   fi
 
-  if ! install_go_ut_analysis; then
+  if ! analysis_tool=$(install_go_ut_analysis); then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
-    go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    "${analysis_tool}" test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
     analysis_status=$?
   fi
 

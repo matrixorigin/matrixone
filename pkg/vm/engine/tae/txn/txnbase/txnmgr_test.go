@@ -181,6 +181,28 @@ func TestTryUpdateMaxCommittedTSNeverMovesBackward(t *testing.T) {
 	require.Equal(t, newer, *mgr.MaxCommittedTS.Load())
 }
 
+func TestHeartbeatCompletionAcrossTxnModes(t *testing.T) {
+	mgr := &TxnManager{}
+	mgr.initMaxCommittedTS()
+	heartbeat := NewTxn(mgr, &heartbeatStore{}, []byte("in-flight-heartbeat"), MinCommittedTS, types.TS{})
+	committed := types.BuildTS(10, 0)
+	require.NoError(t, heartbeat.SetCommitTS(committed))
+
+	// A heartbeat admitted before a mode switch may still complete afterwards.
+	// Stopping new heartbeats must not replace the completion-side mode check.
+	WithReadonlyMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, MinCommittedTS, *mgr.MaxCommittedTS.Load())
+	WithReplayMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, MinCommittedTS, *mgr.MaxCommittedTS.Load())
+
+	// Resuming writes must allow heartbeat progress again.
+	WithWriteMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, committed, *mgr.MaxCommittedTS.Load())
+}
+
 func TestTryUpdateMaxCommittedTSConcurrent(t *testing.T) {
 	mgr := &TxnManager{}
 	mgr.initMaxCommittedTS()
