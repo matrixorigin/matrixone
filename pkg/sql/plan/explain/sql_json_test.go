@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"strings"
@@ -831,6 +832,46 @@ func TestBuildSQLJSONPlanPreservesLiteralVectorQuery(t *testing.T) {
 	}, decoded.MatrixOne.Nodes[0].Expressions)
 }
 
+func TestBuildSQLJSONPlanPreservesFulltextSearchPayload(t *testing.T) {
+	node := fulltextSearchScanNode(t)
+	node.NodeId = 0
+	node.IndexSearchScan.QueryPayload = sqlJSONTestInt32(7)
+	data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{
+		StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{node},
+	})
+	require.NoError(t, err)
+	var decoded struct {
+		MatrixOne struct {
+			Nodes []sqlJSONNode `json:"nodes"`
+		} `json:"matrixone"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.MatrixOne.Nodes, 1)
+	require.Equal(t, "Fulltext Index Scan", decoded.MatrixOne.Nodes[0].Operator)
+	require.Contains(t, decoded.MatrixOne.Nodes[0].Expressions, "index=ft_body")
+	require.Contains(t, decoded.MatrixOne.Nodes[0].Expressions, "query_payload=7")
+	require.NotContains(t, decoded.MatrixOne.Nodes[0].Expressions, "query_vector=7")
+}
+
+func TestBuildSQLJSONPlanRejectsMalformedIndexSearchPayload(t *testing.T) {
+	for name, spec := range map[string]*plan.IndexSearchScan{
+		"missing metadata":          nil,
+		"missing index":             {},
+		"unpaired name":             {Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprNames: []string{"limit"}},
+		"unpaired expression":       {Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}},
+		"empty name":                {Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprNames: []string{""}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}},
+		"nil expression":            {Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprNames: []string{"limit"}, AlgoExprs: []*plan.Expr{nil}},
+		"invalid algorithm options": {Index: &plan.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"}, AlgoOptions: []byte(`{`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildSQLJSONPlan(t.Context(), &plan.Query{
+				StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: spec}},
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestBuildSQLJSONPlanPreservesSamplePolicy(t *testing.T) {
 	buildExpressions := func(spec *plan.SampleFuncSpec) []string {
 		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
@@ -1038,6 +1079,7 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 			} `json:"matrixone"`
 		}
 		require.NoError(t, json.Unmarshal(data, &decoded))
+		require.Contains(t, decoded.MatrixOne.Nodes[0].Expressions, "algorithm_options_base64="+base64.StdEncoding.EncodeToString(settings))
 		return decoded.MatrixOne.Nodes[0].Expressions
 	}
 

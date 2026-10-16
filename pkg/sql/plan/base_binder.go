@@ -63,6 +63,48 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		return nil, bindErr
 	}
 	defer leaveBinding()
+	if b.builder != nil && b.builder.odkuAdmission != nil {
+		admission := b.builder.odkuAdmission
+		if admission.visited == nil {
+			admission.visited = make(map[odkuAdmissionExprKey]struct{})
+		}
+		admission.visited[odkuAdmissionExprKey{astExpr, b.ctx, depth}] = struct{}{}
+		bindUnvisitedOperand := func(operand tree.Expr) {
+			if _, visited := admission.visited[odkuAdmissionExprKey{operand, b.ctx, depth}]; !visited {
+				_, _ = b.impl.BindExpr(operand, depth, false)
+			}
+		}
+		// This builder only resolves ODKU admission. Keep visiting siblings after
+		// an invalid expression; its placeholder plan is always discarded.
+		defer func() {
+			if err != nil {
+				// Preconditions may fail before an operand or window expression.
+				// Reuse syntax traversal, but let the canonical binder own every
+				// child scope; never walk through an unconstructed query block.
+				switch failed := astExpr.(type) {
+				case *tree.Subquery:
+				case *tree.FullTextMatchExpr:
+					bindUnvisitedOperand(failed.Pattern)
+					for _, key := range failed.KeyParts {
+						if key.ColName != nil {
+							_, _ = b.impl.BindColRef(key.ColName, depth, false)
+						}
+					}
+				default:
+					root := true
+					walkGroupingSetOrderByExpr(astExpr, func(operand tree.Expr) bool {
+						if root {
+							root = false
+							return true
+						}
+						bindUnvisitedOperand(operand)
+						return false
+					})
+				}
+				expr, err = makePlan2NullConstExprWithType(), nil
+			}
+		}()
+	}
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -697,6 +739,20 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
+		if binding != nil && db != "" && b.builder != nil && b.builder.odkuAdmission != nil {
+			// A database-qualified real table cannot be impersonated by a
+			// different local table's alias. Database matching is already owned
+			// by resolveTableBinding; additionally check the resolved scan name.
+			ok := binding.nodeId >= 0 && int(binding.nodeId) < len(b.builder.qry.Nodes)
+			if ok {
+				node := b.builder.qry.Nodes[binding.nodeId]
+				ok = node.TableDef != nil &&
+					tree.NewCStr(node.TableDef.Name, b.ctx.lower).Compare() == table
+			}
+			if !ok {
+				binding = nil
+			}
+		}
 		if binding != nil {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {

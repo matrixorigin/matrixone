@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -646,6 +647,11 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		return nil, err
 	}
 	values = append(values, settings...)
+	// Algorithm options are opaque to the generic planner. Preserve them without
+	// assuming an algorithm-specific encoding or duplicating its decoder.
+	if len(spec.AlgoOptions) > 0 {
+		values = append(values, "algorithm_options_base64="+base64.StdEncoding.EncodeToString(spec.AlgoOptions))
+	}
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
 	}
