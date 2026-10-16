@@ -6314,7 +6314,7 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 		return nil, false
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex < 0 || !preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
 		return nil, false
 	}
@@ -6350,42 +6350,65 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 // TEXT representation. Merely relabeling the result loses binary semantics for
 // case conversion, byte offsets and reversal. Inferred BLOBs are not declarations.
 func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*Expr, error) {
-	pos := preparedStringDomainSourceIndex(name, len(args))
-	if pos < 0 || fieldStringStaticDomain(args[pos]).kind != fieldStringText {
-		return args, nil
+	pos, declaredCollation := preparedStringDomainSourceIndex(name, len(args))
+	var resolver *preparedFieldStringResolver
+	result, copied := args, false
+	for i, arg := range args {
+		if fieldStringStaticDomain(arg).kind != fieldStringText {
+			continue
+		}
+		// Consume materialized declarations before a value selector can hide
+		// them. Direct values retain TEXT row overrides for character slicing
+		// and reversal; case folding instead uses the declared collation.
+		materialized := arg.GetCol() != nil || arg.GetSub() != nil || preparedFieldPrivateCastSource(arg, 3) != nil
+		if !materialized && (i != pos || !declaredCollation &&
+			possibleStringDomainsForExpr(arg) == possibleStringDomainText|possibleStringDomainBinary) {
+			continue
+		}
+		if resolver == nil {
+			resolver = newPreparedFieldStringResolver(b)
+			resolver.readOnly = true
+		}
+		domain := fieldStringArgumentDeclaration(resolver.expr(arg))
+		if domain.kind != fieldStringBinary || domain.inferredBinary {
+			continue
+		}
+		target := types.T_blob.ToType()
+		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, makePlan2Type(&target))
+		if err != nil {
+			return nil, err
+		}
+		b.rememberPreparedFieldReturnSource(converted, preparedFieldReturnSource{value: arg})
+		if !copied {
+			result, copied = append([]*Expr(nil), args...), true
+		}
+		result[i] = converted
 	}
-	resolver := newPreparedFieldStringResolver(b)
-	resolver.readOnly = true
-	domain := fieldStringArgumentDeclaration(resolver.expr(args[pos]))
-	if domain.kind != fieldStringBinary || domain.inferredBinary {
-		return args, nil
-	}
-	target := types.T_blob.ToType()
-	converted, err := makePlan2CastExpr(b.GetContext(), args[pos], makePlan2Type(&target))
-	if err != nil {
-		return nil, err
-	}
-	result := append([]*Expr(nil), args...)
-	result[pos] = converted
 	return result, nil
 }
 
-func preparedStringDomainSourceIndex(name string, arity int) int {
+// The single source mapping also distinguishes declaration-collation operations
+// from operations that preserve a directly selected value's row domain.
+func preparedStringDomainSourceIndex(name string, arity int) (index int, declaredCollation bool) {
 	switch name {
-	case "substring", "substr", "mid", "substring_index", "left", "right",
-		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
+	case "lower", "to_lower", "lcase", "upper", "to_upper", "ucase":
+		if arity == 0 {
+			return -1, true
+		}
+		return 0, true
+	case "substring", "substr", "mid", "substring_index", "left", "right", "reverse",
 		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
 		if arity == 0 {
-			return -1
+			return -1, false
 		}
-		return 0
+		return 0, false
 	case "trim":
 		if arity <= 2 {
-			return -1
+			return -1, false
 		}
-		return 2
+		return 2, false
 	default:
-		return -1
+		return -1, false
 	}
 }
 
@@ -6598,7 +6621,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 		}
 		return
 	}
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
 		if preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
 			// A string-producing function implicitly converts numeric runtime
@@ -8721,7 +8744,7 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 
 	// These functions preserve the effective domain of their value source;
 	// follow that source instead of trusting their common static return type.
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
 		return possibleStringDomainsForExpr(fn.Args[sourceIndex])
 	}

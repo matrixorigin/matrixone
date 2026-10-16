@@ -66,6 +66,16 @@ from domains order by id;
 select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
        char_length(concat(coalesce(txt, bin), 'x'))
 from domains order by id;
+-- Declaration-based FIELD comparison must not overwrite the selected row domain.
+select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
+       hex(left(coalesce(txt, bin), 1)) from domains order by id;
+-- Case folding consumes declaration collation, unlike direct character slicing.
+select id, hex(upper(coalesce(txt, bin))) from domains order by id;
+-- Materialized declarations are consumed before any further value selection.
+select id, hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
        char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;

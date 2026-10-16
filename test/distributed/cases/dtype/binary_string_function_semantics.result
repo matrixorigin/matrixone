@@ -89,6 +89,29 @@ from domains order by id;
 1  ¦  E4BDA0  ¦  61E4BDA0  ¦  3  𝄀
 2  ¦  E4  ¦  61A0BDE4  ¦  5  𝄀
 3  ¦  E4BDA0  ¦  61E4BDA0  ¦  3
+select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
+hex(left(coalesce(txt, bin), 1)) from domains order by id;
+➤ id[4,32,0]  ¦  field(left(coalesce(txt, bin), 1), 你, 0xe4)[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
+1  ¦  1  ¦  E4BDA0  𝄀
+2  ¦  2  ¦  E4  𝄀
+3  ¦  1  ¦  E4BDA0
+select id, hex(upper(coalesce(txt, bin))) from domains order by id;
+➤ id[4,32,0]  ¦  hex(upper(coalesce(txt, bin)))[-1,16383,0]  𝄀
+1  ¦  E4BDA061  𝄀
+2  ¦  E4BDA061  𝄀
+3  ¦  E4BDA061
+select id, hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+➤ id[4,32,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+1  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  E4  ¦  61A0BDE4
+select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+➤ id[4,32,0]  ¦  hex(left(coalesce(x, 你a), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(x, 你a)))[-1,16383,0]  𝄀
+1  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  E4  ¦  61A0BDE4
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
 char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;

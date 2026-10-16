@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -148,6 +149,8 @@ func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
 	require.Same(t, source, args[0], "do not mutate the caller's arguments")
 	require.NotSame(t, source, converted[0])
 	require.Equal(t, types.T_blob, makeTypeByPlan2Expr(converted[0]).Oid)
+	require.True(t, isCastOverload(converted[0], 1), "declaration consumption owns the result, unlike transparent cast0")
+	require.False(t, converted[0].GetF().GetSyntaxExplicitCast())
 	again, err := binder.bindStringSourceDeclaration("reverse", converted)
 	require.NoError(t, err)
 	require.Same(t, converted[0], again[0], "do not add repeated representation casts")
@@ -156,6 +159,26 @@ func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
 	text, err := binder.bindStringSourceDeclaration("reverse", []*Expr{explicit})
 	require.NoError(t, err)
 	require.Same(t, explicit, text[0], "SQL-authored text declarations remain authoritative")
+	textColumn := &Expr{Typ: makePlan2Type(&target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}
+	binaryType := types.T_varbinary.ToType()
+	binaryColumn := &Expr{Typ: makePlan2Type(&binaryType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 1}}}
+	convertedBinary, err := appendCastBeforeExpr(ctx, binaryColumn, makePlan2Type(&target))
+	require.NoError(t, err)
+	mixed, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{textColumn, convertedBinary})
+	require.NoError(t, err)
+	preserved, err := binder.bindStringSourceDeclaration("left", []*Expr{mixed, makePlan2Int64ConstExprWithType(1)})
+	require.NoError(t, err)
+	require.Same(t, mixed, preserved[0], "a common binary declaration must not overwrite the selected text row")
+	folded, err := binder.bindStringSourceDeclaration("upper", []*Expr{mixed})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), folded[0].Typ.Id, "case folding uses declaration collation")
+	require.Same(t, mixed, folded[0].GetF().Args[0])
+	consumed, err := binder.bindStringSourceDeclaration("coalesce", []*Expr{source, source})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), consumed[0].Typ.Id, "materialized declarations are consumed before value selection")
+	require.Same(t, source, consumed[0].GetF().Args[0])
+	require.Equal(t, int32(types.T_blob), consumed[1].Typ.Id)
+	require.Same(t, source, consumed[1].GetF().Args[0])
 }
 
 func TestPreparedFieldSetConversionSource(t *testing.T) {
