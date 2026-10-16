@@ -46,12 +46,12 @@ the existing rollback policy. This is not a promise to recover transport failure
 
 ## Physical protocol and state transitions
 
-MORPC v117 introduces `TryLock` method 25, `ForwardTryLock` method 26,
+MORPC v118 introduces `TryLock` method 25, `ForwardTryLock` method 26,
 `LockOptions.NoWait` field 15 and `LockResponse.NoWaitConflict` field 4.
 Coordinator, forwarder and owner enforce admission before any grant. An owner
-below v117 fails closed; the ordinary Lock method is never a compatibility retry.
+below v118 fails closed; the ordinary Lock method is never a compatibility retry.
 Main's v112 WEEK/DAYOFYEAR, v113 DECIMAL, v114 Unicode UNIQUE, v115 calendar
-interval and v116 SELECT division-warning contracts remain unchanged.
+interval and v116 SELECT division-warning and v117 collation-ordering contracts remain unchanged.
 
 Plan NoWait field 18 and pipeline no_wait field 13 are additive; Part B adds
 SkipLocked fields 19/14. Existing numbers, unknown fields and result ABI remain
@@ -84,7 +84,7 @@ Late response capability/binding validation remains independent of that snapshot
 
 Part A has no SkipLocked flag, row filter, LIMIT refill or borrowed output state;
 it explicitly rejects SHARE SKIP LOCKED until Part B. Both reject UPDATE SKIP.
-Part B uses the same v117 exact-row Shared API, with no new physical RPC. A v117
+Part B uses the same v118 exact-row Shared API, with no new physical RPC. A v118
 NOWAIT-only physical owner can serve it; an older SQL coordinator can reject the
 new syntax. All targets must have consistent Shared/SkipLocked policy.
 
@@ -126,7 +126,7 @@ performance must be evaluated before adopting this syntax for a production queue
 
 ## Compatibility, rollout and diagnosis
 
-Upgrade coordinators/forwarders/owners to v117 before enabling application use.
+Upgrade coordinators/forwarders/owners to v118 before enabling application use.
 Do not route new syntax through an older SQL coordinator and assume it works.
 Unsupported owners fail closed; homogeneous dual-CN tests do not constitute a
 mixed-binary upgrade test. Existing capability/old-peer/two-service tests prove
@@ -134,7 +134,7 @@ no-grant rejection and cleanup boundaries at their stated source revisions.
 
 Rollback is to stop issuing the new syntax and drain affected transactions before
 downgrading; do not transparently rewrite NOWAIT/SKIP into ordinary waiting reads.
-There is no persisted-data migration. Prepared plans and active v117 requests
+There is no persisted-data migration. Prepared plans and active v118 requests
 must not be carried into an unsupported coordinator/owner generation.
 
 Existing SQL privilege checks, tenant/table routing and transaction ownership
@@ -198,9 +198,9 @@ Approval is design-only; implementation conformity, execution evidence and final
 
 ## Main synchronization amendment (2026-10-16)
 
-Main `c2b990cd` already uses v114-v116. The nonblocking admission binding moves
-to v117; methods, wire fields, ownership and SQL semantics are unchanged. Tests
-reject v113-v116 before dispatch and admit v117. Pipeline generation preserves
+Main `9f873692` already uses v114-v117. The nonblocking admission binding moves
+to v118; methods, wire fields, ownership and SQL semantics are unchanged. Tests
+reject v113-v117 before dispatch and admit v118. Pipeline generation preserves
 main's statement-runtime SELECT field. Obsolete fulltext integration fixes and
 helper tests are replaced by main's covered-score ordering/snapshot coverage.
 The approval above records the original v114 design revision; it does not claim
