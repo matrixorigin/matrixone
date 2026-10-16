@@ -80,7 +80,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -166,9 +165,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
-	}
-	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -414,9 +410,9 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
-func sourceNodeForRemoteRun(source *Source, proc *process.Process) (*plan.Node, error) {
+func sourceNodeForRemoteRun(source *Source) *plan.Node {
 	if source == nil || source.node == nil {
-		return nil, nil
+		return nil
 	}
 	// pipeline.Source does not have wire fields for the execution-time filter
 	// lists. Carry them in a per-message node copy so the reusable plan node is
@@ -425,28 +421,7 @@ func sourceNodeForRemoteRun(source *Source, proc *process.Process) (*plan.Node, 
 	if source.BlockFilterList != nil {
 		node.BlockFilterList = source.BlockFilterList
 	}
-	// A remote CN has no session: carry the session search knobs in the copy.
-	if node.IndexSearchScan != nil {
-		spec, err := remoteIndexSearchScan(node.IndexSearchScan, proc)
-		if err != nil {
-			return nil, err
-		}
-		node.IndexSearchScan = spec
-	}
-	return &node, nil
-}
-
-// remoteIndexSearchScan returns a copy of spec whose unset search knobs are filled from
-// the session variables of proc, for a CN that runs spec without the session.
-func remoteIndexSearchScan(spec *plan.IndexSearchScan, proc *process.Process) (*plan.IndexSearchScan, error) {
-	if spec == nil || proc == nil {
-		return spec, nil
-	}
-	stamped := plan2.DeepCopyIndexSearchScan(spec)
-	if err := vectorscan.StampSessionKnobs(stamped, proc.GetResolveVariableFunc()); err != nil {
-		return nil, err
-	}
-	return stamped, nil
+	return &node
 }
 
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
@@ -503,10 +478,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	}
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
-		sourceNode, err := sourceNodeForRemoteRun(s.DataSource, s.Proc)
-		if err != nil {
-			return nil, -1, err
-		}
 		p.DataSource = &pipeline.Source{
 			SchemaName:             s.DataSource.SchemaName,
 			TableName:              s.DataSource.RelationName,
@@ -515,7 +486,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
-			Node:                   sourceNode,
+			Node:                   sourceNodeForRemoteRun(s.DataSource),
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -1251,16 +1222,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
-		applySpec, err := remoteIndexSearchScan(t.IndexSearchScan, proc)
-		if err != nil {
-			return ctxId, nil, err
-		}
 		in.Apply = &pipeline.Apply{
 			ApplyType:       int32(t.ApplyType),
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			IndexSearchScan: applySpec,
+			IndexSearchScan: t.IndexSearchScan,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
@@ -2051,11 +2018,6 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
-		if isJSONOpaqueGroupConcatAggregate(agg) {
-			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONOpaqueTextContracts: true}); err != nil {
-				return err
-			}
-		}
 		if isDecimalStatisticalAggregate(agg) {
 			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
 				return err
@@ -2164,11 +2126,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectAggregateDescriptorFeatures(p, &features)
+	collectDecimalStatisticalDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2181,7 +2143,6 @@ func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.Rem
 				continue
 			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
-			features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueGroupConcatAggregate(agg)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
 				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
@@ -2190,20 +2151,8 @@ func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.Rem
 		}
 	}
 	for _, child := range p.Children {
-		collectAggregateDescriptorFeatures(child, features)
+		collectDecimalStatisticalDescriptorFeatures(child, features)
 	}
-}
-
-func isJSONOpaqueGroupConcatAggregate(agg aggexec.AggFuncExecExpression) bool {
-	if agg.GetAggID() != aggexec.AggIdOfGroupConcat {
-		return false
-	}
-	for _, arg := range agg.GetArgExpressions() {
-		if arg != nil && types.T(arg.Typ.Id) == types.T_json {
-			return true
-		}
-	}
-	return false
 }
 
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2385,27 +2334,14 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 129")
-	}
 	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
 	}
-	if features.JSONNumericComparisons && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
-		return moerr.NewNotSupportedNoCtx("mixed JSON/numeric comparisons require MORPC protocol version 128")
-	}
 	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
 		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 130")
-	}
-	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
-		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 130")
-=======
-	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
-		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 110")
->>>>>>> 889317ca7d (fix(udf): allocate MORPC 110 after upstream rebase)
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
