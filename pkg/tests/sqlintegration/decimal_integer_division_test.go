@@ -94,6 +94,50 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 				exec("create view negative_unsigned as select d div u as q from src where id=2")
 				var negative int64
 				require.ErrorContains(t, conn.QueryRowContext(ctx, "select q from negative_unsigned").Scan(&negative), "out of range")
+				// The unsigned overload shares SELECT diagnostics with scalar DIV.
+				for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO"} {
+					exec("set session sql_mode='" + mode + "'")
+					for _, tc := range []struct {
+						expression string
+						null       bool
+						value      int64
+						warnings   int
+					}{
+						{expression: "cast(1 as decimal(10,3)) div cast(0 as unsigned)", null: true, warnings: 1},
+						{expression: "cast(null as decimal(10,3)) div cast(0 as unsigned)", null: true},
+						{expression: "if(false,cast(1 as decimal(10,3)) div cast(0 as unsigned),7)", value: 7},
+						{expression: "cast(5 as decimal(10,3)) div cast(2 as unsigned)", value: 2},
+					} {
+						var q sql.NullInt64
+						require.NoError(t, conn.QueryRowContext(ctx, "select "+tc.expression).Scan(&q))
+						require.Equal(t, !tc.null, q.Valid, tc.expression)
+						if q.Valid {
+							require.Equal(t, tc.value, q.Int64, tc.expression)
+						}
+						func() {
+							rows, err := conn.QueryContext(ctx, "show warnings")
+							require.NoError(t, err)
+							defer rows.Close()
+							count := 0
+							for rows.Next() {
+								var level, message string
+								var code int
+								require.NoError(t, rows.Scan(&level, &code, &message))
+								require.Equal(t, "Warning", level)
+								require.Equal(t, 1365, code)
+								require.Equal(t, "Division by 0", message)
+								count++
+							}
+							require.NoError(t, rows.Err())
+							want := tc.warnings
+							if mode == "" {
+								want = 0
+							}
+							require.Equal(t, want, count, tc.expression)
+						}()
+					}
+				}
+				exec("set session sql_mode=''")
 				for _, mode := range []string{"", "NO_UNSIGNED_SUBTRACTION"} {
 					exec("set session sql_mode='" + mode + "'")
 					var q int64

@@ -19,7 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
@@ -138,6 +140,76 @@ func TestDecimalIntegerDivUnsignedVectorAdmission(t *testing.T) {
 	fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
+}
+
+// Exercise the new overload's diagnostic boundary, including failed kernels.
+func TestDecimalIntegerDivUnsignedWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name                                      string
+		disabled, dml, allMasked, empty, negative bool
+		code                                      uint16
+		want                                      uint64
+	}{
+		{name: "enabled", want: 1},
+		{name: "disabled", disabled: true},
+		{name: "strict DML", dml: true, code: moerr.ErrDivByZero},
+		{name: "all masked", allMasked: true},
+		{name: "empty", empty: true},
+		{name: "negative result", negative: true, code: moerr.ErrOutOfRange},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+			if tc.dml {
+				proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", false)
+			}
+			mode := "TRADITIONAL"
+			if tc.disabled {
+				mode = ""
+			}
+			proc.GetSessionInfo().SqlMode = mode
+			proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return mode, nil })
+			sink := &arithmeticWarningSink{limit: 1}
+			proc.WarningSink = sink
+			typ := types.New(types.T_decimal256, 20, 0)
+			left := []types.Decimal256{{B0_63: 5}, {B0_63: 5}, {B0_63: 5}, {B0_63: 5}, {B0_63: 5}}
+			right := []types.Decimal256{{}, {}, {}, {B0_63: 2}, {}}
+			if tc.negative {
+				left[0] = left[0].Minus()
+				right[0] = types.Decimal256{B0_63: 2}
+			}
+			test := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(typ, left, []bool{false, true, false, false, false}),
+				NewFunctionTestInput(typ, right, []bool{false, false, true, false, false}),
+			}, NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil), decimalIntegerDivUnsignedFn)
+			defer test.Free()
+			length := 5
+			if tc.empty {
+				length = 0
+			}
+			selection := &FunctionSelectList{AnyNull: true, AllNull: tc.allMasked, SelectList: []bool{true, true, true, true, false}}
+			require.NoError(t, test.result.PreExtendAndReset(length))
+			err := test.fn(test.parameters, test.result, proc, length, selection)
+			if tc.code != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.code), err)
+			} else {
+				require.NoError(t, err)
+				if !tc.allMasked && !tc.empty {
+					for _, row := range []uint64{0, 1, 2, 4} {
+						require.True(t, test.GetResultVectorDirectly().IsNull(row))
+					}
+					require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](test.GetResultVectorDirectly(), 3))
+				}
+			}
+			require.Equal(t, tc.want, sink.total)
+			require.Len(t, sink.records, int(tc.want))
+			if tc.want > 0 {
+				require.Equal(t, uncompressWarningRecord{code: moerr.ER_DIVISION_BY_ZERO, message: "Division by 0"}, sink.records[0])
+			}
+		})
+	}
 }
 
 func BenchmarkDecimalIntegerDivUnsigned(b *testing.B) {
