@@ -279,6 +279,20 @@ func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
 	return row, err
 }
 
+// ScanRecord advances to the next record using Read's framing and header rules,
+// without decoding its field values. Pos reports the consumed record boundary.
+// Like Read, it returns io.EOF when no record remains. Its scratch buffers are
+// reused and it does not produce a decoded row.
+func (parser *CSVParser) ScanRecord() error {
+	if parser.shouldParseHeader {
+		if err := parser.readColumns(); err != nil {
+			return err
+		}
+		parser.shouldParseHeader = false
+	}
+	return parser.readRecord()
+}
+
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }
@@ -296,16 +310,7 @@ func validDelim(r rune) bool {
 
 // readRow reads a row from the datafile.
 func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
-	// skip the header first
-	if parser.shouldParseHeader {
-		err := parser.readColumns()
-		if err != nil {
-			return nil, err
-		}
-		parser.shouldParseHeader = false
-	}
-
-	if err := parser.readRecord(); err != nil {
+	if err := parser.ScanRecord(); err != nil {
 		return nil, err
 	}
 

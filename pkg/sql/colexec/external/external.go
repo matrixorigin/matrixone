@@ -934,12 +934,11 @@ func getNonStrictBoundary(param *tree.ExternParam, fs fileservice.ETLFileService
 	if err != nil {
 		return 0, false, err
 	}
-	var fields []csvparser.Field
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, false, err
 		}
-		fields, err = csvReader.Read(fields)
+		err = csvReader.ScanRecord()
 		if err == io.EOF {
 			return start + csvReader.Pos(), false, io.EOF
 		}
