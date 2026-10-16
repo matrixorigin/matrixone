@@ -1,9 +1,10 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 3
+- Revision: 4
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
-- Source baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Rebase baseline: official main `b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 
 # Signed-zero set membership and scalar reaggregation
@@ -14,7 +15,9 @@ This revision describes the complete proposed execution and compatibility
 contract, including the scalar fallback added after the initial membership fix.
 Global occurrence numbering, cross-operator reaggregation and execution/persisted
 expression admission trigger the design-first gate. The earlier ordinary-fix
-exemption does not cover this expansion. Revision 3 supplies the missing design;
+exemption does not cover this expansion. Revision 3 supplied the missing design;
+revision 4 retains that architecture and mechanically advances set-key admission
+after official main allocated version 116;
 it does not assert repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
@@ -224,27 +227,30 @@ GROUP BY equality and avoids a new set executor/wire schema.
 
 ## Compatibility, rollout and rollback
 
-Official main at this revision ends at MORPC 115. This capability uses MORPC
-**116**. The feature walker recognizes encoded function identity 599 without
+Official main at this revision ends at MORPC 116. This capability uses MORPC
+**117**. The feature walker recognizes encoded function identity 599 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar
-composition adds no separate function identity or wire field.
+composition adds no separate function identity or wire field. Official main
+retains SELECT division diagnostics at 116, conditional on execution/session
+policy. Set keys require 117 regardless of that policy; a combined expression
+requires 117. Division diagnostics remain outside persisted-expression admission.
 
-Placement requires workers advertising 116 or newer; missing or old capabilities
+Placement requires workers advertising 117 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 116. Operator expression construction checks the same floor
+missing or below 117. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 116. These checks add no per-row work or new resource owner.
+also require 117. These checks add no per-row work or new resource owner.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 116 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 115 rejects these
+then release the 117 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 116 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 116. Lowering a new binary's floor does not rewrite existing
+under a floor below 117. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 599.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -264,18 +270,22 @@ using the same candidate do not reserve it.
 
 ## Evidence and acceptance record
 
-The baseline below is the implementation examined by this revision. This is a
-documentation-only revision: it does not change runtime semantics, test selection,
-CI harness or build inputs, so those correctness receipts remain reusable.
-Successful tests are not independent design acceptance or a capacity benchmark.
+The baseline below records historical correctness evidence. Revision 3 was
+documentation-only; revision 4 rebases onto the stated official main and changes
+the set-key protocol floor to 117. Historical 115/116 receipts are not rewritten
+as new 116/117 evidence. Fresh boundary and composition checks are recorded
+separately; unrelated correctness evidence remains reusable only where its
+semantic inputs are unchanged. Successful tests are not independent design
+acceptance or a capacity benchmark.
 
 | Invariant or risk | Evidence and revision | Result and limitation | Pending acceptance |
 | --- | --- | --- | --- |
 | Signed-zero membership, empty/real NULL, outer identity and scalar cardinality | Public `TestSetOperationSignedZero` at `fae17ae98d93f2b3e5e251dbc5649d643513af03`; preceding repair receipts report 117 named pass events (6.36s root, 8.438s package) | Pass includes grouped MAX, LIMIT 2, OFFSET, COUNT, repeated members, opposite-zero/finite-member 1242, and correlation partitions. One-CN correctness, not capacity. | Independent reconciliation/implementation review |
-| Boundary routing, physical/correlation keys, pagination and SINGLE, volatile/prepared controls | Complete planner and compile package tests from that same repair; `-count=1` through repository CGo wrapper, 35.715s and 14.010s | Passed; gofmt/vet and incremental lint also passed (0 lint issues). The documentation revision runs no product tests. | Independent implementation review |
+| Boundary routing, physical/correlation keys, pagination and SINGLE, volatile/prepared controls | Complete planner and compile package tests from that same repair; `-count=1` through repository CGo wrapper, 35.715s and 14.010s | Passed; gofmt/vet and incremental lint also passed (0 lint issues). Revision 3 ran no product tests; this is a historical receipt. | Independent implementation review |
 | Encoded 599 overloads, hidden key traversal, prepare regeneration and 115/116 rejection | Retained compatibility tests described in the PR at the source baseline | Registry/protobuf, compiled grouping stages, old/missing/new/changed destinations, balanced releases, receive-before-decode, executor/persisted floors and integer/float/integer controls. Does not prove a live mixed-version upgrade or old-binary backup restore. | Execution/compatibility acceptance |
-| Current CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
+| Historical CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
 | Selective typed-key filter work | Earlier unchanged-path receipt: 4,096 rows, one scan row per arm, two aggregation input rows, reported memory 262,270 bytes | A selective set-operation observation only; does not measure occurrence-based scalar fallback latency, concurrency or resident peak. | Separate from fallback acceptance |
+| Rebased capability allocation | Set-key placement/send/receive/Prepare/persisted tests at 116/117, plus division-only and combined-feature controls | Focused compile/colexec/planner boundary checks pass (3.073s/2.088s/1.517s); full planner, compile, colexec, function and protobuf-plan packages also pass. Fresh receipts are recorded in the implementation PR; historical 115/116 receipts above retain their original provenance. | Independent implementation review |
 | Global merge and reaggregation capacity | Source model and protocol above | Full outer buffering and candidate multiplication are explicit. No supported numerical envelope or completed fallback benchmark is claimed. | Planner/execution reviewers: envelope, measured evidence and decision |
 | Composed partial failure/cancel/reset/spill recovery | Existing cleanup owners mapped above | Delegation is documented; successful SQL/CI is not proof of every forced-budget failure path. | Execution reviewers: deterministic failure-path acceptance |
 | Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
@@ -283,4 +293,4 @@ Successful tests are not independent design acceptance or a capacity benchmark.
 Record any later acceptance with the immutable revision/commit link, reviewer,
 decision, supported capacity envelope and evidence links. Advance status to
 `in progress` only after independent approval; the author does not self-approve
-or infer acceptance from CI. Until then, revision 3 remains a reviewable draft.
+or infer acceptance from CI. Until then, revision 4 remains a reviewable draft.

@@ -5061,15 +5061,15 @@ func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
 	})
 	for _, typ := range []types.T{types.T_float32, types.T_float64} {
 		expr := bindTestFunction(t, proc, "set_operation_float_key", &plan.Expr{Typ: typ.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
-		for _, floor := range []any{defines.MORPCVersion115, "unknown", defines.MORPCVersion116} {
+		for _, floor := range []any{defines.MORPCVersion116, "unknown", defines.MORPCVersion117} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
 			before := proc.Mp().CurrNB()
 			executor, err := NewExpressionExecutor(proc, expr)
-			if floor == defines.MORPCVersion116 {
+			if floor == defines.MORPCVersion117 {
 				require.NoError(t, err)
 				executor.Free()
 			} else {
-				require.ErrorContains(t, err, "version 116")
+				require.ErrorContains(t, err, "version 117")
 				require.Nil(t, executor)
 			}
 			require.Equal(t, before, proc.Mp().CurrNB())
