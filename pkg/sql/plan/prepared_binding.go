@@ -559,26 +559,14 @@ func specializePreparedTemporalDecimalCasts(proc *process.Process, state *prepar
 		if literal != nil {
 			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
 			child.Expr = &plan.Expr_Lit{Lit: literal}
-		} else if vec.GetType().Oid == types.T_decimal256 {
-			// DECIMAL256 has no scalar Literal payload. Use the existing vector
-			// representation, physically constant so every parent row sees the
-			// same exact coefficient rather than a flat one-row input.
-			constant, err := vector.NewConstFixed(*vec.GetType(),
-				vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0), 1, proc.Mp())
+		} else {
+			constant, err := rule.MaterializeDecimal256Constant(proc, child, vec)
+			if err != nil {
+				return err
+			}
 			if constant != nil {
-				defer constant.Free(proc.Mp())
+				child.Expr = &plan.Expr_Vec{Vec: constant}
 			}
-			if err != nil {
-				return err
-			}
-			data, err := constant.MarshalBinary()
-			if err != nil {
-				return err
-			}
-			child.Expr = &plan.Expr_Vec{Vec: &plan.LiteralVec{
-				Len: 1, Data: data, StringSource: uint32(vec.GetStringSourceAt(0)),
-				DecimalLiteralRequiresV82: true,
-			}}
 		}
 		return nil
 	})

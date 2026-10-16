@@ -121,8 +121,57 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			exec(t, "create table decimal_interval_rhs(id int)")
 			exec(t, "insert into decimal_interval_lhs values(1,'00:00:00'),(2,'00:00:00'),(3,'00:00:00')")
 			exec(t, "insert into decimal_interval_rhs values(1),(2),(3)")
+			require.Equal(t, "1", scalar(t, "select count(*) from decimal_interval_lhs where id=(select cast(3 as decimal(65,1)))"))
+			func() {
+				stmt, err := conn.PrepareContext(ctx, "select percentile_cont((?+cast(5 as decimal(65,1)))/100.0) within group (order by id) from decimal_interval_lhs")
+				require.NoError(t, err)
+				defer stmt.Close()
+				var median float64
+				require.NoError(t, stmt.QueryRowContext(ctx, int64(45)).Scan(&median))
+				require.Equal(t, float64(2), median)
+			}()
+
+			assertTemporalWarnings := func(t *testing.T, want string) {
+				t.Helper()
+				require.Equal(t, want, scalar(t, "show count(*) warnings"))
+				if want == "1" {
+					var level, message string
+					var code int
+					require.NoError(t, conn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+					require.Equal(t, 1441, code, "the warning belongs to TIME overflow, not the silent DECIMAL child")
+				}
+			}
 			for _, width := range []int{10, 38, 65} {
 				t.Run(fmt.Sprintf("decimal%d", width), func(t *testing.T) {
+					defer func() {
+						exec(t, "delete from decimal_interval_rhs")
+						exec(t, "insert into decimal_interval_rhs values(1),(2),(3)")
+					}()
+					literalQuery := func(value string) string {
+						return fmt.Sprintf("select count(*) from decimal_interval_lhs a join decimal_interval_rhs b on a.id=b.id and a.t=date_sub(time '00:00:00', interval cast(%s as decimal(%d,1)) hour)", value, width)
+					}
+					for _, tc := range []struct{ value, count, warnings string }{
+						{"900", "0", "1"}, {"'900'", "0", "1"}, {"0", "3", "0"}, {"NULL", "0", "0"},
+					} {
+						require.Equal(t, tc.count, scalar(t, literalQuery(tc.value)))
+						assertTemporalWarnings(t, tc.warnings)
+					}
+					// A warning-producing literal must retain per-row conversion.
+					overflow := "1" + strings.Repeat("0", width-1)
+					require.Equal(t, "3", scalar(t, fmt.Sprintf("select count(*) from decimal_interval_lhs where cast('%s' as decimal(%d,1)) > 0", overflow, width)))
+					require.Equal(t, "3", scalar(t, "show count(*) warnings"))
+					func() {
+						rows, err := conn.QueryContext(ctx, "show warnings")
+						require.NoError(t, err)
+						defer rows.Close()
+						for rows.Next() {
+							var level, message string
+							var code int
+							require.NoError(t, rows.Scan(&level, &code, &message))
+							require.Equal(t, 1264, code)
+						}
+						require.NoError(t, rows.Err())
+					}()
 					exec(t, fmt.Sprintf("prepare decimal_interval_sub from 'select count(*) from decimal_interval_lhs a join decimal_interval_rhs b on a.id=b.id and a.t=date_sub(time ''00:00:00'', interval cast(? as decimal(%d,1)) hour)'", width))
 					defer exec(t, "deallocate prepare decimal_interval_sub")
 					for _, tc := range []struct {
@@ -132,25 +181,27 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					} {
 						exec(t, "set @decimal_interval_value="+tc.value)
 						require.Equal(t, tc.count, scalar(t, "execute decimal_interval_sub using @decimal_interval_value"))
-						require.Equal(t, tc.warnings, scalar(t, "show count(*) warnings"))
-						if tc.warnings == "1" {
-							var level, message string
-							var code int
-							require.NoError(t, conn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
-							require.Equal(t, 1441, code, "the warning belongs to TIME overflow, not the silent DECIMAL child")
-						}
+						assertTemporalWarnings(t, tc.warnings)
 					}
 					exec(t, "update decimal_interval_rhs set id=id+10")
 					require.Equal(t, "0", scalar(t, "execute decimal_interval_sub using @decimal_interval_value"))
 					require.Equal(t, "1", scalar(t, "show count(*) warnings"), "nonmatching nonempty inputs still activate the owner")
+					require.Equal(t, "0", scalar(t, literalQuery("900")))
+					assertTemporalWarnings(t, "1")
 					exec(t, "delete from decimal_interval_rhs")
 					require.Equal(t, "0", scalar(t, "execute decimal_interval_sub using @decimal_interval_value"))
 					require.Equal(t, "0", scalar(t, "show count(*) warnings"), "an empty input must not activate the owner")
+					require.Equal(t, "0", scalar(t, literalQuery("900")))
+					// Direct literals already diagnose once with an empty input;
+					// preserve that established behavior.
+					assertTemporalWarnings(t, "1")
 					exec(t, "insert into decimal_interval_rhs values(1),(2),(3)")
 					exec(t, fmt.Sprintf("prepare decimal_interval_inactive from 'select count(*) from decimal_interval_lhs a join decimal_interval_rhs b on a.id=b.id and a.t=case when false then date_sub(time ''00:00:00'', interval cast(? as decimal(%d,1)) hour) else time ''00:00:00'' end'", width))
 					defer exec(t, "deallocate prepare decimal_interval_inactive")
 					require.Equal(t, "3", scalar(t, "execute decimal_interval_inactive using @decimal_interval_value"))
 					require.Equal(t, "0", scalar(t, "show count(*) warnings"), "an unselected temporal branch stays silent")
+					require.Equal(t, "3", scalar(t, fmt.Sprintf("select count(*) from decimal_interval_lhs a join decimal_interval_rhs b on a.id=b.id and a.t=case when false then date_sub(time '00:00:00', interval cast(900 as decimal(%d,1)) hour) else time '00:00:00' end", width)))
+					assertTemporalWarnings(t, "0")
 				})
 			}
 		})
