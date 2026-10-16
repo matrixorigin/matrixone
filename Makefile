@@ -1536,24 +1536,37 @@ install-static-check-tools:
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
-STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+STATIC_CHECK_PACKAGES ?= ./...
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
+static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
 	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(STATIC_CHECK_GOLANGCI)
 
-# Keep the complete local/release entry point above. PR CI owns license scope
-# selection, but still analyzes the full package graph through content-addressed
-# Go and golangci-lint caches.
-static-check-analysis: config err-check
+# PR CI selects complete affected packages using the verified Go test/import
+# graph. Local use (including hosts without Node) retains the full checks.
+# Both analyzers consume the same package list and their failures stay fatal.
+static-check-analysis: err-check
+	@set -e; packages='./...'; \
+	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	else \
+		$(MAKE) --no-print-directory config; \
+	fi; \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
+.PHONY: static-check-selected
+static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
 
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to
 # use static-check-analysis or static-check above.
+static-check-golangci: override STATIC_CHECK_PACKAGES = ./...
 static-check-golangci:
 	$(STATIC_CHECK_GOLANGCI)
 
