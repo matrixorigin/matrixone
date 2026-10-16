@@ -142,10 +142,13 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.LeastGreatestCollationSemantics {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)

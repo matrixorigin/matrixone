@@ -147,7 +147,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		return nil, err
 	}
 	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion117)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion118)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2297,8 +2297,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 117")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 118")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
@@ -2308,6 +2308,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
 	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")

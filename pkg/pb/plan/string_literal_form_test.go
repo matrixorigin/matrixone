@@ -986,7 +986,7 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion117JSONStringConsumerOverload(t *testing.T) {
+func TestRequiresMORPCVersion118JSONStringConsumerOverload(t *testing.T) {
 	consumer := func(functionID, overloadID int32) *Expr {
 		return &Expr{
 			Typ: Type{Id: 61},
@@ -998,11 +998,11 @@ func TestRequiresMORPCVersion117JSONStringConsumerOverload(t *testing.T) {
 
 	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
 		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
-			required, err := RequiresMORPCVersion117JSONStringConsumerOverload(consumer(functionID, 1))
+			required, err := RequiresMORPCVersion118JSONStringConsumerOverload(consumer(functionID, 1))
 			require.NoError(t, err)
 			require.True(t, required)
 			for _, overloadID := range []int32{0, 2} {
-				required, err = RequiresMORPCVersion117JSONStringConsumerOverload(consumer(functionID, overloadID))
+				required, err = RequiresMORPCVersion118JSONStringConsumerOverload(consumer(functionID, overloadID))
 				require.NoError(t, err)
 				require.False(t, required)
 			}
@@ -1010,7 +1010,7 @@ func TestRequiresMORPCVersion117JSONStringConsumerOverload(t *testing.T) {
 	}
 
 	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
-		required, err := RequiresMORPCVersion117JSONStringConsumerOverload(control)
+		required, err := RequiresMORPCVersion118JSONStringConsumerOverload(control)
 		require.NoError(t, err)
 		require.False(t, required)
 	}

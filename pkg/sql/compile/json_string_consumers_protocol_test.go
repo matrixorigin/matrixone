@@ -106,7 +106,7 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 		}
 	})
 
@@ -116,16 +116,16 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 			for _, owner := range []string{"check", "default", "generated", "on_update"} {
 				t.Run(owner, func(t *testing.T) {
 					queryPlan := jsonStringConsumerCreateTablePlan(expr, owner)
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 					require.NoError(t, validateJSONStringConsumerProtocol(proc, queryPlan))
 
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 					c := &Compile{proc: proc, pn: queryPlan}
 					require.ErrorContains(t,
 						c.Compile(context.Background(), queryPlan, nil),
-						"protocol version 117")
+						"protocol version 118")
 					_, err := c.Run(0)
-					require.ErrorContains(t, err, "protocol version 117")
+					require.ErrorContains(t, err, "protocol version 118")
 				})
 			}
 		})
@@ -160,10 +160,10 @@ func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	}
 	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// A simulated v116 worker response forces one-CN placement and prevents
+	// A simulated v117 worker response forces one-CN placement and prevents
 	// encoding a pipeline carrying overload 1 for that destination.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-	client.version = defines.MORPCVersion116
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	client.version = defines.MORPCVersion117
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = workers
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -171,9 +171,9 @@ func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	// A simulated v117 worker response retains multi-CN placement and permits
+	// A simulated v118 worker response retains multi-CN placement and permits
 	// encoding. This does not prove remote pipeline execution.
-	client.version = defines.MORPCVersion117
+	client.version = defines.MORPCVersion118
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = workers
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -181,15 +181,15 @@ func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion117, minimum, "the execution stream must confirm the selected JSON overload")
+	require.Equal(t, defines.MORPCVersion118, minimum, "the execution stream must confirm the selected JSON overload")
 	require.NotEmpty(t, data)
 
-	// A simulated v116 receiver rejects the serialized overload; a simulated
-	// v117 receiver accepts decoding. Neither case executes the decoded scope.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 117")
+	// A simulated v117 receiver rejects the serialized overload; a simulated
+	// v118 receiver accepts decoding. Neither case executes the decoded scope.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 118")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	require.NotNil(t, decoded)
@@ -203,9 +203,9 @@ func TestJSONStringConsumerActualOwnerProtocolFloors(t *testing.T) {
 		floor    int64
 		overload int32
 	}{
-		{"concat", defines.MORPCVersion117, 0},
-		{"concat_ws", defines.MORPCVersion117, 0},
-		{"elt", defines.MORPCVersion117, 1},
+		{"concat", defines.MORPCVersion118, 0},
+		{"concat_ws", defines.MORPCVersion118, 0},
+		{"elt", defines.MORPCVersion118, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := bindJSONStringConsumerExpr(t, tc.name)
@@ -221,7 +221,7 @@ func TestJSONStringConsumerActualOwnerProtocolFloors(t *testing.T) {
 	}
 }
 
-// MEDIUMINT semantics retain their actual main110 owner independently of JSON ELT117.
+// MEDIUMINT semantics retain their actual main110 owner independently of JSON ELT118.
 // This component test validates two independently derived requirements and
 // both expression orders; it does not run an old executable.
 func TestJSONStringConsumerAndActualMediumIntFloors(t *testing.T) {
@@ -238,10 +238,10 @@ func TestJSONStringConsumerAndActualMediumIntFloors(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, features.JSONStringConsumerOverload)
 		require.True(t, features.MediumIntAssignmentBounds)
-		require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+		require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 		floor, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion117, floor)
+		require.Equal(t, defines.MORPCVersion118, floor)
 	}
 	features, err := planpb.RequiredRemoteExpressionFeatures(medium)
 	require.NoError(t, err)
@@ -260,7 +260,7 @@ func TestJSONStringConsumerIndexSearchExpressionOwners(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 		}
 	})
 	expr := bindJSONStringConsumerExpr(t, "elt")
@@ -288,16 +288,16 @@ func TestJSONStringConsumerIndexSearchExpressionOwners(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 			require.NoError(t, err)
 			require.True(t, features.JSONStringConsumerOverload)
-			require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion117, floor)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
-			require.ErrorContains(t, validateJSONStringConsumerProtocol(proc, owner), "protocol version 117")
+			require.Equal(t, defines.MORPCVersion118, floor)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(proc, owner), "protocol version 118")
 			c := &Compile{proc: proc, pn: owner}
 			_, err = c.Run(0)
-			require.ErrorContains(t, err, "protocol version 117")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			require.ErrorContains(t, err, "protocol version 118")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 			require.NoError(t, validateJSONStringConsumerProtocol(proc, owner))
 		})
 	}
@@ -323,7 +323,7 @@ func TestJSONStringConsumerAfterMainDateProtocol(t *testing.T) {
 }
 
 // Main's published protocol identities retain their independent contracts;
-// none admits the JSON execution semantics added after protocol 116.
+// none admits the JSON execution semantics added after protocol 117.
 func TestJSONStringConsumerAfterPublishedMainProtocols(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -333,19 +333,57 @@ func TestJSONStringConsumerAfterPublishedMainProtocols(t *testing.T) {
 	}{
 		{defines.MORPCVersion113, planpb.RemoteExpressionFeatures{DecimalStatisticalResultContracts: true}},
 		{defines.MORPCVersion115, planpb.RemoteExpressionFeatures{CalendarIntervalNormalization: true}},
+		{defines.MORPCVersion117, planpb.RemoteExpressionFeatures{LeastGreatestCollationSemantics: true}},
 	} {
 		require.Equal(t, tc.version, remoteExpressionProtocolVersion(tc.features))
 		tc.features.JSONStringConsumerOverload = true
-		require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(tc.features))
+		require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(tc.features))
 	}
 	for _, name := range []string{"elt", "concat", "concat_ws", "binary_cast"} {
 		expr := bindJSONStringConsumerExpr(t, name)
-		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
+		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, expr), "protocol version 117")
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, expr), "protocol version 118")
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, expr))
+	}
+}
+
+func TestJSONStringConsumerAndLeastGreatestFloors(t *testing.T) {
+	elt := bindJSONStringConsumerExpr(t, "elt")
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			collated, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			})
+			require.NoError(t, err)
+			for _, expressions := range [][]*planpb.Expr{{elt, collated}, {collated, elt}} {
+				query := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
+				data, err := query.Marshal()
+				require.NoError(t, err)
+				decoded := new(planpb.Query)
+				require.NoError(t, decoded.Unmarshal(data))
+				features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
+				require.NoError(t, err)
+				require.True(t, features.JSONStringConsumerOverload)
+				require.True(t, features.LeastGreatestCollationSemantics)
+				require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
+				floor, err := plan2.RequiredPersistedExpressionProtocolVersion(decoded)
+				require.NoError(t, err)
+				require.Equal(t, defines.MORPCVersion118, floor)
+			}
+			features, err := planpb.RequiredRemoteExpressionFeatures(collated)
+			require.NoError(t, err)
+			require.False(t, features.JSONStringConsumerOverload)
+			require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(collated)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion117, floor)
+		})
 	}
 }
 
@@ -359,7 +397,7 @@ func TestJSONOpaqueExistingConsumerFences(t *testing.T) {
 			require.True(t, features.JSONOpaqueTextContracts)
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion117, floor)
+			require.Equal(t, defines.MORPCVersion118, floor)
 			testJSONStringConsumerSerializationFences(t, name)
 		})
 	}
