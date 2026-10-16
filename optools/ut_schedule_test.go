@@ -447,7 +447,7 @@ trap handle_ut_termination TERM
 function logger() { :; }
 function report_cgroup_memory_usage() {
  if [[ "$1" == "Final race UT" ]]; then
-  [[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
+  [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
   [[ -z "$ENGINE_RACE_REPORT$PLAN_RACE_REPORT" ]] || exit 98
   touch "$CASE_DIR/final-memory"
  fi
@@ -544,210 +544,6 @@ printf '\nREPORT\n'
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
-			}
-		})
-	}
-}
-
-func TestEmbeddedPlanHeavyOverlapPreservesStagesAndFailures(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name, config string
-		early        bool
-		failed       bool
-	}{
-		{name: "full-profile", early: true},
-		{name: "ordinary-cluster-owner", config: "CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/tests/arrowload", early: true},
-		{name: "new-cluster-owner", config: "CLUSTER_PACKAGE=unclassified/embed"},
-		{name: "heavy-failure", config: "export HEAVY_STATUS=7", early: true, failed: true},
-		{name: "late-heavy-failure", config: "export LATE_HEAVY_STATUS=8", early: true, failed: true},
-		{name: "both-heavy-failures", config: "export HEAVY_STATUS=7 LATE_HEAVY_STATUS=8", early: true, failed: true},
-		{name: "no-fileservice", config: "SCOPE_MODE=no-fs", early: true},
-		{name: "only-fileservice", config: "SCOPE_MODE=fs-only"},
-		{name: "fileservice-owns-cluster", config: "CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/fileservice"},
-		{name: "plan-failure", config: "PLAN_STATUS=8", early: true, failed: true},
-		{name: "embedded-failure", config: "EMBEDDED_STATUS=9", early: true, failed: true},
-		{name: "engine-failure", config: "ENGINE_STATUS=10", early: true, failed: true},
-		{name: "disabled", config: "UT_OVERLAP_PLAN=0"},
-		{name: "smaller-runner", config: "UT_PARALLEL=6"},
-		{name: "explicit-cpu-budget", config: "export GOMAXPROCS=2"},
-		{name: "explicit-go-flags", config: "export GOFLAGS=-count=1"},
-		{name: "persistent-go-flags", config: "PERSISTENT_GOFLAGS=-count=1"},
-		{name: "prebuild-override", config: "UT_PREBUILD_EMBEDDED=1"},
-		{name: "other-platform", config: "function uname() { echo Darwin; }"},
-		{name: "one-plan-budget", config: "HEAVY_RACE_PARALLEL=1"},
-		{name: "plan-two-processes", config: "PLAN_RACE_PARALLEL=2"},
-		{name: "batch-rollback", config: "UT_EMBEDDED_BATCHES=1"},
-		{name: "embedded-shard", config: "UT_SHARD=embedded"},
-		{name: "heavy-plan-shard", config: "UT_SHARD=heavy-plan"},
-		{name: "issues-shard", config: "UT_SHARD=issues"},
-		{name: "light-shard", config: "UT_SHARD=light"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			mock := `#!/bin/bash
-if [[ "$1" == version ]]; then exit 0; fi
-[[ "$*" != *toolexec* ]] || exit 90
-selected=""
-for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
- if [[ " $* " == *" $package "* ]]; then
-  printf 'resource:%s\n' "$package"
-  selected="$selected $package"
- fi
-done
-[[ -n "$selected" ]] || exit 90
-if [[ "$EXPECT_EARLY" == 1 && "$selected" == *pkg/fileservice* ]]; then
- [[ "$selected" == ' github.com/matrixorigin/matrixone/pkg/fileservice' && -e "$CASE_DIR/engine-finished" && -z "${GOMAXPROCS+x}" ]] || exit 95
- mkdir "$CASE_DIR/late-heavy-once" || exit 96
- exit "$LATE_HEAVY_STATUS"
-fi
-mkdir "$CASE_DIR/heavy-once" || exit 91
-if [[ "$EXPECT_EARLY" == 1 ]]; then
- [[ "$GOMAXPROCS" == 2 && ! -e "$CASE_DIR/engine-once" ]] || exit 92
- case " $* " in *" -p 1 "*) ;; *) exit 93 ;; esac
-else
- [[ -e "$CASE_DIR/engine-once" ]] || exit 94
-fi
-printf 'heavy\n'
-touch "$CASE_DIR/heavy-started"
-if [[ "$EXPECT_EARLY" == 1 ]]; then
- while [[ ! -e "$CASE_DIR/embedded-started" ]]; do sleep 0.01; done
-fi
-touch "$CASE_DIR/heavy-finished"
-exit "$HEAVY_STATUS"
-`
-			script := `source ./run_ut.sh UT
-trap handle_ut_termination TERM
-function logger() { :; }
-function uname() { echo Linux; }
-function make() { :; }
-function report_cgroup_memory_usage() { :; }
-function egrep() { echo fake.pb.go; }
-function prepare_light_link_gate() { return 0; }
-MO_CL_CUDA=1
-UT_SHARD=all
-UT_PARALLEL=8
-UT_EMBEDDED_PACKAGE_PARALLEL=4
-UT_EMBEDDED_BATCHES=4
-UT_PREBUILD_EMBEDDED=0
-UT_OVERLAP_LIGHT=0
-UT_OVERLAP_PLAN=1
-PLAN_RACE_PARALLEL=1
-PLAN_RACE_SHARDS=8
-HEAVY_RACE_PARALLEL=3
-unset GOMAXPROCS
-export HEAVY_STATUS=0 LATE_HEAVY_STATUS=0
-SCOPE_MODE=all
-PLAN_STATUS=0
-EMBEDDED_STATUS=0
-ENGINE_STATUS=0
-CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/embed
-@CONFIG@
-function go() {
- if [[ "$1" == clean ]]; then return 0; fi
- if [[ "$1" == env ]]; then printf '%s' "${PERSISTENT_GOFLAGS:-}"; return 0; fi
- shift 2
- if [[ "$1" == ./... ]]; then
-  { printf '%s\n' "$CLUSTER_PACKAGE" example/light github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues}
-  for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
-   if [[ "$SCOPE_MODE" == no-fs && "$package" == */fileservice ]]; then continue; fi
-   if [[ "$SCOPE_MODE" == fs-only && "$package" != */fileservice ]]; then continue; fi
-   echo "$package"
-  done; } | sort -u
- else
-  for package in "$@"; do
-   if [[ "$SCOPE_MODE" == no-fs && "$package" == ./pkg/fileservice ]]; then continue; fi
-   if [[ "$SCOPE_MODE" == fs-only ]]; then
-    case "$package" in ./pkg/backup|./pkg/sql/plan/function|./pkg/vm/engine/tae/db/test) continue ;; esac
-   fi
-   echo "github.com/matrixorigin/matrixone/${package#./}"
-  done
- fi
-}
-function start_embedded_prebuild() { :; }
-function list_embedded_cluster_test_packages() { echo "$CLUSTER_PACKAGE"; }
-function run_ut_command() {
- local stage=$1
- if [[ "$stage" == heavy ]]; then
-  start_ut_command "$@"
-  finish_ut_command
- else
-  printf '%s\n' "$stage" >> "$UT_REPORT"
-  if [[ "$stage" == serial ]]; then touch "$CASE_DIR/issues-finished"; fi
- fi
-}
-function run_embedded_tests() {
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  while [[ ! -e "$CASE_DIR/heavy-started" || ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
-  [[ -e "$CASE_DIR/issues-finished" && -z "$UT_LINK_DIR" ]] || return 95
- else
-  [[ ! -e "$CASE_DIR/heavy-started" && ! -e "$CASE_DIR/plan-started" ]] || return 96
- fi
- touch "$CASE_DIR/embedded-started"
- printf 'embedded\n' >> "$UT_REPORT"
- return "$EMBEDDED_STATUS"
-}
-function run_plan_race_shards() {
- mkdir "$CASE_DIR/plan-once" || return 97
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  [[ "$GOMAXPROCS" == 2 && "${2:-}" == "-test.parallel=$UT_PARALLEL" && ! -e "$CASE_DIR/engine-once" && -e "$CASE_DIR/issues-finished" ]] || return 98
- else
-  [[ -e "$CASE_DIR/engine-once" && "$#" == 1 ]] || return 99
- fi
- printf 'plan\n' > "$PLAN_RACE_REPORT"
- touch "$CASE_DIR/plan-started"
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  while [[ ! -e "$CASE_DIR/embedded-started" ]]; do sleep 0.01; done
- fi
- touch "$CASE_DIR/plan-finished"
- return "$PLAN_STATUS"
-}
-function run_engine_race_shards() {
- mkdir "$CASE_DIR/engine-once" || return 100
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  [[ -e "$CASE_DIR/heavy-finished" && -e "$CASE_DIR/plan-finished" ]] || return 101
-  [[ -z "$BACKGROUND_RACE_JOB_PID$PLAN_RACE_JOB_PID$BACKGROUND_RACE_REPORT$PLAN_RACE_REPORT" ]] || return 102
- else
-  [[ ! -e "$CASE_DIR/heavy-started" && ! -e "$CASE_DIR/plan-started" ]] || return 103
- fi
- printf 'engine\n' > "$ENGINE_RACE_REPORT"
- touch "$CASE_DIR/engine-finished"
- return "$ENGINE_STATUS"
-}
-run_tests
-[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 104
-[[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$PLAN_RACE_JOB_PID$ENGINE_RACE_JOB_PID" ]] || exit 105
-for stage in light hnsw serial embedded plan; do
- expected=0
- if should_run_ut_stage "$stage"; then expected=1; fi
- actual=$(grep -cx "$stage" "$UT_REPORT" || true)
- [[ "$actual" == "$expected" ]] || { printf '%s report count=%s expected=%s\n' "$stage" "$actual" "$expected"; exit 106; }
-done
-if should_run_ut_stage heavy; then
- [[ $(grep -cx engine "$UT_REPORT") == 1 ]] || exit 107
-fi
-for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
- expected=0
- if should_run_ut_stage heavy && ! printf '%s\n' "$CLUSTER_PACKAGE" | grep -Fxq "$package"; then
-  expected=1
-  if [[ "$SCOPE_MODE" == no-fs && "$package" == */fileservice ]]; then expected=0; fi
-  if [[ "$SCOPE_MODE" == fs-only && "$package" != */fileservice ]]; then expected=0; fi
- fi
- actual=$(grep -Fxc "resource:$package" "$UT_REPORT" || true)
- [[ "$actual" == "$expected" ]] || { printf '%s count=%s expected=%s\n' "$package" "$actual" "$expected"; exit 108; }
-done
-`
-			script = strings.Replace(script, "@CONFIG@", tc.config, 1)
-			early, failed := "0", "0"
-			if tc.early {
-				early = "1"
-			}
-			if tc.failed {
-				failed = "1"
-			}
-			out, err := scheduleHarnessWithMock(t, script, mock, "EXPECT_EARLY="+early, "EXPECTED_STATUS="+failed)
-			if err != nil {
-				t.Fatalf("embedded/plan/heavy scheduling: %v\n%s", err, out)
 			}
 		})
 	}
@@ -1226,8 +1022,8 @@ function ps() {
     printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
 }
 start_ut_heartbeat
-BACKGROUND_RACE_REPORT="$G_WKSP/${G_TS}-background-race-report.out"
-cat > "$BACKGROUND_RACE_REPORT" <<'EOF'
+LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
+cat > "$LIGHT_RACE_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
 EOF
 cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
@@ -1551,7 +1347,7 @@ exit 99
 			script := `source ./run_ut.sh UT
 function logger() { :; }
 trap handle_ut_termination TERM
-start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package
+start_light_race example/light-package 2
 start_ut_command serial 'exclusive issues package' bash -c '
  printf "serial-start\n"
  touch "$CASE_DIR/serial-started"
@@ -1562,23 +1358,23 @@ start_ut_command serial 'exclusive issues package' bash -c '
 serial_status=0
 finish_ut_command || serial_status=$?
 light_status=0
-finish_background_race || light_status=$?
+finish_light_race || light_status=$?
 [[ "$serial_status" == "$SERIAL_STATUS" ]] || exit 90
 [[ "$light_status" == "$LIGHT_STATUS" ]] || exit 91
 if [[ "$LIGHT_STATUS" == 125 ]]; then
- retained_report=$BACKGROUND_RACE_REPORT
+ retained_report=$LIGHT_RACE_REPORT
  UT_LINK_DIR="$CASE_DIR/link-slots"
  UT_LINK_PARALLEL=1
  mkdir "$UT_LINK_DIR"
  touch "$UT_LINK_DIR/slot-0"
- [[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
+ [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
  cleanup_light_link_gate; [[ "$?" == 125 ]] || exit 95
- start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package; [[ "$?" == 125 ]] || exit 96
+ start_light_race example/light-package 2; [[ "$?" == 125 ]] || exit 96
  trap 'status=$?; [[ -s "$retained_report" && -f "$UT_LINK_DIR/slot-0" && "$(cat "$UT_REPORT")" == $'"'"'serial-start\nserial-end'"'"' ]] || status=97; exit "$status"' EXIT
  kill -TERM "$$"
  exit 98
 fi
-[[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$BACKGROUND_RACE_REPORT" ]] || exit 92
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$LIGHT_RACE_REPORT" ]] || exit 92
 report=$(cat "$UT_REPORT")
 [[ "$report" == $'serial-start\nserial-end\nlight-start\nlight-end' ]] || { printf 'REPORT=%q\n' "$report"; exit 93; }
 `
@@ -1613,7 +1409,7 @@ function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
-start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package
+start_light_race example/light-package 2
 start_ut_command serial 'exclusive issues package' bash -c '
  trap '\''printf "serial-stopped\n"; exit 143'\'' TERM
  printf "serial-start\n"
@@ -1715,7 +1511,7 @@ UT_OVERLAP_LIGHT_PARALLEL=${OVERLAP_PARALLEL_VALUE}
 UT_OVERLAP_PLAN=0
 UT_PREBUILD_EMBEDDED=${PREBUILD_VALUE:-0}
 if [[ "$FORCE_LIGHT_LAUNCH_FAILURE" == 1 ]]; then
- function start_background_race() { return 1; }
+ function start_light_race() { return 1; }
 fi
 function go() {
  if [[ "$1" == clean ]]; then return 0; fi
@@ -1740,7 +1536,7 @@ if [[ -n "$EMBEDDED_STATUS" ]]; then
  grep -q "event=finish stage=embedded label=embedded-cluster race-test packages status=${EMBEDDED_STATUS}" "$UT_CHECKPOINT" || exit 98
 fi
 if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
-[[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
 report=$(cat "$UT_REPORT")
 [[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
 if [[ "$PREBUILD_VALUE" == 1 ]]; then
