@@ -683,6 +683,8 @@ function start_ut_heartbeat(){
                 "${G_WKSP}/${G_TS}-issues-race-report.out".*
                 "${G_WKSP}/${G_TS}-embedded-race-report.out"
                 "${G_WKSP}/${G_TS}-embedded-race-report.out".*
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out".*
             )
             # Own the finite scan as a group. A large first scan or fallback
             # must not outlive heartbeat cancellation or keep its pipes open.
