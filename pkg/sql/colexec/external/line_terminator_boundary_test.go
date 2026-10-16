@@ -130,7 +130,7 @@ func TestReadFileOffsetNonStrictLineTerminators(t *testing.T) {
 		{"one unterminated record", "||", strings.Repeat("x", 128) + "\nlast", 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 			fs := testutil.NewFS(t)
 			t.Cleanup(func() { fs.Close(ctx) })
 			const header = "ignored header"
@@ -198,7 +198,7 @@ func TestReadFileOffsetNonStrictOverlappingBoundary(t *testing.T) {
 		{"unterminated final record", "||", "a,bb|||c,d", [][]string{{"a", "bb"}, {"|c", "d"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 			fs := testutil.NewFS(t)
 			t.Cleanup(func() { fs.Close(ctx) })
 			const filePath = "etl:/overlapping-boundaries.csv"
@@ -271,7 +271,7 @@ func TestReadFileOffsetConflictingFieldTerminator(t *testing.T) {
 	} {
 		for _, header := range []string{"", "ignored header"} {
 			t.Run(fmt.Sprintf("%s/header=%d", tc.name, len(header)), func(t *testing.T) {
-				ctx := context.Background()
+				ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 				fs := testutil.NewFS(t)
 				t.Cleanup(func() { fs.Close(ctx) })
 				const filePath = "etl:/field-boundaries.csv"
@@ -348,7 +348,7 @@ func TestReadFileOffsetProbeOwnership(t *testing.T) {
 			fs := &boundaryProbeFS{t: t, data: tc.data, readErr: tc.readErr, closeErr: tc.closeErr}
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 				Filepath: "etl:/probe.csv", Format: tree.CSV, Tail: &tree.TailParameter{Lines: tree.NewLines("", "||")},
-			}, ExParam: tree.ExParam{Ctx: context.Background(), FileService: fs}}
+			}, ExParam: tree.ExParam{Ctx: fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"), FileService: fs}}
 			param.Strict = tc.strict
 			if tc.field != "" {
 				param.Tail.Fields = tree.NewFields(tc.field, false, 0, 0)
