@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r15-2026-10-16`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r17-2026-10-16`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -271,4 +271,48 @@ The nine idempotent shared-function entries and catalog repair 4.0.15 are
 unchanged; this revision adds no execution, production or security scope.
 
 Independent Architecture and SQL/Planner approval of r15 remains pending.
+Mechanical rebase, protocol allocation and validation do not supply it.
+
+## r16 protocol allocation addendum (2026-10-16)
+
+Official main `76deafc8062f9a7e33a31a4df858ebcdb9477cb5` assigns MORPC 116
+to SELECT scalar division warning diagnostics. The governing
+`python-udf-current-stage-r16-2026-10-16` revision moves Python's single new
+capability to 117, with 116 as the immediate predecessor rejection case.
+Division diagnostics retain their execution-only 116 floor and statement-policy
+check; calendar normalization remains at 115. The receiver and actual remote
+endpoint retain both independent admission checks after rebase.
+
+Shared revision publication and reads, cached/prepared/evaluator checks,
+actual remote-destination admission, receiver validation, catalog repair
+metadata and login compensation, and `GetPythonUdfStatus` all require Python
+capability 117. Predecessor-only and mixed 117/116 CNs are rejected before
+catalog mutation. Ordinary SQL UDFs retain their pre-floor legacy fallback.
+The nine idempotent shared-function entries and catalog repair 4.0.15 are
+unchanged; this revision adds no execution, production or security scope.
+
+Independent Architecture and SQL/Planner approval of r16 remains pending.
+Mechanical rebase, protocol allocation and validation do not supply it.
+
+## r17 protocol allocation addendum (2026-10-16)
+
+Official main `14a8d854b0f9346065ff8432eb979e35f32f50d8` assigns MORPC 117
+to collation-aware LEAST/GREATEST ordering. The governing
+`python-udf-current-stage-r17-2026-10-16` revision moves Python's single new
+capability to 118, with 117 as the immediate predecessor rejection case.
+LEAST/GREATEST retains its independent 117 floor; SELECT division diagnostics
+remain at the execution-only 116 floor and calendar normalization at 115.
+The sender, actual endpoint and receiver preserve all independent checks.
+
+Shared revision publication and reads, cached/prepared/evaluator checks,
+remote-destination and receiver admission, catalog repair metadata and login
+compensation, and `GetPythonUdfStatus` all require Python capability 118.
+Predecessor-only and mixed 118/117 CNs are rejected before catalog mutation.
+Ordinary SQL UDFs retain their pre-floor legacy fallback. The nine idempotent
+shared-function entries and catalog repair 4.0.15 are unchanged. The rebase also
+preserves upstream SQL UDF subquery admission and COLLATE expression binding;
+it does not restore the removed Sirius Flight transport or add execution,
+production or security scope to Python UDFs.
+
+Independent Architecture and SQL/Planner approval of r17 remains pending.
 Mechanical rebase, protocol allocation and validation do not supply it.

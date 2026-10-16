@@ -228,6 +228,8 @@ raise SystemExit(result)
 func TestPythonStdlibEnvironmentUsesConfiguredRuntimeLibraryPath(t *testing.T) {
 	t.Setenv("pythonLocation", "/python/toolcache")
 	t.Setenv("LD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_FALLBACK_LIBRARY_PATH", "/matrixone/thirdparties/lib")
 	t.Setenv("PYTHONPATH", "/matrixone/python")
 	t.Setenv("PYTHONHOME", "/matrixone/python-home")
 	t.Setenv("PYTHONUSERBASE", "/matrixone/user-site")
@@ -251,6 +253,7 @@ func TestPythonStdlibEnvironmentUsesConfiguredRuntimeLibraryPath(t *testing.T) {
 		t.Fatalf("Python runtime loader path = %q, want %q", got, want)
 	}
 	for _, forbidden := range []string{
+		"DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
 		"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT",
 	} {
 		if _, ok := values[forbidden]; ok {
@@ -262,8 +265,14 @@ func TestPythonStdlibEnvironmentUsesConfiguredRuntimeLibraryPath(t *testing.T) {
 func TestPythonStdlibEnvironmentDropsNativeLoaderPathWithoutPythonLocation(t *testing.T) {
 	t.Setenv("pythonLocation", "")
 	t.Setenv("LD_LIBRARY_PATH", "/matrixone/cgo")
-	if got := pythonStdlibEnvironment(); strings.Contains(strings.Join(got, "\n"), "LD_LIBRARY_PATH=") {
-		t.Fatalf("Python stdlib helper inherited MatrixOne loader path: %q", got)
+	t.Setenv("DYLD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("DYLD_FALLBACK_LIBRARY_PATH", "/matrixone/thirdparties/lib")
+	for _, entry := range pythonStdlibEnvironment() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH":
+			t.Fatalf("Python stdlib helper inherited native loader variable %q", key)
+		}
 	}
 }
 
@@ -275,7 +284,7 @@ func pythonStdlibEnvironment() []string {
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "LD_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT":
+		case "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT":
 			continue
 		default:
 			env = append(env, entry)
