@@ -883,11 +883,14 @@ const (
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 	INTERNAL_TABLE_COLLATION    = 600
 
-	FUNCTION_END_NUMBER = 601
+	JSON_PARSE_EXACT = 601
+
+	FUNCTION_END_NUMBER = 602
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"json_parse_exact":             JSON_PARSE_EXACT,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,

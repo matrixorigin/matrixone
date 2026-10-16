@@ -6893,8 +6893,8 @@ export_format_opt:
 |   FORMAT STRING
     {
         str := strings.ToLower($2)
-        if str != "csv" && str != "jsonline" && str != "parquet" {
-            yylex.Error("invalid format, must be csv, jsonline or parquet")
+        if str != "csv" && str != "jsonline" && str != "parquet" && str != "parquet_variant" {
+            yylex.Error("invalid format, must be csv, jsonline, parquet or parquet_variant")
             goto ret1
         }
         $$ = str

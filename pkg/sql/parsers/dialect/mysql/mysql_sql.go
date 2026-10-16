@@ -23154,8 +23154,8 @@ yydefault:
 //line mysql_sql.y:6894
 		{
 			str := strings.ToLower(yyDollar[2].str)
-			if str != "csv" && str != "jsonline" && str != "parquet" {
-				yylex.Error("invalid format, must be csv, jsonline or parquet")
+			if str != "csv" && str != "jsonline" && str != "parquet" && str != "parquet_variant" {
+				yylex.Error("invalid format, must be csv, jsonline, parquet or parquet_variant")
 				goto ret1
 			}
 			yyVAL.str = str

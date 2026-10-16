@@ -219,6 +219,9 @@ func (tableScan *TableScan) readBatch(
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
 	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
+	if !readerSummaryEnabled && len(tableScan.ctr.jsonProjection) > 0 {
+		ctx = objectio.WithJSONPathProjection(ctx, tableScan.ctr.jsonProjection)
+	}
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(

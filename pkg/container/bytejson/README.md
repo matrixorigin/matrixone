@@ -1,6 +1,7 @@
 # **JSON Types Overview**
 
-MatrixOne JSON types conforms with MySQL JSON types definition.
+MatrixOne JSON implements MySQL-oriented SQL semantics using the MatrixOne
+binary representation below, including typed scalar extensions.
 
 Reference: <https://dev.mysql.com/doc/refman/8.0/en/json.html>
 
@@ -24,6 +25,13 @@ JSON binary format is a binary format for storing JSON data.
         0x0a |       // uint64
         0x0b |       // float64
         0x0c |       // string
+        0x0d |       // exact decimal JSON number text
+        0x0e |       // date text
+        0x0f |       // time text
+        0x10 |       // datetime text
+        0x11 |       // legacy encoded BLOB payload
+        0x12 |       // raw opaque binary (converted on persistence)
+        0x13 |       // raw BIT payload (converted on persistence)
 
     value ::=
         object  |
@@ -31,6 +39,8 @@ JSON binary format is a binary format for storing JSON data.
         literal |
         number  |
         string  |
+        typed-text |
+        binary-payload |
 
     object ::= element-count size key-entry* value-entry* key* value*
 
@@ -58,13 +68,17 @@ JSON binary format is a binary format for storing JSON data.
     key ::= utf8-data
 
     literal ::=
-        0x00 |   // JSON null literal
-        0x01 |   // JSON true literal
-        0x02 |   // JSON false literal
+        0x01 |   // JSON null literal
+        0x02 |   // JSON true literal
+        0x03 |   // JSON false literal
 
     number ::=  ....    // little-endian format for [u]int64 and float64
 
     string ::= data-length utf8-data
+
+    typed-text ::= data-length utf8-data // decimal, date, time, datetime
+
+    binary-payload ::= data-length bytes // legacy encoded or raw BLOB/BIT
 
     data-length ::= uint8*    // Variable size encoding, if the high bit of a byte is 1, the length
                               // field is continued in the next byte,
@@ -75,6 +89,14 @@ JSON binary format is a binary format for storing JSON data.
  ```
 
 ### **Implementations**
+
+`ParseFromByteSliceExact` and `ParseFromStringExact` preserve fractional,
+exponent and oversized integer literals in the existing DECIMAL tag. The SQL
+entry point is `JSON_PARSE_EXACT(text)`. Existing parsing keeps its numeric
+behavior. Typed text tags use the same uvarint-prefixed payload layout as
+strings; DECIMAL renders as a JSON number, while temporal tags render as strings.
+See the [JSON and VARIANT design](../../../docs/rfcs/20261012_json_variant_interop.md)
+for exact aggregation, Parquet interoperability and storage limitations.
 
 1. All the values are wrapped in a JSON doc. A JSON doc consists of a type and a value. The type field is a single byte
    that indicates the type of the value. The value field is a binary representation of the value.

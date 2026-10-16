@@ -74,6 +74,14 @@ func TestExportFormat(t *testing.T) {
 
 		// FORMAT case insensitive
 		{
+			name:           "outfile with unshredded JSON variant",
+			input:          "select * from t1 into outfile 'output.parquet' format 'PARQUET_VARIANT'",
+			output:         "select * from t1 into outfile output.parquet format parquet_variant header true",
+			expectedFormat: "parquet_variant",
+		},
+
+		// FORMAT case insensitive
+		{
 			name:           "outfile with format CSV uppercase",
 			input:          "select * from t1 into outfile 'output.csv' format 'CSV'",
 			output:         "select * from t1 into outfile output.csv format csv fields terminated by , enclosed by \" lines terminated by \n header true",

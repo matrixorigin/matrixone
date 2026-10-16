@@ -648,7 +648,8 @@ type ExportParam struct {
 	ForceQuote []string
 	// stage filename path
 	StageFilePath string
-	// ExportFormat: "csv", "jsonline", "parquet", default is ""(csv)
+	// ExportFormat: "csv", "jsonline", "parquet", "parquet_variant";
+	// default is ""(csv). parquet_variant writes JSON as unshredded VARIANT.
 	ExportFormat string
 	// SplitSize: split file size in bytes, 0 means no split
 	SplitSize uint64

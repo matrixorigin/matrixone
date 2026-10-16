@@ -39,6 +39,15 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.ExactJSONParsing, defines.MORPCVersion119,
+			"exact JSON parsing requires a versioned remote destination",
+			"remote destination does not support exact JSON parsing (MORPC version %d)"},
+		{features.ExactJSONDecimalCast, defines.MORPCVersion119,
+			"exact JSON decimal casts require a versioned remote destination",
+			"remote destination does not support exact JSON decimal casts (MORPC version %d)"},
+		{features.ParquetVariantRead, defines.MORPCVersion119,
+			"Parquet VARIANT reads require a versioned remote destination",
+			"remote destination does not support Parquet VARIANT reads (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
@@ -126,13 +135,24 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 			ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 			version, versionKnown, err := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
 			cancel()
-			if err != nil && parent.Err() != nil {
-				return parent.Err()
+			if cause := parent.Err(); cause != nil {
+				return cause
 			}
 			observed, known, probed = version, versionKnown && err == nil, true
 		}
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+		}
+	}
+	// Preserve the independent gates' diagnostic order above, then also close
+	// the last/only gate's probe window: its successful response is not enough
+	// when the coordinator rollout floor changed during that probe.
+	if probed {
+		current, currentKnown := remoteMORPCProtocolVersion(proc.GetService())
+		for _, gate := range gates {
+			if gate.enabled && (!currentKnown || current < gate.version) {
+				return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+			}
 		}
 	}
 	return nil
