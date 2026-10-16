@@ -679,6 +679,13 @@ func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database
 		}
 		rel, err := dbSource.Relation(ctx, relName, nil)
 		if err != nil {
+			// A sibling may vanish between Relations and Relation when an
+			// internal recreate (e.g. TRUNCATE) drops it in the same
+			// transaction, or when a concurrent DROP commits. Nothing remains
+			// to collide with.
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
 			return err
 		}
 		for _, check := range rel.GetTableDef(ctx).GetChecks() {
@@ -1971,7 +1978,14 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	// attribute another table's CHECK expression to the new table. Validate
 	// both explicit names and generated <table>_chk_<n> names against the
 	// sibling tables before creating.
-	if !qry.GetTemporary() {
+	//
+	// Internal recreations that keep an owned source's identity (ALTER ...
+	// COPY replica, partition backing tables, TRUNCATE's drop+create) carry
+	// defines.TrustedCheckConstraintNames and skip this scan: the source of
+	// their CHECK names is replaced or shares ownership, it is not an
+	// unrelated sibling.
+	trustedChecks, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool)
+	if !qry.GetTemporary() && !trustedChecks {
 		if err := checkConstraintNamesAvailable(c.proc.Ctx, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
 			return err
 		}
@@ -4205,8 +4219,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}
 	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
-	// DDL, which cannot express relkind.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType())
+	// DDL, which cannot express relkind. It also keeps the table's CHECK constraint
+	// names, so skip the 3822 sibling scan for this internal recreate.
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {

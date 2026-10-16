@@ -418,6 +418,12 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
+	if statementOption.TrustedCheckConstraintNames() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TrustedCheckConstraintNames{},
+			true)
+	}
+
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)

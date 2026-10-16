@@ -1096,7 +1096,11 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	// The temporary relation is not externally visible. Its parent backrefs are
 	// reconciled after the original relation is replaced, so avoid materializing
 	// an intermediate parent->temporary-table relationship here.
-	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	//
+	// The replica intentionally keeps the source CHECK constraint names: it
+	// replaces the source table, it is not an unrelated sibling, so the 3822
+	// duplicate-name scan does not apply.
+	opts := executor.StatementOption{}.WithIgnoreForeignKey().WithTrustedCheckConstraintNames()
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
 	}

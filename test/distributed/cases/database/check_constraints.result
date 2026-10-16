@@ -132,3 +132,52 @@ multi_chk  ¦  CREATE TABLE `multi_chk` (
   CONSTRAINT `multi_chk_chk_3` CHECK (`a` > -5)
 )
 drop database check_names_30343;
+
+drop database if exists check_rename_30343;
+create database check_rename_30343;
+use check_rename_30343;
+create table t (a int, check (a > 0));
+rename table t to u;
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `u_chk_1` CHECK (`a` > 0)
+)
+create table t (a int, check (a < 100));
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `t_chk_1` CHECK (`a` < 100)
+)
+insert into u values (-1);
+constraint violation: Check constraint 'u_chk_1' is violated
+insert into t values (200);
+constraint violation: Check constraint 't_chk_1' is violated
+select count(*) from u;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+truncate table u;
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `u_chk_1` CHECK (`a` > 0)
+)
+insert into u values (-1);
+constraint violation: Check constraint 'u_chk_1' is violated
+select count(*) from u;
+➤ count(*)[-5,64,0]  𝄀
+0
+select constraint_name, check_clause
+from information_schema.check_constraints
+where constraint_schema = 'check_rename_30343'
+order by constraint_name;
+➤ constraint_name[12,64,0]  ¦  check_clause[12,65535,0]  𝄀
+t_chk_1  ¦  `a` < 100  𝄀
+u_chk_1  ¦  `a` > 0
+drop database check_rename_30343;

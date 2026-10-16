@@ -2692,7 +2692,13 @@ func buildCreateTable(
 		// MySQL regenerates CHECK constraint names for CREATE TABLE LIKE; copied
 		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
 		// metadata joins attribute the source table's expression to the target.
-		renameCheckConstraintsForClone(tableDef)
+		//
+		// Snapshot/account restore shares this planner branch but must keep the
+		// captured explicit identity: restoring `CONSTRAINT ck CHECK(...)` has
+		// to come back as `ck`, not as a freshly generated <dst>_chk_<n> name.
+		if cloneStmt == nil || !cloneStmt.IsRestore {
+			renameCheckConstraintsForClone(tableDef)
+		}
 
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
