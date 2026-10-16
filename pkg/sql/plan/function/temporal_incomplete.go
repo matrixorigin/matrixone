@@ -36,6 +36,14 @@ type incompleteCalendar struct {
 
 func parseIncompleteCalendar(value string) (incompleteCalendar, bool) {
 	s := strings.TrimSpace(value)
+	// A complete ISO calendar cannot need raw zero-component handling. Leave
+	// calendar/clock validation to the caller's authoritative parser, avoiding
+	// a second component parse on the ordinary VARCHAR date path.
+	if len(s) >= 10 && s[4] == '-' && s[7] == '-' &&
+		s[5] >= '0' && s[5] <= '9' && s[6] >= '0' && s[6] <= '9' && (s[5] != '0' || s[6] != '0') &&
+		s[8] >= '0' && s[8] <= '9' && s[9] >= '0' && s[9] <= '9' && (s[8] != '0' || s[9] != '0') {
+		return incompleteCalendar{}, false
+	}
 	dateText, clockText := s, ""
 	if len(s) >= 14 && isAllDigits(s[:14]) {
 		dateText = s[:8]
