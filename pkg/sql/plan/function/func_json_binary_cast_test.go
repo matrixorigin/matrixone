@@ -36,10 +36,10 @@ func TestJSONBinaryCastPreservesOpaqueSubtype(t *testing.T) {
 		if existed {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	for _, tc := range []struct {
 		oid     types.T
 		subtype int

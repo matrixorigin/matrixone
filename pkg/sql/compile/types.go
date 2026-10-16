@@ -227,6 +227,9 @@ type Scope struct {
 	Proc *process.Process
 
 	ScopeAnalyzer *ScopeAnalyzer
+	// roleRuleRenameAdmissionChecked certifies that a complete RENAME TABLE
+	// batch passed admission before any child rename mutates catalog state.
+	roleRuleRenameAdmissionChecked bool
 
 	// resourceExecutedLocally distinguishes a planned remote scope that fell
 	// back to MergeRun from a scope that was actually dispatched. It is
@@ -454,9 +457,12 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	disableLock              bool
+	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
+	// statement started; a retry restores it.
+	lastInsertIDBaseline    uint64
+	ignorePublish           bool
+	ignoreCheckExperimental bool
+	disableLock             bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

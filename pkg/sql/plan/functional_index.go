@@ -363,7 +363,7 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
 		}
 		if functionalExpressionUsesJSON(expr, table.Cols, make(map[int32]bool)) {
-			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion116); err != nil {
+			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion120); err != nil {
 				return nil, err
 			}
 		}
@@ -519,6 +519,46 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 		return nil, err
 	}
 	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}, nil
+}
+
+// COPY MODIFY/CHANGE updates the source schema before replaying its CREATE SQL.
+// Refresh the owned backing values at that boundary so strict catalog validation
+// never compares an old argument width with the new source column. The caller
+// validates the original metadata before changing the planner-owned table.
+func rebindFunctionalIndexColumns(ctx CompilerContext, table *TableDef) error {
+	names := make([]string, len(table.Cols))
+	colTypes := make([]Type, len(table.Cols))
+	for i, col := range table.Cols {
+		names[i], colTypes[i] = col.Name, col.Typ
+	}
+	bind := func(col *ColDef) (*Expr, error) {
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+col.GeneratedCol.OriginString, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		selectStmt, ok := stmt.(*tree.Select)
+		if !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid functional index expression")
+		}
+		clause, ok := selectStmt.Select.(*tree.SelectClause)
+		if !ok || len(clause.Exprs) != 1 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid functional index expression")
+		}
+		return NewGeneratedColBinder(ddlExpressionContext(ctx, ctx.GetContext()), names, colTypes).BindExpr(clause.Exprs[0].Expr, 0, true)
+	}
+	for i, col := range table.Cols {
+		if !isFunctionalColumn(col) {
+			continue
+		}
+		expr, err := bind(col)
+		if err != nil {
+			return err
+		}
+		col.GeneratedCol.Expr, col.Typ = expr, expr.Typ
+		colTypes[i] = col.Typ
+	}
+	return validateFunctionalTable(ctx.GetContext(), table)
 }
 
 func sameFunctionalValueType(a, b Type) bool {

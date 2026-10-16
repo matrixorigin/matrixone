@@ -40,13 +40,16 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	// This rebind requirement also applies to local execution. Do not hide it
 	// behind the remote-placement fast path or an earlier worker fallback.
+	if features.InvalidDecimalStatisticalResultContract {
+		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
+	}
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
-	required := remoteExpressionProtocolVersion(features)
+	required := executionRemoteExpressionProtocolVersion(c.proc, features)
 	if required == 0 {
 		return nil
 	}
@@ -57,6 +60,16 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
+}
+
+// Diagnostics depend on the outer statement and current session mode, unlike
+// expression result contracts. Keep this floor out of persisted-plan admission.
+func executionRemoteExpressionProtocolVersion(proc *process.Process, features plan.RemoteExpressionFeatures) int64 {
+	required := remoteExpressionProtocolVersion(features)
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() {
+		required = max(required, defines.MORPCVersion116)
+	}
+	return required
 }
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
@@ -97,21 +110,27 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.DateNumericResultContracts {
 		required = max(required, defines.MORPCVersion112)
 	}
+	if features.DecimalStatisticalResultContracts {
+		required = max(required, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		required = max(required, defines.MORPCVersion115)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONFunctionalIndexSemantics {
-		return defines.MORPCVersion116
+		return defines.MORPCVersion120
 	}
 	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
-		return defines.MORPCVersion115
+		return defines.MORPCVersion119
 	}
 	if features.JSONMinMaxTypedComparison {
-		return defines.MORPCVersion114
+		return defines.MORPCVersion118
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		return defines.MORPCVersion113
+		return defines.MORPCVersion117
 	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104

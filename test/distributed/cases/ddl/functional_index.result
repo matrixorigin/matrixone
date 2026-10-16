@@ -74,6 +74,9 @@ alter table t modify name varchar(60);
 select count(*) as matched from t force index(il) where lower(name)='abc';
 matched
 2
+select count(*) as matched_without_index from t ignore index(il,ip) where lower(name)='abc';
+matched_without_index
+2
 begin;
 delete from t where id=1;
 rollback;

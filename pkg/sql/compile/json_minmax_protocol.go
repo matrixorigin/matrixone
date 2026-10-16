@@ -28,7 +28,7 @@ func hasJSONMinMaxAggregate(node *plan.Node) bool {
 // aggregate identity retained after lowering. The same derived requirement
 // reaches sender, destination and receiver fences without new wire state.
 func pipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err == nil {
 		features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || pipelineUsesJSONMinMax(p)
 	}

@@ -66,12 +66,12 @@ func checkpointFunctionalFixture(t *testing.T, sql string) (*TableSchema, *Logic
 	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 	t.Cleanup(func() {
 		if had {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 		}
 	})
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)

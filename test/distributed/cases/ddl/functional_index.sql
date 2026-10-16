@@ -38,6 +38,7 @@ select id from t force index(ip) where id+1=3;
 alter table t add column extra int first;
 alter table t modify name varchar(60);
 select count(*) as matched from t force index(il) where lower(name)='abc';
+select count(*) as matched_without_index from t ignore index(il,ip) where lower(name)='abc';
 begin;
 delete from t where id=1;
 rollback;

@@ -863,6 +863,7 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId                     uuid.UUID
 	statementRuntimeIgnore     bool
+	statementRuntimeSelect     bool
 	planSnapshotTS             timestamp.Timestamp
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
@@ -1146,6 +1147,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		txnId := txn.GetID()
 		stmtProfile := process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
+		if pHelper.statementRuntimeSelect {
+			stmtProfile.SetStatementRuntimeProfile("Select", "DQL", pHelper.statementRuntimeIgnore)
+		}
 		proc.Base.StmtProfile = stmtProfile
 	}
 
@@ -1441,6 +1445,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		txnClient:                  cli,
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		statementRuntimeSelect:     procInfo.StatementRuntimeSelect,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
 		odkuOrdinalBase:            procInfo.OdkuOrdinalBase,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),

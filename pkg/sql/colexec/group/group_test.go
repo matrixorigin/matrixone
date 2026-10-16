@@ -2350,7 +2350,8 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	const groups = 8192
+	// Cross the explicit 64-group spill threshold; larger inputs repeat the same reduced-key oracle.
+	const groups = 65
 	keys := make([]int32, groups*2)
 	payloads := make([]int32, groups*2)
 	for i := range groups {
@@ -3071,7 +3072,8 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
 
-	const rows = 65536
+	// Trigger the explicit 4096-group threshold while retaining all 32 buckets.
+	const rows = 4097
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
 	g.SpillMem = 4096
 	var spillFiles []*os.File

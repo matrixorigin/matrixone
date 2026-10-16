@@ -1025,23 +1025,27 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 }
 
 func TestPreparedNumericContextReusesGroupByAliasParameters(t *testing.T) {
-	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
-	stmt, err := mysql.ParseOne(
-		optimizer.CurrentContext().GetContext(),
-		"insert into constraint_test.emp (sal) select ? + ? as x from nation group by x",
-		1,
-	)
-	require.NoError(t, err)
+	for _, grouping := range []string{"group by x", "group by x with rollup", "group by rollup(x)", "group by 1 with rollup"} {
+		t.Run(grouping, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(
+				optimizer.CurrentContext().GetContext(),
+				"insert into constraint_test.emp (sal) select ? + ? as x from nation "+grouping,
+				1,
+			)
+			require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
-	require.NoError(t, err)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+			require.NoError(t, err)
 
-	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
-	require.Len(t, paramTypes, 2)
-	for _, typ := range paramTypes {
-		require.Equal(t, int32(types.T_decimal64), typ.Id)
-		require.Equal(t, int32(7), typ.Width)
-		require.Equal(t, int32(2), typ.Scale)
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+			require.Len(t, paramTypes, 2)
+			for _, typ := range paramTypes {
+				require.Equal(t, int32(types.T_decimal64), typ.Id)
+				require.Equal(t, int32(7), typ.Width)
+				require.Equal(t, int32(2), typ.Scale)
+			}
+		})
 	}
 }
 

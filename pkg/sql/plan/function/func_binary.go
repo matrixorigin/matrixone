@@ -5352,6 +5352,9 @@ func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buf
 			buf.WriteRune(b)
 		}
 	}
+	if inPatternMatch {
+		buf.WriteByte('%')
+	}
 	return false, nil
 }
 
@@ -8401,6 +8404,9 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	}
 
 	findInStrList := func(str, strlist string) Tr {
+		if strlist == "" {
+			return toResult(0)
+		}
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
 				return toResult(uint64(j + 1))

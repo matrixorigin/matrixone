@@ -21,6 +21,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -30,12 +31,12 @@ func TestFunctionalIndexResolvedOverloadMetadata(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, had := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion116)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
 	t.Cleanup(func() {
 		if had {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion116)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
 		}
 	})
 	build := func(sql string) *TableDef {
@@ -151,6 +152,36 @@ func TestFunctionalIndexResolvedOverloadMetadata(t *testing.T) {
 			require.Error(t, ValidateFunctionalIndexMetadata(t.Context(), bad))
 			_, _, err := constructCreateTableSQL(ctx, bad, nil, false, nil, false, nil)
 			require.Error(t, err, "the real SQL reconstruction consumer must reject damaged JSON result metadata")
+		})
+	}
+}
+
+func TestFunctionalIndexCopyColumnTypeRefresh(t *testing.T) {
+	for _, change := range []string{"modify name varchar(60)", "modify name varchar(80) first"} {
+		t.Run(change, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table fi(id int, name varchar(40), index ix((lower(name)),(upper(name))))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := p.GetDdl().GetCreateTable().TableDef
+			copyTable := DeepCopyTableDef(original, true)
+			alter, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table fi "+change, 1)
+			require.NoError(t, err)
+			defer alter.Free()
+			option := alter.(*tree.AlterTable).Options[0].(*tree.AlterTableModifyColumnClause)
+			_, err = updateNewColumnInTableDef(ctx, copyTable, FindColumn(copyTable.Cols, "name"), option.NewColumn, option.Position)
+			require.NoError(t, err)
+			require.NoError(t, validateFunctionalTable(t.Context(), copyTable))
+			for _, col := range functionalIndexColumns(copyTable, copyTable.Indexes[0]) {
+				require.Equal(t, FindColumn(copyTable.Cols, "name").Typ.Width, col.Typ.Width)
+				require.True(t, functionalExpressionEligible(col.GeneratedCol.Expr, copyTable.Cols, make(map[int32]bool)))
+			}
+			_, _, err = constructCreateTableSQL(ctx, copyTable, nil, false, nil, false, nil)
+			require.NoError(t, err)
+			require.NoError(t, validateFunctionalTable(t.Context(), original))
+			require.Equal(t, int32(40), FindColumn(original.Cols, "name").Typ.Width)
 		})
 	}
 }

@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -452,8 +451,8 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			name:                 "INTERVAL '1' SECOND (varchar)",
 			intervalValueExpr:    makeVarcharConstForProjection("1"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1,
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  1000000,
+			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
@@ -473,8 +472,8 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
 			intervalValueExpr:    makeVarcharConstForProjection("invalid"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // Invalid string returns MaxInt64
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  0, // Invalid numeric prefix is a zero interval
+			expectedIntervalType: types.MicroSecond,
 		},
 		// Test float64 time units
 		{
@@ -713,37 +712,37 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalType: types.MicroSecond,
 		},
 		// Test null decimal64 constant - goes through fallback executor path
-		// NULL values return MaxInt64 marker for consistent handling at execution time
+		// Actual SQL NULL is an illegal frame argument.
 		{
-			name:                 "INTERVAL NULL SECOND (decimal64, null value)",
-			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (decimal64, null value)",
+			intervalValueExpr: makeNullDecimal64ConstForProjection(),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null decimal128 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (decimal128, null value)",
-			intervalValueExpr:    makeNullDecimal128ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (decimal128, null value)",
+			intervalValueExpr: makeNullDecimal128ConstForProjection(),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null float64 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (float64, null value)",
-			intervalValueExpr:    makeNullFloat64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (float64, null value)",
+			intervalValueExpr: makeNullFloat64ConstForProjection(),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null float32 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (float32, null value)",
-			intervalValueExpr:    makeNullFloat32ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (float32, null value)",
+			intervalValueExpr: makeNullFloat32ConstForProjection(),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test fallback branch: when cast to float64 returns unexpected type
 		// This tests the else branch at line 387-409
@@ -757,24 +756,21 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test fallback path with null decimal64 - returns MaxInt64 marker
+		// Test NULL decimal64 rejection in the fallback source domain.
 		{
-			name:                 "INTERVAL NULL SECOND (decimal64, fallback returns null marker)",
-			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectError:          false,
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (decimal64, fallback returns null marker)",
+			intervalValueExpr: makeNullDecimal64ConstForProjection(),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
-		// Test NULL handling for non-time units: returns MaxInt64 marker
-		// The MaxInt64 marker will be detected at execution time and return NULL
+		// Actual SQL NULL is also rejected for non-time units.
 		{
-			name:                 "INTERVAL NULL WEEK (int64, null value)",
-			intervalValueExpr:    makeNullInt64ConstForProjection(),
-			intervalUnit:         "WEEK",
-			expectError:          false,
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Week,
+			name:              "INTERVAL NULL WEEK (int64, null value)",
+			intervalValueExpr: makeNullInt64ConstForProjection(),
+			intervalUnit:      "WEEK",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 	}
 
@@ -1289,7 +1285,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with CURRENT ROW start and PRECEDING end - should return error",
@@ -1307,7 +1303,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with GROUPS frame - should return error",

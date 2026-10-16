@@ -803,6 +803,14 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	// Invalidated prepared handles cannot be exported. Take the decision and
+	// snapshot under one session lock so the target cannot reset its statement-
+	// ID high-water mark from a concurrently changing prepared-handle set: a
+	// later PREPARE must not reuse an invalidated ID after migration.
+	prepareStmts, hasInvalidated := ses.getPrepareStmtsForMigration()
+	if hasInvalidated {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	tempTables, err := ses.snapshotTempTablesForMigration(operationCtx)
 	if err != nil {
 		if isMigrationSnapshotSizeLimitError(err) {
@@ -828,7 +836,6 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	resp.LastInsertID = ses.GetLastInsertID()
 	resp.LastInsertIDExported = true
-	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
@@ -895,6 +902,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.SystemVariablesExported = systemVarsExported
 	}
 	for _, st := range prepareStmts {
+		// A rewrite-policy-invalidated handle cannot be replayed on the target
+		// session: its retained SQL/AST may contain the old row predicate. The
+		// client must explicitly prepare it again under the target policy.
+		if st == nil || st.rewritePolicyInvalidated.Load() {
+			continue
+		}
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,

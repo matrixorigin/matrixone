@@ -5009,7 +5009,11 @@ func timeToTime(
 		} else {
 			result := v
 			// Truncate to target scale if needed
-			if targetScale < 6 {
+			// A value at least one second beyond the endpoint cannot re-enter
+			// the assignment domain at any FSP. Preserve its sign before rounding
+			// can overflow int64; near-boundary values still normalize first.
+			const irrecoverableTime = types.MySQLTimeMax + types.MicroSecsPerSec
+			if targetScale < 6 && !(mode.isAssignment() && (v >= irrecoverableTime || v <= -irrecoverableTime)) {
 				if truncate {
 					result = result.TruncateToScaleWithoutRounding(targetScale)
 				} else {
@@ -5037,7 +5041,15 @@ func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Ti
 		appendTimeRangeWarning(proc, value, scale)
 		return types.ClampMySQLTimeForScale(value, scale), nil
 	}
-	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
+	var label string
+	if value == types.Time(math.MinInt64) {
+		// ClockFormat negates negative durations; MinInt64 has no positive
+		// int64 counterpart. Keep the original value truthful in write errors.
+		label = strconv.FormatInt(int64(value), 10) + " microseconds"
+	} else {
+		label = value.String2(scale)
+	}
+	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, label, value < 0, row)
 }
 
 func mysqlTimeOutOfRangeForCast(
@@ -8929,25 +8941,7 @@ func strToDate(proc *process.Process,
 // assignment/IGNORE diagnostics. Trimming here preserves ParseDatetime's
 // accepted trailing whitespace while still preventing scale-6 rounding.
 func truncateTemporalFractionForParse(s string, scale int32) string {
-	s = strings.TrimSpace(s)
-	dot := strings.LastIndexByte(s, '.')
-	if dot < 0 {
-		return s
-	}
-	end := dot + 1
-	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
-		end++
-	}
-	if end == dot+1 || end != len(s) {
-		return s
-	}
-	if end-dot-1 <= int(scale) {
-		return s
-	}
-	if scale == 0 {
-		return s[:dot]
-	}
-	return s[:dot+1+int(scale)]
+	return types.TruncateTemporalFractionForParse(s, scale)
 }
 
 func strToTime(
