@@ -1668,36 +1668,60 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestSortRollupEmptyInputProducesGrandTotal(t *testing.T) {
-	proc := testutil.NewProcess(t)
+func TestSortRollupEmptyInputAndNullRow(t *testing.T) {
+	for _, name := range []string{"immediate-eof", "empty-batch", "source-null-row"} {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			child := colexec.NewMockOperator()
+			g := newGroupOp(proc,
+				[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(2)})
+			g.SortRollup = true
+			g.AppendChild(child)
+			t.Cleanup(func() {
+				g.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			if name != "immediate-eof" {
+				var values []int32
+				var nullRows []uint64
+				if name == "source-null-row" {
+					values = []int32{0}
+					nullRows = []uint64{0}
+				}
+				input := batch.NewWithSize(3)
+				for i := range input.Vecs {
+					input.Vecs[i] = testutil.MakeInt32Vector(values, nullRows, proc.Mp())
+				}
+				input.SetRowCount(len(values))
+				child.WithBatchs([]*batch.Batch{input})
+			}
 
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = testutil.MakeInt32Vector(nil, nil, proc.Mp())
-	input.Vecs[1] = testutil.MakeInt32Vector(nil, nil, proc.Mp())
-	input.Vecs[2] = testutil.MakeInt32Vector(nil, nil, proc.Mp())
-	input.SetRowCount(0)
-
-	g := newGroupOp(proc,
-		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{sumAgg(2)})
-	g.SortRollup = true
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	g.AppendChild(child)
-	require.NoError(t, g.Prepare(proc))
-	results := collectSortRollupBatches(t, g, proc)
-	require.Len(t, results, 1)
-	require.Equal(t, 1, results[0].RowCount())
-	require.True(t, results[0].Vecs[0].GetGrouping().Contains(0))
-	require.True(t, results[0].Vecs[1].GetGrouping().Contains(0))
-	require.True(t, results[0].Vecs[2].IsNull(0))
-	for _, result := range results {
-		result.Clean(proc.Mp())
+			require.NoError(t, g.Prepare(proc))
+			results := collectSortRollupBatches(t, g, proc)
+			for _, result := range results {
+				t.Cleanup(func() { result.Clean(proc.Mp()) })
+			}
+			if name != "source-null-row" {
+				require.Empty(t, results, "ROLLUP must not synthesize a group from empty input")
+				return
+			}
+			// One real NULL row contributes detail, subtotal and grand total.
+			// NULL keys must not be confused with having observed no input.
+			require.Len(t, results, 1)
+			result := results[0]
+			require.Equal(t, 3, result.RowCount())
+			counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+			for row := 0; row < result.RowCount(); row++ {
+				require.Equal(t, int64(1), counts[row])
+				require.True(t, result.Vecs[3].IsNull(uint64(row)))
+				require.Equal(t, row == 2, result.Vecs[0].GetGrouping().Contains(uint64(row)))
+				require.Equal(t, row >= 1, result.Vecs[1].GetGrouping().Contains(uint64(row)))
+			}
+		})
 	}
-
-	g.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {

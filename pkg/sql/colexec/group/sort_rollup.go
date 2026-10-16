@@ -855,13 +855,10 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 					s.pendingClose = true
 					s.pendingCloseNext = len(s.levelAggs) - 1
 					s.pendingCloseMin = 0
-				} else {
-					// ROLLUP always includes the empty grouping set. The pre-created
-					// prefix-zero aggregate emits COUNT(*) = 0 and NULL for SUM.
-					s.pendingClose = true
-					s.pendingCloseNext = 0
-					s.pendingCloseMin = 0
 				}
+				// Match the legacy planner's COUNT(*) > 0 ROLLUP guard:
+				// no observed input means no detail, subtotal or grand total.
+				// Explicit GROUPING SETS and scalar aggregation use other paths.
 			}
 			if s.pendingClose {
 				if err := group.drainSortRollupClose(proc); err != nil {
