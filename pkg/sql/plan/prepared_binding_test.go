@@ -575,50 +575,57 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 }
 
 func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
-	proc := newPlanTestProcess(t)
-	mock := NewMockOptimizer(false, proc)
-	sink := &loadAssignmentWarningSink{}
-	proc.WarningSink = sink
-	params := vector.NewVec(types.T_text.ToType())
-	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"select 1 where date_sub(time '00:00:00', interval cast(? as decimal(10,1)) hour) is null", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	for _, value := range []string{"900", "1000000000", "0", "900"} {
-		params.CleanOnlyData()
-		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
-		proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger})
-		bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-			[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-			[]any{ParamValue{Value: value}})
-		require.NoError(t, err)
-		require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
-		cast := false
-		require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
-			return planpb.VisitExprTree(root, func(expr *Expr) error {
-				cast = cast || function.IsExplicitDecimalCast(expr)
-				return nil
-			})
-		}))
-		require.Equal(t, value == "1000000000", cast, bound.Plan.String())
-		require.Empty(t, sink.codes, "binding probes must not publish diagnostics")
+	for _, width := range []int{10, 38, 65} {
+		t.Run(fmt.Sprintf("decimal%d", width), func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			mock := NewMockOptimizer(false, proc)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, fmt.Sprintf(
+				"select 1 where date_sub(time '00:00:00', interval cast(? as decimal(%d,1)) hour) is null", width), 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			overflow := "1" + strings.Repeat("0", width-1)
+			for _, value := range []string{"900", overflow, "0", "900"} {
+				params.CleanOnlyData()
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
+					[]any{ParamValue{Value: value}})
+				require.NoError(t, err)
+				require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
+				cast := false
+				require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+					return planpb.VisitExprTree(root, func(expr *Expr) error {
+						cast = cast || function.IsExplicitDecimalCast(expr)
+						return nil
+					})
+				}))
+				require.Equal(t, value == overflow, cast, bound.Plan.String())
+				require.Empty(t, sink.codes, "binding probes must not publish diagnostics")
+			}
+		})
 	}
 }
 
 func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 	for _, tc := range []struct {
-		name, value                       string
-		null, missing, column, standalone bool
-		target                            types.T
-		literal, dependent                bool
+		name, value                        string
+		null, missing, column, standalone  bool
+		target                             types.T
+		literal, constantVector, dependent bool
 	}{
 		{name: "NULL", null: true, target: types.T_decimal64, literal: true, dependent: true},
 		{name: "lexical warning", value: "bad", target: types.T_decimal64, dependent: true},
 		{name: "missing binding", value: "900", missing: true, target: types.T_decimal64, dependent: true},
 		{name: "row source", value: "900", column: true, target: types.T_decimal64},
 		{name: "ordinary cast", value: "900", standalone: true, target: types.T_decimal64},
-		{name: "unsupported literal", value: "900", target: types.T_decimal256, dependent: true},
+		{name: "wide literal", value: "1234567890123456789012345678901234567890123456789012345678901234.5", target: types.T_decimal256, constantVector: true, dependent: true},
+		{name: "wide NULL", null: true, target: types.T_decimal256, literal: true, dependent: true},
+		{name: "wide overflow", value: "1" + strings.Repeat("0", 64), target: types.T_decimal256, dependent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
@@ -635,6 +642,9 @@ func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 				source.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{}}
 			}
 			target := types.New(tc.target, 10, 1).PlanType()
+			if tc.target == types.T_decimal256 {
+				target.Width = 65
+			}
 			cast, err := appendExplicitCastBeforeExpr(proc.Ctx, source, target)
 			require.NoError(t, err)
 			originalType := cast.Typ
@@ -647,11 +657,42 @@ func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 			state := &preparedSourceBindingState{values: []any{ParamValue{Value: tc.value}}}
 			require.NoError(t, specializePreparedTemporalDecimalCasts(proc, state, expr))
 			require.Equal(t, tc.literal, cast.GetLit() != nil)
+			require.Equal(t, tc.constantVector, cast.GetVec() != nil)
 			require.Equal(t, tc.dependent, state.valueDependent)
 			require.Equal(t, originalType, cast.Typ)
 			require.Empty(t, sink.codes)
 			if tc.null {
 				require.True(t, cast.GetLit().GetIsnull())
+			}
+			if tc.constantVector {
+				require.EqualValues(t, 1, cast.GetVec().Len)
+				require.True(t, cast.GetVec().DecimalLiteralRequiresV82)
+				required, err := planpb.RequiresMORPCVersion89DecimalLiteralSemantics(cast)
+				require.NoError(t, err)
+				require.True(t, required, "the existing remote admission must see the wide constant")
+				encoded, err := cast.Marshal()
+				require.NoError(t, err)
+				var decoded planpb.Expr
+				require.NoError(t, decoded.Unmarshal(encoded))
+				executor, err := colexec.NewExpressionExecutor(proc, &decoded)
+				require.NoError(t, err)
+				defer executor.Free()
+				input := batch.New(nil)
+				defer input.Clean(proc.Mp())
+				for _, rows := range []int{2, 3} {
+					input.SetRowCount(rows)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.True(t, result.IsConst(), "a flat one-row vector cannot broadcast")
+					require.Equal(t, 1, result.Length())
+					require.Equal(t, types.New(tc.target, 65, 1), *result.GetType())
+					value := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](result)
+					for row := range rows {
+						coefficient, null := value.GetValue(uint64(row))
+						require.False(t, null)
+						require.Equal(t, tc.value, coefficient.Format(1))
+					}
+				}
 			}
 		})
 	}
