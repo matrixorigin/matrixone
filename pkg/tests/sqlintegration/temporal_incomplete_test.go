@@ -164,6 +164,33 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				check(t, "select is_nullable from information_schema.columns where table_schema='"+schema+"' and table_name='materialized_"+tc.name+"' and column_name='n'", []sql.NullString{value("YES")})
 			})
 		}
+		// CTAS initially stores full expression results even when the declared
+		// width is too small. A later ordinary write must preserve them too.
+		exec("create table " + schema + ".week_dates(id int primary key,v varchar(16) not null)")
+		exec("insert into " + schema + ".week_dates values(1,'0000-01-00'),(2,'2024-00-30')")
+		for _, tc := range []struct {
+			name, format, sourceID, want, width string
+		}{
+			{"week_year_sunday", "%X", "1", "4294967295", "10"},
+			{"week_year_monday", "%x", "1", "4294967295", "10"},
+			{"week_sunday", "%U", "2", "613566756", "9"},
+			{"week_year_week_sunday", "%V", "2", "613566756", "9"},
+		} {
+			t.Run("format_width_ctas/"+tc.name, func(t *testing.T) {
+				tableName := "formatted_" + tc.name
+				table := schema + "." + tableName
+				query := "select date_format(v,'" + tc.format + "') as n from " + schema + ".week_dates where id=" + tc.sourceID
+				check(t, query, []sql.NullString{value(tc.want)})
+				_, err := conn.ExecContext(ctx, "create table "+table+" as "+query)
+				require.NoError(t, err)
+				check(t, "select n from "+table, []sql.NullString{value(tc.want)})
+				_, err = conn.ExecContext(ctx, "insert into "+table+" values('"+tc.want+"')")
+				require.NoError(t, err)
+				check(t, "select n from "+table+" order by n", []sql.NullString{value(tc.want), value(tc.want)})
+				check(t, "select character_maximum_length from information_schema.columns where table_schema='"+schema+"' and table_name='"+tableName+"' and column_name='n'", []sql.NullString{value(tc.width)})
+			})
+		}
+		check(t, "select date_format('2024-02-29','%X|%x')", []sql.NullString{value("2024|2024")})
 		check(t, "select date_format('0000-00-00','%Y-%m-%d')", []sql.NullString{value("0000-00-00")})
 		warnings(t, 0)
 		check(t, "select concat(year('2024-00-00'),'/',month('2024-00-00'),'/',dayofmonth('2024-00-00'))", []sql.NullString{value("2024/0/0")})
