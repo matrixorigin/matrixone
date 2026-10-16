@@ -76,7 +76,7 @@ def failure_location(error):
     known = {
         "sirius_campaign.py",
         "sirius_campaign_v2.py",
-        "sirius_parity.py",
+        "sirius_campaign_common.py",
         "sirius_resource.py",
     }
     location = None
@@ -102,8 +102,9 @@ def controller_sha256():
     for name in (
         "sirius_campaign.py",
         "sirius_campaign_v2.py",
+        "sirius_campaign_common.py",
         "sirius_resource.py",
-        "sirius_profile_exit.gdb",
+        "sirius_profile_exit.py",
     ):
         digest.update(name.encode() + b"\0")
         digest.update((Path(__file__).parent / name).read_bytes())
@@ -646,7 +647,7 @@ class PublicExecutor:
             if after["window"] != before["window"] + 1:
                 raise v2.CampaignError("native cleanup successor is ambiguous")
             for pool in before["pools"]:
-                if pool["tier"] != "gpu" or not (
+                if pool["tier"] == "gpu" and not (
                     pool["end"]["allocated_bytes"] or pool["end"]["reserved_bytes"]
                 ):
                     continue
@@ -791,14 +792,14 @@ def close_services(services, previous_subreaper, monitor=None):
     # Its worker's closer still runs first. If that worker died, its escaped
     # runner descendants are adopted here and joined after the sibling roles.
     try:
-        v2.legacy._kill_and_reap_adopted_children(
-            time.monotonic() + v2.legacy.RUNNER_CLEANUP_TIMEOUT_SECONDS
+        v2.common._kill_and_reap_adopted_children(
+            time.monotonic() + v2.common.RUNNER_CLEANUP_TIMEOUT_SECONDS
         )
     except BaseException as error:
         failures.append(error)
     if failures:
         raise v2.CampaignError("owned service cleanup failed") from failures[0]
-    v2.legacy._set_child_subreaper(previous_subreaper)
+    v2.common._set_child_subreaper(previous_subreaper)
 
 
 def private_json(path, data):
@@ -937,8 +938,6 @@ port = {port_base+300}
 processLimitationSize = 34359738368
 [cn.sirius]
 enabled = true
-backend = "embedded"
-input-mode = "mo"
 native-config-path = {json.dumps(str(native_config))}
 gpu-streams = {stream}
 max-waiting-queries = 16
@@ -1105,20 +1104,20 @@ def run_complete(arguments, *, provenance=None):
     campaign = v2.build_campaign(
         provenance,
         resource=arguments.resource,
-        flight_profiles=[
-            {"id": route, "coverage": [], "status": "N/A", "reason": "not-provisioned"}
-            for route in ("flight-mo", "flight-tae")
-        ],
+
     )
     sirius = tomllib.loads((workspace / "cn-2.toml").read_text())["cn"]["sirius"]
-    if any(
+    if set(sirius) != {
+        "enabled", "native-config-path", "gpu-streams", "max-waiting-queries",
+        "request-timeout", "cleanup-timeout",
+    } or any(
         sirius.get(key) != value
         for key, value in {
             "enabled": True,
-            "backend": "embedded",
-            "input-mode": "mo",
             "max-waiting-queries": 16,
             "cleanup-timeout": "30s",
+            "request-timeout": "1h",
+            "gpu-streams": 2,
         }.items()
     ) or Path(sirius["native-config-path"]).read_text() != native_configuration(
         workspace, provenance["config"]["native_host_block_bytes"]
@@ -1145,7 +1144,7 @@ def run_complete(arguments, *, provenance=None):
             profile_workspace_peak, profile_workspace_bytes(run_workspace)
         )
 
-    previous_subreaper = v2.legacy._enter_exclusive_subreaper()
+    previous_subreaper = v2.common._enter_exclusive_subreaper()
     try:
         for role in ("log", "tn"):
             configs = workspace / f"{role}-2.toml"
@@ -1217,7 +1216,7 @@ def run_complete(arguments, *, provenance=None):
                     "gdb",
                     "--batch",
                     "-x",
-                    str(Path(__file__).with_name("sirius_profile_exit.gdb")),
+                    str(Path(__file__).with_name("sirius_profile_exit.py")),
                     "--args",
                     *command,
                 ]
@@ -1355,7 +1354,7 @@ def run_complete(arguments, *, provenance=None):
                             in {
                                 "sirius_campaign.py",
                                 "sirius_campaign_v2.py",
-                                "sirius_parity.py",
+                                "sirius_campaign_common.py",
                                 "sirius_resource.py",
                             }
                             and type(location["line"]) is int
@@ -1406,6 +1405,7 @@ def run_complete(arguments, *, provenance=None):
                     allocation_summary,
                     MAX_LEDGER_BYTES,
                     MAX_SORT_FILE_BYTES,
+                    reconcile_host_pool,
                 )
 
                 check_workspace()
@@ -1437,7 +1437,6 @@ def run_complete(arguments, *, provenance=None):
                     raise v2.CampaignError("resource profile phase coverage differs")
                 baseline = measured[0]["before_bytes"]
                 after = final[0]["before_bytes"]
-                growth = sum(max(0, after[kind] - baseline[kind]) for kind in baseline)
                 tagged = [
                     run["native_pools"]
                     for run in envelope["records"]
@@ -1456,11 +1455,19 @@ def run_complete(arguments, *, provenance=None):
                     provenance=provenance,
                     warmed_baseline_bytes=baseline,
                     post_cleanup_bytes=after,
-                    unexplained_growth_bytes=growth,
-                    pool_baseline_reconciled=growth == 0 and logical_gpu_clean,
                     logical_pool_scope="query-window",
                     physical_baseline_scope="idle-cn-process",
                 )
+                by_identity = {run["query_id"]: run for run in envelope["records"]}
+                allocation["host_pool_reconciliation"] = reconcile_host_pool(
+                    allocation,
+                    by_identity[measured[0]["query_id"]],
+                    by_identity[measured[-1]["query_id"]],
+                    final[0]["query_id"],
+                    provenance["config"],
+                )
+                allocation["unexplained_growth_bytes"] = allocation["host_pool_reconciliation"]["unexplained_growth_bytes"]
+                allocation["pool_baseline_reconciled"] = allocation["unexplained_growth_bytes"] == 0 and logical_gpu_clean
                 private_json(output / f"resource-phase-{phase_number}.json", allocation)
                 private_json(
                     output / f"excluded-phase-{phase_number}.json",
@@ -1540,7 +1547,7 @@ def start_cluster(arguments):
     write_private(native, native_configuration(workspace, arguments.host_block_bytes))
     configs = make_configs(workspace, native, 2, arguments.port_base)
     services = []
-    previous_subreaper = v2.legacy._enter_exclusive_subreaper()
+    previous_subreaper = v2.common._enter_exclusive_subreaper()
     try:
         for role in ("log", "tn", "cn"):
             service = Service(
@@ -1645,7 +1652,7 @@ def freeze_provenance(arguments):
             if (
                 actual.get("row_count") != source["row_count"]
                 or actual.get("source_sha256") != source["sha256"]
-                or not v2.legacy._is_sha256(actual.get("loaded_data_sha256"))
+                or not v2.common._is_sha256(actual.get("loaded_data_sha256"))
             ):
                 raise v2.CampaignError("loaded table verification is incomplete")
         datasets[f"SF{scale}"] = manifest["dataset_sha256"]
