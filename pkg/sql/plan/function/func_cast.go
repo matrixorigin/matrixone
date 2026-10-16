@@ -7288,6 +7288,18 @@ func appendTemporalAssignmentConversionWarning(proc *process.Process, targetType
 	)
 }
 
+// ParseDecimalInteger rounds decimal text to an integer using assignment
+// semantics. Unlike assignmentIntegerPrefix, it requires the whole value to be
+// numeric. The shared parser keeps precision beyond float64 and bounds work by
+// input length, even for large exponents.
+func ParseDecimalInteger(value string) (string, error) {
+	integer, hasPrefix, truncated, err := assignmentIntegerPrefix(value)
+	if !hasPrefix || truncated {
+		return "", strconv.ErrSyntax
+	}
+	return integer, err
+}
+
 // assignmentIntegerPrefix returns the exact decimal prefix rounded to an
 // integer using assignment semantics and whether a non-whitespace suffix is
 // discarded. It is intentionally separate from leadingDecimalIntegerPrefix,
