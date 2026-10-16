@@ -2022,6 +2022,10 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
 		return nil, err
 	}
+	if stmt.Materialized && mvdefinition.IsStateName(string(viewName)) {
+		return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+			"table name %s is reserved for materialized view state", viewName)
+	}
 
 	createView := &plan.CreateView{
 		Replace:     stmt.Replace,

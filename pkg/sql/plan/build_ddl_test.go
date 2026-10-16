@@ -1632,6 +1632,13 @@ func TestCreateTableRejectsMaterializedViewStateReservedTarget(t *testing.T) {
 	require.ErrorContains(t, err, "reserved for materialized view state")
 }
 
+func TestCreateMaterializedViewRejectsMaterializedViewStateReservedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	_, err := runOneStmt(mock, t,
+		"create materialized view tpch.__mo_mv_state_0123456789abcdef as select n_nationkey from tpch.nation")
+	require.ErrorContains(t, err, "reserved for materialized view state")
+}
+
 func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	name := "__mo_mv_state_0123456789abcdef"

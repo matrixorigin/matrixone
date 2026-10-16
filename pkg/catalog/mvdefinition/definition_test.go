@@ -32,6 +32,13 @@ func definitionFixture(t *testing.T) (*Definition, *plan.TableDef) {
 	require.NoError(t, err)
 	return d, &plan.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan.PropertyDef{{Key: Property, Value: encoded}}}
 }
+
+func TestRequiredCapabilityIsNewerThanPredecessorProtocol(t *testing.T) {
+	require.Equal(t, defines.MORPCVersion117, RequiredCapability)
+	require.Equal(t, RequiredCapability, defines.MORPCLatestVersion)
+	require.Less(t, defines.MORPCVersion116, RequiredCapability)
+}
+
 func TestDefinitionIdentityAndAuthority(t *testing.T) {
 	d, target := definitionFixture(t)
 	ref, err := d.Reference()
