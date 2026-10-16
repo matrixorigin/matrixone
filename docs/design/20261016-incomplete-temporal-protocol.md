@@ -1,4 +1,4 @@
-# Incomplete temporal strings — revision 4
+# Incomplete temporal strings — revision 5
 
 Issue: #30234. Implementation: https://github.com/matrixorigin/matrixone/pull/30311.
 Status: proposed; independent approval remains external to this repair.
@@ -14,7 +14,7 @@ The existing signed WEEK result detector also misses new overloads 4 and 5,
 causing the folded-view admission regression in run 38751428918, attempt 1.
 
 Every expression using these contracts must require MORPC 118. Official main
-2cf7684062e71eece7af4ed74cabf37e0ca3a301 has latest version 117; the candidate
+47b9690d7caec56b589fdefaf0684177412cffb2 has latest version 117; the candidate
 is latest + 1 and must be recalculated if main changes before delivery.
 Official v115 CalendarIntervalNormalization remains independently detected and gated;
 Official v116 SELECT division warnings retain their execution-only floor;
@@ -38,13 +38,23 @@ one-argument WEEK 0/1/4 retains its session-snapshot feature.
 The existing planner observer records the maximum requirement before folding
 and persists it with VIEW SQL. Runtime and authoring floors reject unsupported
 persisted owners. Placement falls back to one CN when a peer cannot support
-118. Actual destination validation probes again for every send. Receiver
+118. Actual destination validation probes the Query RPC endpoint again for every
+send. That connection can reach a different worker generation from the execution
+connection. After variable folding and final pipeline encoding, affected fragments
+carry an execution requirement of max(existing vector requirement, 118). The
+sender performs the existing protocol handshake on the very stream that will
+carry the pipeline, before sending any execution payload. Only a correctly
+identified terminal handshake response advertising at least 118 admits it; an
+old, unknown, malformed, closed or canceled stream fails closed. Query RPC 118
+with an execution peer at 117 therefore sends no pipeline payload. Receiver
 validation rejects an insufficient or unknown floor before constructing
 operators. Compile and Run admission recheck the expression floor before pipeline
 initialization and operator Prepare, including cached executions after a protocol
 rollback. No capability cache or
-new resource owner is introduced. Existing cancellation and probe timeout
-behavior is reused unchanged.
+new resource owner is introduced. The existing five-second handshake timeout
+and parent cancellation bound the connection fence. On rejection remoteRun
+returns its sender to Scope.RemoteRun, which closes it through the existing
+cleanup owner; no stop-response wait is needed before a payload has started.
 
 ## Alternatives and rollout
 
@@ -70,15 +80,22 @@ use the existing unsupported-protocol diagnostics and acquire no new resources.
 Detection adds bounded comparisons per visited function and one boolean in the
 existing feature set. The walker remains linear in expression size. Compile/Run
 admission takes a constant-time fast path at a supported floor; an insufficient
-or unknown floor adds one owner traversal. Probe
-count, memory retention, background work and statement warning ownership are
-unchanged. No new SQL privilege or external trust boundary is introduced.
+or unknown floor adds one owner traversal. Query RPC probe count is unchanged.
+Each affected remote fragment adds one bounded execution-stream handshake round
+trip before its payload (shared with any existing vector requirement, not a
+second handshake). Unaffected typed temporal and ordinary literal projections
+add none. Memory retention, background work and statement warning ownership
+are unchanged. No new SQL privilege or external trust boundary is introduced.
 
 Acceptance: serialized detection covers every affected identity plus typed and
 unknown-overload controls; one-argument string WEEK requires a captured default;
 folded VIEW authoring and persisted owners reject 117 and accept 118; typed
 WEEK still rejects 111 and accepts 112. Placement, actual send, receiver decode
-and Prepare accept 118 and reject its immediate predecessor, including rollback
+and Prepare accept 118 and reject its immediate predecessor. A production-bound
+projection with Query RPC 118 and execution peer 117 must perform one handshake
+and send no payload; peer 118 admits the payload on that same stream. Tests
+cover sender cleanup on rejection, malformed replies, send errors and cancellation,
+plus nested/folded pipelines and composition with vector floors, including rollback
 after an earlier success. A real-bound composition of string WEEK, calendar
 DATE_ADD, SELECT division and collation-aware LEAST retains all predicates;
 LEAST alone remains at 117 while the combined expression requires 118.

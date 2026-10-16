@@ -163,7 +163,7 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
 	var requiredVectorProtocol int64
-	data, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
+	data, err := encodeRemoteScopeWithExecutionProtocol(remote, c.proc, &requiredVectorProtocol)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "the encoded remote index search scan needs a bound handshake")
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
@@ -173,7 +173,7 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	remote.Proc.Base.SessionInfo.TimeZone = time.UTC
 	remote.Proc.Ctx = defines.AttachAccountId(context.Background(), 0)
 	requiredVectorProtocol = 0
-	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
+	_, _, _, _, err = prepareRemoteRunSendingDataWithExecutionProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
 	decoded, err := decodeScope(data, c.proc, true, nil)
@@ -205,11 +205,11 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.False(t, local.IsRemote)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
 	remote.NodeInfo.CNIDX = 1
-	nonzero, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
+	nonzero, err := encodeRemoteScopeWithExecutionProtocol(remote, c.proc, &requiredVectorProtocol)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "a nonzero partition needs the handshake too")
 	requiredVectorProtocol = 0
-	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
+	_, _, _, _, err = prepareRemoteRunSendingDataWithExecutionProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol)
 	decodedNonzero, err := decodeScope(nonzero, c.proc, true, nil)
