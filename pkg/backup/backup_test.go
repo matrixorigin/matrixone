@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -402,7 +403,6 @@ func TestBackupCheckpointBeforeFirstAppend(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 	engine.Restart(ctx)
 	txn, rel = engine.GetRelation()
-	defer txn.Rollback(context.Background())
 	testutil.CheckAllColRowsByScan(t, rel, 1, true)
 	require.NoError(t, txn.Commit(ctx))
 }
@@ -463,7 +463,11 @@ func TestBackupData2(t *testing.T) {
 	for _, data := range bats {
 		func() {
 			txn, rel := db.GetRelation()
-			defer txn.Rollback(context.Background())
+			defer func() {
+				if txn.GetTxnState(false) == txnif.TxnStateActive {
+					require.NoError(t, txn.Rollback(context.Background()))
+				}
+			}()
 			v := testutil.GetSingleSortKeyValue(data, schema, 2)
 			filter := handle.NewEQFilter(v)
 			require.NoError(t, rel.DeleteByFilter(ctx, filter))
