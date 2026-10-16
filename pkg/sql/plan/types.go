@@ -390,6 +390,9 @@ type QueryBuilder struct {
 
 	qry     *plan.Query
 	compCtx CompilerContext
+	// Only buildValueScan owns this borrowed scope. Ordinary VALUES keep ctx nil;
+	// the actual subquery binder initializes it once and the owner restores it.
+	valuesSubqueryBinding valuesSubqueryBinding
 	// queryingSubscriptionMetadata is scoped to binding one account-wide
 	// subscription metadata branch. It complements CompilerContext's publisher
 	// routing state with subscriber-local table visibility.
