@@ -42,7 +42,7 @@ decision; implementation approval remains a separate GitHub review state.
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 599 and 600), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 600 and 601), so the catalog contract is fenced by MORPC
 v118.
 
 ## Problem and invariant
@@ -127,15 +127,16 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v118 is allocated as `MORPCLatestVersion + 1` from official main v117 at
-`14a8d854b0f9346065ff8432eb979e35f32f50d8`. Main owns v117 collation-aware
+`18d5335ee330bb7e3bd3a893bf81044120884021`. Main owns v117 collation-aware
 LEAST/GREATEST overloads, v116 SELECT division diagnostics, v115 calendar interval
 normalization, and the earlier independent metadata/result contracts. This
 rebase advances VIEWS from v117 to v118; historical measurements retain their
 original version and revision identities.
 Main's hyperbolic functions retain IDs 591–595, FORMAT_BYTES and
 FORMAT_PICO_TIME retain IDs 596 and 597, and TO_CALENDAR_INTERVAL retains 598.
-The current main function end marker is 599; the two VIEWS function IDs are
-599 and 600, and the end marker advances to 601. These IDs are allocated from the rebased official main and are
+Main retains CHECK_ASYNC_DATALINK_SOURCE at ID 599. The current main function
+end marker is 600; the two VIEWS function IDs are 600 and 601, and the end
+marker advances to 602. These IDs are allocated from the rebased official main and are
 distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
@@ -407,3 +408,17 @@ formats sequence functions in EXPLAIN group keys. All 127 PR patches remain
 identical; the EXPLAIN package normal suite is refreshed. Protocol allocation,
 metadata execution, parser, binder, and sender benchmark inputs are unchanged,
 so the preceding validation results remain applicable.
+
+The 2026-10-17 base refresh keeps MORPC v117 and VIEWS v118, while main
+allocates ID 599 to the asynchronous datalink admission function. VIEWS moves
+to IDs 600/601. The shared protobuf identity table rejects 599 as a VIEWS
+capability and recognizes both new identities; function registration, persisted
+read/authoring, Prepare, local/remote receivers, and sender placement keep the
+v118 floor, including immediate-predecessor v117 rejection. Historical
+measurements above retain their original function identities and revisions.
+
+At these new IDs, the sender benchmark ran one separate warm-up followed by
+three measured rounds (Go 1.27.1, Darwin/arm64 Apple M4, CGo CPU wrapper,
+`-p=2`, `-benchtime=200ms`). All nine variants and 27 measured samples reported
+0 B/op and 0 allocs/op. This refresh checks the new identities; shared-host
+activity prevents a controlled absolute latency or SQL throughput claim.
