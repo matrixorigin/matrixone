@@ -2993,6 +2993,18 @@ function run_tests(){
             start_embedded_prebuild "${cluster_test_scope}" 1
         fi
 
+        # The bounded issues wave leaves one of the three heavy slots free.
+        # Reuse the planner helper there, instead of leaving it on the final
+        # critical path. Other compiler companions retain their existing budget.
+        if (( UT_OVERLAP_PLAN == 1 && overlap_light == 0 && UT_PREBUILD_EMBEDDED == 0 &&
+              HEAVY_RACE_PARALLEL >= 3 && PLAN_RACE_PARALLEL == 1 )) &&
+            [[ "${UT_ISSUES_BATCHES}:${UT_ISSUES_BATCH_PARALLEL}" == 8:2 ]] &&
+            should_run_ut_stage serial && should_run_ut_stage plan; then
+            logger "INF" "Start plan race wave alongside the bounded issues wave"
+            start_plan_race "${plan_package}" || plan_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+        fi
+
         if should_run_ut_stage serial; then
             logger "INF" "Run exclusive race-test packages serially"
             for package in ${serial_test_scope}; do
@@ -3018,6 +3030,14 @@ function run_tests(){
                     logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
                 fi
             done
+        fi
+
+        # Keep the next cluster/engine wave exclusive. The report retains the
+        # planner's execution identity until the normal plan stage consumes it.
+        if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || plan_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            report_cgroup_memory_usage "Plan/issues overlap"
         fi
 
         if (( light_started == 1 )); then
@@ -3080,7 +3100,8 @@ function run_tests(){
         # If the budget cannot admit both waves, keep the phases sequential.
         if should_run_ut_stage heavy; then
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
-            if (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
+            if [[ -z "${PLAN_RACE_REPORT}" ]] &&
+                (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
                 [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] &&
                 (( PLAN_RACE_PARALLEL <= 2 && HEAVY_RACE_PARALLEL > PLAN_RACE_PARALLEL )); then
                 resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - PLAN_RACE_PARALLEL ))
@@ -3097,9 +3118,8 @@ function run_tests(){
         fi
 
         if should_run_ut_stage plan; then
-            if [[ -z "${PLAN_RACE_JOB_PID}" ]]; then start_plan_race "${plan_package}"; fi
-            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED
-            plan_status=$?
+            if [[ -z "${PLAN_RACE_REPORT}" ]]; then start_plan_race "${plan_package}" || plan_status=$?; fi
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || plan_status=$?
             if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             consume_plan_race_report
             report_status=$?
