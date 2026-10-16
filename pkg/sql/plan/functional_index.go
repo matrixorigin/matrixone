@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -105,16 +106,22 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 	if expr == nil {
 		return false
 	}
+	if _, ok := functionalRuntimeType(expr.Typ); !ok {
+		return false
+	}
 	switch e := expr.Expr.(type) {
 	case *pb.Expr_Lit:
-		return true
+		return e != nil && e.Lit != nil
 	case *pb.Expr_Col:
+		if e == nil || e.Col == nil {
+			return false
+		}
 		pos := e.Col.ColPos
 		if e.Col.RelPos != 0 || pos < 0 || int(pos) >= len(cols) || visiting[pos] {
 			return false
 		}
 		col := cols[pos]
-		if col == nil || col.Hidden || col.Typ.AutoIncr {
+		if col == nil || col.Hidden || col.Typ.AutoIncr || !sameFunctionalValueType(expr.Typ, col.Typ) {
 			return false
 		}
 		if col.GeneratedCol != nil {
@@ -125,17 +132,26 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 		}
 		return true
 	case *pb.Expr_T:
-		return true
+		return e != nil && e.T != nil
 	case *pb.Expr_F:
-		if e.F == nil || e.F.Func == nil {
+		resolved, ok := functionalResolvedFunction(expr)
+		if !ok {
 			return false
 		}
-		switch e.F.Func.ObjName {
-		case "lower", "upper":
+		fid, overload := function.DecodeOverloadID(e.F.Func.Obj)
+		switch fid {
+		case function.LOWER, function.UPPER:
 			if len(e.F.Args) != 1 || !functionalTextType(e.F.Args[0].Typ) || !functionalTextType(expr.Typ) {
 				return false
 			}
-		case "+", "-", "*", "abs":
+		case function.PLUS, function.MINUS, function.MULTI, function.ABS, function.UNARY_PLUS, function.UNARY_MINUS:
+			arity := 2
+			if fid == function.ABS || fid == function.UNARY_PLUS || fid == function.UNARY_MINUS {
+				arity = 1
+			}
+			if len(e.F.Args) != arity {
+				return false
+			}
 			if !types.T(expr.Typ.Id).IsInteger() {
 				return false
 			}
@@ -144,7 +160,15 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 					return false
 				}
 			}
-		case "cast":
+		case function.CAST:
+			// These are the implicit, explicit and comparison casts emitted by
+			// the binder. Other registered CAST kernels have different contracts.
+			if overload < 0 || overload > 2 {
+				return false
+			}
+			if functionalJSONTextCastEligible(expr, cols, visiting) {
+				return true
+			}
 			if len(e.F.Args) == 2 {
 				from, to := types.T(e.F.Args[0].Typ.Id), types.T(expr.Typ.Id)
 				if from.IsInteger() && to.IsInteger() && from.IsUnsignedInt() == to.IsUnsignedInt() && from.TypeLen() <= to.TypeLen() {
@@ -160,9 +184,7 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				}
 			}
 			// Identity casts inserted by generated-column assignment are safe.
-			if len(e.F.Args) != 2 || e.F.Args[0].Typ.Id != expr.Typ.Id ||
-				e.F.Args[0].Typ.Width != expr.Typ.Width || e.F.Args[0].Typ.Scale != expr.Typ.Scale ||
-				e.F.Args[0].Typ.Charset != expr.Typ.Charset || e.F.Args[0].Typ.PadSpace != expr.Typ.PadSpace {
+			if !sameFunctionalValueType(e.F.Args[0].Typ, expr.Typ) {
 				return false
 			}
 		default:
@@ -173,10 +195,108 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				return false
 			}
 		}
+		expected := resolved.GetReturnType().PlanType()
+		// The binder carries CHAR/padded argument provenance on text results;
+		// it is deliberately not part of the runtime registry Type.
+		if fid == function.CAST {
+			expected = e.F.Args[1].Typ
+		} else if fid == function.LOWER || fid == function.UPPER {
+			expected.PadSpace = hasPadSpaceStringProvenance(e.F.Args[0])
+		}
+		if !sameFunctionalValueType(expected, expr.Typ) {
+			return false
+		}
 		return true
 	default:
 		return false
 	}
+}
+
+// Validate the serialized identity using the same registry/type checker as the
+// binder, without inserting coercions or trusting the display name. The
+// eligibility owner still decides which of these resolved kernels are safe.
+func functionalResolvedFunction(expr *Expr) (function.FuncGetResult, bool) {
+	invalid := function.FuncGetResult{}
+	if expr == nil {
+		return invalid, false
+	}
+	e, ok := expr.Expr.(*pb.Expr_F)
+	if !ok || e == nil || e.F == nil || e.F.Func == nil {
+		return invalid, false
+	}
+	fn := e.F
+	// Limit registry lookup to this owner's scalar families. In particular,
+	// damaged names must not enter unrelated functions' type checkers.
+	switch fn.Func.ObjName {
+	case "lower", "to_lower", "lcase", "upper", "to_upper", "ucase",
+		"+", "-", "*", "abs", "unary_plus", "unary_minus", "cast",
+		"json_extract", "json_unquote":
+	default:
+		return invalid, false
+	}
+	if _, ok := functionalRuntimeType(expr.Typ); !ok {
+		return invalid, false
+	}
+	if _, exists := function.GetFunctionByIdWithoutError(fn.Func.Obj); !exists {
+		return invalid, false
+	}
+	args := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		if arg == nil {
+			return invalid, false
+		}
+		var ok bool
+		args[i], ok = functionalRuntimeType(arg.Typ)
+		if !ok {
+			return invalid, false
+		}
+	}
+	resolved, ok := function.GetFunctionByNameWithoutError(fn.Func.ObjName, args)
+	if !ok {
+		return invalid, false
+	}
+	fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+	if fid == function.CAST {
+		// CAST's normal lookup selects overload 0; explicit/comparison casts
+		// are selected by the binder's overload-aware API.
+		if fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+			!sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
+			return invalid, false
+		}
+		target, ok := fn.Args[1].Expr.(*pb.Expr_T)
+		if !ok || target == nil || target.T == nil {
+			return invalid, false
+		}
+		var err error
+		resolved, err = function.GetFunctionByNameWithOverload(context.Background(), "cast", args, overload)
+		if err != nil {
+			return invalid, false
+		}
+	}
+	if resolved.GetEncodedOverloadID() != fn.Func.Obj {
+		return invalid, false
+	}
+	if targets, needed := resolved.ShouldDoImplicitTypeCast(); needed {
+		if len(targets) != len(args) {
+			return invalid, false
+		}
+		for i := range args {
+			if !args[i].Eq(targets[i]) {
+				return invalid, false
+			}
+		}
+	}
+	return resolved, true
+}
+
+func functionalRuntimeType(typ Type) (types.Type, bool) {
+	// TypeFromPlan checks wire widths/collations, but TypeLen panics for an
+	// unassigned OID inside that range. Catalog admission must fail closed.
+	if err := typ.ValidateCollation(); err != nil || strings.HasPrefix(types.T(typ.Id).String(), "unexpected type:") {
+		return types.Type{}, false
+	}
+	runtimeType, err := types.TypeFromPlan(typ)
+	return runtimeType, err == nil
 }
 
 func functionalTextType(typ Type) bool {
@@ -242,6 +362,11 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
 		}
+		if functionalExpressionUsesJSON(expr, table.Cols, make(map[int32]bool)) {
+			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion120); err != nil {
+				return nil, err
+			}
+		}
 		if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
 			return nil, err
 		}
@@ -279,11 +404,20 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 	return &copy, nil
 }
 
+// ValidateFunctionalIndexMetadata applies the same typed ownership and eligibility
+// contract to checkpoint catalog reconstruction before SQL can re-author keys.
+func ValidateFunctionalIndexMetadata(ctx context.Context, table *TableDef) error {
+	return validateFunctionalTable(ctx, table)
+}
+
 func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 	owners := make(map[string]int)
 	for _, index := range table.Indexes {
 		if index == nil {
 			return moerr.NewInvalidInput(ctx, "invalid index metadata")
+		}
+		if err := validateFunctionalJSONIndexSemantics(ctx, table, index); err != nil {
+			return err
 		}
 		functional := false
 		for _, part := range index.Parts {
@@ -387,6 +521,46 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}, nil
 }
 
+// COPY MODIFY/CHANGE updates the source schema before replaying its CREATE SQL.
+// Refresh the owned backing values at that boundary so strict catalog validation
+// never compares an old argument width with the new source column. The caller
+// validates the original metadata before changing the planner-owned table.
+func rebindFunctionalIndexColumns(ctx CompilerContext, table *TableDef) error {
+	names := make([]string, len(table.Cols))
+	colTypes := make([]Type, len(table.Cols))
+	for i, col := range table.Cols {
+		names[i], colTypes[i] = col.Name, col.Typ
+	}
+	bind := func(col *ColDef) (*Expr, error) {
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+col.GeneratedCol.OriginString, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		selectStmt, ok := stmt.(*tree.Select)
+		if !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid functional index expression")
+		}
+		clause, ok := selectStmt.Select.(*tree.SelectClause)
+		if !ok || len(clause.Exprs) != 1 {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid functional index expression")
+		}
+		return NewGeneratedColBinder(ddlExpressionContext(ctx, ctx.GetContext()), names, colTypes).BindExpr(clause.Exprs[0].Expr, 0, true)
+	}
+	for i, col := range table.Cols {
+		if !isFunctionalColumn(col) {
+			continue
+		}
+		expr, err := bind(col)
+		if err != nil {
+			return err
+		}
+		col.GeneratedCol.Expr, col.Typ = expr, expr.Typ
+		colTypes[i] = col.Typ
+	}
+	return validateFunctionalTable(ctx.GetContext(), table)
+}
+
 func sameFunctionalValueType(a, b Type) bool {
 	a.Table, b.Table = "", ""
 	a.NotNullable, b.NotNullable = false, false
@@ -422,7 +596,7 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 					if constant.GetLit() == nil || constant.GetLit().Isnull {
 						continue
 					}
-					candidate := DeepCopyExpr(f.Args[side])
+					candidate := DeepCopyExpr(functionalJSONComparisonOperand(f.Args[side], node.TableDef.Cols, node.BindingTags[0]))
 					persisted := DeepCopyExpr(col.GeneratedCol.Expr)
 					if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
 						!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {

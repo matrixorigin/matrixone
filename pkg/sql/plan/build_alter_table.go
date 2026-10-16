@@ -833,7 +833,7 @@ func buildAlterCopyAddIndex(
 		}
 		if err := buildSecondaryIndexDef(
 			indexInfo, []*tree.Index{index}, colMap,
-			copyTableDef.Indexes, primaryKeyName, ctx,
+			copyTableDef.Indexes, primaryKeyName, ctx, copyTableDef,
 		); err != nil {
 			return nil, "", err
 		}

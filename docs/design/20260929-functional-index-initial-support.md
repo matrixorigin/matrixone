@@ -116,3 +116,39 @@ Issue #29300 does not contain the exact failing InvenTree index expression.
 This change therefore supplies the supported functional-index foundation but
 does not assert that all InvenTree migrations or MySQL functional expressions
 are now supported.
+
+## Bounded JSON text key extension
+
+The extension for issue #28053 retains this foundation and its existing hidden
+column, COPY, FK maintenance and equality-backfill owners. It permits a bounded
+explicit CHAR/VARCHAR cast around JSON_UNQUOTE(JSON_EXTRACT(...)) with a literal
+single-value path. Paths are restricted to `$`, ASCII member names and fixed
+nonnegative array subscripts. The JSON input is a JSON base column, a recursively
+eligible JSON generated dependency, or an identity JSON cast. A direct integer
+image cast to JSON is also eligible; temporal, textual parsing, wildcard,
+parameterized and otherwise unresolved conversions remain rejected. Raw
+unbounded JSON text keys are not enabled. Result collation identities must be
+legacy 0..3 with revision zero; this does not activate native/UCA physical keys.
+
+The existing secondary-index emitter derives revision `1` under the private
+`functional_json_semantics` index-parameter key from the final binding schema.
+The owning index retains this semantic identity even when an unused generated
+column is pruned from a query. Unknown, malformed, missing or inconsistent
+revision metadata is rejected. Public SQL reconstruction continues to render
+expression syntax and rederive the marker; it does not expose a new SQL option.
+Ordinary functional indexes retain their existing protocol-107 semantics.
+
+This extension requires protocol 116 for authoring and for the existing shared
+placement, actual destination stream and receiver checks. The allocation is
+provisional until the real cumulative predecessor code (main112, ELT/opaque113, typed
+JSON MIN/MAX114 and ODKU115) is integrated in order; a high version alone must
+never stand in for missing predecessor implementations.
+
+Equality matching retains the complete base-row predicate. Only the known
+comparison-coercion cast that widens the already eligible CHAR JSON key to
+VARCHAR without changing charset, collation revision, padding or scale is
+removed for structural matching. The inner bounded key remains an exact typed
+match. This does not provide functional covering/range access or promise index
+selection for parameter markers. It also does not assert that inherited MO
+scalar/collation behavior has full MySQL parity, or that a standalone old/new
+consumer test proves mixed-cluster placement or durable reload safety.

@@ -27,11 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -49,27 +57,141 @@ func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.NoError(t, csvPipelineError(nil, nil))
 }
 
-func TestFunctionalIndexCheckpointDDL(t *testing.T) {
-	const backing = "__mo_fi_123"
-	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "name", SQLType: "VARCHAR(40)", Position: 1}},
-		UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{backing}}}}
-	encoded, err := types.Encode(&plan.GeneratedCol{OriginString: "lower(`name`)"})
+// Build genuine planner metadata: OriginString-only fixtures cannot prove a
+// functional key's typed ownership, result type, or generated dependencies.
+func checkpointFunctionalFixture(t *testing.T, sql string) (*TableSchema, *LogicalTableView, *LogicalTableView, *plan.TableDef) {
+	t.Helper()
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+		}
+	})
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"},
-		Rows: [][]string{{}, {"o", "0", "0", "42", backing, "1", string(encoded)}}}
+	defer stmt.Free()
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, proc), stmt, false)
+	require.NoError(t, err)
+	table := built.GetDdl().GetCreateTable().TableDef
+	schema := &TableSchema{TableName: table.Name}
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "attnum", "att_is_hidden", "attr_generated", "atttyp", "attr_has_generated"}}
+	for i, col := range table.Cols {
+		typ := types.MustTypeFromPlan(col.Typ)
+		rawType, err := types.Encode(&typ)
+		require.NoError(t, err)
+		generated := ""
+		hasGenerated := "0"
+		if col.GeneratedCol != nil {
+			raw, err := types.Encode(col.GeneratedCol)
+			require.NoError(t, err)
+			generated = string(raw)
+			hasGenerated = "1"
+		}
+		hidden := "0"
+		if col.Hidden {
+			hidden = "1"
+		} else {
+			schema.Columns = append(schema.Columns, TableColumn{Name: col.Name, SQLType: typ.DescString(), Position: i + 1})
+		}
+		columns.Rows = append(columns.Rows, []string{"o", "0", "0", "42", col.Name, fmt.Sprint(i + 1), hidden, generated, string(rawType), hasGenerated})
+	}
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", catalog.IndexAlgoParams}}
+	for _, idx := range table.Indexes {
+		schema.UniqueKeys = append(schema.UniqueKeys, TableUniqueKey{Name: idx.IndexName, Columns: idx.Parts, Unique: idx.Unique, Algo: idx.IndexAlgo, AlgoParams: idx.IndexAlgoParams})
+		for i, part := range idx.Parts {
+			indexes.Rows = append(indexes.Rows, []string{"o", "0", "0", "42", idx.IndexName, part, "INDEX", fmt.Sprint(i + 1), idx.IndexAlgoParams})
+		}
+	}
+	return schema, columns, indexes, table
+}
+
+func TestFunctionalIndexCheckpointDDL(t *testing.T) {
+	schema, columns, indexes, _ := checkpointFunctionalFixture(t, "create table fi(name varchar(40),index idx((lower(name))))")
 	attachFunctionalIndexExpressions(schema, columns, 42)
 	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
-	require.Contains(t, ddl, "KEY `idx`((lower(`name`)))")
-	require.NotContains(t, ddl, backing)
-	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"},
-		Rows: [][]string{{"o", "0", "0", "42", "idx", backing, "INDEX", "1"}}}
+	require.Contains(t, ddl, "KEY `idx`(")
+	require.NotContains(t, ddl, "__mo_fi_")
 	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.NoError(t, err)
-	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`((lower(`name`)));"}, statements)
+	require.Len(t, statements, 1)
+	require.Contains(t, statements[0], "lower")
 	schema.UniqueKeys[0].Expressions = nil
 	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
 	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.Error(t, err)
+}
+
+// Corrupt only the typed expression, keeping the genuine planner's catalog
+// encoding and printable SQL intact. This is a defensive restore oracle.
+func TestFunctionalCheckpointResolvedOverload(t *testing.T) {
+	for _, input := range []struct {
+		name, sql string
+	}{
+		{"ordinary", "create table fi(name varchar(40),index idx((lower(name))))"},
+		{"transitive", "create table fi(name varchar(40),g varchar(40) as (lower(name)) virtual,index idx((lower(g))))"},
+		{"json", "create table fi(doc json,index idx((cast(doc ->> '$.kind' as char(20)))))"},
+	} {
+		for _, damage := range []string{"unknown_function", "out_of_range_overload", "mismatched_name", "missing_argument"} {
+			t.Run(input.name+"/"+damage, func(t *testing.T) {
+				schema, columns, indexes, table := checkpointFunctionalFixture(t, input.sql)
+				tables := &LogicalTableView{
+					Headers: []string{"object", "block", "row", "rel_id", "relname", catalog.SystemRelAttr_Constraint},
+					Rows:    [][]string{{"o", "0", "0", "42", "fi", encodedConstraint(t, &engine.IndexDef{Indexes: table.Indexes})}},
+				}
+				// The same complete catalog caller must export the untouched control.
+				require.Contains(t, createTableDDLFromCatalogViews(42, tables, columns), "KEY")
+				attachFunctionalIndexExpressions(schema, columns, 42)
+				require.NotEmpty(t, RenderCreateTableDDLFromSchema(cloneTableSchema(schema)))
+				statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+				require.NoError(t, err)
+				require.NotEmpty(t, statements)
+				for _, row := range columns.Rows {
+					selected := strings.HasPrefix(row[4], "__mo_fi_")
+					if input.name == "transitive" {
+						selected = row[4] == "g"
+					}
+					if !selected {
+						continue
+					}
+					var generated plan.GeneratedCol
+					require.NoError(t, types.Decode([]byte(row[7]), &generated))
+					expr := generated.Expr
+					for expr.GetF().Func.ObjName == "cast" {
+						expr = expr.GetF().Args[0]
+					}
+					fn := expr.GetF()
+					switch damage {
+					case "unknown_function":
+						fn.Func.Obj = function.EncodeOverloadID(0x7fffffff, 0)
+					case "out_of_range_overload":
+						fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+						fn.Func.Obj = function.EncodeOverloadID(fid, 0x7fffffff)
+					case "mismatched_name":
+						fn.Func.ObjName = "upper"
+					case "missing_argument":
+						fn.Args = nil
+					}
+					raw, err := types.Encode(&generated)
+					require.NoError(t, err)
+					row[7] = string(raw)
+				}
+				attachFunctionalIndexExpressions(schema, columns, 42)
+				require.True(t, schema.invalidFunctionalMetadata)
+				require.Empty(t, RenderCreateTableDDLFromSchema(cloneTableSchema(schema)))
+				statements, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+				require.Error(t, err)
+				require.Empty(t, statements)
+				require.Empty(t, createTableDDLFromCatalogViews(42, tables, columns), "no substitute DDL through catalog fallback")
+			})
+		}
+	}
 }
 
 func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {
@@ -91,31 +213,18 @@ func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {
 }
 
 func TestFunctionalCompositeIndexCheckpointDDL(t *testing.T) {
-	const first, second = "__mo_fi_a_1", "__mo_fi_a_2"
-	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "id", SQLType: "INT", Position: 1}, {Name: "name", SQLType: "VARCHAR(40)", Position: 2}}, UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{"id", first, second}}}}
-	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"}}
-	for _, part := range []struct{ name, expr string }{{first, "lower(`name`)"}, {second, "upper(`name`)"}} {
-		encoded, err := types.Encode(&plan.GeneratedCol{OriginString: part.expr})
-		require.NoError(t, err)
-		columns.Rows = append(columns.Rows, []string{"o", "0", "0", "42", part.name, "1", string(encoded)})
-	}
+	schema, columns, indexes, _ := checkpointFunctionalFixture(t, "create table fi(id int,name varchar(40),index idx(id,(lower(name)),(upper(name))))")
 	attachFunctionalIndexExpressions(schema, columns, 42)
-	clone := cloneTableSchema(schema)
-	require.Contains(t, RenderCreateTableDDLFromSchema(clone), "KEY `idx`(`id`, (lower(`name`)), (upper(`name`)))")
-	require.NotContains(t, RenderCreateTableDDLFromSchema(clone), "__mo_fi_")
-	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"}, Rows: [][]string{
-		{"o", "0", "0", "42", "idx", second, "INDEX", "3"},
-		{"o", "0", "0", "42", "idx", "id", "INDEX", "1"},
-		{"o", "0", "0", "42", "idx", first, "INDEX", "2"},
-	}}
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	require.Contains(t, ddl, "KEY `idx`(`id`,")
+	require.Contains(t, ddl, "lower")
+	require.Contains(t, ddl, "upper")
+	require.NotContains(t, ddl, "__mo_fi_")
 	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.NoError(t, err)
-	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`(`id`, (lower(`name`)), (upper(`name`)));"}, statements)
-	delete(schema.UniqueKeys[0].Expressions, second)
-	require.NotEmpty(t, clone.UniqueKeys[0].Expressions[second], "clone owns expression map")
-	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
-	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
-	require.Error(t, err)
+	require.Len(t, statements, 1)
+	require.Contains(t, statements[0], "lower")
+	require.Contains(t, statements[0], "upper")
 }
 
 func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
@@ -3179,4 +3288,290 @@ func TestParseCSVRowOrder(t *testing.T) {
 
 	_, err = ParseCSVRowOrder("unknown")
 	require.Error(t, err)
+}
+
+// The SQL exporter must not erase an unsupported semantic revision and thereby
+// let fresh authoring silently reinterpret it as the current JSON key family.
+func TestJSONFunctionalIndexCheckpointSemanticRevision(t *testing.T) {
+	for _, params := range []string{`{"functional_json_semantics":"1"}`, `{"functional_json_semantics":"2"}`, `{"functional_json_semantics":1}`, `{"functional_json_semantics":`} {
+		t.Run(params, func(t *testing.T) {
+			schema, columns, indexes, _ := checkpointFunctionalFixture(t, "create table docs(doc json,index idx_kind((cast(doc ->> '$.kind' as char(20)))))")
+			schema.UniqueKeys[0].AlgoParams = params
+			for _, row := range indexes.Rows {
+				row[8] = params
+			}
+			attachFunctionalIndexExpressions(schema, columns, 42)
+			ddl := RenderCreateTableDDLFromSchema(schema)
+			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", schema)
+			if params == `{"functional_json_semantics":"1"}` {
+				require.NotEmpty(t, ddl)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+			} else {
+				require.Empty(t, ddl)
+				require.Error(t, err)
+				require.Empty(t, statements)
+			}
+		})
+	}
+}
+
+func TestJSONFunctionalIndexTypedCheckpointRequiresMarker(t *testing.T) {
+	for _, sql := range []string{"create table docs(doc json,index idx_kind((cast(doc ->> '$.kind' as char(20)))))", "create table docs(doc json,g json generated always as (doc) virtual,index idx_kind((cast(json_unquote(json_extract(g,'$')) as char(20)))))"} {
+		for _, params := range []string{"", `{"functional_json_\u0073emantics":"1"}`, `{"functional_json_\u0073emantics":"2"}`} {
+			schema, columns, indexes, _ := checkpointFunctionalFixture(t, sql)
+			schema.UniqueKeys[0].AlgoParams = params
+			for _, row := range indexes.Rows {
+				row[8] = params
+			}
+			for i, j := 0, len(columns.Rows)-1; i < j; i, j = i+1, j-1 {
+				columns.Rows[i], columns.Rows[j] = columns.Rows[j], columns.Rows[i]
+			}
+			attachFunctionalIndexExpressions(schema, columns, 42)
+			clone := cloneTableSchema(schema)
+			ddl := RenderCreateTableDDLFromSchema(clone)
+			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", clone)
+			if params == `{"functional_json_\u0073emantics":"1"}` {
+				require.True(t, clone.UniqueKeys[0].requiresJSONSemantics)
+				require.NotEmpty(t, ddl)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+			} else {
+				require.Empty(t, ddl)
+				require.Error(t, err)
+				require.Empty(t, statements)
+			}
+		}
+	}
+}
+
+func TestJSONFunctionalCheckpointMissingTypedExpression(t *testing.T) {
+	const backing = "__mo_fi_json"
+	const expression = "cast(json_unquote(json_extract(`doc`, '$.kind')) as char(20))"
+	generated, err := types.Encode(&plan.GeneratedCol{OriginString: expression})
+	require.NoError(t, err)
+	schema := &TableSchema{TableName: "docs", Columns: []TableColumn{{Name: "doc", SQLType: "JSON", Position: 1}}, UniqueKeys: []TableUniqueKey{{Name: "idx_kind", Columns: []string{backing}}}}
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "attnum", "att_is_hidden", "attr_generated"}, Rows: [][]string{{"o", "0", "0", "42", "doc", "1", "0", ""}, {"o", "0", "0", "42", backing, "2", "1", string(generated)}}}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema), "missing typed identity must not be re-authored as current semantics")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", catalog.IndexAlgoParams}, Rows: [][]string{{"o", "0", "0", "42", "idx_kind", backing, "INDEX", "1", ""}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", schema)
+	require.Error(t, err)
+	require.Empty(t, statements)
+}
+
+func TestJSONFunctionalCheckpointRejectsUnprovenGraph(t *testing.T) {
+	for _, kind := range []string{"missing_expr", "corrupt_generated", "missing_column", "duplicate_ordinal", "gapped_ordinal", "wrong_type", "wrong_owner", "missing_marker", "unexpected_marker", "cycle", "bad_reference", "corrupt_dependency"} {
+		t.Run(kind, func(t *testing.T) {
+			sql := "create table docs(doc json,g json generated always as (doc) virtual,index idx_kind((cast(json_unquote(json_extract(g,'$')) as char(20)))))"
+			if kind == "unexpected_marker" {
+				sql = "create table docs(doc varchar(40),index idx_kind((lower(doc))))"
+			}
+			schema, columns, indexes, table := checkpointFunctionalFixture(t, sql)
+			var backing, dependency int
+			for i, row := range columns.Rows {
+				if strings.HasPrefix(row[4], "__mo_fi_") {
+					backing = i
+				}
+				if row[4] == "g" {
+					dependency = i
+				}
+			}
+			encode := func(i int, g *plan.GeneratedCol) {
+				raw, err := types.Encode(g)
+				require.NoError(t, err)
+				columns.Rows[i][7] = string(raw)
+			}
+			switch kind {
+			case "missing_expr":
+				g := *table.Cols[backing].GeneratedCol
+				g.Expr = nil
+				encode(backing, &g)
+			case "corrupt_generated":
+				columns.Rows[backing][7] = "invalid"
+			case "missing_column":
+				columns.Rows = append(columns.Rows[:dependency], columns.Rows[dependency+1:]...)
+			case "duplicate_ordinal":
+				columns.Rows[backing][5] = columns.Rows[0][5]
+			case "gapped_ordinal":
+				columns.Rows[backing][5] = "100"
+			case "wrong_type":
+				typ := types.T_int64.ToType()
+				raw, err := types.Encode(&typ)
+				require.NoError(t, err)
+				columns.Rows[backing][8] = string(raw)
+			case "wrong_owner":
+				schema.UniqueKeys[0].Name = "other_owner"
+			case "missing_marker":
+				schema.UniqueKeys[0].AlgoParams = ""
+				for _, row := range indexes.Rows {
+					row[8] = ""
+				}
+			case "unexpected_marker":
+				schema.UniqueKeys[0].AlgoParams = `{"functional_json_semantics":"1"}`
+				for _, row := range indexes.Rows {
+					row[8] = schema.UniqueKeys[0].AlgoParams
+				}
+			case "cycle", "bad_reference":
+				g := *table.Cols[dependency].GeneratedCol
+				position := int32(dependency)
+				if kind == "bad_reference" {
+					position = 999
+				}
+				g.Expr = &plan.Expr{Typ: table.Cols[dependency].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: position}}}
+				encode(dependency, &g)
+			case "corrupt_dependency":
+				columns.Rows[dependency][7] = "invalid"
+			}
+			attachFunctionalIndexExpressions(schema, columns, 42)
+			clone := cloneTableSchema(schema)
+			require.Empty(t, RenderCreateTableDDLFromSchema(clone))
+			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", clone)
+			require.Error(t, err)
+			require.Empty(t, statements)
+		})
+	}
+}
+
+func TestFunctionalCheckpointRejectsDamagedOrdinaryDependencyAndOrphan(t *testing.T) {
+	for _, kind := range []string{"missing_type", "corrupt_type", "unknown_type", "orphan"} {
+		t.Run(kind, func(t *testing.T) {
+			schema, columns, indexes, _ := checkpointFunctionalFixture(t, "create table fi(name varchar(40),index idx((lower(name))))")
+			switch kind {
+			case "missing_type":
+				columns.Rows[0][8] = ""
+			case "corrupt_type":
+				columns.Rows[0][8] = "invalid"
+			case "unknown_type":
+				typ := types.Type{Oid: types.T(255)}
+				raw, err := types.Encode(&typ)
+				require.NoError(t, err)
+				columns.Rows[0][8] = string(raw)
+			case "orphan":
+				schema.UniqueKeys = nil
+				indexes.Rows = nil
+			}
+			attachFunctionalIndexExpressions(schema, columns, 42)
+			clone := cloneTableSchema(schema)
+			require.Empty(t, RenderCreateTableDDLFromSchema(clone))
+			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", clone)
+			require.Error(t, err)
+			require.Empty(t, statements)
+		})
+	}
+}
+
+func TestFunctionalCheckpointCatalogCallerRejectsOrphan(t *testing.T) {
+	_, columns, _, _ := checkpointFunctionalFixture(t, "create table fi(name varchar(40),index idx((lower(name))))")
+	tables := &LogicalTableView{Headers: []string{"object", "block", "row", "rel_id", "relname", catalog.SystemRelAttr_Constraint}, Rows: [][]string{{"o", "0", "0", "42", "fi", ""}}}
+	require.Empty(t, createTableDDLFromCatalogViews(42, tables, columns), "catalog fallback must not drop orphan invalid state with an empty key list")
+}
+
+func TestLogicalCSVJSONVisibleRoundTrip(t *testing.T) {
+	columnTypes := []types.Type{types.T_json.ToType(), types.T_blob.ToType()}
+	for _, tc := range []struct{ input, visible string }{
+		{`{"a":1}`, `{"a": 1}`}, {`[1,"x"]`, `[1, "x"]`},
+		{`null`, `null`}, {`"NULL"`, `"NULL"`}, {`256`, `256`},
+		{`"quote\"slash\\"`, `"quote\"slash\\"`},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			bj, err := types.ParseStringToByteJson(tc.input)
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(bj)
+			require.NoError(t, err)
+			row := []string{string(encoded), string(encoded)}
+			require.NoError(t, renderLogicalCSVJSON(row, columnTypes, []bool{false, false}))
+			require.Equal(t, tc.visible, row[0])
+			require.Equal(t, string(encoded), row[1], "binary storage remains bytes")
+			view := &LogicalTableView{Headers: []string{"object", "block", "row", "col_0"}, Rows: [][]string{{"obj", "0", "0", string(encoded)}, {"obj", "0", "1", "NULL"}}}
+			schema := &TableSchema{Columns: []TableColumn{{Name: "j", SQLType: "JSON", Position: 1, PhysicalPosition: 0}}}
+			for _, order := range []CSVRowOrder{CSVRowOrderStorage, CSVRowOrderLexical} {
+				var out bytes.Buffer
+				require.NoError(t, WriteCSV(&out, schema, view, WithCSVHeader(false), WithCSVMetaComments(false), WithCSVRowOrder(order)))
+				require.Contains(t, out.String(), "\""+escapeSQLLoadString(tc.visible, '"')+"\"\n")
+				require.Contains(t, out.String(), "\\N\n")
+				require.Equal(t, string(encoded), view.Rows[0][3], "raw caller view is immutable")
+			}
+		})
+	}
+	row := []string{"ignored NULL storage", "bytes"}
+	require.NoError(t, renderLogicalCSVJSON(row, columnTypes, []bool{true, false}))
+	for _, malformed := range []string{"", "bad", "\x01"} {
+		require.Error(t, renderLogicalCSVJSON([]string{malformed}, columnTypes, []bool{false}))
+	}
+}
+
+func TestCheckpointCSVRejectsTypedJSONLoss(t *testing.T) {
+	opaque, err := bytejson.NewMySQLOpaque(defines.MORPCVersion52, 253, []byte("x"))
+	require.NoError(t, err)
+	values := make([]any, 0, 13)
+	values = append(values, opaque, []any{opaque}, map[string]any{"kind": []any{opaque}})
+	for _, scalar := range []struct {
+		kind bytejson.TpCode
+		text string
+	}{
+		{bytejson.TpCodeDecimal, "1.25"},
+		{bytejson.TpCodeDate, "2024-01-01"},
+		{bytejson.TpCodeTime, "12:34:56"},
+		{bytejson.TpCodeDatetime, "2024-01-01 12:34:56"},
+		{bytejson.TpCodeBit, "\x01"},
+	} {
+		typed := bytejson.ByteJson{Type: scalar.kind, Data: append([]byte{byte(len(scalar.text))}, []byte(scalar.text)...)}
+		values = append(values, typed, map[string]any{"nested": []any{typed}})
+	}
+	for _, value := range values {
+		bj, err := bytejson.CreateByteJSON(value)
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		t.Run(bj.String(), func(t *testing.T) {
+			row := []string{string(raw)}
+			assert.Error(t, renderLogicalCSVJSON(row, []types.Type{types.T_json.ToType()}, []bool{false}))
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(types.T_json.ToType())
+			defer func() { vec.Free(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+			var buf bytes.Buffer
+			assert.Error(t, writeSQLLoadCSVFieldFromVec(&buf, types.T_json.ToType(), []*vector.Vector{vec}, 0, 0))
+			assert.Empty(t, buf.String(), "rejection precedes this field's output")
+			schema := &TableSchema{Columns: []TableColumn{{Name: "j", SQLType: "JSON", Position: 1, PhysicalPosition: 0}}}
+			view := &LogicalTableView{Headers: []string{"object", "block", "row", "col_0"}, Rows: [][]string{{"obj", "0", "0", string(raw)}}}
+			buf.Reset()
+			assert.Error(t, WriteCSV(&buf, schema, view, WithCSVHeader(false), WithCSVMetaComments(false)))
+			assert.Empty(t, buf.String())
+			visible, err := types.ParseStringToByteJson(bj.String())
+			require.NoError(t, err)
+			plain, err := types.EncodeJson(visible)
+			require.NoError(t, err)
+			require.NoError(t, renderLogicalCSVJSON([]string{string(plain)}, []types.Type{types.T_json.ToType()}, []bool{false}), "ordinary JSON with the same visible text remains supported")
+		})
+	}
+}
+
+func TestCheckpointCSVPreservesJSONDoubleType(t *testing.T) {
+	for _, value := range []float64{1, -1, 0, 1.25, 1e30} {
+		for _, shape := range []any{value, []any{value}, map[string]any{"n": value}} {
+			original, err := bytejson.CreateByteJSON(shape)
+			require.NoError(t, err)
+			raw, err := types.EncodeJson(original)
+			require.NoError(t, err)
+			text, err := checkpointJSONLoadText(raw)
+			require.NoError(t, err)
+			parsed, err := types.ParseStringToByteJson(string(text))
+			require.NoError(t, err)
+			expected, actual := original, parsed
+			if original.Type == bytejson.TpCodeArray {
+				expected = original.GetArrayElem(0)
+				actual = parsed.GetArrayElem(0)
+			}
+			if original.Type == bytejson.TpCodeObject {
+				expected = original.GetObjectVal(0)
+				actual = parsed.GetObjectVal(0)
+			}
+			assert.Equal(t, bytejson.TpCodeFloat64, actual.Type, "text %s", text)
+			if actual.Type == bytejson.TpCodeFloat64 {
+				assert.Equal(t, expected.GetFloat64(), actual.GetFloat64())
+			}
+		}
+	}
 }

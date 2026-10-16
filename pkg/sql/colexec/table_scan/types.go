@@ -57,6 +57,7 @@ type TableScan struct {
 	// letter case: origin
 	Attrs              []string
 	Types              []plan.Type
+	HiddenColumns      []bool // immutable source visibility, aligned with scan attributes
 	TableID            uint64
 	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
 	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
@@ -92,6 +93,24 @@ func NewArgument() *TableScan {
 
 func (tableScan *TableScan) WithTypes(types []plan.Type) *TableScan {
 	tableScan.Types = types
+	return tableScan
+}
+
+// WithColumnDefs binds storage visibility by actual scan attribute name. Hidden
+// values are internal keys, not display CHAR values; a name prefix is not proof
+// that a user column is hidden. Scope.Run also binds decoded remote sources.
+func (tableScan *TableScan) WithColumnDefs(attrs []string, cols []*plan.ColDef) *TableScan {
+	tableScan.HiddenColumns = make([]bool, len(attrs))
+	hidden := make(map[string]bool, len(cols))
+	for _, col := range cols {
+		if col != nil {
+			hidden[col.Name] = col.Hidden
+			hidden[col.GetOriginCaseName()] = col.Hidden
+		}
+	}
+	for i, name := range attrs {
+		tableScan.HiddenColumns[i] = hidden[name]
+	}
 	return tableScan
 }
 

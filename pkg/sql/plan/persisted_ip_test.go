@@ -115,6 +115,9 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 			}},
 		}},
 	}
+	mediumIntVersion, err := RequiredPersistedExpressionProtocolVersion(mediumIntCast)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion110), mediumIntVersion)
 	for _, exprs := range [][]*planpb.Expr{{mediumIntCast, jsonConcat}, {jsonConcat, mediumIntCast}} {
 		owner := &planpb.TableDef{Cols: []*planpb.ColDef{
 			{Default: &planpb.Default{Expr: exprs[0]}},
@@ -124,9 +127,10 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, features.MediumIntAssignmentBounds)
 		require.True(t, features.JSONInputContracts)
+		require.True(t, features.JSONOpaqueTextContracts)
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion110), version)
+		require.Equal(t, int64(defines.MORPCVersion117), version)
 	}
 }
 

@@ -289,6 +289,10 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	if err != nil {
 		return err
 	}
+	lastNodeId, err = appendForeignKeyFunctionalRowImage(builder, bindCtx, updatePlanCtx, lastNodeId)
+	if err != nil {
+		return err
+	}
 	if updatePlanCtx.preserveUpdateSourceProjection {
 		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 		if builder.preserveSinkProjection == nil {
@@ -384,6 +388,69 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
 		updatePlanCtx.updateColPosMap, nil)
+}
+
+// Implicit FK actions originate from the final ordinary row image, not an UPDATE
+// binder that has already expanded generated assignments. Preserve the old-row
+// prefix for index deletion and append generated dependency values for replacement insertion.
+func appendForeignKeyFunctionalRowImage(builder *QueryBuilder, bindCtx *BindContext, ctx *dmlPlanCtx, lastNodeID int32) (int32, error) {
+	if !ctx.isFkRecursionCall {
+		return lastNodeID, nil
+	}
+	table := ctx.tableDef
+	hasFunctional := false
+	for _, col := range table.Cols {
+		if isFunctionalColumn(col) {
+			hasFunctional = true
+			break
+		}
+	}
+	if !hasFunctional {
+		return lastNodeID, nil
+	}
+	projection := getProjectionByLastNode(builder, lastNodeID)
+	replacements := make(map[int32]*Expr, len(ctx.updateColPosMap))
+	for i, col := range table.Cols {
+		if pos, ok := ctx.updateColPosMap[col.Name]; ok {
+			if pos < 0 || pos >= len(projection) {
+				return 0, moerr.NewInternalError(builder.GetContext(), "invalid foreign key assignment projection")
+			}
+			replacements[int32(i)] = DeepCopyExpr(projection[pos])
+		}
+	}
+	if err := builder.recomputeForeignKeyFunctionalColumns(table, 0, replacements); err != nil {
+		return 0, err
+	}
+	originalLength := len(projection)
+	for i, col := range table.Cols {
+		if col.GeneratedCol == nil {
+			continue
+		}
+		if replacement, ok := replacements[int32(i)]; ok {
+			ctx.updateColPosMap[col.Name] = len(projection)
+			projection = append(projection, replacement)
+		}
+	}
+	if len(projection) == originalLength {
+		return lastNodeID, nil
+	}
+	ctx.updateColLength += len(projection) - originalLength
+	insertPos := 0
+	for oldPos, col := range table.Cols {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !isFunctionalColumn(col) {
+			continue
+		}
+		if insertPos >= len(ctx.insertColPos) {
+			return 0, moerr.NewInternalError(builder.GetContext(), "invalid foreign key insert projection")
+		}
+		if pos, updated := ctx.updateColPosMap[col.Name]; updated {
+			ctx.insertColPos[insertPos] = pos
+		} else {
+			ctx.insertColPos[insertPos] = oldPos
+		}
+		insertPos++
+	}
+	return builder.appendNode(&Node{NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID}, ProjectList: projection}, bindCtx), nil
 }
 
 // appendSelfReferOnUpdateCascadeRoots folds self-referencing CASCADE changes
@@ -2283,7 +2350,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
-						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						// Single and combined direct-DELETE actions are both appended after
+						// createQuery. Their index flow must use the same local ABI;
+						// REPLACE retains its existing tagged action stream.
+						upPlanCtx.isPostCreateQueryFkSetNullAction = !delCtx.skipTargetDelete && delCtx.sourceTag == 0
+						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete || upPlanCtx.isPostCreateQueryFkSetNullAction
 						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
@@ -6684,7 +6755,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			preserveActionRows = false
 		}
 		if delCtx.isPostCreateQueryFkSetNullAction {
-			// The combined SET NULL source is a post-createQuery maintenance
+			// The SET NULL source is a post-createQuery maintenance
 			// stream. It may retain non-NULL keys for rows matched by a sibling
 			// FK, so it still needs the full delete/reinsert index flow, but that
 			// flow must use the local two-input JOIN ABI rather than planner tags.

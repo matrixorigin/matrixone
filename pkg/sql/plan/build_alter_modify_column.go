@@ -33,6 +33,9 @@ func updateNewColumnInTableDef(
 	nPos *tree.ColumnPosition,
 ) (bool, error) {
 	ctx := cctx.GetContext()
+	if err := validateFunctionalTable(ctx, tableDef); err != nil {
+		return false, err
+	}
 
 	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
 	if err != nil {
@@ -62,6 +65,9 @@ func updateNewColumnInTableDef(
 	}
 
 	if err = modifyColPosition(ctx, tableDef, oCol, nCol, nPos); err != nil {
+		return false, err
+	}
+	if err = rebindFunctionalIndexColumns(cctx, tableDef); err != nil {
 		return false, err
 	}
 

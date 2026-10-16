@@ -102,7 +102,10 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
 	requiredVersion := int64(0)
-	if features.IPFunctionSemantics {
+	if features.JSONFunctionalIndexSemantics {
+		requiredVersion = defines.MORPCVersion120
+	}
+	if features.IPFunctionSemantics && requiredVersion < defines.MORPCVersion72 {
 		requiredVersion = defines.MORPCVersion72
 	}
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
@@ -140,6 +143,15 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
+	}
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+	}
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.JSONMinMaxTypedComparison {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)

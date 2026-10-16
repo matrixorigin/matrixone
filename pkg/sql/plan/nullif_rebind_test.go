@@ -57,6 +57,9 @@ func TestInitNullMapRebindReturnsSameRules(t *testing.T) {
 					require.NoError(t, InitNullMap(param, nil))
 					require.Equal(t, tc.want, param.NullMap, "rebind %d", pass)
 				}
+				for _, assignment := range param.Tail.Assignments {
+					require.Nil(t, assignment.Expr, "all assignments consumed before serialization")
+				}
 				// The stored external-table parameter must retain the same rules
 				// after repeated binding and a remote JSON round trip.
 				raw, err := json.Marshal(param)
