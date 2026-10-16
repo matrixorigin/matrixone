@@ -212,13 +212,10 @@ func scheduleProcessSignalDiagnostics(root string, process *scheduleProcess) str
 	return out.String()
 }
 
-// Only the explicitly traced cancellation fixture collects these observations.
-// Never expose environment contents, and recheck process start identity.
+// Failure paths collect bounded observations before emergency cleanup destroys
+// the evidence. Never expose environment contents; recheck process start identity.
 func scheduleFixtureProcessDiagnostics(root, phase string) string {
 	if runtime.GOOS != "linux" {
-		return ""
-	}
-	if _, err := os.Stat(filepath.Join(root, "ut-signal-trace.log")); err != nil {
 		return ""
 	}
 	entries, err := os.ReadDir("/proc")
@@ -315,9 +312,6 @@ func TestScheduleHarnessForcedCleanup(t *testing.T) {
 	for _, phase := range []string{"cancel", "pipe-holder", "exit-143"} {
 		t.Run(phase, func(t *testing.T) {
 			root := t.TempDir()
-			if err := os.WriteFile(filepath.Join(root, "ut-signal-trace.log"), nil, 0600); err != nil {
-				t.Fatal(err)
-			}
 			neighbor := exec.Command("sleep", "30")
 			neighbor.Env = append(os.Environ(), "CASE_DIR="+root+"/neighbor")
 			if err := neighbor.Start(); err != nil {
