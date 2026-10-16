@@ -32,17 +32,17 @@ SELECT BIT_COUNT(CAST(255 AS TINYINT UNSIGNED)), BIT_COUNT(CAST(65535 AS SMALLIN
 SELECT BIT_COUNT(CAST('4294967296' AS BIGINT UNSIGNED)), BIT_COUNT(CAST('9223372036854775808' AS BIGINT UNSIGNED));
 # hex: 18446744073709551614 = 0xffff ffff ffff fffe; 18446744073709551615 = 0xffff ffff ffff ffff
 SELECT BIT_COUNT(CAST('18446744073709551614' AS BIGINT UNSIGNED)), BIT_COUNT(CAST('18446744073709551615' AS BIGINT UNSIGNED));
-# hex: FLOAT 64.9 -> 65 / 0x0041; DOUBLE 64.9 -> 65 / 0x0041
+# FLOAT/DOUBLE truncate fractional inputs toward zero: 64.9 -> 64 / 0x0040
 SELECT BIT_COUNT(CAST(64.9 AS FLOAT)), BIT_COUNT(CAST(64.9 AS DOUBLE));
 # hex: DECIMAL 64.9 -> 65 / 0x0041; DECIMAL 255.9 -> 256 / 0x0100
 SELECT BIT_COUNT(CAST(64.9 AS DECIMAL(10, 1))), BIT_COUNT(CAST(255.9 AS DECIMAL(10, 1)));
-# hex: FLOAT 1.4 -> 1 / 0x0001; FLOAT 1.5 -> 2 / 0x0002; FLOAT 2.5 -> 2 / 0x0002; FLOAT 3.5 -> 4 / 0x0004
+# FLOAT 1.4, 1.5, 2.5, 3.5 truncate to 1, 1, 2, 3
 SELECT BIT_COUNT(CAST(1.4 AS FLOAT)), BIT_COUNT(CAST(1.5 AS FLOAT)), BIT_COUNT(CAST(2.5 AS FLOAT)), BIT_COUNT(CAST(3.5 AS FLOAT));
-# hex: FLOAT 4.5 -> 4 / 0x0004; FLOAT 5.5 -> 6 / 0x0006; FLOAT 6.5 -> 6 / 0x0006; FLOAT 7.5 -> 8 / 0x0008
+# FLOAT 4.5, 5.5, 6.5, 7.5 truncate to 4, 5, 6, 7
 SELECT BIT_COUNT(CAST(4.5 AS FLOAT)), BIT_COUNT(CAST(5.5 AS FLOAT)), BIT_COUNT(CAST(6.5 AS FLOAT)), BIT_COUNT(CAST(7.5 AS FLOAT));
-# hex: DOUBLE -1.4 -> -1 / 0xffff ffff ffff ffff; DOUBLE -1.5 -> -2 / 0xffff ffff ffff fffe; DOUBLE -2.5 -> -2 / 0xffff ffff ffff fffe; DOUBLE -3.5 -> -4 / 0xffff ffff ffff fffc
+# DOUBLE -1.4, -1.5, -2.5, -3.5 truncate to -1, -1, -2, -3
 SELECT BIT_COUNT(CAST(-1.4 AS DOUBLE)), BIT_COUNT(CAST(-1.5 AS DOUBLE)), BIT_COUNT(CAST(-2.5 AS DOUBLE)), BIT_COUNT(CAST(-3.5 AS DOUBLE));
-# hex: DOUBLE -4.5 -> -4 / 0xffff ffff ffff fffc; DOUBLE -5.5 -> -6 / 0xffff ffff ffff fffa; DOUBLE -6.5 -> -6 / 0xffff ffff ffff fffa; DOUBLE -7.5 -> -8 / 0xffff ffff ffff fff8
+# DOUBLE -4.5, -5.5, -6.5, -7.5 truncate to -4, -5, -6, -7
 SELECT BIT_COUNT(CAST(-4.5 AS DOUBLE)), BIT_COUNT(CAST(-5.5 AS DOUBLE)), BIT_COUNT(CAST(-6.5 AS DOUBLE)), BIT_COUNT(CAST(-7.5 AS DOUBLE));
 # hex: DOUBLE 9223372036854774784 -> 9223372036854774784 / 0x7fff ffff ffff fc00; DOUBLE 9223372036854775807 -> 9223372036854775808 / 0x8000 0000 0000 0000
 SELECT BIT_COUNT(CAST('9223372036854774784' AS DOUBLE)), BIT_COUNT(CAST('9223372036854775807' AS DOUBLE));
@@ -167,3 +167,65 @@ EXECUTE bit_count_marker USING @bit_count_value;
 SET @bit_count_value = NULL;
 EXECUTE bit_count_marker USING @bit_count_value;
 DEALLOCATE PREPARE bit_count_marker;
+
+# Issue #30241: identity-preserving ENUM/SET operands use ordinals/bitmaps.
+# The numeric label distinguishes storage from numeric-looking display text.
+DROP TABLE IF EXISTS t_bit_count_special;
+CREATE TABLE t_bit_count_special(id INT PRIMARY KEY, e ENUM('zero','one','two','three','8'), s SET('a','b','c','d'));
+INSERT INTO t_bit_count_special VALUES (1,'one','a,c'),(2,'two','b,d'),(3,'three',''),(4,NULL,NULL),(5,'8','a,b,d'),(6,'zero','d'),(7,'zero','a');
+SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(e+0) AS enum_numeric_bits, BIT_COUNT(s) AS set_bits, BIT_COUNT(s+0) AS set_numeric_bits FROM t_bit_count_special ORDER BY id;
+SELECT id FROM t_bit_count_special WHERE BIT_COUNT(s)=2 ORDER BY id;
+SELECT id, BIT_COUNT(CAST(e AS CHAR)) AS cast_bits, BIT_COUNT(CONCAT(e,'')) AS concat_bits, BIT_COUNT(CAST(s AS CHAR)) AS set_text_bits FROM t_bit_count_special WHERE id IN (5,6) ORDER BY id;
+SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM (SELECT id,e,s FROM t_bit_count_special) d ORDER BY id;
+SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM (SELECT id,e,s FROM t_bit_count_special ORDER BY id LIMIT 2) d ORDER BY id;
+SELECT s, BIT_COUNT(s) AS bits FROM t_bit_count_special GROUP BY s HAVING BIT_COUNT(s)=2 ORDER BY s;
+DROP TABLE IF EXISTS t_bit_count_materialized;
+CREATE TABLE t_bit_count_materialized AS SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM t_bit_count_special;
+SELECT * FROM t_bit_count_materialized ORDER BY id;
+DROP TABLE t_bit_count_materialized;
+PREPARE bit_count_special FROM 'SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM t_bit_count_special WHERE id >= ? ORDER BY id';
+SET @bit_count_min_id = 5;
+EXECUTE bit_count_special USING @bit_count_min_id;
+DEALLOCATE PREPARE bit_count_special;
+DROP TABLE t_bit_count_special;
+
+# Keep the unsigned high bit and every SET member; never round through DOUBLE.
+DROP TABLE IF EXISTS t_bit_count_wide_set;
+CREATE TABLE t_bit_count_wide_set(id INT PRIMARY KEY, s SET('m1','m2','m3','m4','m5','m6','m7','m8','m9','m10','m11','m12','m13','m14','m15','m16','m17','m18','m19','m20','m21','m22','m23','m24','m25','m26','m27','m28','m29','m30','m31','m32','m33','m34','m35','m36','m37','m38','m39','m40','m41','m42','m43','m44','m45','m46','m47','m48','m49','m50','m51','m52','m53','m54','m55','m56','m57','m58','m59','m60','m61','m62','m63','m64'));
+INSERT INTO t_bit_count_wide_set VALUES (1,'m64'),(2,'m1,m64'),(3,18446744073709551615);
+SELECT id, BIT_COUNT(s) AS bits FROM t_bit_count_wide_set ORDER BY id;
+DROP TABLE t_bit_count_wide_set;
+
+# Empty labels must retain the original value in direct and transparent inputs.
+DROP TABLE IF EXISTS t_bit_count_empty_label;
+CREATE TABLE t_bit_count_empty_label(id INT PRIMARY KEY, e ENUM('','x'), s SET('','a'));
+INSERT INTO t_bit_count_empty_label VALUES (1,1,0),(2,2,1),(3,NULL,NULL),(4,1,3);
+SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM t_bit_count_empty_label ORDER BY id;
+SELECT id, BIT_COUNT(e) AS enum_bits, BIT_COUNT(s) AS set_bits FROM (SELECT id,e,s FROM t_bit_count_empty_label) d ORDER BY id;
+DROP TABLE t_bit_count_empty_label;
+
+# FLOAT/DOUBLE constants and integer/DECIMAL controls use distinct conversions.
+SELECT BIT_COUNT(CAST(3.9 AS FLOAT)) AS f_pos, BIT_COUNT(CAST(-3.5 AS FLOAT)) AS f_neg, BIT_COUNT(CAST(3.9 AS DOUBLE)) AS d_pos, BIT_COUNT(CAST(-3.5 AS DOUBLE)) AS d_neg, BIT_COUNT(3) AS i_pos, BIT_COUNT(-3) AS i_neg;
+SELECT BIT_COUNT(CAST(3.9 AS DECIMAL(10,2))) AS d_pos, BIT_COUNT(CAST(-3.9 AS DECIMAL(10,2))) AS d_neg, BIT_COUNT(CAST(-0.9 AS DECIMAL(10,2))) AS d_subunit;
+
+# Stored columns exercise vector evaluation, NULL propagation, and predicates.
+DROP TABLE IF EXISTS t_bit_count_float;
+CREATE TABLE t_bit_count_float(id INT, f FLOAT, d DOUBLE);
+INSERT INTO t_bit_count_float VALUES (1, 3.9, 3.9), (2, -3.5, -3.5), (3, 0.9, 0.9), (4, -0.9, -0.9), (5, NULL, NULL);
+SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits FROM t_bit_count_float ORDER BY id;
+SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 2 AND BIT_COUNT(d) = 2 ORDER BY id;
+SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 63 AND BIT_COUNT(d) = 63 ORDER BY id;
+DROP TABLE t_bit_count_float;
+
+# Explicit casts keep prepared parameters on the floating overloads.
+PREPARE bit_count_float_marker FROM 'SELECT BIT_COUNT(CAST(? AS FLOAT)) AS f_bits, BIT_COUNT(CAST(? AS DOUBLE)) AS d_bits';
+SET @bit_count_f = 3.9;
+SET @bit_count_d = -3.5;
+EXECUTE bit_count_float_marker USING @bit_count_f, @bit_count_d;
+SET @bit_count_f = -3.5;
+SET @bit_count_d = 3.9;
+EXECUTE bit_count_float_marker USING @bit_count_f, @bit_count_d;
+SET @bit_count_f = NULL;
+SET @bit_count_d = NULL;
+EXECUTE bit_count_float_marker USING @bit_count_f, @bit_count_d;
+DEALLOCATE PREPARE bit_count_float_marker;

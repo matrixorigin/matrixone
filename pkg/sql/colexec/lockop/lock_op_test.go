@@ -1946,7 +1946,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				defer arg2.ctr.parker.Close()
 
 				_, err = vm.Exec(arg2, proc)
-				assert.NoError(t, err)
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
 
 				resetChildren(arg2, nil)
 				_, err = vm.Exec(arg2, proc)
@@ -2014,7 +2014,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				defer arg2.ctr.parker.Close()
 
 				_, err = vm.Exec(arg2, proc)
-				assert.NoError(t, err)
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
 
 				resetChildren(arg2, nil)
 				_, err = vm.Exec(arg2, proc)
@@ -2130,7 +2130,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 			}
 
 			_, err := vm.Exec(arg, proc)
-			require.NoError(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
 			require.Error(t, arg.ctr.retryError)
 			require.True(t, moerr.IsMoErrCode(arg.ctr.retryError, moerr.ErrTxnNeedRetry))
 		},
@@ -2175,12 +2175,8 @@ func TestLockOpDefinitionChangeRebuildsBeforeRefreshExpression(t *testing.T) {
 			}
 
 			_, err := vm.Exec(arg, proc)
-			require.NoError(t, err)
-			require.True(t, arg.ctr.defChanged)
-
-			resetChildren(arg, nil)
-			_, err = vm.Exec(arg, proc)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+			require.True(t, arg.ctr.defChanged)
 		},
 		client.WithTimestampWaiter(timestampWaiter),
 		client.WithEnableRefreshExpression(),
@@ -2230,13 +2226,9 @@ func TestLockOpDefinitionFenceUsesPlanSnapshotAcrossTargets(t *testing.T) {
 			}
 
 			_, err := vm.Exec(arg, proc)
-			require.NoError(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 			require.True(t, arg.ctr.defChanged)
 			require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(definitionFence))
-
-			resetChildren(arg, nil)
-			_, err = vm.Exec(arg, proc)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 		},
 		client.WithTimestampWaiter(immediateLockTimestampWaiter{}),
 		client.WithEnableRefreshExpression(),
@@ -2344,7 +2336,7 @@ func TestLockOpRowVersionScanUsesCurrentSnapshotAcrossTargets(t *testing.T) {
 			}
 
 			_, err := vm.Exec(arg, proc)
-			require.NoError(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
 			require.True(t, secondTargetScanned)
 			require.False(t, arg.ctr.defChanged)
 		},
