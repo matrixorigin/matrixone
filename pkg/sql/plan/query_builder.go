@@ -638,6 +638,7 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	builder.inheritIndexHints(newNodeId, nodeId)
 	return newNodeId
 }
 
@@ -884,7 +885,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	}
 
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_VECTOR_QUERY_TOP:
+		return builder.remapVectorQuery(node, step, colRefCnt, colRefBool, sinkColRef)
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -3298,6 +3301,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		// 标量向量选择器会替换根节点，后续 remap 必须使用新根。
+		builder.qry.Steps[i] = rootID
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
@@ -6632,6 +6637,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	if clause.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0 {
+		builder.sqlCalcFoundRows = true
+	}
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return

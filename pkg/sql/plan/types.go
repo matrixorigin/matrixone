@@ -244,6 +244,7 @@ type QueryBuilder struct {
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
 	projectSpecialGuards        map[int32]*specialIndexGuard
+	vectorCandidateAuto         *vectorCandidateAutoSummary
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
 	indexHintOwnerByNode        map[int32]int32
@@ -261,6 +262,8 @@ type QueryBuilder struct {
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
 
+	// SQL_CALC_FOUND_ROWS 不允许新增会提前截断原关系的候选改写。
+	sqlCalcFoundRows      bool
 	isPrepareStatement    bool
 	mysqlCompatible       bool
 	isForUpdate           bool // if it's a query plan for update

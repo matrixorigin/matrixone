@@ -394,6 +394,9 @@ func (s *Scope) FreeOperator(c *Compile) {
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
+	if s.VectorQueryScope {
+		return nil // provider/候选 reader 在实际选择并启动时才初始化。
+	}
 	err := s.initDataSource(c)
 	if err != nil {
 		return err
@@ -440,6 +443,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+
+	if s.VectorQueryScope {
+		return s.runVectorQueryScope(c)
+	}
 
 	// specific case.
 	if c.IsTpQuery() && !c.hasMergeOp {
@@ -997,11 +1004,11 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 			if plan2.HasFoldValExpr(e) {
 				return nil, moerr.NewInternalErrorNoCtx("remote block filter contains a sender-owned Fold value")
 			}
-			if _, err := plan2.ReplaceFoldExpr(s.Proc, e, &c.filterExprExes); err != nil {
+			if err := c.replaceFoldExpr(s.Proc, e); err != nil {
 				return nil, err
 			}
 		}
-		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		err := c.evalFoldExpr(s.Proc, e)
 		if err != nil {
 			return nil, err
 		}
