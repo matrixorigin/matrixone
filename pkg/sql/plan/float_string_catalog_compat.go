@@ -260,6 +260,7 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr) (bool,
 				args[i] = makeTypeByPlan2Expr(arg)
 			}
 			result := ov.GetReturnTypeMethod()(args)
+			refineStringLiteralReturnType(fn.Func.ObjName, fn.Args, &result)
 			expr.Typ.Id = int32(result.Oid)
 			expr.Typ.Width = result.Width
 			expr.Typ.Scale = result.Scale
