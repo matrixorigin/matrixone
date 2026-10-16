@@ -138,10 +138,10 @@ func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
-	return r.foldExpr(expr, proc, false)
+	return r.foldExpr(expr, proc, false, false)
 }
 
-func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked, jsonFeatureChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -161,7 +161,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
+				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked, jsonFeatureChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -240,8 +240,12 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	// Admission must still see JSON ELT after optimization; selected-subtree
 	// constant evaluation belongs to its lazy expression executor.
-	if requiresJSON, err := plan.RequiresMORPCVersion118JSONStringConsumerOverload(expr); err != nil || requiresJSON {
-		return expr
+	if !jsonFeatureChecked {
+		if requiresJSON, err := plan.RequiresMORPCVersion118JSONStringConsumerOverload(expr); err != nil || requiresJSON {
+			return expr
+		}
+		// Reuse this negative subtree result while visiting descendants.
+		jsonFeatureChecked = true
 	}
 	if f.CannotFold() { // function cannot be fold
 		return expr
@@ -261,7 +265,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked, jsonFeatureChecked)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
