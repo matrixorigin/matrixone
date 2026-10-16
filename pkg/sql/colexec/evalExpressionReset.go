@@ -53,6 +53,9 @@ type functionInformationForEval struct {
 	// stringToNumericCast is volatile for ordinary text parameters, but a
 	// prepared parameter with integer provenance can be folded safely.
 	stringToNumericCast bool
+	// Integer provenance excludes lexical warnings, but cannot prove that an
+	// explicit DECIMAL target has enough precision for the current value.
+	rowScopedDecimalCast bool
 
 	// the function's evalFn and freeFn.
 	evalFn func(
@@ -367,7 +370,7 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 // integer provenance means the value cannot contain the trailing text that
 // requires row-level coercion warnings, making scalar folding safe.
 func (expr *FunctionExpressionExecutor) canFoldPreparedIntegerStringCast() bool {
-	if !expr.stringToNumericCast || len(expr.parameterResults) == 0 {
+	if !expr.stringToNumericCast || expr.rowScopedDecimalCast || len(expr.parameterResults) == 0 {
 		return false
 	}
 	parameter := expr.parameterResults[0]
