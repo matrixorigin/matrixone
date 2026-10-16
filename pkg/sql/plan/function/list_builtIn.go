@@ -1405,6 +1405,11 @@ var supportedStringBuiltIns = []FuncNew{
 					return greatestYearNumericFn
 				},
 			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return greatestCollatedFn },
+			},
 		},
 	},
 
@@ -3173,6 +3178,11 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return leastYearNumericFn
 				},
+			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return leastCollatedFn },
 			},
 		},
 	},
@@ -14929,7 +14939,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// Protocol 117 metadata consumer for the persistent table-default pair.
+	// Protocol 118 metadata consumer for the persistent table-default pair.
 	{
 		functionId: INTERNAL_TABLE_COLLATION,
 		class:      plan.Function_STRICT,

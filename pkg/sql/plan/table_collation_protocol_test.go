@@ -34,7 +34,7 @@ func TestTableCollationExpressionProtocolIdentity(t *testing.T) {
 		required, err := RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
 		if id == function.INTERNAL_TABLE_COLLATION {
-			require.Equal(t, defines.MORPCVersion117, required)
+			require.Equal(t, defines.MORPCVersion118, required)
 		} else {
 			require.Zero(t, required, "main's existing function identities retain their gates")
 		}
@@ -74,28 +74,29 @@ func TestTableCollationViewProtocol(t *testing.T) {
 		local, read, author int64
 	}{
 		{"all_113", 113, 113, 113},
-		{"old_local", 113, 117, 117},
-		{"native_unique_local", 114, 117, 117},
-		{"calendar_interval_local", 115, 117, 117},
-		{"division_warning_local", 116, 117, 117},
-		{"old_authoring_floor", 117, 117, 116},
+		{"old_local", 113, 118, 118},
+		{"native_unique_local", 114, 118, 118},
+		{"calendar_interval_local", 115, 118, 118},
+		{"division_warning_local", 116, 118, 118},
+		{"least_greatest_local", 117, 118, 118},
+		{"old_authoring_floor", 118, 118, 117},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			set(tc.local, tc.read, tc.author)
 			_, err := build(legacy)
 			require.NoError(t, err)
 			_, err = build(authored)
-			require.ErrorContains(t, err, "protocol version 117")
+			require.ErrorContains(t, err, "protocol version 118")
 		})
 	}
-	set(117, 117, 117)
+	set(118, 118, 118)
 	created, err := build(authored)
 	require.NoError(t, err)
 	payload := created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 	var metadata ViewData
 	require.NoError(t, json.Unmarshal([]byte(payload), &metadata))
 	require.NotNil(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, defines.MORPCVersion117, *metadata.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion118, *metadata.RequiredProtocolVersion)
 	for _, marked := range []bool{true, false} {
 		t.Run(map[bool]string{true: "marked_reader", false: "unmarked_reader"}[marked], func(t *testing.T) {
 			data := metadata
@@ -104,11 +105,11 @@ func TestTableCollationViewProtocol(t *testing.T) {
 			}
 			encoded, err := json.Marshal(data)
 			require.NoError(t, err)
-			for _, floors := range [][2]int64{{113, 117}, {114, 117}, {115, 117}, {116, 117}, {117, 116}, {117, 117}} {
+			for _, floors := range [][2]int64{{113, 118}, {114, 118}, {115, 118}, {116, 118}, {117, 118}, {118, 117}, {118, 118}} {
 				set(floors[0], floors[1], 113)
 				_, err := RegenerateViewDefinition(ctx, string(encoded))
-				if floors[0] < 117 || floors[1] < 117 {
-					require.ErrorContains(t, err, "protocol version 117")
+				if floors[0] < 118 || floors[1] < 118 {
+					require.ErrorContains(t, err, "protocol version 118")
 				} else {
 					require.NoError(t, err, "read admission must not depend on the authoring floor")
 				}

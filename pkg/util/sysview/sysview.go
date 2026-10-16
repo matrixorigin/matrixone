@@ -52,7 +52,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesV117DDL,
+		InformationSchemaTablesV118DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion117 {
+	if protocol >= defines.MORPCVersion118 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -86,10 +86,10 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
 		case InformationSchemaSchemataDDL:
-			if protocol < defines.MORPCVersion117 {
+			if protocol < defines.MORPCVersion118 {
 				sql = InformationSchemaSchemataLegacyDDL
 			}
-		case InformationSchemaTablesV117DDL:
+		case InformationSchemaTablesV118DDL:
 			if protocol < defines.MORPCVersion46 {
 				sql = InformationSchemaTablesV41DDL
 			} else {
@@ -185,8 +185,8 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 	for _, sql := range InitInformationSchemaSysTables {
 		// Prerequisites commit before persisted-expression admission. The
 		// function-599 definition is installed with the other derived views
-		// after the v117 catalog barrier, before opening ingress.
-		if sql == InformationSchemaTablesV117DDL {
+		// after the v118 catalog barrier, before opening ingress.
+		if sql == InformationSchemaTablesV118DDL {
 			sql = InformationSchemaTablesDDL
 		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {

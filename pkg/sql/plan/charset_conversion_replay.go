@@ -19,7 +19,9 @@ import (
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -29,7 +31,6 @@ import (
 type charsetConversionCompilerContext struct {
 	CompilerContext
 	replay *persistedDDLReplay
-	source *planpb.TableDef
 }
 
 func (c *charsetConversionCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
@@ -39,6 +40,53 @@ func (c *charsetConversionCompilerContext) getInternalSQLExecutor(proc *process.
 		return provider.getInternalSQLExecutor(proc)
 	}
 	return nil, false
+}
+
+func isPersistedCharacterCoercion(expr *planpb.Expr) bool {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "cast" || f.SyntaxExplicitCast ||
+		(expr.Typ.CollationCoercibilitySet && expr.Typ.CollationCoercibility == 0) ||
+		len(f.Args) != 2 || f.Args[0] == nil || f.Args[1].GetT() == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return false
+	}
+	id, overload := function.DecodeOverloadID(f.Func.Obj)
+	return id == function.CAST && overload == 0
+}
+
+// Refresh compiler-owned character coercions before rebinding their consumer.
+// Keep the physical target (including a narrowing width), every authored
+// CAST/EXPLICIT COLLATE or assignment boundary, and the typed computation underneath. Only collapse
+// equal-physical-type coercion layers; repeated CONVERT must not grow metadata.
+func refreshedPersistedCharacterCoercion(ctx context.Context, expr *planpb.Expr) (*planpb.Expr, error) {
+	if list := expr.GetList(); list != nil {
+		for i, item := range list.List {
+			var err error
+			list.List[i], err = refreshedPersistedCharacterCoercion(ctx, item)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if !isPersistedCharacterCoercion(expr) {
+		return expr, nil
+	}
+	target := expr.Typ
+	source := expr.GetF().Args[0]
+	for isPersistedCharacterCoercion(source) && source.Typ.Id == target.Id &&
+		source.Typ.Width == target.Width && source.Typ.Scale == target.Scale && source.Typ.PadSpace == target.PadSpace {
+		source = source.GetF().Args[0]
+	}
+	if domain, ok := collationForExpression(source); ok {
+		domain.apply(&target)
+	} else {
+		// An implicit scalar-to-text conversion has NUMERIC coercibility. Treating
+		// it as a column (IMPLICIT) makes a changed native peer spuriously conflict.
+		// Annotate the coercion, not the unaffected numeric subtree.
+		target.CollationCoercibility = 5
+		target.CollationCoercibilitySet = true
+		target.CollationMergeConflict = false
+	}
+	return appendCastBeforeExpr(ctx, source, target)
 }
 
 // Retain the persisted computation, including any user-authored plain CAST.
@@ -73,29 +121,36 @@ func charsetConversionExpressions(ctx CompilerContext, tableName, columnName str
 	if source == nil {
 		return nil, nil
 	}
-	// Replay entries use visible CREATE positions. MODIFY binds against the
-	// complete catalog schema, so take the proven-safe expressions from the raw
-	// source snapshot instead, without a second visible/raw remapping.
-	raw := FindColumn(conversion.source.Cols, columnName)
+	// Replay retains unaffected typed children while adapting character
+	// operations. Restore its visible CREATE positions to the catalog schema
+	// used by MODIFY, rather than discarding the adapted tree for the raw one.
+	assignment := func(expr *planpb.Expr) (*planpb.Expr, error) {
+		converted, err := convertedPersistedAssignment(ctx.GetContext(), expr, target)
+		if err != nil {
+			return nil, err
+		}
+		remapGeneratedColExprPositions(converted, conversion.replay.rawPositions)
+		return converted, nil
+	}
 	result := &replayedColumnExpressions{columnType: target}
 	var err error
 	if source.defaultExpr != nil {
-		result.defaultExpr = proto.Clone(raw.Default).(*planpb.Default)
-		result.defaultExpr.Expr, err = convertedPersistedAssignment(ctx.GetContext(), raw.Default.Expr, target)
+		result.defaultExpr = proto.Clone(source.defaultExpr).(*planpb.Default)
+		result.defaultExpr.Expr, err = assignment(source.defaultExpr.Expr)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if source.onUpdate != nil {
-		result.onUpdate = proto.Clone(raw.OnUpdate).(*planpb.OnUpdate)
-		result.onUpdate.Expr, err = convertedPersistedAssignment(ctx.GetContext(), raw.OnUpdate.Expr, target)
+		result.onUpdate = proto.Clone(source.onUpdate).(*planpb.OnUpdate)
+		result.onUpdate.Expr, err = assignment(source.onUpdate.Expr)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if source.generated != nil {
-		result.generated = proto.Clone(raw.GeneratedCol).(*planpb.GeneratedCol)
-		result.generated.Expr, err = convertedPersistedAssignment(ctx.GetContext(), raw.GeneratedCol.Expr, target)
+		result.generated = proto.Clone(source.generated).(*planpb.GeneratedCol)
+		result.generated.Expr, err = assignment(source.generated.Expr)
 		if err != nil {
 			return nil, err
 		}

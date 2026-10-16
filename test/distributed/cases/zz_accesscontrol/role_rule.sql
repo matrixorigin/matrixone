@@ -244,6 +244,14 @@ set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 -- @session
 
+-- 相同 COLLATE 投影必须合并主角色和继承角色允许的行。
+alter role test_rule_role_inherit_a add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 10" on table db2.t2;
+alter role test_rule_role_inherit_b add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 20" on table db2.t2;
+-- @session:id=22&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+set enable_remap_hint = 1;
+select * from db2.t2 order by a;
+-- @session
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

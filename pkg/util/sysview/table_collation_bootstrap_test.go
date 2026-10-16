@@ -29,6 +29,6 @@ func TestBootstrapDefersTableCollationView(t *testing.T) {
 	}, nil)
 	require.NoError(t, InitSchema(t.Context(), txn))
 	require.Contains(t, statements, InformationSchemaTablesDDL)
-	require.NotContains(t, statements, InformationSchemaTablesV117DDL)
-	require.Contains(t, InitInformationSchemaSysTables, InformationSchemaTablesV117DDL, "ordinary tenant initialization retains the current definition")
+	require.NotContains(t, statements, InformationSchemaTablesV118DDL)
+	require.Contains(t, InitInformationSchemaSysTables, InformationSchemaTablesV118DDL, "ordinary tenant initialization retains the current definition")
 }

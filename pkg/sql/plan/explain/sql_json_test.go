@@ -1212,6 +1212,14 @@ func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) 
 		}},
 	})
 	require.Error(t, err)
+	for _, spec := range []*plan.IndexSearchScan{
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprNames: []string{"first_round_limit"}},
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(4)}},
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{{}}},
+	} {
+		_, err = sqlJSONIndexSearchExpressions(context.Background(), spec, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
+		require.Error(t, err)
+	}
 	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
 		StmtType: plan.Query_SELECT,
 		Steps:    []int32{0},

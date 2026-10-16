@@ -38,32 +38,32 @@ func TestTableCollationProtocolPlacementSendReceive(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.TableCollationFunction)
-	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{113, 114, 115, 116, 117, 116} {
+	for _, version := range []int64{113, 114, 115, 116, 117, 118, 117} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{scope.NodeInfo}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		_, err := encodeRemoteScope(scope, c.proc)
-		if version < 117 {
+		if version < 118 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			require.ErrorContains(t, err, "version 117")
+			require.ErrorContains(t, err, "version 118")
 		} else {
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			require.NoError(t, err)
 		}
 	}
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
-	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 117")
+	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 118")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 117", "an unknown destination fails closed")
+	require.ErrorContains(t, err, "version 118", "an unknown destination fails closed")
 	require.Equal(t, client.calls, client.releases)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	for _, nested := range []bool{false, true} {
@@ -73,17 +73,17 @@ func TestTableCollationProtocolPlacementSendReceive(t *testing.T) {
 		}
 		data, err := p.Marshal()
 		require.NoError(t, err)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 117")
-		for _, version := range []any{nil, "117", int64(113), int64(114), int64(115), int64(116), int64(117)} {
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 118")
+		for _, version := range []any{nil, "118", int64(113), int64(114), int64(115), int64(116), int64(117), int64(118)} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err := decodeScope(data, c.proc, true, nil)
 			if decoded != nil {
 				decoded.release()
 			}
-			if version == int64(117) {
+			if version == int64(118) {
 				require.NoError(t, err)
 			} else {
-				require.ErrorContains(t, err, "version 117")
+				require.ErrorContains(t, err, "version 118")
 				require.Nil(t, decoded, "reject before allocating operator owners")
 			}
 		}

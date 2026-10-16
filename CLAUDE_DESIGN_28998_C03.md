@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-16，冻结main `76deafc8062f9a7e33a31a4df858ebcdb9477cb5`）：保留main协议112/113，以及native Unicode UNIQUE **114**、calendar interval **115**、scalar division warning **116**和`TO_CALENDAR_INTERVAL=598`。未发布C03顺延 **117**、`INTERNAL_TABLE_COLLATION=599`、`FUNCTION_END_NUMBER=600`；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配或main最新能力；历史112下SHOW binary展示已由SHOW NULL/information_schema binary合同纠正。
+当前维护编号（2026-10-16，冻结main `b3d6b21fe9d260c91e1777529a48a9d93061af33`）：保留main协议112/113，以及native Unicode UNIQUE **114**、calendar interval **115**、scalar division warning **116**、collation-aware LEAST/GREATEST **117**和`TO_CALENDAR_INTERVAL=598`。未发布C03顺延 **118**、`INTERNAL_TABLE_COLLATION=599`、`FUNCTION_END_NUMBER=600`；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配或main最新能力；历史112下SHOW binary展示已由SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -296,3 +296,12 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - Issue28909降级71的无ghost断言改读原始mo_catalog.mo_tables，不依赖最低117的TABLES视图；保留错误码、已有数据/普通SQL、恢复后同名视图创建断言，不放松view能力门槛。
 - main114原生UNIQUE以KeyFormatV1/CollationVersionV1保留schema级证明，不能与独立表默认字符域revision混为一谈。DEFAULT只更新继承身份，已有V1物理索引仍保留schema marker1和原列/索引；optimizer-pruned count(*)不能因此失去准入。TABLES formatter沿SchemaExtra.Unmarshal验证已知identity/revision/format，仅展示默认字符域：已知format1/schema marker1且legacy默认域时，用域revision0解析名称；这不是索引执行准入，不改全局RequireLegacy或TableDef/index owner。未知format2/256、revision、identity、缺失native revision、0/1历史身份及非支持字符域仍拒绝。保留完整source metadata在frontend recoverLegacyTinyText入口、ALTER重写之前的既有RequireLegacyCollations门；不把最终marker当原始损坏数据的修复手段。有效RED证明已知format1展示误拒绝及DEFAULT把marker1清零；typed pruning与真实SQL的TABLES/COLUMNS、DEFAULT后count(*)/重复1062验证修复，已有表index mutation仍拒绝。
 - legacy partition fixture保留main两列seed和普通列模板clone、4098列typed注入及全部边界/回滚断言；保留本分支分阶段180秒/600秒总预算。pipeline冲突从合并proto owner双次生成且字节一致，不手改生成块。完整解压descriptor审查证明pipeline差异仅SourceCodeInfo，字段/类型/编号/reserved/enums/options与main一致；plan仅批准DatabaseDefaults及CreateDatabase#5/AlterDatabase#3/CreateTable#18。当前执行结果及限制另记验证文档。
+
+## 2026-10-16 新一轮评审修复（冻结 main b3d6b21fe9）
+
+- 本轮是既有 r1 设计内的正确性修复，不引入新功能/存储格式。新反例为 `concat(v,a/b)`：字符列 v 换域使旧 replay 丢弃整个表达式，导致无关除法被当前 div_precision_increment 重新创作。原始实际 SQL 中，改变字符依赖、带作者 CAST、经数字 CAST 的三个反例失败，保持域不变等控制通过。必须同时保持无关计算并真正更新受影响字符操作，而不是把旧树只贴上新标签。
+- 首个 replay owner 仍按列身份建立原始/可见坐标及物理类型兼容性；只有物理类型、宽度、scale、enum/自增均不变的 CHAR/VARCHAR/TEXT 依赖允许字符域适配。按 typed 树自底向上更新字符引用，仅在参数域变化时重新绑定该操作；不受影响的除法等子树保留原执行身份/返回类型/参数。作者 CAST 保留其目标，根目标赋值由原有 owner 重定向；新声明和物理类型变动仍走原绑定。对现有 CAST0 且非 syntax_explicit_cast / EXPLICIT COLLATE(rank0) 的编译器字符串coercion，在受影响字符操作绑定前刷新其输入域：非字符格式化输入使用 NUMERIC coercibility5，不向原数字子树写标记；仅合并物理类型/宽度/pad相同的隐式层，保留窄宽度、作者/数字/assignment边界，使 native 混合域不会被旧 IMPLICIT 标记误拒绝且重复转换有界。CHECK 与数字结果生成表达式共享此首个 owner，避免仅修 VARCHAR 输出。
+- replay 仅在目标仍为原表达式，或等于已证明的 typed 适配/根赋值变换时保留；不接受 SQL 文本等价作为权威。CONVERT 从 replay 的适配结果恢复可见→完整 catalog 坐标，再交给 MODIFY；不再丢弃适配结果而取旧 raw 表达式。typed 适配失败直接拒绝 CONVERT，不回落到整表达式重新创作。所有 schema/表达式/坐标/error 状态均为调用内副本，无新缓存、worker、锁或等待；成本按 schema/表达式大小有界，重复转换不得堆积 cast。
+- main117 已发布 collation-aware LEAST/GREATEST overload4；保留其 identity、feature walk、author/read/worker/send/receive 门禁与旧 overload0。C03 顺延118，INTERNAL_TABLE_COLLATION599/END600、升级4.0.15/min4.0.14/offset4与 PB18 不变。新增真实 main117 拒绝，118 允许；TABLES 初始化/升级/恢复及独立599表达式门禁同步，不把117误当作C03。
+- 合并交互逐项保留：SET NAMES DEFAULT 及 collation_connection 的独立服务端解析/迁移状态、qualified ALTER VIEW 目标库、window interval 执行前检查、COLLATE AST、两个独立表达式feature。合并 grammar 按 owner 强制生成两次，与自动合并的 parser 及彼此 SHA 一致；没有 protobuf 生成冲突或本轮 wire/schema 增量。
+- 验证复用现有 planner、SQL、restart 与 public case fixture：每个 SQL 子例仅两个已有/未来行，已有 public 脚本内增加字符依赖、作者 CAST 与真正 native 比较域的独立断言，新增 public 场景仅三行，不更改旧 oracle 单元格、不 genrs、不增加 skip，不改变原有场景的数据或超时预算。当前有效结果、资源回收证据及未验证平台见验证文档。

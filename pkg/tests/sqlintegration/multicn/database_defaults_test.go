@@ -91,19 +91,19 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 		setProtocol := func(version int) {
 			exec(writer, fmt.Sprintf("select mo_ctl('cn','setprotocolversion','%s:%d')", targets, version))
 		}
-		defer setProtocol(117)
-		for _, version := range []int{109, 110, 111, 112, 113, 114, 115, 116} {
+		defer setProtocol(118)
+		for _, version := range []int{109, 110, 111, 112, 113, 114, 115, 116, 117} {
 			setProtocol(version)
 			for _, conn := range []*sql.Conn{writer, reader} {
 				_, err := conn.ExecContext(ctx, "create database rejected_rollout collate utf8mb4_bin")
-				require.ErrorContains(t, err, "protocol version 117")
+				require.ErrorContains(t, err, "protocol version 118")
 			}
 		}
 		exec(writer, "create database legacy_rollout")
 		defer exec(writer, "drop database legacy_rollout")
 		exec(writer, "create table legacy_rollout.t(v varchar(8))")
 		_, err = reader.ExecContext(ctx, "alter table legacy_rollout.t convert to character set binary")
-		require.ErrorContains(t, err, "protocol version 117")
+		require.ErrorContains(t, err, "protocol version 118")
 	}()
 	exec(writer, "create database defaults_two_cn collate utf8mb4_bin")
 	t.Cleanup(func() {

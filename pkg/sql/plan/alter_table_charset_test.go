@@ -26,7 +26,7 @@ import (
 )
 
 func TestAlterTableCharsetContract(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion117)
+	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	for _, tc := range []struct {
 		name, source, option, failure string
 		algorithm                     plan.AlterTable_AlgorithmType
@@ -124,7 +124,7 @@ func TestAlterCopyCollationInvalidatesDedupProof(t *testing.T) {
 }
 
 func TestAlterTableDefaultPreservesNativeUniqueSchemaMarker(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion117)
+	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	table := &plan.TableDef{
 		DefaultCharset: uint32(collation.UTF8MB4UnicodeCIIdentity), CollationVersion: uint32(collation.RevisionV1), KeyFormat: collation.KeyFormatV1,

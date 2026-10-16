@@ -26,7 +26,7 @@ import (
 )
 
 func TestCharsetConversionRetainsTypedComputation(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion117)
+	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	for _, expression := range []string{"a/b", "cast(a/b as char(32))", "cast(a/b as char(64))"} {
 		for _, collation := range []string{"utf8mb4_bin", "utf8mb4_general_ci", "utf8mb4_unicode_ci"} {
 			t.Run(expression+"/"+collation, func(t *testing.T) {

@@ -32,7 +32,7 @@ func TestTableCollationDerivedViewPublication(t *testing.T) {
 	for _, failAt := range []int{0, 1, 2} {
 		t.Run(map[int]string{0: "success", 1: "drop_error", 2: "create_error"}[failAt], func(t *testing.T) {
 			var statements []string
-			rejected := moerr.NewNotSupportedNoCtx("protocol version 117")
+			rejected := moerr.NewNotSupportedNoCtx("protocol version 118")
 			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
 			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, body func(executor.TxnExecutor) error, opts executor.Options) error {
 				require.True(t, opts.HasTxnMode())
@@ -63,7 +63,7 @@ func TestTableCollationDerivedViewPublication(t *testing.T) {
 				require.Greater(t, len(statements), 2)
 			}
 			if len(statements) > 1 {
-				require.Equal(t, sysview.InformationSchemaTablesV117DDL, statements[1])
+				require.Equal(t, sysview.InformationSchemaTablesV118DDL, statements[1])
 			}
 		})
 	}

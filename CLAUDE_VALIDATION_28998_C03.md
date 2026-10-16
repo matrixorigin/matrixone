@@ -1,6 +1,20 @@
 # #28998：C03 验证与交付记录
 
-## 当前维护资格：CI修复及main语义协调（2026-10-16）
+## 当前维护轮次：依赖表达式评审修复及 main b3d6b21fe9 合并（2026-10-16）
+
+本轮最终冻结输入的本地执行终态已收齐；源/index/commit和远端交付另核验。后续历史章节只保留各自输入/模式范围，不冒充本轮重跑。冻结 main=`b3d6b21fe9d260c91e1777529a48a9d93061af33`，原 PR head=`05d97d39697fc7adc0b5719f3f297490c9664376`。本轮 C03 MORPC118，保留 main117 独立 LEAST/GREATEST；599/END600、升级4.0.15与 PB18 不变。
+
+已保留实际 SQL RED：原精度10创作、当前精度0及字符列改域下，三个部分依赖场景改变无关除法结果，五个最近控制通过。首版 typed 修复的8个实际 SQL 场景通过，但追加 bin/general/native 12轮往返暴露 compiler string-coercion 的旧 IMPLICIT rank 导致 native 非法混合；此失败不计成功，也不更改全局/session策略绕过。后续修复在首个 typed owner 内刷新编译器字符串coercion：保留物理宽度、作者/数字/assignment边界和原数字子树；只折叠相同物理类型/宽度/pad的隐式层，非字符输入的格式化cast使用 NUMERIC coercibility5，再由原字符函数binder推导实际域。普通显式 MODIFY 继续使用当前声明/会话。
+
+- **当前普通终态**：Go1.27.1/Darwin/arm64/native wrapper/vet启用，13完整owner（PB两包/sysview/bootstrap/migration/CN/function/plan/compile/frontend/explain/mysql parser/facade/tree）共**39853 PASS事件**，全为完整atomic profiles/非空package PASS/exit0/source unchanged。完整SQL **50 top/342 PASS/105.357秒**；完整multicn count3 **15/45/105.794秒**；完整isolated **18/49/97.157秒**，包含扩展的转换表达式跨重启及未来写入。原optimistic CDC **1/1/7.301秒**，原Issue28909+29148 **2/9/7.567秒**。这些不是全仓库UT。
+- **覆盖/静态**：严格非生成AST可执行token差分 **804/979=82.12%**，辅助changed-block **965/1094=88.21%**。只合并13组本轮完整成功owner；缺采集/无映射仍计未覆盖，不含失败、中断、source-changed或SQL mode-only profiles。**17适用包vet/lint exit0、0 issues；120变动Go文件gofmt干净**，相对b3 whitespace exit0。
+- **生成/当前范围**：parser owner强制双次生成SHA一致，且等于自动合并parser。PB plan/pipeline schema/生成载体/gen.sh 在main76与冻结mainb3逐SHA相同；候选又等于已交付05，因此仅复用精确输入一致的完整descriptor/正常owner生成证明，PB测试仍本轮新跑。共享远端ref后续前进至3478692905（仍只占117），不改冻结BASE或把其新增binder内容冒充已经测试；交付前另核验可合并性。
+- **race终态**：四个精确测试独立测量T=.04/0/.20/.02秒（migration/publication/retry/CN barrier），B=30秒，按clamp(floor(B/T),1,100)分别独立stress **100次**；T=0按100。完整frontend **2480 top/5981 PASS/27.035秒**、bootstrap **64/162/15.919秒**、CN **150/321/11.523秒**，均exit0/source unchanged。既有!race allocation排除及两模式相同mock skip不改，不称全仓race。
+- **27 public同实例双轮终态**：原run.sh -g -n正常比较，每轮 **3022 total/3021 success/0 failed/1既有ignore/0 abnormal**，Java **60/74秒**，driver **186.72秒PASS/exit0**。54 source+54 mirror逐SHA相同，errors空，两轮fixture及DB/account/snapshot闭包均0，owned kernel PID88464退出；service-close/port-release ready且admission_released=true。native-linked候选binary/libmo/driver SHA及Go1.27.1 build info保留。**2831条service ERROR**原样保留，panic/fatal/data-race签名0，不称零ERROR。
+- **oracle/反例边界**：本轮public仅手写追加新场景，旧oracle保持（前轮批准的一个错误文案cell本轮不再变）、不genrs；同时要求隐式native比较与作者EXPLICIT COLLATE的相反结果。两个实际SQL COLLATE控制没有失败，不称公共RED；最近typed owner/规范CAST0的EXPLICIT rank0保留断言确有RED，已修且最终owner通过。
+- **失败与限制**：未运行driver、资源等待、fixture、编译、断言失败和旧平台限制独立保留。初轮owner为先闭合作者边界而停止排程，已启动测试自然结束，全部归档不参与本轮最终coverage；未终止Go编译/测试或无关进程。Darwin不代表Linux CI；不声称全仓库UT/race/GPU或旧二进制混部升级。
+
+## 历史维护资格：CI修复及main语义协调（2026-10-16）
 
 - **冻结范围**：原head `0f0c038d7898fb1ea93544fe49c958221f757744`，正常合并官方main `76deafc8062f9a7e33a31a4df858ebcdb9477cb5`。C03统一**117/INTERNAL_TABLE_COLLATION599/END600**；保留main原生Unicode新建普通持久表UNIQUE114、calendar115/598、division warning116，迁移4.0.15/min4.0.14/offset4及CreateTable.defaults18不变。验证期间观测main前进到b24d1b3115，仅18个window相关文件，不扩张为已验证该提交；当前证据均绑定76deaf。
 - **CI根因/修复**：run38707446306的内部derived-view发布显式拥有pessimistic RC事务，不改变全局/user optimistic负控；migration在请求之间使用operation context及认证TenantInfo，保留活动用户事务compiler路径和逐次executor Close；降级71无ghost断言直接读account0原始mo_tables，不调用117 TABLES。原coverage aggregation是producer profile不完整，不冒充已算得的覆盖率失败。

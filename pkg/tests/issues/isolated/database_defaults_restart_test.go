@@ -64,6 +64,11 @@ func TestDatabaseDefaultsDurableRestart(t *testing.T) {
 	exec("insert into c03_durable.converted values (1,'ß'),(2,'ss')")
 	exec("alter table c03_durable.converted convert to character set utf8mb4 collate utf8mb4_unicode_ci")
 	exec("alter database c03_durable collate utf8mb4_unicode_ci")
+	exec("set div_precision_increment=10")
+	exec("create table c03_durable.expressions(v varchar(8),a decimal(10,2),b decimal(10,2),g varchar(64) generated always as(concat(v,a/b)) stored) collate utf8mb4_bin")
+	exec("insert into c03_durable.expressions(v,a,b) values('x',1,3)")
+	exec("set div_precision_increment=0")
+	exec("alter table c03_durable.expressions convert to character set utf8mb4 collate utf8mb4_unicode_ci")
 	require.NoError(t, db.Close())
 	require.NoError(t, cluster.Close())
 	require.NoError(t, cluster.Start())
@@ -84,5 +89,11 @@ func TestDatabaseDefaultsDurableRestart(t *testing.T) {
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from converted force index(iv) where v='ss'").Scan(&count))
 	require.Equal(t, 2, count)
+	exec("set div_precision_increment=0")
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from expressions where g='x0.333333333333'").Scan(&count))
+	require.Equal(t, 1, count, "the converted catalog expression and existing row must survive restart")
+	exec("insert into expressions(v,a,b) values('x',1,3)")
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from expressions where g='x0.333333333333'").Scan(&count))
+	require.Equal(t, 2, count, "future writes must use the persisted arithmetic after restart")
 	exec("drop database c03_durable")
 }

@@ -48,16 +48,22 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 		for _, tc := range []struct {
 			name, alter, collation string
 			precision              int
+			expression, input      string
 		}{
-			{"unchanged_session", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 10},
-			{"ordinary_copy", "add column extra int, algorithm=copy", "utf8mb4_bin", 0},
-			{"same_domain", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 0},
-			{"changed_domain", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0},
+			{"unchanged_session", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 10, "a/b", "1"},
+			{"ordinary_copy", "add column extra int, algorithm=copy", "utf8mb4_bin", 0, "a/b", "1"},
+			{"same_domain", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 0, "a/b", "1"},
+			{"changed_domain", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "a/b", "1"},
+			{"dependent_same_domain", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 0, "concat(v,a/b)", "1"},
+			{"dependent_changed_domain", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v,a/b)", "1"},
+			{"dependent_authored_cast", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v,cast(a/b as char(32)))", "1"},
+			{"dependent_numeric_result", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "cast(v as decimal(10,2))/b", "1"},
+			{"authored_collate", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v collate utf8mb4_bin='a',a/b)", "A"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec("set div_precision_increment=10")
-				exec("create table " + tc.name + "(a decimal(10,2), b decimal(10,2), g varchar(64) generated always as(a/b) stored) collate utf8mb4_bin")
-				exec("insert into " + tc.name + "(a,b) values(1,3)")
+				exec("create table " + tc.name + "(v varchar(8), a decimal(10,2), b decimal(10,2), g varchar(64) generated always as(" + tc.expression + ") stored) collate utf8mb4_bin")
+				exec(fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
 				read := func() string {
 					t.Helper()
 					var value string
@@ -65,14 +71,20 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 					return value
 				}
 				before := read()
-				require.Equal(t, "0.333333333333", before)
+				expected := "0.333333333333"
+				if tc.expression == "concat(v,a/b)" || tc.expression == "concat(v,cast(a/b as char(32)))" {
+					expected = "1" + expected
+				} else if tc.name == "authored_collate" {
+					expected = "0" + expected
+				}
+				require.Equal(t, expected, before)
 				exec(fmt.Sprintf("set div_precision_increment=%d", tc.precision))
 				exec("alter table " + tc.name + " " + tc.alter)
 				require.Equal(t, before, read(), "DDL must not re-author unaffected arithmetic")
 				var collation string
 				require.NoError(t, conn.QueryRowContext(ctx, "select collation_name from information_schema.columns where table_schema='conversion_expressions' and table_name=? and column_name='g'", tc.name).Scan(&collation))
 				require.Equal(t, tc.collation, collation)
-				exec("insert into " + tc.name + "(a,b) values(1,3)")
+				exec(fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
 				var mismatches int
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.name+" where g<>?", before).Scan(&mismatches))
 				require.Zero(t, mismatches, "future writes must retain the persisted expression as well")

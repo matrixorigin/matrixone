@@ -109,8 +109,8 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 		return moerr.NewInternalError(ctx.GetContext(), "invalid character set conversion schema")
 	}
 	// Select replay against the complete destination schema, not a partially
-	// converted prefix. Only expressions whose inputs keep their value domain
-	// may retain their persisted binding.
+	// converted prefix. Retain unaffected typed subtrees while rebinding
+	// operations whose character inputs acquire a new domain.
 	source := DeepCopyTableDef(alter.CopyTableDef, true)
 	target := DeepCopyTableDef(source, true)
 	for _, definition := range create.Defs {
@@ -134,7 +134,12 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 		}
 	}
 	replay := ddlReplayForTable(WithPersistedDDLReplay(ctx.GetContext(), alter.CopyTableDef, target), target.Name)
-	conversionCtx := &charsetConversionCompilerContext{CompilerContext: ctx, replay: replay, source: source}
+	if replay.err != nil {
+		// Never recover a failed typed adaptation by re-authoring the whole
+		// persisted expression using the current session.
+		return replay.err
+	}
+	conversionCtx := &charsetConversionCompilerContext{CompilerContext: ctx, replay: replay}
 	for _, definition := range create.Defs {
 		column, ok := definition.(*tree.ColumnTableDef)
 		if !ok {

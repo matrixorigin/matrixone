@@ -34,7 +34,7 @@ type defaultsMigrationBackground struct {
 func (b *defaultsMigrationBackground) Close() { b.closed++ }
 
 func TestDatabaseDefaultsMigrationWithoutRequestContext(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion117)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion118)
 	for _, state := range []string{"between_requests", "finished_request", "active_request"} {
 		t.Run(state, func(t *testing.T) {
 			ses := newTestSession(t, gomock.NewController(t))
@@ -132,7 +132,7 @@ func TestDatabaseDefaultsMigrationWithoutRequestContext(t *testing.T) {
 }
 
 func TestDatabaseDefaultsGetterWithoutRequestContext(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion117)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion118)
 	ses := newTestSession(t, gomock.NewController(t))
 	defer ses.Close()
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{ses: ses}

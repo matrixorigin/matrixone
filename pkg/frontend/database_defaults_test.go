@@ -30,7 +30,7 @@ import (
 )
 
 func TestDatabaseDefaultsRestoreMetadata(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion117)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion118)
 	const checkSQL = "select relname from mo_catalog.mo_tables {MO_TS = 42} where account_id = 7 and reldatabase = 'mo_catalog' and relname = 'mo_database_defaults'"
 	const readSQL = "select cast(dd.collation_id as varchar(10)), cast(dd.collation_revision as varchar(10)), cast(dd.version as varchar(20)) from mo_catalog.mo_database {MO_TS = 42} db join mo_catalog.mo_database_defaults {MO_TS = 42} dd on dd.account_id=db.account_id and dd.database_id=db.dat_id where db.account_id=7 and db.datname='source'"
 	injected := errors.New("snapshot read unavailable")
@@ -88,7 +88,7 @@ func TestDatabaseDefaultsRestoreMetadata(t *testing.T) {
 }
 
 func TestDatabaseDefaultsTSRestore(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion117)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion118)
 	const sourceSQL = "select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = 42 } where datname = 'source' and account_id = 7"
 	const checkSQL = "select relname from mo_catalog.mo_tables {MO_TS = 42} where account_id = 7 and reldatabase = 'mo_catalog' and relname = 'mo_database_defaults'"
 	const readSQL = "select cast(dd.collation_id as varchar(10)), cast(dd.collation_revision as varchar(10)), cast(dd.version as varchar(20)) from mo_catalog.mo_database {MO_TS = 42} db join mo_catalog.mo_database_defaults {MO_TS = 42} dd on dd.account_id=db.account_id and dd.database_id=db.dat_id where db.account_id=7 and db.datname='source'"
@@ -165,10 +165,10 @@ func defaultsRestoreRows(rows [][]interface{}) *MysqlResultSet {
 
 func TestDatabaseDefaultsRestorePreflight(t *testing.T) {
 	definition := logicalRestoreDatabaseDefinition{defaults: &plan.DatabaseDefaults{CharacterSet: "utf8mb4", Collation: "utf8mb4_bin", Version: 1}}
-	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118} {
 		_, err := prepareLogicalRestoreDatabase(t.Context(), "d", definition, version)
-		if version < defines.MORPCVersion117 {
-			require.ErrorContains(t, err, "protocol version 117")
+		if version < defines.MORPCVersion118 {
+			require.ErrorContains(t, err, "protocol version 118")
 		} else {
 			require.NoError(t, err)
 		}
@@ -180,7 +180,7 @@ func TestDatabaseDefaultsRestorePreflight(t *testing.T) {
 		return definition, nil
 	})
 	require.True(t, visited)
-	require.ErrorContains(t, err, "protocol version 117")
+	require.ErrorContains(t, err, "protocol version 118")
 	require.Equal(t, "create database d", appendDatabaseDefaultsSQL("create database d", nil))
 }
 

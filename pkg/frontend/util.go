@@ -440,6 +440,8 @@ func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.CastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.CollateExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.BitCastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.IntervalExpr:

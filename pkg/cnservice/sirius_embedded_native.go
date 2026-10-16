@@ -19,6 +19,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge"
@@ -36,7 +37,7 @@ func (s *service) startEmbeddedSiriusRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	runtime := &compile.SiriusRuntime{EmbeddedMO: true, Backend: &embeddedBackend{native: native, streams: c.GPUStreams}, CleanupTimeout: c.CleanupTimeout.Duration, RequestTimeout: c.RequestTimeout.Duration}
+	runtime := &compile.SiriusRuntime{Engine: &siriusEngine{native: native, streams: c.GPUStreams}, CleanupTimeout: c.CleanupTimeout.Duration, RequestTimeout: c.RequestTimeout.Duration}
 	if err = runtime.Validate(); err != nil {
 		return errors.Join(err, native.Close(ctx))
 	}

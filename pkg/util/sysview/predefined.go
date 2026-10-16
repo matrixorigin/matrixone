@@ -672,7 +672,7 @@ var (
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
-	InformationSchemaTablesV117DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
+	InformationSchemaTablesV118DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
 		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
 
