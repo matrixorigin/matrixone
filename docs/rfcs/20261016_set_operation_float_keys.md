@@ -4,7 +4,7 @@
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Rebase baseline: official main `b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7`
+- Rebase baseline: official main `7c61f67e5dc46b0b8e591fe957219308b078bfa4`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 
 # Signed-zero set membership and scalar reaggregation
@@ -351,23 +351,23 @@ occur 64:64 versus 127:1 times per arm. Both correctly return cardinality error
 
 | Profile | O / total I / payload bytes / C | Warm maximum completion ms | Internal account generation peak bytes | Physical merge input bytes sum |
 | --- | --- | --- | --- | --- |
-| baseline | 8/16/0/1 | 1.124 | 1,366,648 | 912 |
-| outer | 64/16/0/1 | 1.917 | 1,450,312 | 5840 |
-| candidates | 8/256/0/1 | 1.376 | 1,545,376 | 3792 |
-| sparse | 8/16/0/1 | 0.878 | 1,355,528 | 912 |
-| distinct-cardinality-error | 8/16/0/1 | 0.939 | 1,365,624 | unavailable |
-| width | 8/16/256/1 | 0.984 | 1,417,848 | 5008 |
-| concurrency | 8/16/0/2 | 1.205 | 1,366,648 | 912 |
-| combined | 64/256/256/2 | 9.995 | 4,820,544 | 41488 |
-| high-distinctness-boundary | 64/256/256/2 | 20.687 | 8,505,176 | unavailable |
-| balanced-two-values | 64/256/256/1 | 5.287 | 4,820,544 | unavailable |
-| skewed-two-values | 64/256/256/1 | 6.244 | 4,820,544 | unavailable |
-| forced-spill | 64/256/0/1 | 52.627 | 2,107,648 | 8720 |
+| baseline | 8/16/0/1 | 2.672 | 1,366,648 | 912 |
+| outer | 64/16/0/1 | 4.832 | 1,450,312 | 5840 |
+| candidates | 8/256/0/1 | 3.734 | 1,545,376 | 3792 |
+| sparse | 8/16/0/1 | 10.843 | 1,355,528 | 912 |
+| distinct-cardinality-error | 8/16/0/1 | 6.592 | 1,365,624 | unavailable |
+| width | 8/16/256/1 | 3.627 | 1,417,848 | 5008 |
+| concurrency | 8/16/0/2 | 3.739 | 1,366,648 | 912 |
+| combined | 64/256/256/2 | 14.417 | 4,820,544 | 41488 |
+| high-distinctness-boundary | 64/256/256/2 | 34.590 | 8,505,176 | unavailable |
+| balanced-two-values | 64/256/256/1 | 12.245 | 4,820,544 | unavailable |
+| skewed-two-values | 64/256/256/1 | 20.099 | 4,820,544 | unavailable |
+| forced-spill | 64/256/0/1 | 77.766 | 2,107,648 | 8720 |
 
 All available quantities meet the proposal's numerical targets. Every internal
 root reports one valid allocation generation, no failed generation and zero
 terminal account bytes. The largest measured account peak is 8,505,176 bytes;
-the largest process lifetime RSS high-water is 415,055,872 bytes. These are
+the largest process lifetime RSS high-water is 397,246,464 bytes. These are
 separate observations with different coverage, not additive query memory.
 
 Public `EXPLAIN ANALYZE FORMAT JSON` and `EXPLAIN PHYPLAN FORMAT JSON` are
@@ -431,6 +431,15 @@ or aggregation call, establish full allocator attribution, or qualify distribute
 placement/capacity. Independent acceptance of this exact revision and supported
 production envelope remains external; the author does not infer it from tests.
 
+Revision 6 was subsequently rebased onto official main
+`7c61f67e5dc46b0b8e591fe957219308b078bfa4`. Main allocated 117 to
+collation-aware LEAST/GREATEST; set keys now use 118 across all admission layers.
+The independent division floor remains 116, and real bound collation-only and
+combined-expression controls verify 117 versus 118. Capacity and lifecycle
+receipts above were refreshed after the container/spill dependency changes;
+revision 5's 116/117 records remain historical. Full planner, compile, colexec
+and protobuf-plan package checks and updated static checks pass on this source.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -448,30 +457,32 @@ GROUP BY equality and avoids a new set executor/wire schema.
 
 ## Compatibility, rollout and rollback
 
-Official main at this revision ends at MORPC 116. This capability uses MORPC
-**117**. The feature walker recognizes encoded function identity 599 without
+Official main at this revision ends at MORPC 117. This capability uses MORPC
+**118**. The feature walker recognizes encoded function identity 599 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar
 composition adds no separate function identity or wire field. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 117 regardless of that policy; a combined expression
-requires 117. Division diagnostics remain outside persisted-expression admission.
+policy. Set keys require 118 regardless of that policy; a combined expression
+requires 118. Division diagnostics remain outside persisted-expression admission. Official main
+adds collation-aware LEAST/GREATEST at 117; that independent feature remains
+admitted at 117, and a combined expression with a set key requires 118.
 
-Placement requires workers advertising 117 or newer; missing or old capabilities
+Placement requires workers advertising 118 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 117. Operator expression construction checks the same floor
+missing or below 118. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 117. These checks add no per-row work or new resource owner.
+also require 118. These checks add no per-row work or new resource owner.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 117 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 116 rejects these
+then release the 118 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 117 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 117. Lowering a new binary's floor does not rewrite existing
+under a floor below 118. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 599.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected

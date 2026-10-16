@@ -392,7 +392,7 @@ const (
 // TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
 // execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
-// SetOperationFloatKeys requires MORPC v117 for append-only function ID 599.
+// SetOperationFloatKeys requires MORPC v118 for append-only function ID 599.
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
 	SetOperationFloatKeys         bool
