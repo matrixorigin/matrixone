@@ -842,7 +842,7 @@ function run_embedded_prebuild() {
 }
 function prepare_ut_native() {
  case "$COMPANION" in
- light) start_light_race example/light 1; fixture_companion_pid="$LIGHT_RACE_JOB_PID" ;;
+ light) start_background_race light "light race-test packages" go test -json -race -p 1 example/light; fixture_companion_pid="$BACKGROUND_RACE_JOB_PID" ;;
  prebuild) start_embedded_prebuild example/embedded 1; fixture_companion_pid="$CLUSTER_PREBUILD_JOB_PID" ;;
  esac
 }
@@ -927,5 +927,55 @@ read -r _ <&9
 				t.Fatalf("root status: want %d, got %v\n%s", tc.want, err, out)
 			}
 		})
+	}
+}
+
+func TestCancellationDrainsEmbeddedAndBothCompanions(t *testing.T) {
+	t.Parallel()
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+trap handle_ut_termination TERM
+function run_plan_race_shards() {
+ trap 'printf "plan-stop\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143; exit 143' TERM
+ printf 'plan-start\n' > "$PLAN_RACE_REPORT"
+ touch "$CASE_DIR/plan-started"
+ while :; do sleep 0.01; done
+}
+start_plan_race example/plan
+start_background_race heavy 'heavy packages' bash -c '
+ trap '\''printf "heavy-stop\n"; exit 143'\'' TERM
+ printf "heavy-start\n"
+ touch "$CASE_DIR/heavy-started"
+ while :; do sleep 0.01; done
+'
+start_ut_command embedded 'embedded packages' bash -c '
+ trap '\''printf "embedded-stop\n"; exit 143'\'' TERM
+ printf "embedded-start\n"
+ touch "$CASE_DIR/embedded-started"
+ while :; do sleep 0.01; done
+'
+owned_groups="$CURRENT_UT_PID $BACKGROUND_RACE_JOB_PID $PLAN_RACE_JOB_PID"
+function verify_cancelled_writers() {
+ local status=$?
+ [[ "$status" == 143 && -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 90
+ for pid in $owned_groups; do
+  if ut_process_group_alive "$pid"; then exit 91; fi
+ done
+ for stage in embedded heavy plan; do
+  for action in start stop; do
+   [[ $(grep -cx "$stage-$action" "$UT_REPORT") == 1 ]] || exit 92
+  done
+ done
+ printf 'THREE_OWNERS_DRAINED\n'
+ exit 143
+}
+trap verify_cancelled_writers EXIT
+while [[ ! -e "$CASE_DIR/plan-started" || ! -e "$CASE_DIR/heavy-started" || ! -e "$CASE_DIR/embedded-started" ]]; do sleep 0.01; done
+kill -TERM "$$"
+`
+	out, err := scheduleHarness(t, script)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "THREE_OWNERS_DRAINED") {
+		t.Fatalf("embedded/plan/heavy cancellation: %v\n%s", err, out)
 	}
 }

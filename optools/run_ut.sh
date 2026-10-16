@@ -81,8 +81,9 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
 # Keep the constrained runner's existing three-slot heavy-stage budget. The
-# engine race wave runs exclusively, then one slot is reserved for the plan
-# race wave while the resource-heavy packages use the remaining two slots.
+# engine race wave runs exclusively. The legacy tail reserves one slot for
+# plan while heavy packages use two; the full eight-core profile instead
+# overlaps one-core plan/heavy companions with the embedded wave.
 # This is a process/task budget, not a hard memory guarantee; stronger runners
 # may explicitly override it.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
@@ -119,8 +120,10 @@ ENGINE_RACE_REPORT=""
 ENGINE_RACE_REPORT_READY=""
 PREBUILT_RACE_REPORT=""
 PREBUILT_RACE_TEST_BINARY=""
-LIGHT_RACE_JOB_PID=""
-LIGHT_RACE_REPORT=""
+BACKGROUND_RACE_JOB_PID=""
+BACKGROUND_RACE_REPORT=""
+BACKGROUND_RACE_STAGE=""
+BACKGROUND_RACE_LABEL=""
 CURRENT_UT_PID=""
 CURRENT_UT_COMMAND_STAGE=""
 CURRENT_UT_COMMAND_LABEL=""
@@ -130,7 +133,7 @@ UT_TERMINATING=0
 # Reaping a helper is not proof that its independently owned descendants drained.
 # These facts are monotonic for this runner invocation, separate from live PIDs.
 CURRENT_UT_DRAIN_FAILED=0
-LIGHT_RACE_DRAIN_FAILED=0
+BACKGROUND_RACE_DRAIN_FAILED=0
 ENGINE_RACE_DRAIN_FAILED=0
 PLAN_RACE_DRAIN_FAILED=0
 CLUSTER_PREBUILD_DRAIN_FAILED=0
@@ -219,7 +222,7 @@ function mark_ut_stage(){
 }
 
 function ut_drain_failed(){
-    (( CURRENT_UT_DRAIN_FAILED || LIGHT_RACE_DRAIN_FAILED ||
+    (( CURRENT_UT_DRAIN_FAILED || BACKGROUND_RACE_DRAIN_FAILED ||
         ENGINE_RACE_DRAIN_FAILED || PLAN_RACE_DRAIN_FAILED || CLUSTER_PREBUILD_DRAIN_FAILED ))
 }
 
@@ -395,7 +398,7 @@ function prepare_light_link_gate(){
 }
 
 function cleanup_light_link_gate(){
-    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    (( BACKGROUND_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
     # Only after the light process group is drained: never unlink a live lease.
     if [[ -n "${UT_LINK_DIR}" ]]; then
         local slot
@@ -408,47 +411,39 @@ function cleanup_light_link_gate(){
     LIGHT_TOOL_FLAGS=()
 }
 
-function start_light_race(){
+function start_background_race(){
     ut_drain_failed && return 125
-    if (( $# != 2 )); then
-        logger "ERR" "start_light_race requires package scope and parallelism"
-        return 2
-    fi
-    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
-        logger "ERR" "start_light_race cannot start while another light helper is active"
+    if (( $# < 3 )) || [[ -n "${BACKGROUND_RACE_JOB_PID}${BACKGROUND_RACE_REPORT}" ]]; then
+        logger "ERR" "start_background_race requires stage, label, command and no retained owner"
         return 2
     fi
 
-    local package_scope=$1
-    local package_parallel=$2
+    local stage=$1 label=$2
+    shift 2
     local saved_term_trap
     local term_pending=0
-    LIGHT_RACE_REPORT="${G_WKSP}/${G_TS}-light-race-report.out"
-    : > "${LIGHT_RACE_REPORT}"
+    BACKGROUND_RACE_REPORT="${G_WKSP}/${G_TS}-background-race-report.out"
+    : > "${BACKGROUND_RACE_REPORT}" || return 1
+    BACKGROUND_RACE_STAGE=${stage}
+    BACKGROUND_RACE_LABEL=${label}
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
-    checkpoint_ut_event "start" "light" "light race-test packages" "" \
-        "parallel=${package_parallel} background=true"
+    checkpoint_ut_event "start" "${stage}" "${label}" "" "background=true"
     set -m
-    env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-        CGO_CFLAGS="${CGO_CFLAGS}" \
-        CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json \
-        -tags "${TAGS}" -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" \
-        -race ${package_scope} > "${LIGHT_RACE_REPORT}" 2>> "${UT_STDERR}" &
-    LIGHT_RACE_JOB_PID=$!
+    "$@" > "${BACKGROUND_RACE_REPORT}" 2>> "${UT_STDERR}" &
+    BACKGROUND_RACE_JOB_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
-    checkpoint_ut_event "pid-start" "light" "light race-test packages" "" \
-        "child_pid=${LIGHT_RACE_JOB_PID} parallel=${package_parallel}"
+    checkpoint_ut_event "pid-start" "${stage}" "${label}" "" "child_pid=${BACKGROUND_RACE_JOB_PID}"
     if (( term_pending != 0 )); then
         handle_ut_termination
     fi
 }
 
-function consume_light_race_report(){
-    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
-    if [[ -z "${LIGHT_RACE_REPORT}" ]]; then
+function consume_background_race_report(){
+    [[ -z "${BACKGROUND_RACE_JOB_PID}${CURRENT_UT_PID}" ]] || return 2
+    (( BACKGROUND_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    if [[ -z "${BACKGROUND_RACE_REPORT}" ]]; then
         return 0
     fi
 
@@ -460,37 +455,36 @@ function consume_light_race_report(){
     local append_status=0
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
-    append_ut_report "${LIGHT_RACE_REPORT}" "${UT_REPORT}"
+    append_ut_report "${BACKGROUND_RACE_REPORT}" "${UT_REPORT}"
     append_status=$?
     if (( append_status != 0 )); then
-        logger "ERR" "failed to consume light race report; preserving ${LIGHT_RACE_REPORT}"
+        logger "ERR" "failed to consume background race report; preserving ${BACKGROUND_RACE_REPORT}"
         restore_ut_term_trap "${saved_term_trap}"
         if (( term_pending != 0 && UT_TERMINATING == 0 )); then
             handle_ut_termination
         fi
         return "${append_status}"
     fi
-    rm -f "${LIGHT_RACE_REPORT}" "${LIGHT_RACE_REPORT}".*
-    LIGHT_RACE_REPORT=""
+    rm -f "${BACKGROUND_RACE_REPORT}" "${BACKGROUND_RACE_REPORT}".*
+    BACKGROUND_RACE_REPORT=""
     restore_ut_term_trap "${saved_term_trap}"
     if (( term_pending != 0 && UT_TERMINATING == 0 )); then
         handle_ut_termination
     fi
 }
 
-function finish_light_race(){
+function finish_background_race(){
     local status=0
     local report_status=0
-    if [[ -z "${LIGHT_RACE_JOB_PID}" ]]; then
-        (( LIGHT_RACE_DRAIN_FAILED == 0 )) || return 125
+    if [[ -z "${BACKGROUND_RACE_JOB_PID}" ]]; then
+        (( BACKGROUND_RACE_DRAIN_FAILED == 0 )) || return 125
         return 0
     fi
-    join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED || status=$?
+    join_ut_owner BACKGROUND_RACE_JOB_PID BACKGROUND_RACE_DRAIN_FAILED || status=$?
     if (( status == 125 )); then return 125; fi
-    checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
-    consume_light_race_report
+    checkpoint_ut_event "finish" "${BACKGROUND_RACE_STAGE}" "${BACKGROUND_RACE_LABEL}" "${status}"
+    consume_background_race_report
     report_status=$?
-    cleanup_light_link_gate
     if (( report_status != 0 && status == 0 )); then
         status=${report_status}
     fi
@@ -517,6 +511,21 @@ function start_plan_race(){
     fi
 }
 
+
+function finish_plan_race(){
+    local status=0 report_status=0
+    join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED
+    status=$?
+    if ut_drain_failed; then return 125; fi
+    consume_plan_race_report
+    report_status=$?
+    if (( report_status != 0 )); then
+        status=1
+    fi
+    rm -f "${PLAN_RACE_TEST_BINARY}"
+    PLAN_RACE_TEST_BINARY=""
+    return "${status}"
+}
 
 function logger(){
     local level=$1
@@ -1209,13 +1218,13 @@ function handle_ut_termination(){
     fi
     UT_TERMINATING=1
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
-        "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
+        "current_pid=${CURRENT_UT_PID} background_pid=${BACKGROUND_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
     local pid
     local termination_status=${1:-143} child_status=0
     # Notify every group before waiting, so the concurrent plan/helper cleanup
     # gets the same grace window as the foreground writer.
-    for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
+    for pid in "${CURRENT_UT_PID}" "${BACKGROUND_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
         [[ -n "${pid}" ]] && terminate_ut_process_group "${pid}" TERM
     done
     stop_ut_heartbeat
@@ -1252,26 +1261,26 @@ function handle_ut_termination(){
             fi
         fi
     fi
-    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
-        if ! wait_for_ut_process_group "${LIGHT_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            LIGHT_RACE_DRAIN_FAILED=1
+    if [[ -n "${BACKGROUND_RACE_JOB_PID}" ]]; then
+        if ! wait_for_ut_process_group "${BACKGROUND_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
+            BACKGROUND_RACE_DRAIN_FAILED=1
             termination_status=125
-            logger "ERR" "UT cancellation: preserving light race artifacts because child ${LIGHT_RACE_JOB_PID} did not drain"
+            logger "ERR" "UT cancellation: preserving background race artifacts because child ${BACKGROUND_RACE_JOB_PID} did not drain"
         else
             child_status=0
-            join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
+            join_ut_owner BACKGROUND_RACE_JOB_PID BACKGROUND_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                LIGHT_RACE_DRAIN_FAILED=1
+                BACKGROUND_RACE_DRAIN_FAILED=1
                 termination_status=125
-                logger "ERR" "UT cancellation: preserving light race artifacts because helper reported an undrained descendant"
+                logger "ERR" "UT cancellation: preserving background race artifacts because helper reported an undrained descendant"
             fi
         fi
     fi
-    if (( LIGHT_RACE_DRAIN_FAILED == 0 )); then
-        consume_light_race_report
+    if (( BACKGROUND_RACE_DRAIN_FAILED == 0 )); then
+        consume_background_race_report
         cleanup_light_link_gate
     else
-        logger "ERR" "UT cancellation: preserving light race report and link leases while an owner is undrained"
+        logger "ERR" "UT cancellation: preserving background race report and link leases while an owner is undrained"
     fi
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         if ! wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
@@ -2034,14 +2043,17 @@ function cleanup_embedded_prebuild(){
 # Callers prepare race_packages, race_dirs, race_binaries, race_patterns and
 # race_deadlines in their local scope. A nonzero deadline is shared by all
 # batches of that package; zero retains the ordinary per-package timeout.
-function prebuilt_race_package_is_high_footprint(){
+function prebuilt_race_package_needs_exclusive_execution(){
+    # Audited four-batch generations bound retention for these owners. Ordinary
+    # execution and newly discovered owners still require exclusive admission.
     # Synthetic package names are used by the shell scheduler harnesses; they
     # do not represent production embedded owners.
     case "$1" in
         github.com/matrixorigin/matrixone/pkg/embed|\
         github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
         github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
-            return 0
+            [[ "${2:-1}" != 4 ]]
+            return $?
             ;;
         github.com/matrixorigin/matrixone/pkg/tests/arrowload|\
         github.com/matrixorigin/matrixone/pkg/tests/dml|\
@@ -2110,7 +2122,7 @@ function run_prebuilt_race_commands(){
                     continue
                 fi
                 if (( exclusive_high_footprint == 1 && active > 0 )) &&
-                    prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                    prebuilt_race_package_needs_exclusive_execution "${race_packages[index]}"; then
                     continue
                 fi
                 candidate=${index}
@@ -2194,7 +2206,7 @@ function run_prebuilt_race_commands(){
             restore_ut_term_trap "${execution_term_trap}"
             if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
             active=$((active + 1))
-            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_needs_exclusive_execution "${race_packages[index]}"; then
                 high_footprint_active=$((high_footprint_active + 1))
             fi
         done
@@ -2247,7 +2259,7 @@ function run_prebuilt_race_commands(){
                 "package_index=${index} phase=execute prebuilt=true"
             test_pids[index]=0
             active=$((active - 1))
-            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_needs_exclusive_execution "${race_packages[index]}"; then
                 high_footprint_active=$((high_footprint_active - 1))
             fi
             progress=1
@@ -2560,7 +2572,7 @@ function run_embedded_tests(){
         local ordinary_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
         local -a ordinary_env=()
         for package in ${ordinary_scope}; do
-            if prebuilt_race_package_is_high_footprint "${package}"; then
+            if prebuilt_race_package_needs_exclusive_execution "${package}"; then
                 ordinary_parallel=1
                 break
             fi
@@ -2798,6 +2810,8 @@ function run_tests(){
         local shard_engine=1
         local light_started=0
         local overlap_light=0
+        local early_heavy_plan=0
+        local overlap_go_flags=""
         local light_stage_parallel=${UT_LIGHT_PARALLEL}
         local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
 
@@ -2953,7 +2967,7 @@ function run_tests(){
                 if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             fi
             logger "INF" "Start light race-test packages in background with parallelism ${light_parallel}; overlap only with exclusive issues"
-            if start_light_race "${light_test_scope}" "${light_parallel}"; then
+            if start_background_race light "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p "${light_parallel}" -timeout "${UT_TIMEOUT}m" -race $light_test_scope; then
                 light_started=1
             else
                 # A launch failure must not silently remove the light group
@@ -3023,12 +3037,41 @@ function run_tests(){
         fi
 
         if (( light_started == 1 )); then
-            finish_light_race
+            finish_background_race
             light_status=$?
             if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             report_cgroup_memory_usage "Light/issues overlap"
         fi
         cleanup_light_link_gate
+
+        # Only the measured full eight-core profile admits companions. Keep
+        # explicit CPU overrides and smaller/partial runs on their legacy path.
+        # Issues and light linking have finished; engine remains exclusive.
+        if [[ "${UT_SHARD}" == all && -z "${GOMAXPROCS+x}" && -z "${GOFLAGS:-}" &&
+              "${UT_PREBUILD_EMBEDDED}" == 0 &&
+              "${UT_EMBEDDED_BATCHES}" == 4 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" == 4 &&
+              "${PLAN_RACE_PARALLEL}" == 1 && "${PLAN_RACE_SHARDS}" == 8 &&
+              -n "${cluster_test_scope}" && -n "${resource_heavy_test_scope}" ]] &&
+            (( UT_PARALLEL >= 8 && UT_OVERLAP_PLAN == 1 && UT_OVERLAP_LIGHT == 0 &&
+               HEAVY_RACE_PARALLEL >= 2 && shard_engine == 1 )) &&
+            [[ "$(uname -s)" == Linux ]] &&
+            overlap_go_flags=$(go env GOFLAGS) && [[ -z "${overlap_go_flags}" ]]; then
+            early_heavy_plan=1
+            for package in ${cluster_test_scope}; do
+                if prebuilt_race_package_needs_exclusive_execution "${package}" "${UT_EMBEDDED_BATCHES}"; then
+                    early_heavy_plan=0
+                    break
+                fi
+            done
+        fi
+        if (( early_heavy_plan == 1 )); then
+            logger "INF" "Overlap serial plan/heavy companions with embedded tests; one Go core per companion"
+            GOMAXPROCS=1 start_plan_race "${plan_package}" || handle_ut_termination "$?"
+            start_background_race heavy "resource-heavy race-test packages" \
+                env GOMAXPROCS=1 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+                -p 1 -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope || handle_ut_termination "$?"
+        fi
 
         # Cluster admission serializes service lifecycles, not whole test
         # processes: a waiting race binary still retains memory, and linking or
@@ -3040,16 +3083,30 @@ function run_tests(){
             logger "INF" "Run embedded-cluster race-test packages with bounded package parallelism ${UT_EMBEDDED_PACKAGE_PARALLEL}"
             run_embedded_tests "${cluster_test_scope}"
             cluster_status=$?
-            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+            if ut_drain_failed; then
+                if (( early_heavy_plan == 1 )); then handle_ut_termination 125; fi
+                UT_TEST_STATUS=1
+                return 0
+            fi
+        fi
+
+        if (( early_heavy_plan == 1 )); then
+            finish_background_race
+            resource_heavy_status=$?
+            if ut_drain_failed; then handle_ut_termination 125; fi
+            finish_plan_race
+            plan_status=$?
+            if ut_drain_failed; then handle_ut_termination 125; fi
+            report_cgroup_memory_usage "Embedded/plan/heavy overlap"
         fi
 
         if should_run_ut_stage heavy && (( shard_engine == 1 )); then
             # engine/test is dominated by serial fixture lifecycles inside one
             # process. Build it once and split every discovered top-level test
-            # across fresh race processes. Run the complete engine wave before
-            # any resource-heavy package starts: those package lifecycles can
-            # otherwise delay the engine's ISCP progress and make watermark
-            # assertions depend on which runner process gets CPU first.
+            # across fresh race processes. Early companions have drained above;
+            # legacy heavy/plan work starts below. No other wave may delay the
+            # engine's ISCP progress and make watermark assertions depend on
+            # which runner process gets CPU first.
             engine_race_parallel=${ENGINE_RACE_SHARDS}
             if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
                 engine_race_parallel=${HEAVY_RACE_PARALLEL}
@@ -3080,7 +3137,7 @@ function run_tests(){
         # Reserve exactly its configured process count from the existing heavy
         # budget, so plan+resource work never exceeds the prior three-slot cap.
         # If the budget cannot admit both waves, keep the phases sequential.
-        if should_run_ut_stage heavy; then
+        if (( early_heavy_plan == 0 )) && should_run_ut_stage heavy; then
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
             if (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
                 [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] &&
@@ -3098,18 +3155,11 @@ function run_tests(){
             report_cgroup_memory_usage "Resource-heavy UT"
         fi
 
-        if should_run_ut_stage plan; then
+        if (( early_heavy_plan == 0 )) && should_run_ut_stage plan; then
             if [[ -z "${PLAN_RACE_JOB_PID}" ]]; then start_plan_race "${plan_package}"; fi
-            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED
+            finish_plan_race
             plan_status=$?
             if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
-            consume_plan_race_report
-            report_status=$?
-            if (( report_status != 0 )); then
-                plan_status=1
-            fi
-            rm -f "${PLAN_RACE_TEST_BINARY}"
-            PLAN_RACE_TEST_BINARY=""
         fi
 
         if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then

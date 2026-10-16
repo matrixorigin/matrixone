@@ -323,10 +323,10 @@ if [[ "$OWNER" == current ]]; then
  finish_ut_command || status=$?
  [[ -z "$CURRENT_UT_PID" && "$CURRENT_UT_DRAIN_FAILED" == 0 ]] || exit 90
 else
- start_light_race example/light 1
- owner_pid=$LIGHT_RACE_JOB_PID
- finish_light_race || status=$?
- [[ -z "$LIGHT_RACE_JOB_PID" && "$LIGHT_RACE_DRAIN_FAILED" == 0 ]] || exit 91
+ start_background_race light "light race-test packages" go test -json -race -p 1 example/light
+ owner_pid=$BACKGROUND_RACE_JOB_PID
+ finish_background_race || status=$?
+ [[ -z "$BACKGROUND_RACE_JOB_PID" && "$BACKGROUND_RACE_DRAIN_FAILED" == 0 ]] || exit 91
 fi
 [[ "$(<"$CASE_DIR/killed-helper.pid")" == "$owner_pid" ]] || exit 99
 [[ "$status" == 137 ]] || exit 92

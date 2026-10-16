@@ -621,8 +621,9 @@ UT_EMBEDDED_BATCHES ?= 4
 # the prebuild policy for rollback modes; overlapping compilation remains an
 # explicit opt-in for the bounded issues pool.
 UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
-# Reuse released engine slots for plan while resource-heavy work finishes.
-# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+# On the full Linux eight-task profile, overlap one-core plan/heavy companions
+# with embedded tests and drain both before engine. Other profiles reuse released
+# engine slots for plan/heavy overlap. Set 0 to keep all three waves sequential.
 UT_OVERLAP_PLAN ?= 1
 # Keep light/issues overlap opt-in: the measured treatment was slower than the
 # serial baseline and left insufficient cgroup memory headroom. Re-enable only
