@@ -337,7 +337,14 @@ func TestCluster_DebugUpdateCNLabelWithContext(t *testing.T) {
 			require.True(t, gotDeadline.Equal(wantDeadline), "caller deadline must reach HAKeeper unchanged")
 			require.Equal(t, 1, calls)
 
-			err := c.DebugUpdateCNLabelWithContext(context.Background(), "cn0", map[string][]string{})
+			err := c.DebugUpdateCNLabelWithContext(nil, "cn0", map[string][]string{})
+			require.ErrorContains(t, err, "nil context")
+			canceledCtx, cancelCanceled := context.WithTimeout(context.Background(), time.Minute)
+			cancelCanceled()
+			err = c.DebugUpdateCNLabelWithContext(canceledCtx, "cn0", map[string][]string{})
+			require.ErrorIs(t, err, context.Canceled)
+
+			err = c.DebugUpdateCNLabelWithContext(context.Background(), "cn0", map[string][]string{})
 			require.ErrorContains(t, err, "context deadline not set")
 			hc.RLock()
 			callsAfterInvalidContext := hc.updateCNLabelCalls
