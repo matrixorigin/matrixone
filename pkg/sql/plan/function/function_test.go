@@ -619,6 +619,22 @@ func TestGetFunctionByNameWithoutError(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestFunctionLookupRejectsUnknownOverload(t *testing.T) {
+	for _, overloadID := range []int32{-1, 3} {
+		t.Run(fmt.Sprintf("overload_%d", overloadID), func(t *testing.T) {
+			encoded := encodeOverloadID(JSON_VALUE, overloadID)
+			require.NotPanics(t, func() {
+				_, err := GetFunctionById(context.Background(), encoded)
+				require.Error(t, err)
+				_, ok := GetFunctionByIdWithoutError(encoded)
+				require.False(t, ok)
+				_, err = GetFunctionIsZonemappableById(context.Background(), encoded)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
 func TestPointAliasUsesSTPointFunction(t *testing.T) {
 	args := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
 	point, err := GetFunctionByName(context.Background(), "point", args)
@@ -1445,6 +1461,7 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},
 		{name: "inverse hyperbolic tangent domain", fid: ATANH, argCount: 1},
+		{name: "JSON value missing path", fid: JSON_VALUE, argCount: 2},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},

@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	goruntime "runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +39,51 @@ import (
 )
 
 type sqlTaskContextKey struct{}
+
+func TestFrontendTaskServiceConcurrentPublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	pu := getPu(ses.GetService())
+	ctx := context.Background()
+
+	// Bootstrap may not have published a service yet. Keep the existing error
+	// contract, then exercise the same publication owner as CN heartbeat.
+	pu.SetTaskService(nil)
+	got, err := getSQLTaskService(ctx, ses)
+	require.Nil(t, got)
+	require.ErrorContains(t, err, "task service not ready yet")
+	pu.SetTaskService(ts)
+
+	start := make(chan struct{})
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		<-start
+		for i := 0; i < 1024; i++ {
+			pu.SetTaskService(ts)
+			goruntime.Gosched()
+		}
+	}()
+	// Join before session/task-service cleanup, including assertion failure.
+	defer writer.Wait()
+	close(start)
+	for i := 0; i < 1024; i++ {
+		got, err = getSQLTaskService(ctx, ses)
+		require.NoError(t, err)
+		require.Same(t, ts, got)
+		// Each request-local DAO snapshots publication through the same owner.
+		dao := NewCDCDao(ses)
+		require.Same(t, ts, dao.MustGetTaskService())
+		goruntime.Gosched()
+	}
+	writer.Wait()
+	got, err = getSQLTaskService(ctx, ses)
+	require.NoError(t, err)
+	require.Same(t, ts, got)
+}
 
 func TestGetSQLTaskServicePublication(t *testing.T) {
 	service := t.Name()
@@ -654,7 +701,7 @@ func newSQLTaskHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	t.Cleanup(func() {
 		require.NoError(t, ts.Close())
 	})
-	getPu(ses.GetService()).TaskService = ts
+	getPu(ses.GetService()).SetTaskService(ts)
 	return ses, ts, store
 }
 
