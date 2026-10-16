@@ -267,6 +267,9 @@ type ExecutionResourceBudget struct {
 	closed                bool
 	spillDiskCap          uint64
 	spillDiskUsed         uint64
+	// spillDiskEpoch changes with disk ownership or cap updates. A filesystem
+	// sample may only be published against the ledger it started with.
+	spillDiskEpoch uint64
 	// spillDiskAutomatic means the shared cap was derived from the filesystem
 	// which actually owns spill files. The explicit floor is monotonic because
 	// an operator-configured limit must not be invalidated by another statement
@@ -496,6 +499,7 @@ func (b *ExecutionResourceBudget) SetSpillCaps(diskBytes, fds uint64) error {
 		return newComponentAdmissionError(ExecutionResourceComponentSpillFD, 0, b.spillFDUsed, effectiveFDCap)
 	}
 	b.spillDiskCap = diskBytes
+	b.spillDiskEpoch++
 	b.spillDiskAutomatic = false
 	b.spillDiskExplicitFloor = explicitDiskBytes
 	b.spillFDConfiguredCap = fds
@@ -503,26 +507,38 @@ func (b *ExecutionResourceBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	return nil
 }
 
-// setAutomaticSpillDiskCapFromAvailable publishes one statement-start sample
-// from the filesystem that owns LOCAL/__spill. Statfs available bytes already
-// exclude spill files charged to this ledger, so add those owned bytes back
-// before applying the free-space policy. Otherwise every concurrent statement
-// mistakes the running query's own spill for external disk use and repeatedly
-// tightens the shared envelope. An active envelope may still tighten when real
-// external disk use consumes headroom, but it never grows until every live
-// spill byte has been released. Explicit operator configuration remains a
-// floor.
-func (b *ExecutionResourceBudget) setAutomaticSpillDiskCapFromAvailable(availableBytes uint64) error {
-	if b == nil || availableBytes == 0 {
+// refreshAutomaticSpillDiskCap samples the filesystem that owns LOCAL/__spill.
+// Sampling must not hold mu: disk I/O must not block resource admission or
+// cleanup. Discard the sample if ownership or another cap update changed while
+// it was in flight, including a release followed by an equal-sized reservation.
+// Retain the previous finite cap on an unavailable or invalidated sample; the
+// next statement can refresh it without retrying against busy spill writers.
+//
+// Statfs already excludes live spill, so add this ledger's owned bytes back
+// before applying the headroom policy. A coherent sample may tighten an active
+// envelope for external disk use, but may not grow it until spill drains.
+// Explicit operator configuration remains a floor.
+func (b *ExecutionResourceBudget) refreshAutomaticSpillDiskCap(sampleAvailable func() uint64) error {
+	if b == nil || sampleAvailable == nil {
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid}
 	}
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	epoch := b.spillDiskEpoch
+	b.mu.Unlock()
+
+	availableBytes := sampleAvailable()
+
+	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return &ExecutionResourceError{
-			Kind:    ExecutionResourceErrorClosed,
-			Message: ErrExecutionResourceClosed.Error(),
-		}
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	if availableBytes == 0 || epoch != b.spillDiskEpoch {
+		return nil
 	}
 	ownedCapacity := availableBytes
 	if b.spillDiskUsed > math.MaxUint64-ownedCapacity {
@@ -541,6 +557,7 @@ func (b *ExecutionResourceBudget) setAutomaticSpillDiskCapFromAvailable(availabl
 		diskBytes = b.spillDiskCap
 	}
 	b.spillDiskCap = diskBytes
+	b.spillDiskEpoch++
 	b.spillDiskAutomatic = true
 	return nil
 }
@@ -571,6 +588,7 @@ func (b *ExecutionResourceBudget) raiseSpillDiskCapToExplicitLimit(diskBytes uin
 	if diskBytes > b.spillDiskExplicitFloor {
 		b.spillDiskExplicitFloor = diskBytes
 	}
+	b.spillDiskEpoch++
 	return nil
 }
 
@@ -1294,9 +1312,10 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
-// ExecutionTransientMemoryReservation owns a bounded Go-heap scratch charge.
+// ExecutionTransientMemoryReservation owns a bounded non-MPool memory charge,
+// including temporary Go buffers and explicitly retained spill page cache.
 // Physical MPool allocations continue to use AllocationAccount as their sole
-// owner; this token is only for temporary buffers that cannot carry one.
+// owner; this token is only for temporary memory that cannot carry one.
 type ExecutionTransientMemoryReservation struct {
 	budget     *ExecutionResourceBudget
 	generation *ExecutionResourceGeneration
@@ -1690,6 +1709,9 @@ func (g *ExecutionResourceGeneration) ReserveSpillDisk(size uint64) (*ExecutionS
 		return nil, newComponentAdmissionError(ExecutionResourceComponentSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
 	}
 	b.spillDiskUsed += size
+	if size != 0 {
+		b.spillDiskEpoch++
+	}
 	g.spillDiskUsed += size
 	observeExecutionResourceBudget("spill_disk", "reserve", "query", size)
 	observeExecutionResourceBudget("spill_disk", "reserve", "cn", size)
@@ -1732,6 +1754,7 @@ func (r *ExecutionSpillDiskReservation) Grow(additional uint64) error {
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
 	}
 	b.spillDiskUsed += additional
+	b.spillDiskEpoch++
 	g.spillDiskUsed += additional
 	r.core.size += additional
 	observeExecutionResourceBudget("spill_disk", "reserve", "query", additional)
@@ -1793,6 +1816,9 @@ func (r *ExecutionSpillDiskReservation) Release() bool {
 	}
 	r.generation.spillDiskUsed -= r.core.size
 	r.budget.spillDiskUsed -= r.core.size
+	if r.core.size != 0 {
+		r.budget.spillDiskEpoch++
+	}
 	observeExecutionResourceBudget("spill_disk", "release", "query", r.core.size)
 	observeExecutionResourceBudget("spill_disk", "release", "cn", r.core.size)
 	r.generation.releaseCount++
@@ -1839,6 +1865,7 @@ func (r *ExecutionSpillDiskReservation) ReconcileDown(actual uint64) (bool, erro
 		}
 		r.generation.spillDiskUsed -= delta
 		r.budget.spillDiskUsed -= delta
+		r.budget.spillDiskEpoch++
 		r.core.size = actual
 		observeExecutionResourceBudget("spill_disk", "reconcile", "query", delta)
 		observeExecutionResourceBudget("spill_disk", "reconcile", "cn", delta)
@@ -1976,7 +2003,6 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	if err != nil {
 		return nil, err
 	}
-	automaticDiskAvailable := proc.automaticSpillDiskAvailable()
 
 	var aggregate *ExecutionResourceBudget
 	service := proc.GetService()
@@ -1994,11 +2020,6 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 			b.memoryHeadroomTTL = executionResourceBudgetCapRefreshTTL
 			b.memoryHeadroomNow = time.Now
 			b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)
-			if automaticDiskAvailable != 0 {
-				if createErr = b.setAutomaticSpillDiskCapFromAvailable(automaticDiskAvailable); createErr != nil {
-					return nil
-				}
-			}
 			// Attach the source snapshot before publishing the candidate so
 			// another process never observes an aggregate without its stable
 			// provider.
@@ -2014,10 +2035,10 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	if err != nil {
 		return nil, err
 	}
-	if loaded && automaticDiskAvailable != 0 {
-		if err = aggregate.setAutomaticSpillDiskCapFromAvailable(automaticDiskAvailable); err != nil {
-			return nil, err
-		}
+	// Resolve the winning CN ledger before sampling. In particular, a losing
+	// LoadOrStore candidate must not publish a sample taken for its empty ledger.
+	if err = aggregate.refreshAutomaticSpillDiskCap(proc.automaticSpillDiskAvailable); err != nil {
+		return nil, err
 	}
 	if loaded {
 		aggregate.mergeObservedCNCap(initialInputs, ceiling.CNMemoryCap)

@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v117. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v118. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v117; receiving checks the new identity. Old coordinators send identity
+worker at candidate v118; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -49,14 +49,15 @@ v108's isolated user-variable NULL regexp history during migration and v109's
 native Unicode collation metadata, v110's MEDIUMINT assignment bounds, and v111's
 IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs,
 v112's signed date results, v113's DECIMAL statistical DOUBLE results,
-v114's Unicode UNIQUE keys, v115's calendar intervals, and v116's scalar division warnings.
-CRC32 uses candidate v117. This number is
+v114's Unicode UNIQUE keys, v115's calendar intervals, v116's scalar division warnings,
+and v117's collation-aware LEAST/GREATEST ordering.
+CRC32 uses candidate v118. This number is
 not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v117 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v118 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -92,6 +93,31 @@ post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
 ## Current main integration candidate on 2026-10-16
+
+The bounded maintenance candidate merges frozen upstream
+`b3d6b21fe9d260c91e1777529a48a9d93061af33`, whose v117 implements
+collation-aware LEAST/GREATEST. CRC32 therefore moves to v118 throughout its
+execution, placement, send/receive, catalog-read and authoring guards.
+Predecessor tests now include v117 rejection and preserve LEAST/GREATEST's
+independent v117 floor.
+
+The unvalidated-rewrite-generation scalar fixture now supplies a real prepared
+plan; all upstream rejection and known-empty-policy assertions remain intact.
+The table-backed owner-policy migration cases remain blocked: the closed-scalar
+guard rejects them at export and would also reject their SQL at import.
+`query.PrepareStmt` carries only name, SQL and parameter types, with no bound
+identity or catalog-dependency proof. Allowing a table projection at export
+alone cannot establish that target replay avoids a legacy CRC expression hidden
+behind a view or changed dependency. Resolving that contract needs a separately
+reviewed migration-identity/catalog-validation design; this candidate adds no
+such protocol and retains the CRC fences and upstream assertions.
+
+Native CGo focused and owning-package checks, the binary-prepared embedded
+consumer, and proportional vet/lint pass for this bounded increment. BVT and
+mixed-binary execution remain unverified. The table-migration contract above
+still blocks full CI repair; the prior CI failures are not claimed closed.
+
+## Historical main integration candidate: scalar-division prefix
 
 The base-sync merge integrates actual main
 `b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7`. Main owns v113-v116;

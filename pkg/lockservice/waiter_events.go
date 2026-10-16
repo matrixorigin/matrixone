@@ -47,7 +47,6 @@ type lockContext struct {
 	rows               [][]byte
 	opts               LockOptions
 	offset             int
-	idx                int
 	lockedTS           timestamp.Timestamp
 	result             pb.Result
 	cb                 func(pb.Result, error)

@@ -979,7 +979,7 @@ func TestMigrateConnectionFromRejectsUnvalidatedRewriteGeneration(t *testing.T) 
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	ses.prepareStmts = map[string]*PrepareStmt{
-		"old": {Name: "old", Sql: "select 1", rewritePolicyCaptured: true},
+		"old": {Name: "old", Sql: "select 1", PreparePlan: crc32MigrationTestPlan(t, "select 1"), rewritePolicyCaptured: true},
 	}
 	ses.rewritePolicyGeneration = 1
 	rt := &Routine{mc: newMigrateController()}

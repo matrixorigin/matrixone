@@ -161,10 +161,15 @@ func TestCRC32PreparedMigrationChecksFoldedAndBoundIdentity(t *testing.T) {
 	t.Cleanup(ses.Close)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
+	originalPlan := prepared.PreparePlan
+	prepared.PreparePlan = nil
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	prepared.PreparePlan = originalPlan
 	// Explicit pruning fixture: do not pretend this manually changed plan is
 	// an observed optimizer trace. The original SQL must independently pin it.
 	prepared.Sql = "select coalesce(1,crc32(cast(? as json)))"
-	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	err = rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 	prepared.Sql = "select 1"
 	for _, identity := range []struct {

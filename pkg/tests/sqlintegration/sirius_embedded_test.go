@@ -43,7 +43,7 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(op embed.ServiceOperator) {
 		if op.ServiceType() == metadata.ServiceType_CN {
 			op.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Sirius = cnservice.SiriusConfig{Enabled: true, Backend: "embedded", InputMode: "mo", NativeConfigPath: config, GPUStreams: 2}
+				cfg.CN.Sirius = cnservice.SiriusConfig{Enabled: true, NativeConfigPath: config, GPUStreams: 2}
 			})
 		}
 	}))
