@@ -27,7 +27,7 @@ desc dst_explicit;
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table dst_missing as select * from missing_src limit 0;
-no such table ctas_select_star_limit.missing_src
+SQL parser error: table "missing_src" does not exist
 show tables like 'dst_missing';
 ➤ Tables_in_ctas_select_star_limit[12,-1,0]
 select count(*) from src;
