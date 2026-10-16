@@ -398,4 +398,68 @@ id    v    n
 1    a    1
 2    b    1
 3    c    -1
+create table identity_rename(id int primary key,a int,v int,unique key u(a),constraint u check(v>0));
+insert into identity_rename values (1,1,1);
+alter table identity_rename rename column a to x,add column a int,drop column a,drop constraint u;
+invalid input: ambiguous constraint name 'u'; use constraint-specific DROP syntax
+select * from identity_rename order by id;
+id    a    v
+1    1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='identity_rename' and constraint_type='CHECK';
+count(*)
+1
+select column_name from information_schema.statistics
+where table_schema=database() and table_name='identity_rename' and index_name='u';
+column_name
+a
+insert into identity_rename values (2,2,-1);
+constraint violation: Check constraint 'u' is violated
+alter table identity_rename rename column a to x,add column a int,drop column a,drop check u;
+select * from identity_rename order by id;
+id    x    v
+1    1    1
+select column_name from information_schema.statistics
+where table_schema=database() and table_name='identity_rename' and index_name='u';
+column_name
+x
+insert into identity_rename values (2,2,-1);
+insert into identity_rename values (3,2,1);
+Duplicate entry '2' for key 'x'
+select * from identity_rename order by id;
+id    x    v
+1    1    1
+2    2    -1
+create table identity_change(id int primary key,a int,v int,unique key u(a),constraint u check(v>0));
+insert into identity_change values (1,1,1);
+alter table identity_change change column a x int,add column a int,drop column a,drop constraint u;
+invalid input: ambiguous constraint name 'u'; use constraint-specific DROP syntax
+select * from identity_change order by id;
+id    a    v
+1    1    1
+select count(*) from information_schema.table_constraints
+where table_schema=database() and table_name='identity_change' and constraint_type='CHECK';
+count(*)
+1
+select column_name from information_schema.statistics
+where table_schema=database() and table_name='identity_change' and index_name='u';
+column_name
+a
+insert into identity_change values (2,2,-1);
+constraint violation: Check constraint 'u' is violated
+alter table identity_change change column a x int,add column a int,drop column a,drop check u;
+select * from identity_change order by id;
+id    x    v
+1    1    1
+select column_name from information_schema.statistics
+where table_schema=database() and table_name='identity_change' and index_name='u';
+column_name
+x
+insert into identity_change values (2,2,-1);
+insert into identity_change values (3,2,1);
+Duplicate entry '2' for key 'x'
+select * from identity_change order by id;
+id    x    v
+1    1    1
+2    2    -1
 drop database alter_check_constraints;

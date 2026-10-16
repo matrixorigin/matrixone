@@ -81,15 +81,31 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 		// indexes after column changes. Retain inline producers separately so
 		// ordered DROP resolution sees them only after their column clause.
 		columnOrigins := make(map[string]string, len(current.Cols))
+		usedOrigins := make(map[string]bool, len(current.Cols))
 		for _, col := range current.Cols {
 			columnOrigins[col.Name] = col.Name
+			usedOrigins[col.Name] = true
+		}
+		// A new column is a new identity even when it reuses a renamed or
+		// dropped column's SQL name. Reserve source and allocated identities
+		// for this whole planning pass. These private names never leave the view.
+		nextOrigin := 0
+		newColumnOrigin := func() string {
+			for {
+				origin := fmt.Sprintf("__mo_alter_col_%d", nextOrigin)
+				nextOrigin++
+				if !usedOrigins[origin] {
+					usedOrigins[origin] = true
+					return origin
+				}
+			}
 		}
 		for _, option := range options {
 			var column *tree.ColumnTableDef
 			switch opt := option.(type) {
 			case *tree.AlterAddCol:
 				column = opt.Column
-				columnOrigins[column.Name.ColName()] = column.Name.ColName()
+				columnOrigins[column.Name.ColName()] = newColumnOrigin()
 			case *tree.AlterTableModifyColumnClause:
 				column = opt.NewColumn
 			case *tree.AlterTableRenameColumnClause:

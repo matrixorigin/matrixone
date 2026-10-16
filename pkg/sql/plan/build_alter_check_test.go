@@ -267,6 +267,18 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 		name, definition, clause, index string
 		primary, ambiguous              bool
 	}{
+		{"renamed source identity survives old name reuse", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,add column a int,drop column a,drop constraint u", "", false, true},
+		{"changed source identity survives old name reuse", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "change column a x int,add column a int,drop column a,drop constraint u", "", false, true},
+		{"new inline unique does not replace renamed source identity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,add column a int unique,drop column a,drop constraint u", "", false, true},
+		{"renamed inline identity survives old name reuse", "id int primary key,v int,constraint a check(v>0)", "add column a int unique,rename column a to x,add column a int,drop column a,drop constraint a", "", false, true},
+		{"changed inline identity survives old name reuse", "id int primary key,v int,constraint a check(v>0)", "add column a int unique,change column a x int,add column a int,drop column a,drop constraint a", "", false, true},
+		{"multiple renames retain source identity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,rename column x to y,add column a int,drop column a,drop constraint u", "", false, true},
+		{"multiple new generations retain inline identity", "id int primary key,v int,constraint a check(v>0)", "add column a int unique,rename column a to x,add column a int unique,rename column a to y,add column a int,drop column a,drop constraint a", "", false, true},
+		{"fresh identity cannot collide with a legal source name", "id int primary key,__mo_alter_col_0 int,v int,unique key u(__mo_alter_col_0),constraint u check(v>0)", "add column a int,drop column a,drop constraint u", "", false, true},
+		{"dropping renamed original clears only its unique identity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,add column a int,drop column x,drop constraint u", "", false, false},
+		{"dropping changed original clears only its unique identity", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "change column a x int,add column a int,drop column x,drop constraint u", "", false, false},
+		{"explicit check drop preserves renamed unique with name reuse", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "rename column a to x,add column a int,drop column a,drop check u", "u", false, false},
+		{"explicit check drop preserves changed unique with name reuse", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "change column a x int,add column a int,drop column a,drop check u", "u", false, false},
 		{"source unique cannot be hidden by future column drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop constraint u,drop column a", "", false, true},
 		{"inline unique cannot be hidden by future column drop", "id int primary key,v int,constraint w check(v>0)", "add column w int unique,drop constraint w,drop column w", "", false, true},
 		{"source unique cannot be hidden by future index drop", "id int primary key,a int,v int,unique key u(a),constraint u check(v>0)", "drop constraint u,drop index u", "", false, true},

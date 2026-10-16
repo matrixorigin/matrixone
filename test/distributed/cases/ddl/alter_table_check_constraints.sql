@@ -260,4 +260,39 @@ alter table unicode_drop_admission drop constraint ck;
 insert into unicode_drop_admission values (3,'c',-1);
 select * from unicode_drop_admission order by id;
 
+-- Column generations remain distinct when a renamed column name is reused.
+create table identity_rename(id int primary key,a int,v int,unique key u(a),constraint u check(v>0));
+insert into identity_rename values (1,1,1);
+alter table identity_rename rename column a to x,add column a int,drop column a,drop constraint u;
+select * from identity_rename order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='identity_rename' and constraint_type='CHECK';
+select column_name from information_schema.statistics
+    where table_schema=database() and table_name='identity_rename' and index_name='u';
+insert into identity_rename values (2,2,-1);
+alter table identity_rename rename column a to x,add column a int,drop column a,drop check u;
+select * from identity_rename order by id;
+select column_name from information_schema.statistics
+    where table_schema=database() and table_name='identity_rename' and index_name='u';
+insert into identity_rename values (2,2,-1);
+insert into identity_rename values (3,2,1);
+select * from identity_rename order by id;
+
+create table identity_change(id int primary key,a int,v int,unique key u(a),constraint u check(v>0));
+insert into identity_change values (1,1,1);
+alter table identity_change change column a x int,add column a int,drop column a,drop constraint u;
+select * from identity_change order by id;
+select count(*) from information_schema.table_constraints
+    where table_schema=database() and table_name='identity_change' and constraint_type='CHECK';
+select column_name from information_schema.statistics
+    where table_schema=database() and table_name='identity_change' and index_name='u';
+insert into identity_change values (2,2,-1);
+alter table identity_change change column a x int,add column a int,drop column a,drop check u;
+select * from identity_change order by id;
+select column_name from information_schema.statistics
+    where table_schema=database() and table_name='identity_change' and index_name='u';
+insert into identity_change values (2,2,-1);
+insert into identity_change values (3,2,1);
+select * from identity_change order by id;
+
 drop database alter_check_constraints;
