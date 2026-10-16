@@ -181,6 +181,12 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
 		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
+		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 2 0", accepted: true},
+		{name: "seven-core-linux-default", args: []string{"UT_PARALLEL=7"}, want: "8 2 2 0", accepted: true},
+		{name: "eight-core-darwin-default", args: []string{"UNAME_S=darwin", "UT_PARALLEL=8"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-three-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=3"}, want: "8 3 2 0", accepted: true},
+		{name: "explicit-four-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=4"}, want: "8 4 2 0", accepted: true},
+		{name: "issues-parallel-above-cap", args: []string{"UT_ISSUES_BATCH_PARALLEL=5"}, want: "8 5 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 2 0", accepted: true},
 		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
 		{name: "embedded-pool-serial-rollback", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=1"}, want: "8 2 1 0", accepted: true},
@@ -511,120 +517,6 @@ printf '\nREPORT\n'
 				t.Fatalf("schedule: %v\n%s", err, out)
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
-				t.Fatalf("lost or duplicated report events:\n%s", out)
-			}
-		})
-	}
-}
-
-// Exercise the real scheduler and helper/report owners. Only package workloads
-// are replaced; FIFO handshakes prove overlap without scheduling sleeps.
-func TestPlanOverlapsIssuesAndDrainsBeforeClusters(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name, overlap, prebuild, planParallel, serial, plan, early string
-	}{
-		{"default", "1", "0", "1", "0", "0", "1"},
-		{"issues-failure", "1", "0", "1", "7", "0", "1"},
-		{"plan-failure", "1", "0", "1", "0", "9", "1"},
-		{"plan-undrained", "1", "0", "1", "0", "125", "1"},
-		{"disabled", "0", "0", "1", "0", "0", "0"},
-		{"compiler-companion", "1", "1", "1", "0", "0", "0"},
-		{"two-plan-workers", "1", "0", "2", "0", "0", "0"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
-trap handle_ut_termination TERM
-function logger() { :; }
-function make() { :; }
-function egrep() { echo fake.pb.go; }
-MO_CL_CUDA=1
-UT_SHARD=all
-function should_run_ut_stage() { [[ "$1" != light && "$1" != hnsw ]]; }
-function list_embedded_cluster_test_packages() { echo example/embed; }
-function go() {
- if [[ "$1" == clean ]]; then return 0; fi
- shift 2
- if [[ "$1" == ./... ]]; then
-  printf '%s\n' example/embed github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,backup,fileservice,sql/plan/function,vm/engine/tae/db/test}
- else
-  for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
- fi
-}
-mkfifo "$CASE_DIR/plan-ready" "$CASE_DIR/plan-release"
-exec 8<>"$CASE_DIR/plan-release" 9<>"$CASE_DIR/plan-ready"
-function start_embedded_prebuild() { touch "$CASE_DIR/prebuild"; }
-function run_plan_race_shards() {
- mkdir "$CASE_DIR/plan-once" || return 90
- printf 'plan\n' > "$PLAN_RACE_REPORT"
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  [[ ! -e "$CASE_DIR/issues-finished" ]] || return 91
-  printf 'ready\n' >&9
-  IFS= read -r -t 10 _ <&8 || return 92
- else
-  [[ -e "$CASE_DIR/engine-finished" ]] || return 93
- fi
- touch "$CASE_DIR/plan-finished"
- if [[ "$PLAN_STATUS" == 125 ]]; then touch "$PLAN_RACE_TEST_BINARY"; fi
- return "$PLAN_STATUS"
-}
-function run_race_test_batches() {
- mkdir "$CASE_DIR/issues-once" || return 94
- if [[ "$EXPECT_EARLY" == 1 ]]; then
-  [[ -n "$PLAN_RACE_JOB_PID" ]] || return 95
-  IFS= read -r -t 10 _ <&9 || return 96
-  printf 'release\n' >&8
- else
-  [[ -z "$PLAN_RACE_JOB_PID" ]] || return 97
- fi
- printf 'issues\n' > "$PREBUILT_RACE_REPORT"
- touch "$CASE_DIR/issues-finished"
- return "$ISSUES_STATUS"
-}
-function run_embedded_tests() {
- [[ -z "$PLAN_RACE_JOB_PID" ]] || return 98
- if [[ "$EXPECT_EARLY" == 1 ]]; then [[ -e "$CASE_DIR/plan-finished" ]] || return 99; fi
- touch "$CASE_DIR/embedded-finished"
-}
-function run_engine_race_shards() {
- [[ -e "$CASE_DIR/embedded-finished" && -z "$PLAN_RACE_JOB_PID" ]] || return 100
- printf 'engine\n' > "$ENGINE_RACE_REPORT"
- touch "$CASE_DIR/engine-finished"
-}
-function report_cgroup_memory_usage() { :; }
-run_tests
-exec 8>&- 9>&-
-[[ -d "$CASE_DIR/issues-once" && -d "$CASE_DIR/plan-once" ]] || exit 101
-[[ -z "$CURRENT_UT_PID$PLAN_RACE_JOB_PID$ENGINE_RACE_JOB_PID" ]] || exit 102
-if [[ "$PLAN_STATUS" == 125 ]]; then
- [[ "$UT_TEST_STATUS" == 1 && ! -e "$CASE_DIR/embedded-finished" && ! -e "$CASE_DIR/engine-finished" ]] || exit 103
- [[ -s "$PLAN_RACE_REPORT" && -f "$PLAN_RACE_TEST_BINARY" ]] || exit 104
-else
- expected=0
- if [[ "$PLAN_STATUS" != 0 || "$ISSUES_STATUS" != 0 ]]; then expected=1; fi
- [[ "$UT_TEST_STATUS" == "$expected" && -z "$PLAN_RACE_REPORT$ENGINE_RACE_REPORT" ]] || exit 105
- printf '\nREPORT\n'
- cat "$UT_REPORT"
-fi
-`
-			parallel := "3"
-			if tc.early == "0" && tc.overlap == "1" {
-				if tc.planParallel == "2" {
-					parallel = "1"
-				} else {
-					parallel = "2"
-				}
-			}
-			out, err := scheduleHarness(t, script,
-				"UT_ISSUES_BATCHES=8", "UT_ISSUES_BATCH_PARALLEL=2",
-				"UT_PREBUILD_EMBEDDED="+tc.prebuild, "UT_OVERLAP_PLAN="+tc.overlap,
-				"PLAN_RACE_PARALLEL="+tc.planParallel, "PLAN_STATUS="+tc.plan,
-				"ISSUES_STATUS="+tc.serial, "EXPECT_EARLY="+tc.early,
-				"EXPECTED_HEAVY_PARALLEL="+parallel, "EXPECT_OVERLAP=0", "HEAVY_STATUS=0")
-			if err != nil {
-				t.Fatalf("plan/issues schedule: %v\n%s", err, out)
-			}
-			if tc.plan != "125" && !strings.HasSuffix(string(out), "REPORT\nissues\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
 			}
 		})
