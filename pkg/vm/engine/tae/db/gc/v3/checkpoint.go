@@ -632,10 +632,6 @@ func (c *checkpointCleaner) GetScanWaterMark() *checkpoint.CheckpointEntry {
 	return c.watermarks.scanWaterMark.Load()
 }
 
-func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
-	return c.GetScanWaterMark()
-}
-
 func (c *checkpointCleaner) GetGCWaterMark() *checkpoint.CheckpointEntry {
 	return c.watermarks.gcWaterMark.Load()
 }
