@@ -25,7 +25,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64
 		want bool
-	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, true}, {600, true}, {601, false}} {
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, true}, {601, true}, {602, false}} {
 		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
 			// Identity, not the spelling or the surrounding expression shape,
 			// controls the floor. A subquery child exercises nested detection.
