@@ -1473,7 +1473,7 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 			search.IndexSearchScan.GetIndex() != nil &&
 			catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
 			search.IndexSearchScan.CandidateLimit == nil &&
-			search.Limit == nil && search.Offset == nil &&
+			search.Limit == nil && search.Offset == nil && search.RankOption == nil &&
 			len(search.FilterList) == 0 {
 			keyCol := sortNode.OrderBy[0].Expr.GetCol()
 			if len(search.BindingTags) == 1 && keyCol != nil &&
@@ -1498,7 +1498,7 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 				search.IndexSearchScan.GetIndex() != nil &&
 				catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
 				search.IndexSearchScan.CandidateLimit == nil &&
-				search.Limit == nil && search.Offset == nil &&
+				search.Limit == nil && search.Offset == nil && search.RankOption == nil &&
 				len(search.FilterList) == 0 {
 				if len(search.BindingTags) == 1 &&
 					fulltext2ProjectedScore(project, sortNode.OrderBy[0].Expr, search.BindingTags[0]) {
