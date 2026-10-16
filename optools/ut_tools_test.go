@@ -32,15 +32,31 @@ func writeMockGo(t *testing.T) string {
 	path := filepath.Join(dir, "go")
 	script := `#!/bin/bash
 if [[ "$1" == version ]]; then
+    if [[ "${2:-}" != -m ]]; then echo 'go version go1.27.1 linux/amd64'; exit 0; fi
     if [[ -n "${MOCK_GO_BUILD_INFO:-}" ]]; then printf "%s\n" "$MOCK_GO_BUILD_INFO"; exit 0; fi
     exit 1
+fi
+if [[ "$1" == env ]]; then
+    case "$2" in
+        GOBIN) printf '%s\n' "${MOCK_GOBIN-${0%/*}}" ;;
+        GOPATH) printf '%s\n' "${MOCK_GOPATH:-${0%/*}}" ;;
+    esac
+    exit 0
 fi
 count=0
 if [[ -f "${MOCK_GO_COUNTER}" ]]; then count=$(<"${MOCK_GO_COUNTER}"); fi
 count=$((count + 1))
 echo "${count}" > "${MOCK_GO_COUNTER}"
 echo "$*" >> "${MOCK_GO_ARGS}"
-if (( count >= MOCK_GO_SUCCEED_AFTER )); then exit 0; fi
+if (( count >= MOCK_GO_SUCCEED_AFTER )); then
+    if [[ -n "${MOCK_INSTALLED_TOOL:-}" ]]; then
+        mkdir -p "${MOCK_INSTALLED_TOOL%/*}"
+        cp "$MOCK_ANALYSIS_TEMPLATE" "$MOCK_INSTALLED_TOOL" || exit 1
+        chmod +x "$MOCK_INSTALLED_TOOL" || exit 1
+        echo 'install diagnostics' # The installer must not return this as a path.
+    fi
+    exit 0
+fi
 exit "${MOCK_GO_FAILURE_STATUS}"
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -155,6 +171,66 @@ func TestInstallGoUTAnalysisChecksCachedVersion(t *testing.T) {
 				}
 			} else {
 				assertAttempts(t, counter, arguments, 1)
+			}
+		})
+	}
+}
+
+func TestUTSummaryUsesInstalledAnalyzer(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		useGOPATH      bool
+		shadow         bool
+		analysisStatus int
+		testStatus     int
+	}{
+		{name: "GOBIN outside PATH with spaces"},
+		{name: "first GOPATH entry", useGOPATH: true},
+		{name: "stale PATH executable", shadow: true},
+		{name: "analyzer failure", analysisStatus: 42},
+		{name: "test failure", testStatus: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			binDir := filepath.Join(dir, "installed tools")
+			gobin, gopath := binDir, ""
+			if tc.useGOPATH {
+				gobin = ""
+				gopath = filepath.Join(dir, "first") + string(os.PathListSeparator) + filepath.Join(dir, "second")
+				binDir = filepath.Join(dir, "first", "bin")
+			}
+			installed := filepath.Join(binDir, "go-ut-analysis")
+			called := filepath.Join(dir, "called")
+			template := filepath.Join(dir, "analyzer")
+			if err := os.WriteFile(template, []byte("#!/bin/bash\nprintf '%s\\n' \"$0\" > \"$MOCK_ANALYSIS_CALLED\"\nexit \"$MOCK_ANALYSIS_STATUS\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mock, err := os.ReadFile(filepath.Join(writeMockGo(t), "go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := `export MOCK_GO_COUNTER="$CASE_DIR/counter" MOCK_GO_ARGS="$CASE_DIR/args"
+source ./run_ut.sh UT
+UT_TEST_STATUS=$MOCK_TEST_STATUS
+if [[ "$MOCK_SHADOW" == true ]]; then
+ printf '#!/bin/bash\nexit 99\n' > "$CASE_DIR/optools/go-ut-analysis"
+ chmod +x "$CASE_DIR/optools/go-ut-analysis"
+fi
+: > "$UT_REPORT"
+ut_summary
+`
+			out, err := scheduleHarnessWithMock(t, script, string(mock),
+				"MOCK_GOBIN="+gobin, "MOCK_GOPATH="+gopath, "MOCK_INSTALLED_TOOL="+installed,
+				"MOCK_ANALYSIS_TEMPLATE="+template, "MOCK_ANALYSIS_CALLED="+called,
+				"MOCK_ANALYSIS_STATUS="+strconv.Itoa(tc.analysisStatus), "MOCK_TEST_STATUS="+strconv.Itoa(tc.testStatus),
+				"MOCK_SHADOW="+strconv.FormatBool(tc.shadow),
+				"MOCK_GO_SUCCEED_AFTER=1", "MOCK_GO_FAILURE_STATUS=42", "MOCK_GO_BUILD_INFO=")
+			if failed := tc.analysisStatus != 0 || tc.testStatus != 0; (err != nil) != failed {
+				t.Fatalf("summary: %v\n%s", err, out)
+			}
+			actual, readErr := os.ReadFile(called)
+			if readErr != nil || strings.TrimSpace(string(actual)) != installed {
+				t.Fatalf("expected installed analyzer %q, got %q: %v\n%s", installed, actual, readErr, out)
 			}
 		})
 	}

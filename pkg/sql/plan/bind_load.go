@@ -72,6 +72,9 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+		return -1, nil, err
+	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
 	if err != nil {
 		return -1, nil, err

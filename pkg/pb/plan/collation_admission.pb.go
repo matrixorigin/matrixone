@@ -1477,7 +1477,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 	if p == nil {
 		return nil
 	}
-	if err := requireLegacySchema(p.DefaultCharset, p.CollationVersion, p.KeyFormat); err != nil {
+	if err := requireLegacyTable(p); err != nil {
 		return err
 	}
 	for _, item0 := range p.Cols {
@@ -1489,7 +1489,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 		return err
 	}
 	for _, item0 := range p.Indexes {
-		if err := v.walkIndexDef(item0); err != nil {
+		if err := requireLegacyTableIndex(p, item0); err != nil {
 			return err
 		}
 	}

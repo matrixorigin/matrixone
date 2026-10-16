@@ -14556,6 +14556,21 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 		require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked role must not reach ownership fallback")
 	})
 
+	for _, stmt := range []tree.Statement{&tree.ShowTables{DBName: "db"}, &tree.ShowColumns{Table: tree.NewUnresolvedObjectName("db", "t")}, &tree.ShowCreateTable{Name: tree.NewUnresolvedObjectName("db", "t")}} {
+		t.Run(fmt.Sprintf("revoked metadata %T", stmt), func(t *testing.T) {
+			ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(nil)
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(t.Context(), ses, stmt)
+			require.False(t, ok)
+			require.Error(t, err)
+			require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked active role cannot enter metadata fallback")
+		})
+	}
+
 	t.Run("privilege grant option", func(t *testing.T) {
 		stmt := &tree.GrantPrivilege{
 			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},

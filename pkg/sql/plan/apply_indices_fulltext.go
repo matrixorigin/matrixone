@@ -1431,8 +1431,8 @@ func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, 
 }
 
 // pushCoveredFulltext2ScoreLimitFromSort handles the bound SQL shape where the
-// explicit ORDER BY score LIMIT is above the covered projection's implicit
-// score sort. Only a direct column projection and that equivalent sort may
+// explicit ORDER BY score LIMIT is above the covered projection. Only a direct
+// column projection and, when present, an equivalent implicit score sort may
 // separate the outer sort from the search; joins and residual filters decline.
 func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
 	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
@@ -1499,26 +1499,35 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 		int(keyCol.ColPos) >= len(project.ProjectList) {
 		return
 	}
-	innerSort := builder.qry.Nodes[project.Children[0]]
-	if innerSort.NodeType != plan.Node_SORT || len(innerSort.Children) != 1 ||
-		len(innerSort.OrderBy) != 1 || len(innerSort.FilterList) != 0 ||
-		innerSort.Limit != nil || innerSort.Offset != nil || innerSort.RankOption != nil ||
-		!fulltext2ScoreDescending(innerSort.OrderBy[0]) {
-		return
+	// An explicit ORDER BY can overwrite the implicit relevance ordering.
+	var innerSort *plan.Node
+	search := builder.qry.Nodes[project.Children[0]]
+	if search.NodeType == plan.Node_SORT {
+		innerSort = search
+		if len(innerSort.Children) != 1 || len(innerSort.OrderBy) != 1 ||
+			len(innerSort.FilterList) != 0 || innerSort.Limit != nil ||
+			innerSort.Offset != nil || innerSort.RankOption != nil ||
+			!fulltext2ScoreDescending(innerSort.OrderBy[0]) {
+			return
+		}
+		search = builder.qry.Nodes[innerSort.Children[0]]
 	}
-	search := builder.qry.Nodes[innerSort.Children[0]]
 	spec := search.IndexSearchScan
 	if search.NodeType != plan.Node_INDEX_SEARCH_SCAN || spec == nil ||
 		!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) ||
 		len(search.BindingTags) != 1 || spec.CandidateLimit != nil ||
-		search.Limit != nil || search.Offset != nil || len(search.FilterList) != 0 {
+		search.Limit != nil || search.Offset != nil || search.RankOption != nil || len(search.FilterList) != 0 {
 		return
 	}
 	scoreTag := search.BindingTags[0]
-	innerKey := innerSort.OrderBy[0].Expr.GetCol()
+	if innerSort != nil {
+		innerKey := innerSort.OrderBy[0].Expr.GetCol()
+		if innerKey == nil || innerKey.RelPos != scoreTag || innerKey.ColPos != 1 {
+			return
+		}
+	}
 	projectScore := project.ProjectList[keyCol.ColPos].GetCol()
-	if innerKey == nil || innerKey.RelPos != scoreTag || innerKey.ColPos != 1 ||
-		projectScore == nil || projectScore.RelPos != scoreTag || projectScore.ColPos != 1 {
+	if projectScore == nil || projectScore.RelPos != scoreTag || projectScore.ColPos != 1 {
 		return
 	}
 	for _, expr := range project.ProjectList {
