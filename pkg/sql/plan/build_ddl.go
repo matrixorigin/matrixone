@@ -2693,10 +2693,15 @@ func buildCreateTable(
 		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
 		// metadata joins attribute the source table's expression to the target.
 		//
-		// Snapshot/account restore shares this planner branch but must keep the
-		// captured explicit identity: restoring `CONSTRAINT ck CHECK(...)` has
-		// to come back as `ck`, not as a freshly generated <dst>_chk_<n> name.
-		if cloneStmt == nil || !cloneStmt.IsRestore {
+		// Snapshot/account restore shares this planner branch, but the restore
+		// marker is carried by the background process rather than by the nested
+		// CLONE statement that is reparsed for the restore. Consult both markers
+		// so an internal restore keeps the captured explicit identity.
+		isRestore := cloneStmt != nil && cloneStmt.IsRestore
+		if !isRestore && ctx.GetProcess() != nil && ctx.GetProcess().GetSessionInfo() != nil {
+			isRestore = ctx.GetProcess().GetSessionInfo().IsRestore
+		}
+		if !isRestore {
 			renameCheckConstraintsForClone(tableDef)
 		}
 
@@ -2747,7 +2752,11 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			preserveChecksForCreateLike(p, tableDef)
+			// The skeleton contains the final names: ordinary LIKE/CLONE has
+			// regenerated names, while restore retains the source identities.
+			// Reattaching the pre-rewrite tableDef here would undo that choice
+			// for data-branch clones and recreate schema-wide name collisions.
+			preserveChecksForCreateLike(p, likeSkeletonDef)
 			return p, nil
 		}
 

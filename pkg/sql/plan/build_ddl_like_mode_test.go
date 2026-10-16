@@ -405,15 +405,18 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 // CLONE) regenerates <dst>_chk_<n>.
 func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		restore  bool
-		wantName string
+		name           string
+		restore        bool
+		sessionRestore bool
+		wantName       string
 	}{
 		{name: "like regenerates", wantName: "clone_t_chk_1"},
 		{name: "restore preserves", restore: true, wantName: "ck_positive"},
+		{name: "background restore preserves", sessionRestore: true, wantName: "ck_positive"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.GetProcess().GetSessionInfo().IsRestore = tc.sessionRestore
 			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
