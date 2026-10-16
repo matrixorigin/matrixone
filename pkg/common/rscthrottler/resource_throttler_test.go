@@ -101,6 +101,16 @@ func TestFullRefreshPreservesSharedBudgetOnLimitFailure(t *testing.T) {
 	}
 }
 
+func TestSharedMemoryAdmissionReleaseDoesNotTouchLegacyReservation(t *testing.T) {
+	legacy := &cgroupMemoryBudget{}
+	m := &memThrottler{
+		cgroupBudget: legacy,
+		memoryLedger: system.NewMemoryAdmissionBudget(system.MemoryDomainReservePolicy{}),
+	}
+	m.releaseCgroup(64)
+	require.Zero(t, legacy.reserved.Load())
+}
+
 func TestFullRefreshClearsConfirmedRemovedCgroupLimit(t *testing.T) {
 	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
 	t.Cleanup(func() {

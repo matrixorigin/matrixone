@@ -268,6 +268,7 @@ func NewService(
 
 	throttlerOptions := []rscthrottler.MemThrottlerOption{
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithSharedMemoryAdmission(),
 	}
 	if srv.cfg.Engine.MemoryReclamationMode.EnablesReclamation() {
 		throttlerOptions = append(throttlerOptions,

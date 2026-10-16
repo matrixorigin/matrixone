@@ -678,6 +678,7 @@ func TestReadCgroupMemoryDomainSelectsTightestLevel(t *testing.T) {
 	require.Equal(t, uint64(10<<30), snapshot.Limit)
 	require.Equal(t, uint64(2<<30), snapshot.Reclaimable)
 	require.Equal(t, uint64(128), snapshot.Kernel)
+	require.Equal(t, uint64(128), snapshot.NonGo)
 	require.Equal(t, MemoryDomainSourceCgroupV2, snapshot.Source)
 	require.Equal(t, uint64(3<<30), snapshot.HardHeadroom())
 	require.Equal(t, uint64(5<<30), snapshot.ReclaimableHeadroom())

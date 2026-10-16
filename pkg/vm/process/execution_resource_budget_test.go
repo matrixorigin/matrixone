@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -562,6 +563,27 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 || small.QueryCap != small.CNMemoryCap {
 		t.Fatalf("small-CN ceiling = %+v, err=%v", small, smallErr)
 	}
+}
+
+func TestResolveExecutionMemoryCeilingUsesMeasuredReservePolicy(t *testing.T) {
+	t.Setenv("MO_MEMORY_NON_GO_RESERVE_BYTES", "0")
+	t.Setenv("MO_MEMORY_RUNTIME_RESERVE_BYTES", "2")
+	t.Setenv("MO_MEMORY_RESERVE_PERCENT", "0")
+
+	ceiling, err := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
+		MemoryDomain: system.MemoryDomainSnapshot{
+			Limit:    100,
+			NonGo:    10,
+			Measured: true,
+		},
+	})
+	require.NoError(t, err)
+	// The observed non-Go high-water reserve is 2*10 plus the configured
+	// runtime margin. A measured domain must not fall back to the legacy 4GiB
+	// reserve or the legacy one-fifth formula.
+	require.Equal(t, uint64(22), ceiling.RequestedReserve)
+	require.Equal(t, uint64(2), ceiling.RuntimeReserve)
+	require.Equal(t, uint64(78), ceiling.CNMemoryCap)
 }
 
 func TestExecutionMemoryHeadroomSafety(t *testing.T) {

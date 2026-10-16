@@ -46,9 +46,14 @@ type MemoryDomainSnapshot struct {
 	Limit       uint64
 	Reclaimable uint64
 	Kernel      uint64
-	Source      MemoryDomainSource
-	Measured    bool
-	ObservedAt  time.Time
+	// NonGo is the measured portion of the domain which is not expected to be
+	// owned by Go/MPool allocations.  It includes kernel/socket/slab charges
+	// and dirty/shmem pages when the domain exposes those counters.  It is an
+	// input to the reserve policy, not an additional charge on top of Used.
+	NonGo      uint64
+	Source     MemoryDomainSource
+	Measured   bool
+	ObservedAt time.Time
 }
 
 func (s MemoryDomainSnapshot) IsCgroup() bool {
@@ -78,6 +83,127 @@ func (s MemoryDomainSnapshot) ReclaimableHeadroom() uint64 {
 		return 0
 	}
 	return s.Limit - used
+}
+
+// MemoryDomainReservePolicy converts observed non-Go charges into a reserve
+// which is removed from the physical admission budget.  The policy is kept in
+// this package so the execution gate and the write-path throttlers cannot
+// silently choose different reserve semantics.
+//
+// MinimumBytes and RuntimeBytes are deliberately small, data-independent
+// floors.  The normal reserve is driven by the observed high-water non-Go
+// charge.  A deployment can override the floors with
+// MO_MEMORY_NON_GO_RESERVE_BYTES and MO_MEMORY_RUNTIME_RESERVE_BYTES.
+type MemoryDomainReservePolicy struct {
+	MinimumBytes            uint64
+	RuntimeBytes            uint64
+	ObservedNonGoMultiplier uint64
+	// MinimumPercent is a domain-relative safety floor. It is intentionally
+	// lower than the old fixed 20% execution reserve; the measured non-Go high
+	// water is the primary input and this percentage covers counters the domain
+	// cannot expose.
+	MinimumPercent uint64
+}
+
+const (
+	defaultMemoryDomainReserveFloor    = uint64(256 << 20)
+	defaultMemoryDomainRuntimeFloor    = uint64(256 << 20)
+	defaultMemoryDomainNonGoMultiplier = uint64(2)
+	defaultMemoryDomainReservePercent  = uint64(5)
+)
+
+// DefaultMemoryDomainReservePolicy returns the process-wide policy. Environment
+// values are read when the policy is requested so benchmark processes can set
+// them without adding another service configuration field.
+func DefaultMemoryDomainReservePolicy() MemoryDomainReservePolicy {
+	policy := MemoryDomainReservePolicy{
+		MinimumBytes:            defaultMemoryDomainReserveFloor,
+		RuntimeBytes:            defaultMemoryDomainRuntimeFloor,
+		ObservedNonGoMultiplier: defaultMemoryDomainNonGoMultiplier,
+		MinimumPercent:          defaultMemoryDomainReservePercent,
+	}
+	if value, ok := memorySizeFromEnv("MO_MEMORY_NON_GO_RESERVE_BYTES"); ok {
+		policy.MinimumBytes = value
+	}
+	if value, ok := memorySizeFromEnv("MO_MEMORY_RUNTIME_RESERVE_BYTES"); ok {
+		policy.RuntimeBytes = value
+	}
+	if value, ok := memoryPercentFromEnv("MO_MEMORY_RESERVE_PERCENT"); ok {
+		policy.MinimumPercent = value
+	}
+	return policy
+}
+
+// Reserve returns the non-Go and runtime reserve required by one observation.
+// Saturating arithmetic keeps malformed or unusually large kernel counters
+// from wrapping into an unsafe small reserve.
+func (p MemoryDomainReservePolicy) Reserve(snapshot MemoryDomainSnapshot) uint64 {
+	reserve := p.MinimumBytes
+	if p.ObservedNonGoMultiplier == 0 {
+		p.ObservedNonGoMultiplier = 1
+	}
+	observed := snapshot.NonGo
+	if observed > ^uint64(0)/p.ObservedNonGoMultiplier {
+		observed = ^uint64(0)
+	} else {
+		observed *= p.ObservedNonGoMultiplier
+	}
+	if observed > reserve {
+		reserve = observed
+	}
+	if p.MinimumPercent > 0 {
+		percentReserve := snapshot.Limit / 100 * p.MinimumPercent
+		if snapshot.Limit%100 != 0 && (snapshot.Limit%100)*p.MinimumPercent > 0 {
+			percentReserve++
+		}
+		if percentReserve > reserve {
+			reserve = percentReserve
+		}
+	}
+	if p.RuntimeBytes > ^uint64(0)-reserve {
+		return ^uint64(0)
+	}
+	return reserve + p.RuntimeBytes
+}
+
+func memoryPercentFromEnv(name string) (uint64, bool) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return 0, false
+	}
+	percent, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || percent > 100 {
+		return 0, false
+	}
+	return percent, true
+}
+
+func memorySizeFromEnv(name string) (uint64, bool) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return 0, false
+	}
+	value = strings.ToUpper(value)
+	multiplier := uint64(1)
+	for _, suffix := range []struct {
+		name string
+		mul  uint64
+	}{
+		{"KIB", 1 << 10}, {"MIB", 1 << 20}, {"GIB", 1 << 30},
+		{"KB", 1 << 10}, {"MB", 1 << 20}, {"GB", 1 << 30},
+		{"B", 1},
+	} {
+		if strings.HasSuffix(value, suffix.name) {
+			value = strings.TrimSpace(strings.TrimSuffix(value, suffix.name))
+			multiplier = suffix.mul
+			break
+		}
+	}
+	bytes, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	if err != nil || bytes > ^uint64(0)/multiplier {
+		return 0, false
+	}
+	return bytes * multiplier, true
 }
 
 const memoryDomainRefreshInterval = 100 * time.Millisecond
@@ -148,10 +274,13 @@ func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
 	if mem.ActualFree >= mem.Free {
 		reclaimable = mem.ActualFree - mem.Free
 	}
+	kernel, nonGo := hostMemoryAccounting()
 	return MemoryDomainSnapshot{
 		Used:        mem.Used,
 		Limit:       mem.Total,
 		Reclaimable: reclaimable,
+		Kernel:      kernel,
+		NonGo:       nonGo,
 		Source:      MemoryDomainSourceHost,
 		Measured:    mem.Total > 0,
 		ObservedAt:  time.Now(),
@@ -264,8 +393,7 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 			return MemoryDomainSnapshot{}, false,
 				fmt.Errorf("read memory usage for %s", level.dir)
 		}
-		reclaimable, _ := reclaimableCgroupCache(filepath.Join(level.dir, level.statFile))
-		kernel := readCgroupKernelBytes(filepath.Join(level.dir, level.statFile))
+		reclaimable, kernel, nonGo := readCgroupAccounting(filepath.Join(level.dir, level.statFile))
 		headroom := uint64(0)
 		if usage < limit {
 			headroom = limit - usage
@@ -273,7 +401,7 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		if !found || headroom < selectedHeadroom {
 			selected = MemoryDomainSnapshot{
 				Used: usage, Limit: limit, Reclaimable: reclaimable,
-				Kernel: kernel, Source: level.source, Measured: true,
+				Kernel: kernel, NonGo: nonGo, Source: level.source, Measured: true,
 				ObservedAt: time.Now(),
 			}
 			selectedHeadroom = headroom
@@ -283,33 +411,103 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 	return selected, found, nil
 }
 
-func readCgroupKernelBytes(path string) uint64 {
+// readCgroupAccounting reads one memory.stat snapshot.  v1 exposes the
+// hierarchical counters with a total_ prefix; v2 exposes the local names.
+// Keeping all derived fields on the same read avoids mixing measurements from
+// different pressure points.
+func readCgroupAccounting(path string) (reclaimable, kernel, nonGo uint64) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		return 0, 0, 0
 	}
-	values := make(map[string]uint64)
+	stats := make(map[string]uint64)
+	v1 := false
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
 			continue
 		}
-		value, err := strconv.ParseUint(fields[1], 10, 64)
-		if err == nil {
-			values[fields[0]] = value
+		v1 = v1 || strings.HasPrefix(fields[0], "total_")
+		if value, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
+			stats[fields[0]] = value
 		}
 	}
-	if kernel, ok := values["kernel"]; ok {
-		return kernel
+
+	value := func(name string) uint64 {
+		if v1 {
+			switch name {
+			case "file":
+				name = "cache"
+			case "file_dirty":
+				name = "dirty"
+			case "file_writeback":
+				name = "writeback"
+			}
+			name = "total_" + name
+		}
+		return stats[name]
 	}
-	var total uint64
-	for _, key := range []string{
-		"kernel_stack", "pagetables", "percpu", "sock", "slab",
-		"total_kernel_stack", "total_pagetables", "total_percpu", "total_sock", "total_slab",
-	} {
-		if value, ok := values[key]; ok && value <= ^uint64(0)-total {
-			total += value
+	fileName := "file"
+	if v1 {
+		fileName = "cache"
+	}
+	file, shmem := value(fileName), value("shmem")
+	inactive, active := value("inactive_file"), value("active_file")
+	dirty, writeback := value("file_dirty"), value("file_writeback")
+	if shmem < file {
+		if active <= ^uint64(0)-inactive {
+			reclaimable = min(file-shmem, inactive+active)
+			if dirty < reclaimable {
+				reclaimable -= dirty
+			} else {
+				reclaimable = 0
+			}
+			if writeback < reclaimable {
+				reclaimable -= writeback
+			} else {
+				reclaimable = 0
+			}
 		}
 	}
-	return total
+
+	if v1 {
+		kernel = stats["total_kernel"]
+	} else {
+		kernel = stats["kernel"]
+	}
+	if kernel == 0 {
+		for _, name := range []string{
+			"kernel_stack", "pagetables", "percpu", "sock", "slab",
+			"total_kernel_stack", "total_pagetables", "total_percpu", "total_sock", "total_slab",
+		} {
+			if v1 && !strings.HasPrefix(name, "total_") {
+				continue
+			}
+			if !v1 && strings.HasPrefix(name, "total_") {
+				continue
+			}
+			part := stats[name]
+			if part <= ^uint64(0)-kernel {
+				kernel += part
+			}
+		}
+	}
+
+	// These counters are charged to the domain but are not clean cache credit.
+	// Include them in the reserve estimate so a high-water sample protects the
+	// cgroup before the kernel has to reclaim or write them back.
+	// kernel already includes slab when the aggregate counter is available, so
+	// do not add slab_unreclaimable a second time.
+	for _, name := range []string{"file_dirty", "file_writeback", "shmem", "unevictable"} {
+		part := value(name)
+		if part <= ^uint64(0)-nonGo {
+			nonGo += part
+		}
+	}
+	if kernel <= ^uint64(0)-nonGo {
+		nonGo += kernel
+	} else {
+		nonGo = ^uint64(0)
+	}
+	return reclaimable, kernel, nonGo
 }

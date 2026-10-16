@@ -213,6 +213,7 @@ func New(
 				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
 			)
 		}
+		throttlerOptions = append(throttlerOptions, rscthrottler.WithSharedMemoryAdmission())
 		e.config.memThrottler = rscthrottler.NewMemThrottler(
 			"Workspace",
 			5.0/100.0,

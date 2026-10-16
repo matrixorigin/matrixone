@@ -359,6 +359,22 @@ func (m *memThrottler) cgroupSnapshot() *cgroupMemorySample {
 // local CAS must roll back this claim before retrying. A nil budget is used by
 // isolated policy tests; NewMemThrottler always installs the process owner.
 func (m *memThrottler) claimCgroup(ask int64) (int64, bool) {
+	if ask < 0 {
+		return 0, false
+	}
+	if m.memoryLedger != nil {
+		// Explicit test/diagnostic callers that opt into the historical
+		// out-of-limit mode intentionally bypass the shared physical gate. The
+		// production paths never enable that option.
+		if m.options.allowOutOfMemoryAcquire {
+			return math.MaxInt64, true
+		}
+		available, ok := m.memoryLedger.TryReserve(uint64(ask))
+		if available > math.MaxInt64 {
+			available = math.MaxInt64
+		}
+		return int64(available), ok
+	}
 	if m.cgroupBudget == nil {
 		return math.MaxInt64, true
 	}
@@ -379,8 +395,17 @@ func (m *memThrottler) claimCgroup(ask int64) (int64, bool) {
 }
 
 func (m *memThrottler) releaseCgroup(n int64) {
-	if m.cgroupBudget != nil {
+	if n <= 0 {
+		return
+	}
+	// A shared ledger replaces the legacy processCgroupBudget reservation for
+	// this owner. Decrementing both ledgers would create a negative legacy
+	// reservation because claimCgroup only increments the shared ledger.
+	if m.cgroupBudget != nil && m.memoryLedger == nil {
 		m.cgroupBudget.reserved.Add(-n)
+	}
+	if m.memoryLedger != nil && !m.options.allowOutOfMemoryAcquire {
+		m.memoryLedger.Release(uint64(n))
 	}
 }
 
@@ -395,6 +420,11 @@ type memThrottler struct {
 	// than RSS reported.
 	cgroupSample atomic.Pointer[cgroupMemorySample]
 	cgroupBudget *cgroupMemoryBudget
+	// memoryLedger is installed only for production throttlers. Keeping the
+	// option explicit leaves unit-test throttlers independent from the process
+	// resident memory of the test binary while making all production write-path
+	// owners share the same physical ledger as execution admission.
+	memoryLedger *system.MemoryAdmissionBudget
 	// rssReservedBase records the reserved bytes that were already reflected in
 	// the latest rss sample. S3 admission can then add only the delta above this
 	// base, avoiding the rss+reserved double-count that caused #24881 while
@@ -452,8 +482,19 @@ func (m *memThrottler) String() string {
 		usage = sample.usage
 		source = sample.source
 	}
+	sharedReserved := uint64(0)
+	sharedReserve := uint64(0)
+	sharedAvailable := uint64(0)
+	sharedMeasured := false
+	if m.memoryLedger != nil {
+		shared := m.memoryLedger.Snapshot()
+		sharedReserve = shared.Reserve
+		sharedReserved = shared.Reserved
+		sharedAvailable = shared.Available
+		sharedMeasured = shared.Measured
+	}
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
@@ -463,6 +504,10 @@ func (m *memThrottler) String() string {
 		common.HumanReadableBytes(int(usage)),
 		common.HumanReadableBytes(int(m.rss.Load())),
 		common.HumanReadableBytes(int(m.reserved.Load())),
+		common.HumanReadableBytes(int(sharedReserve)),
+		common.HumanReadableBytes(int(sharedReserved)),
+		common.HumanReadableBytes(int(sharedAvailable)),
+		sharedMeasured,
 		m.pinnedRate(),
 		m.limitRate,
 		m.options.constLimit > 0,
@@ -949,7 +994,15 @@ func (m *memThrottler) capCgroupAvailable(available, localReserved int64) int64 
 	if m.cgroupBudget != nil {
 		localReserved = m.cgroupBudget.reserved.Load()
 	}
-	return m.cgroupSnapshot().capAdmissionAvailable(available, localReserved)
+	available = m.cgroupSnapshot().capAdmissionAvailable(available, localReserved)
+	if m.memoryLedger != nil && !m.options.allowOutOfMemoryAcquire {
+		if sharedAvailable, measured := m.memoryLedger.Available(); measured {
+			if sharedAvailable < uint64(max(0, available)) {
+				available = int64(sharedAvailable)
+			}
+		}
+	}
+	return available
 }
 
 func (m *memThrottler) PrintUsage() {
@@ -1071,6 +1124,15 @@ type MemThrottlerOption func(throttler *memThrottler)
 func WithAllowOutOfLimitAcquire() MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.allowOutOfMemoryAcquire = true
+	}
+}
+
+// WithSharedMemoryAdmission makes the throttler participate in the process
+// physical-memory ledger shared with execution admission. It is intentionally
+// opt-in so isolated unit-test throttlers do not consume the production ledger.
+func WithSharedMemoryAdmission() MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.memoryLedger = system.DefaultMemoryAdmissionBudget()
 	}
 }
 
