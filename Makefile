@@ -598,20 +598,26 @@ UT_SHARD ?= all
 UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded race binaries with one compiler while the exclusive issues
+# Optional: build embedded race binaries with one compiler while the issues
 # fixture runs, then execute those exact binaries through the bounded embedded
 # pool. High-footprint packages remain exclusive; build or admission failures
 # fall back before any prebuilt binary executes.
-UT_PREBUILD_EMBEDDED ?= 1
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
-# Split issues roots into four batches under one shared package deadline.
-# Pools remain opt-in until matched full-wave CPU and memory evidence passes.
-# Each admitted process owns a complete cluster. Serial mode keeps contiguous
-# batches; explicit two-process mode uses round-robin roots.
-UT_ISSUES_BATCHES ?= 4
-UT_ISSUES_BATCH_PARALLEL ?= 1
-UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
+# Split issues roots under one shared package deadline.
+# Shorter process lifetimes bound catalog and race-detector retention. The
+# eight-batch pool shares four Go execution cores across two complete clusters.
+# One/four issues batches retain the serial rollback.
+UT_ISSUES_BATCHES ?= 8
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),2,1)
+# Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
+UT_EMBEDDED_BATCHES ?= 4
+# A compiler overlapping two clusters increases the memory peak. The new
+# issues default prepares embedded packages on demand instead. Preserve
+# the prebuild policy for rollback modes; overlapping compilation remains an
+# explicit opt-in for the two-cluster issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -623,6 +629,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_EMBEDDED_BATCHES
 export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,

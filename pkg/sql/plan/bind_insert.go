@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1596,6 +1597,26 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			if err != nil {
 				return 0, 0, 0, err
 			}
+			// Versioned native-Unicode unique indexes store the physical
+			// collation key in their hidden table.  ODKU's target-arbitration
+			// probe is a separate path from the ordinary dedup projection, so
+			// it must apply the same canonicalization before joining the hidden
+			// index table.  Keep the cast explicit: optimizer projection
+			// pruning may otherwise leave the source expression with a stale
+			// collation/type descriptor.
+			if idxDef.KeyFormat == collation.KeyFormatV1 {
+				partColPos := tableDef.Name2ColIndex[partName]
+				incomingValExpr, err = appendCastBeforeExpr(
+					builder.GetContext(), incomingValExpr, tableDef.Cols[partColPos].Typ)
+				if err != nil {
+					return 0, 0, 0, err
+				}
+				incomingValExpr, err = bindIndexKeyExpr(
+					builder.GetContext(), idxDef, []*plan.Expr{incomingValExpr})
+				if err != nil {
+					return 0, 0, 0, err
+				}
+			}
 		} else {
 			incomingValPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
 			incomingValExpr = &plan.Expr{
@@ -1912,8 +1933,8 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 							return 0, nil, err
 						}
 					}
-					if indexTableStoresSerializedKey(matchedIndex) {
-						lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+					if indexTableStoresSerializedKey(matchedIndex) || matchedIndex.KeyFormat == collation.KeyFormatV1 {
+						lockExpr, err = bindIndexKeyExpr(builder.GetContext(), matchedIndex, keyParts)
 						if err != nil {
 							return 0, nil, err
 						}
@@ -3310,7 +3331,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
-		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
+		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 && idxDef.KeyFormat != collation.KeyFormatV1 {
 			var ok bool
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+partName]
@@ -3453,6 +3474,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
+			if idxDef.KeyFormat == collation.KeyFormatV1 {
+				partTyp := tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]].Typ
+				idxIndexColExpr, err = appendCastBeforeExpr(builder.GetContext(), idxIndexColExpr, partTyp)
+				if err != nil {
+					return 0, err
+				}
+			}
+			idxIndexColExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{idxIndexColExpr})
+			if err != nil {
+				return 0, err
+			}
 		} else {
 			args := make([]*plan.Expr, argsLen)
 			for k := range argsLen {
@@ -3460,9 +3492,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				if idxDef.KeyFormat == collation.KeyFormatV1 {
+					partTyp := tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]].Typ
+					args[k], err = appendCastBeforeExpr(builder.GetContext(), args[k], partTyp)
+					if err != nil {
+						return 0, err
+					}
+				}
 			}
 
-			idxIndexColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			idxIndexColExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+			if err != nil {
+				return 0, err
+			}
 		}
 		appendedUniqueProjs[idxIdxColName] = idxIndexColExpr
 	}
@@ -4593,6 +4635,16 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 			if err != nil {
 				return err
 			}
+			if idxDef.KeyFormat == collation.KeyFormatV1 {
+				lockExpr, err = appendCastBeforeExpr(builder.GetContext(), lockExpr, tableDef.Cols[tableDef.Name2ColIndex[partName]].Typ)
+				if err != nil {
+					return err
+				}
+			}
+			lockExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{lockExpr})
+			if err != nil {
+				return err
+			}
 		} else {
 			args := make([]*plan.Expr, len(idxDef.Parts))
 			for k := range idxDef.Parts {
@@ -4605,8 +4657,17 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 				if err != nil {
 					return err
 				}
+				if idxDef.KeyFormat == collation.KeyFormatV1 {
+					args[k], err = appendCastBeforeExpr(builder.GetContext(), args[k], tableDef.Cols[tableDef.Name2ColIndex[partName]].Typ)
+					if err != nil {
+						return err
+					}
+				}
 			}
-			lockExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			lockExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+			if err != nil {
+				return err
+			}
 		}
 
 		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
@@ -4634,7 +4695,7 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 		return nil, false, err
 	}
 	return prefixLengths, idxDef.Unique && !skip &&
-		(len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
+		(idxDef.KeyFormat == collation.KeyFormatV1 || len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
 }
 
 // isOnDupIncomingColumn reports whether an ON DUPLICATE KEY UPDATE expression

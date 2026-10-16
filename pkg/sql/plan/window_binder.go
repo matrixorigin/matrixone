@@ -961,11 +961,11 @@ func bindWindowSpec(
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING.")
 		}
 		if ws.Frame.End.Type == tree.Preceding || ws.Frame.End.Type == tree.CurrentRow {
-			return nil, newWindowFrameIllegalError(b.GetContext())
+			return nil, newWindowFrameOrderError(b.GetContext())
 		}
 	case tree.CurrentRow:
 		if ws.Frame.End.Type == tree.Preceding {
-			return nil, newWindowFrameIllegalError(b.GetContext())
+			return nil, newWindowFrameOrderError(b.GetContext())
 		}
 	}
 
@@ -1003,8 +1003,20 @@ func bindWindowSpec(
 	case tree.Groups:
 		return nil, moerr.NewNYI(b.GetContext(), "GROUPS in WINDOW FUNCTION condition")
 	}
-	if isPreparedWindowIntervalBound(ws.Frame.Start.Expr) || isPreparedWindowIntervalBound(ws.Frame.End.Expr) {
-		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in interval window frames")
+	for _, bound := range []*tree.FrameBound{ws.Frame.Start, ws.Frame.End} {
+		if isPreparedWindowIntervalBound(bound.Expr) && !isDirectPreparedWindowIntervalBound(bound.Expr) {
+			return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in interval window frames")
+		}
+		if interval, ok := bound.Expr.(*tree.FuncExpr); ok && len(interval.Exprs) == 2 {
+			if _, isUnit := interval.Exprs[1].(*tree.TimeUnitExpr); isUnit {
+				if ws.Frame.Type != tree.Range {
+					return nil, moerr.NewParseError(b.GetContext(), "INTERVAL can only be used with RANGE frames")
+				}
+				if typ == nil || !(types.Type{Oid: types.T(typ.Id)}).IsTemporal() {
+					return nil, moerr.NewParseError(b.GetContext(), "RANGE INTERVAL frame requires a temporal ORDER BY expression")
+				}
+			}
+		}
 	}
 	if ws.Frame.Type == tree.Range &&
 		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) &&
@@ -1013,7 +1025,7 @@ func bindWindowSpec(
 	}
 	var err error
 	if ws.Frame.Start.Expr != nil {
-		if isWindowFrameParam(ws.Frame.Start.Expr) {
+		if isWindowFrameParam(ws.Frame.Start.Expr) || isDirectPreparedWindowIntervalBound(ws.Frame.Start.Expr) {
 			w.Frame.Start.Val, err = b.bindPreparedWindowFrameBound(ws.Frame.Start.Expr, typ)
 		} else {
 			w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
@@ -1026,7 +1038,7 @@ func bindWindowSpec(
 		}
 	}
 	if ws.Frame.End.Expr != nil {
-		if isWindowFrameParam(ws.Frame.End.Expr) {
+		if isWindowFrameParam(ws.Frame.End.Expr) || isDirectPreparedWindowIntervalBound(ws.Frame.End.Expr) {
 			w.Frame.End.Val, err = b.bindPreparedWindowFrameBound(ws.Frame.End.Expr, typ)
 		} else {
 			w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
@@ -1125,6 +1137,15 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 
 func isWindowFrameParam(expr tree.Expr) bool {
 	_, ok := expr.(*tree.ParamExpr)
+	return ok
+}
+
+func isDirectPreparedWindowIntervalBound(expr tree.Expr) bool {
+	interval, ok := expr.(*tree.FuncExpr)
+	if !ok || len(interval.Exprs) != 2 || !isWindowFrameParam(interval.Exprs[0]) {
+		return false
+	}
+	_, ok = interval.Exprs[1].(*tree.TimeUnitExpr)
 	return ok
 }
 
@@ -1243,6 +1264,11 @@ func (b *baseBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *plan.Type
 	if err != nil {
 		return nil, err
 	}
+	if isDirectPreparedWindowIntervalBound(expr) {
+		// Retain the original unit and scalar source for per-execution
+		// normalization. A temporal cast here would erase the offset's domain.
+		return bound, nil
+	}
 	return appendCastBeforeExpr(b.GetContext(), bound, *typ)
 }
 
@@ -1333,15 +1359,20 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return nil, err
 	}
 
-	if e1.Typ.Id == int32(types.T_varchar) || e1.Typ.Id == int32(types.T_char) {
-		s := e1.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
+	if e1.GetLit() != nil && e1.GetLit().Isnull {
+		return nil, newWindowFrameIllegalError(bindCtx)
+	}
+	if types.T(e1.Typ.Id).IsMySQLString() && e1.GetLit() != nil {
+		value, unit, null, err := types.NormalizeWindowInterval(e1.GetLit().GetSval(), intervalType, false)
 		if err != nil {
-			returnNum = math.MaxInt64
-			returnType = intervalType
+			return nil, err
 		}
-
-		return setWindowIntervalValue(bindCtx, e, returnNum, returnType)
+		result, err := setWindowIntervalValue(bindCtx, e, value, unit)
+		if err == nil && null {
+			result.GetList().List[0].GetLit().Isnull = true
+			result.GetList().List[0].Typ.NotNullable = false
+		}
+		return result, err
 	}
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
@@ -1426,7 +1457,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 
 	var finalValue int64
 	if c.Isnull {
-		finalValue = math.MaxInt64
+		return nil, newWindowFrameIllegalError(bindCtx)
 	} else if ival, ok := c.Value.(*plan.Literal_I64Val); ok {
 		finalValue = ival.I64Val
 	} else {
@@ -1452,6 +1483,10 @@ func setWindowIntervalValue(
 	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
+}
+
+func newWindowFrameOrderError(ctx context.Context) error {
+	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start cannot be after frame end.")
 }
 
 func newWindowFrameIllegalError(ctx context.Context) error {

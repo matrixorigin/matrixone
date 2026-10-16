@@ -50,6 +50,8 @@ def provenance():
             "gdb": "test",
         },
         "config": {
+            "gomaxprocs": 4,
+            "native_host_block_bytes": 65536,
             "gpu_memory_bytes": 6 << 30,
             "native_host_memory_bytes": 16 << 30,
             "input_window_bytes": 64 << 20,
@@ -147,6 +149,29 @@ class CampaignV2Test(unittest.TestCase):
         with self.assertRaises(campaign.CampaignError):
             campaign.build_campaign(value)
 
+    def test_execution_profile_requires_explicit_bounded_settings(self):
+        for budget, block in ((4, 1048576), (16, 65536), ((1 << 31) - 1, 65536)):
+            value = provenance()
+            value["config"].update(gomaxprocs=budget, native_host_block_bytes=block)
+            frozen = campaign.build_campaign(value)["provenance"]["config"]
+            self.assertEqual(frozen["gomaxprocs"], budget)
+            self.assertEqual(frozen["native_host_block_bytes"], block)
+        for key, values in (
+            ("gomaxprocs", (None, True, 0, -1, "16", 16.0, 1 << 31, 10**100)),
+            ("native_host_block_bytes", (None, True, 0, 32768, 65536.0)),
+        ):
+            for setting in values:
+                value = provenance()
+                value["config"][key] = setting
+                with self.subTest(key=key, setting=setting), self.assertRaises(
+                    campaign.CampaignError
+                ):
+                    campaign.build_campaign(value)
+            value = provenance()
+            del value["config"][key]
+            with self.subTest(missing=key), self.assertRaises(campaign.CampaignError):
+                campaign.build_campaign(value)
+
     def test_schedule_counts_and_sampling_separation(self):
         timing = campaign.build_campaign(provenance())
         resources = campaign.build_campaign(provenance(), resource=True)
@@ -158,6 +183,43 @@ class CampaignV2Test(unittest.TestCase):
             {"mo-native", "embedded-mo"}, {x["route"] for x in timing["schedule"]}
         )
         self.assertEqual((0, 2, 1, 3), campaign.ORDER_KEYS[2])
+
+    def test_historical_profile_cannot_launch_an_executor(self):
+        manifest = campaign.build_campaign(provenance())
+        for key in ("gomaxprocs", "native_host_block_bytes"):
+            del manifest["provenance"]["config"][key]
+        with self.assertRaises(campaign.CampaignError):
+            campaign.build_campaign(manifest["provenance"])
+        calls = []
+
+        def executor(spec):
+            calls.append(spec)
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            with self.assertRaises(campaign.CampaignError):
+                campaign.execute_campaign(manifest, executor, campaign.Scratch(root))
+            self.assertEqual([], calls, "historical verification cannot admit execution")
+            self.assertEqual([], list(root.iterdir()))
+
+    def test_archive_verification_rejects_partial_or_invalid_profiles(self):
+        for key, values in (
+            ("gomaxprocs", (None, True, 0, 1 << 31)),
+            ("native_host_block_bytes", (None, True, 32768, 65536.0)),
+        ):
+            for setting in values:
+                manifest = campaign.build_campaign(provenance())
+                manifest["provenance"]["config"][key] = setting
+                with self.subTest(key=key, setting=setting), self.assertRaises(
+                    campaign.CampaignError
+                ):
+                    campaign.summarize(manifest, [])
+            manifest = campaign.build_campaign(provenance())
+            del manifest["provenance"]["config"][key]
+            with self.subTest(missing=key), self.assertRaises(campaign.CampaignError):
+                campaign.summarize(manifest, [])
 
     def test_full_value_duplicate_and_empty_comparison(self):
         for a, b, keys, ok in (
