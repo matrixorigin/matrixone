@@ -237,6 +237,7 @@ func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx
 
 // vectorValueToParquet converts a vector value to a parquet-compatible Go value
 func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (any, error) {
+	// typeswitch:partial parquet export writes vecf32/vecf64; other vector types fail as unsupported
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil
@@ -261,6 +262,9 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return f, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:

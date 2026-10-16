@@ -21,7 +21,7 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 // 动态宽度不能充当某个已知固定宽度，以免结果元数据承诺不存在的约束。
 func conditionalVectorType(inputs []types.Type) (target types.Type, hasVector, ok bool) {
 	for _, input := range inputs {
-		if !input.Oid.IsArrayRelate() {
+		if !input.Oid.IsArray() {
 			continue
 		}
 		if !hasVector {
@@ -42,7 +42,7 @@ func conditionalVectorType(inputs []types.Type) (target types.Type, hasVector, o
 	}
 	if hasVector {
 		for _, input := range inputs {
-			if !input.Oid.IsArrayRelate() && input.Oid != types.T_any && !input.Oid.IsMySQLString() {
+			if !input.Oid.IsArray() && input.Oid != types.T_any && !input.Oid.IsMySQLString() {
 				return target, true, false
 			}
 		}
@@ -53,4 +53,21 @@ func conditionalVectorType(inputs []types.Type) (target types.Type, hasVector, o
 func coalesceVectorReturnType(parameters []types.Type) types.Type {
 	target, _, _ := conditionalVectorType(parameters)
 	return target
+}
+
+// sameLowPrecisionFloatType returns the bf16/float16/float8/float4 type shared by every
+// branch; untyped NULL branches take that type.
+func sameLowPrecisionFloatType(inputs []types.Type) (types.Type, bool) {
+	var target types.Type
+	found := false
+	for _, input := range inputs {
+		if input.Oid == types.T_any {
+			continue
+		}
+		if !input.Oid.IsLowPrecisionFloat() || (found && input.Oid != target.Oid) {
+			return types.Type{}, false
+		}
+		target, found = input, true
+	}
+	return target, found
 }

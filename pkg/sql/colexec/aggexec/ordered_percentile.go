@@ -163,7 +163,7 @@ func PercentileDiscReturnType(args []types.Type) types.Type {
 // returns one of its input values and therefore does not require numeric
 // interpolation.
 func PercentileDiscSupportedType(typ types.T) bool {
-	if typ == types.T_json || typ.IsArrayRelate() {
+	if typ == types.T_json || typ.IsArray() {
 		return false
 	}
 	return mosort.IsSupportedType(typ)

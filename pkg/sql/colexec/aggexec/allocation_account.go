@@ -160,6 +160,15 @@ func (a *AllocationAccount) newArgumentBuffer(
 	)
 }
 
+// reserveCapacity admits n bytes allocated outside the MPool (native GPU host staging)
+// before they are allocated; a nil account admits without a reservation.
+func (a *AllocationAccount) reserveCapacity(n uint64) (*mpool.CapacityReservation, error) {
+	if a == nil {
+		return nil, nil
+	}
+	return a.account.ReserveCapacityWithClass(n, a.capacityClass, a.owner, a.sites.ArgumentArena)
+}
+
 func makeAccountedScratch[T any](
 	a *AllocationAccount, mp *mpool.MPool, length int,
 ) ([]T, error) {

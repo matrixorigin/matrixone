@@ -388,8 +388,12 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
+// LowPrecisionFloatContracts requires LowPrecisionFloatProtocolVersion
+// (pkg/sql/plan): older services cannot decode bf16/float16/float8/float4/
+// vecf8/vecf4 values or execute VECTOR_MATMUL, VECBLOCK_JSON or VECBLOCK_BINARY.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
+	LowPrecisionFloatContracts    bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
@@ -434,7 +438,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.LowPrecisionFloatContracts || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -906,8 +910,11 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
-	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+	err = walkOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if IsLowPrecisionFloatContractType(current.Typ.Id) {
+				features.LowPrecisionFloatContracts = true
+			}
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
 				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
@@ -928,6 +935,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
+				}
+				if isLowPrecisionFloatContractFunction(fn.Func.Obj) {
+					features.LowPrecisionFloatContracts = true
 				}
 				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
 				// storage domains are 20..34; BIT uses the uint64 domain.
@@ -1151,6 +1161,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(typeID int32) {
+		// Schema carriers such as TableDef columns and aggregate result types.
+		if IsLowPrecisionFloatContractType(typeID) {
+			features.LowPrecisionFloatContracts = true
+		}
 	})
 	return
 }
@@ -1327,16 +1342,42 @@ func isNumericFormatFunction(function *Function) (bool, error) {
 	return isPlanNumericType(function.Args[0].Typ.Id), nil
 }
 
+// LowPrecisionFloatContract recognizes the type IDs and function identities
+// (ObjectRef.Obj) that set LowPrecisionFloatContracts. pkg/sql/plan installs it
+// from container/types and the function registry, which import this package.
+type LowPrecisionFloatContract struct {
+	IsType     func(typeID int32) bool
+	IsFunction func(obj int64) bool
+}
+
+var lowPrecisionFloatContract LowPrecisionFloatContract
+
+// SetLowPrecisionFloatContract installs the contract; call it from init only.
+func SetLowPrecisionFloatContract(contract LowPrecisionFloatContract) {
+	lowPrecisionFloatContract = contract
+}
+
+// IsLowPrecisionFloatContractType reports the type IDs of the installed contract.
+func IsLowPrecisionFloatContractType(id int32) bool {
+	return lowPrecisionFloatContract.IsType != nil && lowPrecisionFloatContract.IsType(id)
+}
+
+func isLowPrecisionFloatContractFunction(obj int64) bool {
+	return lowPrecisionFloatContract.IsFunction != nil && lowPrecisionFloatContract.IsFunction(obj)
+}
+
 // isPlanNumericType mirrors container/types.Type.IsNumeric without importing
 // that package (container/types itself depends on pb/plan). The IDs are part
 // of the plan wire contract and include BIT, integer, floating-point and
 // decimal families.
+
 func isPlanNumericType(id int32) bool {
 	switch id {
 	case 11, // BIT
 		20, 21, 22, 23, // signed integers
 		25, 26, 27, 28, // unsigned integers
 		30, 31, // floating point
+		73, 74, 75, 76, // bf16, float16, float8, float4
 		32, 33, 34: // decimals
 		return true
 	default:
@@ -1631,6 +1672,12 @@ func validateStringLiteralFormsInOwner(owner any) error {
 }
 
 func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkOwner(owner, visitor, nil)
+}
+
+// walkOwner calls visitor for each expression root and, when typeVisitor is
+// set, typeVisitor for the Id of each Type value outside expression roots.
+func walkOwner(owner any, visitor func(*Expr) error, typeVisitor func(int32)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1659,6 +1706,12 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		}
 		switch value.Kind() {
 		case reflect.Struct:
+			if value.Type() == planTypeReflectType {
+				if typeVisitor != nil {
+					typeVisitor(int32(value.Field(planTypeIDField).Int()))
+				}
+				return nil
+			}
 			for field, fieldCount := 0, value.NumField(); field < fieldCount; field++ {
 				child := value.Field(field)
 				// Only exported containers can hold expression roots. Checking
@@ -1693,6 +1746,13 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 	}
 	return walk(reflect.ValueOf(owner))
 }
+
+var planTypeReflectType = reflect.TypeOf(Type{})
+
+var planTypeIDField = func() int {
+	field, _ := planTypeReflectType.FieldByName("Id")
+	return field.Index[0]
+}()
 
 // Scalar payloads cannot contain an expression root, irrespective of their
 // size. Interfaces and every container kind remain open to new owner shapes.

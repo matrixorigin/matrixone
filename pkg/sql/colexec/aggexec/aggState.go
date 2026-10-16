@@ -3560,7 +3560,7 @@ func distinctArgumentRowsEqual(
 		return distinctFloat64KeyBits(values[left], legacy) ==
 			distinctFloat64KeyBits(values[right], legacy)
 	case types.T_json, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return keycodec.CanonicalValuesEqual(
 			typ, vec.GetRawBytesAt(left), vec.GetRawBytesAt(right))
 	default:

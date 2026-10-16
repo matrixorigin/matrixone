@@ -144,8 +144,9 @@ func TestCheckVectorPrimaryKeyPartTypes(t *testing.T) {
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 	} {
-		require.True(t, id.IsArrayRelate(), "%s should be array-related", id)
+		require.True(t, id.IsArray(), "%s should be a vector type", id)
 		err := checkPrimaryKeyPartType(context.Background(), plan.Type{Id: int32(id)}, "v")
 		require.Error(t, err, "type %s must be rejected in primary key", id)
 		require.Contains(t, err.Error(), "VECTOR column 'v' cannot be in primary key")
@@ -173,4 +174,80 @@ func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
 	err = checkIndexedColumnTypeChange(context.Background(), tableDef, pkOldCol, pkNewCol)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'id' cannot be in primary key")
+}
+
+// TestLowPrecisionFloatKeyParts checks that bf16, float16, float8 and float4 columns are
+// rejected as primary key, unique key, index and cluster by parts, and accepted as plain
+// columns.
+func TestLowPrecisionFloatKeyParts(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		typ := plan.Type{Id: int32(id)}
+		err := checkPrimaryKeyPartType(ctx, typ, "k")
+		require.ErrorContains(t, err, id.String()+" column 'k' cannot be in primary key")
+		err = checkUniqueKeyPartType(ctx, typ, "k")
+		require.ErrorContains(t, err, id.String()+" column 'k' cannot be in unique index")
+		col := &ColDef{Typ: typ}
+		key := &tree.KeyPart{ColName: tree.NewUnresolvedColName("k")}
+		for kind, want := range map[string]string{
+			"primary":   "cannot be in primary key",
+			"unique":    "cannot be in unique index",
+			"secondary": "cannot be in index",
+		} {
+			err = checkIndexColumnSupportability(ctx, col, key, kind)
+			require.ErrorContains(t, err, id.String()+" column 'k' "+want)
+		}
+		require.ErrorContains(t, lowPrecisionKeyError(ctx, int32(id), "k", "cluster"), "cannot be a cluster by key")
+	}
+	for _, id := range []types.T{types.T_float32, types.T_float64, types.T_int32} {
+		require.NoError(t, lowPrecisionKeyError(ctx, int32(id), "k", "primary"))
+		require.NoError(t, checkPrimaryKeyPartType(ctx, plan.Type{Id: int32(id)}, "k"))
+	}
+
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, typ := range []string{"bf16", "float16", "float8", "float4"} {
+		for _, sql := range []string{
+			"create table lp (k " + typ + " primary key, v int)",
+			"create table lp (id int primary key, k " + typ + " unique key)",
+			"create table lp (k " + typ + ", j int, primary key (k, j))",
+			"create table lp (id int primary key, k " + typ + ", unique key uk (k))",
+			"create table lp (id int primary key, k " + typ + ", key ik (k))",
+			"create table lp (id int, k " + typ + ") cluster by (k)",
+			"create table lp (id int, k " + typ + ") cluster by (id, k)",
+		} {
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "cannot be", sql)
+		}
+		_, err := runOneStmt(mock, t, "create table lp (id int primary key, k "+typ+")")
+		require.NoError(t, err, typ)
+	}
+	// vecf8/vecf4 cells equal by decoded value can differ in bytes: no cluster by key
+	for _, typ := range []string{"vecf8(4)", "vecf4(4)"} {
+		for _, sql := range []string{
+			"create table lp (id int, v " + typ + ") cluster by (v)",
+			"create table lp (id int, v " + typ + ") cluster by (id, v)",
+		} {
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "cannot be a cluster by key", sql)
+		}
+	}
+	_, err := runOneStmt(mock, t, "create table lp (id int, v vecf32(4)) cluster by (v)")
+	require.NoError(t, err)
+}
+
+// TestBuildColumnDomainExprLowPrecisionFloat checks that a column-domain rewrite over a
+// bf16/float16/float8/float4 column builds a disjunction of equalities, since these types
+// have no IN kernel.
+func TestBuildColumnDomainExprLowPrecisionFloat(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		col := &plan.Expr{
+			Typ:  plan.Type{Id: int32(id)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "f"}},
+		}
+		vals := []*plan.Expr{makePlan2Float32ConstExprWithType(0.5), makePlan2Float32ConstExprWithType(1.5)}
+		expr, err := buildColumnDomainExpr(ctx, col, vals)
+		require.NoError(t, err, id.String())
+		require.Equal(t, "or", expr.GetF().Func.ObjName, id.String())
+	}
 }

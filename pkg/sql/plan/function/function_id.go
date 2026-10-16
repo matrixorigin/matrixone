@@ -866,8 +866,15 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
-	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
-	// TODO: every one should put the new function id in front of this one if you want to make a new function.
+	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
+	VECTOR_MATMUL = 600
+
+	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
+	VECBLOCK_JSON = 601
+
+	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
+	VECBLOCK_BINARY = 602
+
 	UUID_SHORT = 587
 
 	TANH  = 591
@@ -882,7 +889,9 @@ const (
 	TO_CALENDAR_INTERVAL        = 598
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 
-	FUNCTION_END_NUMBER = 600
+	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
+	// TODO: every one should put the new function id in front of this one if you want to make a new function.
+	FUNCTION_END_NUMBER = 603
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1199,6 +1208,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
@@ -1499,6 +1509,8 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"vecblock_json":     VECBLOCK_JSON,
+	"vecblock_binary":   VECBLOCK_BINARY,
 	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,

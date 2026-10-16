@@ -347,6 +347,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res[attr.ColFieldIndex] = csvparser.Field{Val: text}
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
 		if err != nil {
@@ -407,6 +413,12 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			res = append(res, csvparser.Field{Val: string(data)})
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res = append(res, csvparser.Field{Val: text})
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
 		if err != nil {
@@ -417,12 +429,28 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 	return res, nil
 }
 
+// vecBlockJSONText returns the JSON text of an object value of a vecf8/vecf4 column, the
+// exact form of the cell.
+func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
+	if !types.T(tp).IsBlockScaledArray() {
+		return "", false, nil
+	}
+	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
+		return "", false, nil
+	}
+	bj, err := valN.ByteJson()
+	if err != nil {
+		return "", false, err
+	}
+	return bj.String(), true, nil
+}
+
 // jsonLineScalarText preserves numeric array boundaries for vector columns.
 // Node.String uses Go slice formatting, whose spaces are removed by the vector
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
 func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
-	if !typ.IsArrayRelate() || !ok || group.Obj {
+	if !(typ.IsArrayRelate() || typ.IsBlockScaledArray()) || !ok || group.Obj {
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder
