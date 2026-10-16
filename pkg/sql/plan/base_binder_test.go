@@ -356,6 +356,34 @@ type sqlUdfMockCompilerContext struct {
 
 func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
 	switch name {
+	case "f_values_constant":
+		return &function.Udf{
+			Body:     "1 + 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_increment":
+		return &function.Udf{
+			Body:     "$1 + 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_lookup":
+		return &function.Udf{
+			Body:     "select max(n_nationkey) from nation",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_nested_lookup":
+		return &function.Udf{
+			Body:     "f_values_lookup()",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_upper_lookup":
+		return &function.Udf{Body: "(SELECT max(n_nationkey) FROM nation)", Language: string(tree.SQL)}, nil
+	case "f_values_wrapped_lookup":
+		return &function.Udf{Body: "coalesce((SELECT max(n_nationkey) FROM nation),0)", Language: string(tree.SQL)}, nil
+	case "f_values_mixed_lookup":
+		return &function.Udf{Body: "(SeLeCt max(n_nationkey) FrOm nation)", Language: string(tree.SQL)}, nil
+	case "f_values_nested_upper_lookup":
+		return &function.Udf{Body: "f_values_upper_lookup()", Language: string(tree.SQL)}, nil
 	case "f_lookup":
 		return &function.Udf{
 			Body:     "select n_regionkey from nation where n_nationkey = $1",
