@@ -162,9 +162,34 @@ func TestLoadIgnoreCheckPrecedesIrregularMaintenance(t *testing.T) {
 		}
 		return false
 	}
-	writes, tokenizers := 0, 0
+	writes, tokenizers, images := 0, 0, 0
 	for id := range reachableODKUPlanNodes(q) {
 		n := q.Nodes[id]
+		if n.NodeType == planpb.Node_SINK && reachesCheck(id) {
+			images++
+			require.Len(t, n.Children, 1)
+			image := q.Nodes[n.Children[0]]
+			require.Equal(t, planpb.Node_PROJECT, image.NodeType, "the shared image must execute its row projection after filtering")
+			require.Len(t, image.Children, 1)
+			input := q.Nodes[image.Children[0]]
+			columns := 0
+			for _, col := range table.Cols {
+				if col.Name != catalog.Row_ID {
+					columns++
+				}
+			}
+			require.Len(t, image.ProjectList, columns+1, "preserve table columns and the computed composite unique lock key")
+			for _, expr := range image.ProjectList {
+				// Remapping has consumed binding tags; executable references must
+				// address real columns of the filtered input batch.
+				col := expr.GetCol()
+				require.NotNil(t, col, "restoring the row image must not re-evaluate expressions")
+				require.Zero(t, col.RelPos)
+				require.GreaterOrEqual(t, col.ColPos, int32(0))
+				require.Less(t, int(col.ColPos), len(input.ProjectList))
+				require.Equal(t, input.ProjectList[col.ColPos].Typ, expr.Typ)
+			}
+		}
 		if n.NodeType == planpb.Node_MULTI_UPDATE {
 			writes++
 			require.True(t, reachesCheck(id), "base and index writes must read filtered rows")
@@ -176,4 +201,5 @@ func TestLoadIgnoreCheckPrecedesIrregularMaintenance(t *testing.T) {
 	}
 	require.Positive(t, writes)
 	require.Positive(t, tokenizers)
+	require.Equal(t, 1, images, "base and fulltext writes share one accepted row image")
 }

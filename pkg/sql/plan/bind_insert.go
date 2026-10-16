@@ -2937,6 +2937,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	if filterCheckRows {
+		checkInputID := lastNodeID
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,
@@ -2949,7 +2950,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
-		selectNode = builder.qry.Nodes[lastNodeID]
+		if lastNodeID != checkInputID {
+			// CHECK's untagged FILTER carries a physical pass-through projection,
+			// not an executable row image. Restore the complete tagged image for
+			// downstream consumers, including previously computed lock columns.
+			selectTag = builder.genNewBindTag()
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeID},
+				ProjectList: getProjectionByLastNodeWithTag(builder, selectNode.NodeId, selectTag),
+				BindingTags: []int32{selectTag},
+			}, bindCtx)
+			selectNode = builder.qry.Nodes[lastNodeID]
+		}
 	}
 
 	if onDupAction == plan.Node_FAIL {

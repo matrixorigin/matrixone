@@ -161,5 +161,97 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 			require.ErrorContains(t, err, "foreign key constraint fails")
 			require.Empty(t, read(t, database+".child", "v*2"))
 		})
+		exec(t, "set experimental_fulltext_index=1")
+		files := make(map[string]string)
+		for name, data := range map[string]string{
+			"valid":    "1,one,1,5,accepted\n",
+			"mixed":    "2,two,1,-1,rejected\n3,three,1,8,surviving\n",
+			"rejected": "4,four,1,-1,discarded\n",
+		} {
+			path := filepath.Join(filepath.Dir(csv), "fulltext_"+name+".csv")
+			require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+			mysql.RegisterLocalFile(path)
+			defer mysql.DeregisterLocalFile(path)
+			files[name] = path
+		}
+		queryIDs := func(t *testing.T, query string) []int {
+			t.Helper()
+			rows, err := peer.QueryContext(ctx, query)
+			require.NoError(t, err)
+			defer rows.Close()
+			var ids []int
+			for rows.Next() {
+				var id int
+				require.NoError(t, rows.Scan(&id))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			return ids
+		}
+		for _, local := range []bool{false, true} {
+			for index, tc := range []struct {
+				name, definition, generated string
+				ignore, checks              bool
+			}{
+				{"basic", "check(v>0)", "v*2", true, true},
+				{"single_unique", "unique(k),check(v>0)", "v*2", true, true},
+				{"composite_unique", "unique(k,tag),check(v>0)", "v*2", true, true},
+				{"generated", "g int generated always as (v*2) stored,unique(k,tag),check(g>0)", "g", true, true},
+				{"no_check", "", "v*2", true, false},
+				{"ordinary_load", "check(v>0)", "v*2", false, true},
+			} {
+				t.Run(fmt.Sprintf("fulltext/local_%t/%s", local, tc.name), func(t *testing.T) {
+					name := fmt.Sprintf("ft_%t_%d", local, index)
+					table := database + "." + name
+					definition := "id int primary key,k varchar(20),tag int,v int,body text,fulltext fi(body)"
+					if tc.definition != "" {
+						definition += "," + tc.definition
+					}
+					exec(t, "create table "+table+"("+definition+")")
+					load := func(file string) {
+						t.Helper()
+						prefix := "load data "
+						if local {
+							prefix += "local "
+						}
+						prefix += "infile '" + files[file] + "' "
+						if tc.ignore {
+							prefix += "ignore "
+						}
+						exec(t, prefix+"into table "+table+" fields terminated by ',' (id,k,tag,v,body)")
+					}
+					load("valid")
+					requireWarningCodes(t, ctx, conn, map[uint16]int{})
+					var postings string
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select index_table_name from mo_catalog.mo_indexes where name='fi' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?) limit 1",
+						database, name).Scan(&postings))
+					postings = database + ".`" + postings + "`"
+					assertImage := func(want [][3]int, ids []int) {
+						t.Helper()
+						require.Equal(t, want, read(t, table, tc.generated))
+						require.Equal(t, ids, queryIDs(t, "select distinct doc_id from "+postings+" order by doc_id"))
+						var orphans int
+						require.NoError(t, peer.QueryRowContext(ctx, "select count(*) from "+postings+" p left join "+table+" b on p.doc_id=b.id where b.id is null or p.word in ('rejected','discarded')").Scan(&orphans))
+						require.Zero(t, orphans, "rejected rows must never produce postings, even after their keys are reused")
+					}
+					assertImage([][3]int{{1, 5, 10}}, []int{1})
+					require.Equal(t, []int{1}, queryIDs(t, "select id from "+table+" where match(body) against('accepted' in boolean mode) order by id"))
+					if !tc.checks || !tc.ignore {
+						return
+					}
+					load("mixed")
+					requireWarningCodes(t, ctx, conn, map[uint16]int{3819: 1})
+					assertImage([][3]int{{1, 5, 10}, {3, 8, 16}}, []int{1, 3})
+					load("rejected")
+					requireWarningCodes(t, ctx, conn, map[uint16]int{3819: 1})
+					assertImage([][3]int{{1, 5, 10}, {3, 8, 16}}, []int{1, 3})
+					exec(t, "insert into "+table+"(id,k,tag,v,body) values(2,'two',1,6,'reused'),(4,'four',1,7,'recovered')")
+					assertImage([][3]int{{1, 5, 10}, {2, 6, 12}, {3, 8, 16}, {4, 7, 14}}, []int{1, 2, 3, 4})
+					require.Equal(t, []int{3}, queryIDs(t, "select id from "+table+" where match(body) against('surviving' in boolean mode) order by id"))
+					require.Empty(t, queryIDs(t, "select id from "+table+" where match(body) against('rejected discarded' in boolean mode) order by id"))
+				})
+			}
+		}
 	})
 }
