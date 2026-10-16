@@ -18,6 +18,7 @@ import (
 )
 
 func TestRaceInventoryPartition(t *testing.T) {
+	t.Parallel()
 	names := []string{"TestFirst", "Example_named", "FuzzSeeds", "Test字面", "TestLiteral.[a]+(b)?"}
 	for _, layout := range []string{"roundrobin", "contiguous"} {
 		for _, groups := range []int{1, 2, 8} {
@@ -78,6 +79,7 @@ for ((i=0;i<${#shard_patterns[@]};i++)); do printf '%s\t%s\n' "${shard_patterns[
 }
 
 func TestRaceInventoryRejectsIncompleteDiscovery(t *testing.T) {
+	t.Parallel()
 	for _, inventory := range []string{"diagnostics only\n", "TestOnce\nTestOnce\n", "TestValid\nTest invalid\n"} {
 		t.Run(inventory, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "inventory")
@@ -96,6 +98,7 @@ if partition_race_test_inventory "$1" 4 contiguous; then exit 9; fi
 }
 
 func TestRaceInventoryCancellationAtCompletion(t *testing.T) {
+	t.Parallel()
 	transform := func(text string) string {
 		const anchor = "    done\n    wait \"${pid}\" || status=$?\n"
 		if strings.Count(text, anchor) != 1 {
@@ -125,6 +128,7 @@ run_race_inventory_with_deadline "$CASE_DIR" "$CASE_DIR/list.sh" "$CASE_DIR/inve
 }
 
 func TestPrebuiltRaceDeadlineFailureIsReported(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_TIMEOUT=1
@@ -146,6 +150,7 @@ grep -q 'shared test timeout exhausted before batch execution' "$CASE_DIR/report
 }
 
 func TestOuterCancellationKeepsUnpublishedDiscoveryArtifacts(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
@@ -184,6 +189,7 @@ cleanup() {
 }
 
 func TestOuterCancellationKeepsReportWhenChildDrainFails(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
@@ -228,6 +234,7 @@ handle_ut_termination
 }
 
 func TestOuterCancellationKeepsReportForFailedDrainHelper(t *testing.T) {
+	t.Parallel()
 	for _, helperStatus := range []string{"125", "137"} {
 		for _, phase := range []string{"active", "captured", "flagged", "released", "joined", "raw-status"} {
 			t.Run("status="+helperStatus+"/"+phase, func(t *testing.T) {
@@ -301,6 +308,7 @@ fi
 }
 
 func TestKilledOrdinaryUTOwnerPreservesExitStatus(t *testing.T) {
+	t.Parallel()
 	for _, pidMode := range []string{"native", "fallback"} {
 		for _, owner := range []string{"current", "light"} {
 			t.Run(pidMode+"/"+owner, func(t *testing.T) {
@@ -344,6 +352,7 @@ kill -KILL "$fixture_pid"
 }
 
 func TestIssuesDiscoveryFallbackUsesRemainingDeadline(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_TIMEOUT=1
@@ -425,6 +434,7 @@ run_race_test_batches example/issues "$CASE_DIR/issues-exhausted.test" 4 || stat
 }
 
 func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, contract, main, processExit, wantStatus string }{
 		{"independent", "independent", "", "0", "0"},
 		{"cleanup-only", "cleanup-only", "func TestMain(m *testing.M) {}", "0", "0"},
@@ -526,6 +536,7 @@ esac
 // A denied/unknown lifetime contract must run the ordinary package exactly
 // once and still release its batch-report ownership before another package.
 func TestRaceBatchPreparationFallbackReleasesOwnership(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, contract, fallbackExit string
 		badReport                    bool
@@ -594,6 +605,7 @@ esac
 }
 
 func TestRaceInventoryPreservesRunnableRootsAndStress(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeScopeFixture(t, root, "go.mod", "module inventoryfixture\n\ngo 1.27.0\n")
 	writeScopeFixture(t, root, "inventory_test.go", `package inventoryfixture
@@ -668,6 +680,7 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 }
 
 func TestKilledIndependentHelperRetainsEvidence(t *testing.T) {
+	t.Parallel()
 	for _, pidMode := range []string{"native", "fallback"} {
 		for _, owner := range []string{"engine", "plan", "prebuild"} {
 			t.Run(pidMode+"/"+owner, func(t *testing.T) {
@@ -725,6 +738,7 @@ start_ut_command serial forbidden touch "$CASE_DIR/admitted"; [[ "$?" == 125 ]] 
 // Exercise the common owner gate through real helper admission, including
 // normal stage failure, stale evidence and failed completion publication.
 func TestHelperCompletionAdmissionAndJoin(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"failure", "missing", "mismatch", "malformed", "stale", "init-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			script := `source ./run_ut.sh UT
@@ -780,6 +794,7 @@ fi
 }
 
 func TestIssuesFallbackCompletionDrainsOwnedGroup(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 function fixture_cleanup() {
