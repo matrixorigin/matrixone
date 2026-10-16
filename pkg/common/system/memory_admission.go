@@ -219,7 +219,7 @@ func (b *MemoryAdmissionBudget) Reserved() uint64 {
 }
 
 func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) uint64 {
-	if !snapshot.Measured || snapshot.Limit == 0 {
+	if !snapshot.Measured {
 		return 0
 	}
 	limit := snapshot.AdmissionLimit()

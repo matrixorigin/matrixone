@@ -569,11 +569,15 @@ func (m *memThrottler) refresh(force bool) {
 	if m.cgroupBudget != nil && m.cgroupBudget.domainProvider != nil {
 		var snapshot system.MemoryDomainSnapshot
 		snapshot, err = m.cgroupBudget.domainProvider()
-		if err == nil && snapshot.Measured && snapshot.Limit > 0 {
+		if err == nil && snapshot.Measured && snapshot.AdmissionLimit() > 0 {
 			domain = &snapshot
 			total = snapshot.Limit
 			if snapshot.IsCgroup() {
-				cgroup = snapshot.Limit
+				// MaxUint64 is the immutable sample's unlimited-hard marker;
+				// it is not a finite cgroup quota.
+				if snapshot.Limit != math.MaxUint64 {
+					cgroup = snapshot.Limit
+				}
 			}
 			validLimits = true
 		}
@@ -594,17 +598,27 @@ func (m *memThrottler) refresh(force bool) {
 	// observation replaces them; in particular, do not publish zero on error.
 	if validLimits {
 		actualTotal := total
+		if domain != nil && (domain.Limit == 0 || domain.Limit == math.MaxUint64) {
+			// Keep the unlimited-hard marker out of signed RSS/quota
+			// arithmetic. A finite soft limit is the effective pressure
+			// domain for this throttler.
+			actualTotal = domain.AdmissionLimit()
+		}
 		if domain == nil && cgroup != 0 && cgroup < total {
 			actualTotal = cgroup
 		}
-		m.actualTotalMemory.Store(actualTotal)
+		m.actualTotalMemory.Store(uint64(uint64ToInt64(actualTotal)))
+		storedTotal := total
+		if domain != nil && (domain.Limit == 0 || domain.Limit == math.MaxUint64) {
+			storedTotal = actualTotal
+		}
 
 		// if the const limit option is set, we should not change the limit.
 		if m.options.constLimit < 0 {
 			m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
 		}
 		m.cgroup.Store(cgroup)
-		m.total.Store(total)
+		m.total.Store(uint64(uint64ToInt64(storedTotal)))
 		if domain != nil {
 			m.publishMemoryDomain(domain)
 		} else {
@@ -616,6 +630,9 @@ func (m *memThrottler) refresh(force bool) {
 		initialTotal := total
 		if sample := m.cgroupSnapshot(); sample != nil {
 			initialTotal = uint64(sample.limit)
+			if (sample.limit <= 0 || sample.limit == math.MaxInt64) && sample.softLimit > 0 {
+				initialTotal = uint64(sample.softLimit)
+			}
 			m.total.Store(initialTotal)
 			if sample.cgroup {
 				m.cgroup.Store(initialTotal)
@@ -624,7 +641,7 @@ func (m *memThrottler) refresh(force bool) {
 		if initialTotal == 0 {
 			initialTotal = math.MaxInt64
 		}
-		m.actualTotalMemory.Store(initialTotal)
+		m.actualTotalMemory.Store(uint64(uint64ToInt64(initialTotal)))
 		if m.options.constLimit < 0 {
 			m.limit.Store(int64(float64(initialTotal) * m.limitRate))
 		}
@@ -671,7 +688,7 @@ func (m *memThrottler) refresh(force bool) {
 func (m *memThrottler) refreshCgroupUsage() {
 	if m.cgroupBudget != nil && m.cgroupBudget.domainProvider != nil {
 		snapshot, err := m.cgroupBudget.domainProvider()
-		if err != nil || !snapshot.Measured || snapshot.Limit == 0 {
+		if err != nil || !snapshot.Measured || snapshot.AdmissionLimit() == 0 {
 			// A failed read must not erase the last known pressure budget while
 			// pending allocations still hold reservations against it.
 			return
@@ -693,7 +710,7 @@ func (m *memThrottler) publishMemoryDomain(snapshot *system.MemoryDomainSnapshot
 	}
 	usage := uint64ToInt64(snapshot.Used)
 	limit := uint64ToInt64(snapshot.Limit)
-	if limit <= 0 {
+	if limit <= 0 && snapshot.AdmissionLimit() == 0 {
 		return
 	}
 	destination.Store(&cgroupMemorySample{
@@ -761,20 +778,19 @@ func (sample *cgroupMemorySample) admissionHeadroom() int64 {
 	if sample == nil {
 		return math.MaxInt64
 	}
+	if sample.softLimit > 0 &&
+		(sample.limit <= 0 || sample.softLimit < sample.limit) {
+		return max(0, sample.softLimit-sample.usage)
+	}
 	total := sample.limit
 	if total <= 0 || total == math.MaxInt64 {
 		return math.MaxInt64
 	}
-
-	usage := sample.usage
-	if sample.softLimit > 0 && sample.softLimit < total {
-		return max(0, sample.softLimit-usage)
-	}
 	hardEnter := int64(float64(total) * rssPressureHardEnter)
-	if usage <= 0 || usage < hardEnter {
+	if sample.usage <= 0 || sample.usage < hardEnter {
 		return math.MaxInt64
 	}
-	return max(0, total-usage)
+	return max(0, total-sample.usage)
 }
 
 func (sample *cgroupMemorySample) capAdmissionAvailable(available, reserved int64) int64 {

@@ -357,6 +357,7 @@ type memoryDomainLevel struct {
 	usageFile string
 	statFile  string
 	source    MemoryDomainSource
+	mountRoot bool
 }
 
 func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
@@ -466,7 +467,7 @@ func buildMemoryDomainLevels(dir, mountPoint string, source MemoryDomainSource,
 	for {
 		levels = append(levels, memoryDomainLevel{
 			dir: dir, limitFile: limitFile, softFile: softFile, usageFile: usageFile,
-			statFile: statFile, source: source,
+			statFile: statFile, source: source, mountRoot: dir == mountPoint,
 		})
 		if dir == mountPoint {
 			break
@@ -488,11 +489,17 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 	)
 	for _, level := range levels {
 		limit, state := readCgroupLimitState(filepath.Join(level.dir, level.limitFile))
-		if state == cgroupLimitUnavailable {
+		if state == cgroupLimitUnavailable ||
+			(state == cgroupLimitMissing && !level.mountRoot) {
 			return MemoryDomainSnapshot{}, false,
 				moerr.NewInternalErrorNoCtxf("read memory limit for %s", level.dir)
 		}
 		softLimit, softState := readCgroupLimitState(filepath.Join(level.dir, level.softFile))
+		if softState == cgroupLimitUnavailable ||
+			(softState == cgroupLimitMissing && !level.mountRoot) {
+			return MemoryDomainSnapshot{}, false,
+				moerr.NewInternalErrorNoCtxf("read memory soft limit for %s", level.dir)
+		}
 		if softState != cgroupLimitFinite || softLimit == 0 {
 			softLimit = 0
 		}

@@ -15,6 +15,7 @@
 package system
 
 import (
+	"math"
 	"sync"
 	"testing"
 
@@ -96,6 +97,9 @@ func TestMemoryAdmissionBudgetUsesDomainSoftLimit(t *testing.T) {
 	}
 	budget.mu.Lock()
 	require.Equal(t, uint64(20), budget.availableLocked(snapshot))
+	snapshot.Limit = math.MaxUint64
+	require.Equal(t, uint64(20), budget.availableLocked(snapshot),
+		"an unlimited hard limit must still honor a finite soft limit")
 	budget.mu.Unlock()
 }
 

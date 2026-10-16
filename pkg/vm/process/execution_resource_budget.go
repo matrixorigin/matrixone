@@ -941,7 +941,7 @@ func (b *ExecutionResourceBudget) publishLiveCNCapInputs() {
 // memory.
 func (b *ExecutionResourceBudget) sampleCNCap() (uint64, error) {
 	current := executionResourceProcessMemoryInputs
-	if snapshot, _ := system.CurrentMemoryDomain(); snapshot.Measured && snapshot.Limit > 0 {
+	if snapshot, _ := system.CurrentMemoryDomain(); snapshot.Measured && snapshot.AdmissionLimit() > 0 {
 		current.MemoryDomain = snapshot
 		current.CgroupMemoryMax = 0
 		current.HostMemTotal = 0
@@ -2151,7 +2151,7 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 		fileCacheHint = uint64(hint)
 	}
 	initialInputs := executionResourceProcessMemoryInputs
-	if snapshot, _ := system.CurrentMemoryDomain(); snapshot.Measured && snapshot.Limit > 0 {
+	if snapshot, _ := system.CurrentMemoryDomain(); snapshot.Measured && snapshot.AdmissionLimit() > 0 {
 		initialInputs.MemoryDomain = snapshot
 		initialInputs.CgroupMemoryMax = 0
 		initialInputs.HostMemTotal = 0
@@ -2159,7 +2159,7 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	var physicalLedger *system.MemoryAdmissionBudget
 	if proc.Base.FileService != nil {
 		physicalLedger = system.DefaultMemoryAdmissionBudget()
-		if calibrated := physicalLedger.Snapshot(); calibrated.Measured && calibrated.Domain.Limit > 0 {
+		if calibrated := physicalLedger.Snapshot(); calibrated.Measured && calibrated.Domain.AdmissionLimit() > 0 {
 			initialInputs.MemoryDomain = calibrated.Domain
 			initialInputs.MemoryDomainReserve = calibrated.Reserve
 			initialInputs.CgroupMemoryMax = 0

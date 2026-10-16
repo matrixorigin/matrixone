@@ -274,17 +274,25 @@ type cgroupLimitState uint8
 
 const (
 	cgroupLimitUnavailable cgroupLimitState = iota
+	// cgroupLimitMissing is a structural absence, not a malformed or failed
+	// observation. A cgroup-v2 hierarchy root may not expose memory control
+	// files when the memory controller is not attached to that root.
+	cgroupLimitMissing
 	cgroupLimitUnlimited
 	cgroupLimitFinite
 )
 
-// readCgroupLimitState distinguishes an authoritative unlimited value from a
-// failed observation. Callers walking a hierarchy must not silently skip a
-// missing or malformed governing limit: doing so can replace a tight parent
-// constraint with a looser child constraint.
+// readCgroupLimitState distinguishes an authoritative unlimited value, a
+// structurally missing interface, and a failed observation. Callers walking a
+// hierarchy may ignore a missing interface only at a known controller/root
+// boundary; a missing or malformed governing file elsewhere must not replace a
+// tight parent constraint with a looser child constraint.
 func readCgroupLimitState(path string) (uint64, cgroupLimitState) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, cgroupLimitMissing
+		}
 		return 0, cgroupLimitUnavailable
 	}
 	value := strings.TrimSpace(string(data))
@@ -441,7 +449,7 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 	// published sample. A refresh error keeps the last good sample available;
 	// only the first-ever failure is reported as an unavailable measurement.
 	snapshot, err := CurrentMemoryDomain()
-	if !snapshot.Measured || snapshot.Limit == 0 {
+	if !snapshot.Measured || snapshot.AdmissionLimit() == 0 {
 		if err != nil {
 			logutil.Errorf("failed to get memory domain: %v", err)
 		}

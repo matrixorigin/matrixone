@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -563,6 +564,38 @@ func TestMemThrottlerUsesCgroupHeadroomForAdmission(t *testing.T) {
 		require.Zero(t, left)
 		require.Equal(t, int64(10*mpool.GB), throttler.reserved.Load())
 	})
+}
+
+func TestMemThrottlerSoftOnlyCgroupDoesNotUnderflowSignedCapacity(t *testing.T) {
+	const unit = int64(mpool.GB)
+	budget := &cgroupMemoryBudget{
+		domainProvider: func() (system.MemoryDomainSnapshot, error) {
+			return system.MemoryDomainSnapshot{
+				Used:      uint64(10 * unit),
+				Limit:     math.MaxUint64,
+				SoftLimit: uint64(100 * unit),
+				Source:    system.MemoryDomainSourceCgroupV2,
+				Measured:  true,
+			}, nil
+		},
+	}
+	throttler := &memThrottler{
+		cgroupBudget: budget,
+		limitRate:    0.05,
+	}
+	throttler.fillDefaults()
+	throttler.ForceRefresh()
+
+	// The hard limit is unlimited, but the finite memory.high must remain the
+	// effective pressure domain. It must never be cast to -1 and reject every
+	// workspace allocation before the shared cgroup check runs.
+	require.Equal(t, uint64(100*unit), throttler.actualTotalMemory.Load())
+	require.Equal(t, uint64(100*unit), throttler.total.Load())
+	require.Greater(t, throttler.Available(), int64(0))
+	left, ok := defaultAcquirePolicy(throttler, 1)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, left, int64(0))
+	throttler.Release(1)
 }
 
 func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {

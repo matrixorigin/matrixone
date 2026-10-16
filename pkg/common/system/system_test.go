@@ -690,6 +690,37 @@ func TestReadCgroupMemoryDomainSelectsTightestLevel(t *testing.T) {
 	require.Equal(t, uint64(4<<30), snapshot.AdmissionReclaimableHeadroom())
 }
 
+func TestReadCgroupMemoryDomainSkipsStructuralMountRoot(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	// A true cgroup-v2 hierarchy root can lack the memory controller files.
+	// The bounded child must still be selected instead of turning the whole
+	// domain read into an observation failure.
+	write(child, "memory.max", "100")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "95")
+
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	// An entirely unlimited hierarchy falls through to the host-domain reader.
+	write(child, "memory.max", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.False(t, measured)
+	require.Zero(t, snapshot)
+}
+
 func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
 	root := t.TempDir()
 	write := func(name, content string) {
@@ -713,10 +744,13 @@ func TestReadCgroupMemoryDomainRetainsBindingLimitOnReadFailure(t *testing.T) {
 	}
 
 	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
 	write(root, "memory.current", "0")
 	write(parent, "memory.max", "100")
+	write(parent, "memory.high", "max")
 	write(parent, "memory.current", "95")
 	write(child, "memory.max", "200")
+	write(child, "memory.high", "max")
 	write(child, "memory.current", "50")
 	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
 		"memory.max", "memory.high", "memory.current", "memory.stat")
@@ -746,6 +780,55 @@ func TestReadCgroupMemoryDomainRetainsBindingLimitOnReadFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, measured)
 	require.Equal(t, uint64(200), snapshot.Limit)
+}
+
+func TestReadCgroupMemoryDomainRetainsSoftLimitOnReadFailure(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "200")
+	write(parent, "memory.high", "100")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "max")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.AdmissionLimit())
+	require.Equal(t, uint64(5), snapshot.AdmissionLimit()-snapshot.Used)
+
+	for _, value := range []string{"", "not-a-number"} {
+		if value == "" {
+			require.NoError(t, os.Remove(filepath.Join(parent, "memory.high")))
+		} else {
+			write(parent, "memory.high", value)
+		}
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		write(parent, "memory.high", "100")
+	}
+
+	// An explicit unlimited value is authoritative and removes only the soft
+	// boundary; it is not treated as a failed observation.
+	write(parent, "memory.high", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+	require.Equal(t, uint64(105), snapshot.AdmissionLimit()-snapshot.Used)
 }
 
 func TestReadCgroupMemoryDomainKeepsSoftOnlyLimit(t *testing.T) {
