@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -83,27 +84,67 @@ func TestBitCountStringNumericPrefixCoercion(t *testing.T) {
 
 func TestBitCountFloat(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{
-				1.4, 1.5, 2.5, 3.5,
-				-1.4, -1.5, -2.5, -3.5,
-				-9223372036854774784.0, -9223372036854775808.0,
-				math.Inf(1), math.Inf(-1),
-			}, nil),
-		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{
-			1, 1, 1, 1,
-			64, 63, 63, 62,
-			2, 1,
-			64, 1,
-		}, nil),
-		BitCountFloat[float64])
-	ok, info := tc.RunAndFree()
-	require.True(t, ok, info)
+	values := []float64{
+		1.4, 1.5, 2.5, 3.5, 3.9, 64.9,
+		-1.4, -1.5, -2.5, -3.5, -3.9,
+		0, math.Copysign(0, -1), 0.9, -0.9, 3, -3,
+		-9223372036854775808.0, 18446744073709551616.0,
+		math.Inf(1), math.Inf(-1), math.NaN(),
+	}
+	want := []uint64{
+		1, 1, 1, 2, 2, 1,
+		64, 64, 63, 63, 63,
+		0, 0, 0, 0, 2, 63,
+		1, 64, 64, 1, 0,
+	}
+	nulls := make([]bool, len(values))
+	nulls[len(values)-1] = true // A NULL NaN must not enter the conversion helper.
+	float32Values := make([]float32, len(values))
+	for i, value := range values {
+		float32Values[i] = float32(value)
+	}
+	for _, tc := range []struct {
+		typ    types.T
+		values any
+		fn     executeLogicOfOverload
+	}{
+		{types.T_float32, float32Values, BitCountFloat[float32]},
+		{types.T_float64, values, BitCountFloat[float64]},
+	} {
+		t.Run(tc.typ.String(), func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(tc.typ.ToType(), tc.values, nulls)},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nulls), tc.fn)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("bounds", func(t *testing.T) {
+		const upper = 18446744073709549568.0
+		for _, tc := range []struct {
+			value float64
+			want  uint64
+		}{
+			{math.Nextafter(float64(math.MinInt64), math.Inf(-1)), 1},
+			{float64(math.MinInt64), 1},
+			{math.Nextafter(float64(math.MinInt64), 0), 2},
+			{math.Nextafter(float64(math.MaxInt64), 0), 53},
+			{float64(math.MaxInt64), 1},
+			{math.Nextafter(upper, 0), 52},
+			{upper, 64},
+			{math.Nextafter(upper, math.Inf(1)), 64},
+		} {
+			got, err := bitCountFromFloat(tc.value, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got, "input %g", tc.value)
+		}
+	})
 
 	_, err := bitCountFromFloat(math.NaN(), proc)
-	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	_, err = bitCountFromFloat(float32(math.NaN()), proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestBitCountDecimal64(t *testing.T) {

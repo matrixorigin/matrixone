@@ -41,13 +41,23 @@ const (
 	loadFirstLineSampleSize = 1 << 20
 )
 
+// Textual LOAD keeps TIME fields intact until the shared assignment cast owns
+// syntax, precision and range policy. The scan's TableDef retains the target
+// type for field preprocessing; only its physical column references are text.
+func loadTimeInputType(format string, typ plan.Type) plan.Type {
+	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	return typ
+}
+
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	var externalProject []*Expr
 	colToIndex := make(map[string]int32, 0)
 	for i, col := range tableDef.Cols {
 		if col.Name != catalog.FakePrimaryKeyColName {
 			colExpr := &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -79,7 +89,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: newTableDef.Cols[tbColIdx].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, newTableDef.Cols[tbColIdx].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -93,9 +103,8 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			tbColToDataCol[colName] = int32(i)
 			newCols = append(newCols, newTableDef.Cols[tbColIdx])
 		case *tree.VarExpr:
-			//NOTE:variable like '@abc' will be passed by.
-			name := realCol.Name
-			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+			// Row-variable slots are recorded after target columns so referenced
+			// values can be exposed to the LOAD assignment projection.
 		default:
 			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
@@ -615,6 +624,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+		return nil, err
+	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
@@ -644,6 +660,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, &externalProject,
+	)
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
@@ -669,6 +689,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.Tail.Assignments = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -725,7 +746,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		Stats:    &plan.Stats{},
 	}
 
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, 0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex, setExpressions)
 
 	if err != nil {
 		return nil, err
@@ -741,11 +768,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Parallel CSV staging converts file columns first. Enforce byte limits
-	// before defaults can read those assigned values, including the FK fallback.
+	// Enforce payload, TIME and MEDIUMINT assignment limits before defaults read
+	// assigned values, including parallel CSV staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
-			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
@@ -753,7 +781,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	for target, expr := range setExpressions {
+		for i, col := range originTableDef.Cols {
+			if strings.EqualFold(col.Name, target) {
+				projectNode.ProjectList[i] = expr
+				break
+			}
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions)
 	if err != nil {
 		return nil, err
 	}
@@ -956,16 +992,31 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
+func getProjectNode(
+	stmt *tree.Load,
+	ctx CompilerContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	colToIndex map[string]int32,
+	setExpressions map[string]*plan.Expr,
+) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	ifExistAutoPkCol := false
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
 
 	for i := 0; i < len(tableDef.Cols); i++ {
+		if expr, ok := setExpressions[tableDef.Cols[i].Name]; ok {
+			node.ProjectList[i] = expr
+			if _, supplied := colToIndex[tableDef.Cols[i].Name]; !supplied &&
+				tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
+				ifExistAutoPkCol = true
+			}
+			continue
+		}
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colListId),
@@ -995,11 +1046,17 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
-	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+	bindCtx *BindContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	supplied map[string]int32,
+	setExpressions map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
-		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if !sourceSupplied && !setSupplied && exprHasLocalColumnRef(node.ProjectList[i]) {
 			needed = true
 			break
 		}
@@ -1016,7 +1073,9 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		pos := int32(i)
 		positions[pos] = pos
 		expr := DeepCopyExpr(node.ProjectList[i])
-		if _, ok := supplied[col.Name]; ok {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
 			materialize[pos] = true
@@ -1042,27 +1101,37 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
+	// Binding consumes assignment expressions before serializing ExternParam.
+	// A consumed first assignment means this AST was already normalized; keep
+	// its rules when PREPARE or a transaction retry builds another plan.
+	if param.NullMap != nil && len(param.Tail.Assignments) > 0 && param.Tail.Assignments[0].Expr == nil {
+		return nil
+	}
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
 		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 		if len(expr.Exprs) != 2 {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || expr2.ColName() != "nullif" {
+		if !ok || !strings.EqualFold(expr2.ColName(), "nullif") {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
+			if _, isVariable := expr.Exprs[0].(*tree.VarExpr); isVariable {
+				param.Tail.Assignments[i].Expr = nil
+				continue
+			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
 		}
 
@@ -1162,10 +1231,10 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || isMediumIntPlanType(typ) {
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || typ.Id == int32(types.T_time) || isMediumIntPlanType(typ) {
 			// The following assignment projection owns both conversion and
-			// width enforcement. An ordinary TINYTEXT cast here would silently
-			// truncate before strict/IGNORE assignment can inspect the payload.
+			// domain enforcement. An ordinary cast here would truncate BLOB/TEXT
+			// or clamp TIME/MEDIUMINT before assignment sees the original value.
 			ret = append(ret, planExpr)
 			continue
 		}

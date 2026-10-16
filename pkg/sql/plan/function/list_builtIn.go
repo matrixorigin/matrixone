@@ -106,6 +106,12 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+func physicalCollationKeyReturnType(_ []types.Type) types.Type {
+	typ := types.T_varbinary.ToType()
+	typ.Charset = types.CharsetBinary
+	return typ
+}
+
 // Decimal epochs must reach the exact decimal overload. The generic numeric
 // cast costs tie decimal-to-float with decimal widening and pick the first
 // overload, losing both decimal digits and declared fractional precision.
@@ -593,6 +599,35 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 }
 
 var supportedStringBuiltIns = []FuncNew{
+	// MySQL Performance Schema formatting functions evaluate in the DOUBLE domain.
+	{
+		functionId: FORMAT_BYTES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatBytes },
+			},
+		},
+	},
+	{
+		functionId: FORMAT_PICO_TIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatPicoTime },
+			},
+		},
+	},
 	// function `ascii`
 	{
 		functionId: ASCII,
@@ -3944,7 +3979,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_char},
-				retType:    serializedTupleReturnType,
+				retType:    physicalCollationKeyReturnType,
 				newOp: func() executeLogicOfOverload {
 					return BuiltInPhysicalCollationKey
 				},
@@ -3998,7 +4033,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceNumber[uint64]
@@ -4008,7 +4043,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceNumber[int64]
@@ -4018,7 +4053,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal64
@@ -4028,7 +4063,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal128
@@ -4038,7 +4073,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.New(types.T_text, types.MaxLongTextLen, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SpaceDecimal256
@@ -10819,7 +10854,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DayOfYear
@@ -12363,7 +12398,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				args:            []types.T{types.T_date},
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
@@ -12374,7 +12409,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				args:            []types.T{types.T_datetime},
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -12384,7 +12419,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_date, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateToWeek
@@ -12394,7 +12429,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_datetime, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
@@ -13817,6 +13852,8 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	{functionId: TO_CALENDAR_INTERVAL, class: plan.Function_STRICT,
+		layout: STANDARD_FUNCTION, checkFn: fixedTypeMatch, Overloads: calendarIntervalOverloads()},
 	{
 		functionId: TO_INTERVAL_MICROSECOND,
 		class:      plan.Function_STRICT,
@@ -16509,6 +16546,9 @@ var supportedOthersBuiltIns = []FuncNew{
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
 							if isNull || !flag {
+								if errType == "odku_pk_mutation" {
+									return moerr.NewUnsupportedDML(proc.Ctx, "update primary key on duplicate")
+								}
 								if errType == "fk_no_referenced_row" {
 									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
 								}

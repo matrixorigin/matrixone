@@ -8432,6 +8432,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
+		} else if !w.gsp.EmptyByFlag() {
+			// Constants share one payload, but grouping belongs to logical
+			// rows and must follow the selection, including repeated rows.
+			for i, sel := range sels {
+				if w.gsp.Contains(uint64(sel)) {
+					nulls.Add(&v.gsp, uint64(oldLen+i))
+				}
+			}
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -8657,6 +8665,8 @@ func (v *Vector) unionBatch(
 		v.setLengthAfterExtend(v.length + addCnt)
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
+		} else {
+			appendBatchGrouping(v, w, oldLen, offset, cnt, flags)
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
@@ -12218,8 +12228,12 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
-	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-		return err
+	// Legacy domains need no collation admission. Check the domain before
+	// extracting bytes, especially for inline values copied in merge loops.
+	if types.IsUnicodeCollation(vec.typ.Charset) {
+		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+			return err
+		}
 	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)

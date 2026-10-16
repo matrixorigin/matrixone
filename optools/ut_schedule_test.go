@@ -56,6 +56,8 @@ exit "$HEAVY_STATUS"
 `
 }
 
+// Scheduling cases may run in parallel: each harness owns its directory,
+// environment and child processes. Cases using t.Setenv stay serial.
 // Source the real runner in a private repository layout. Its startup clears
 // diagnostics, so sourcing it in the actual checkout would corrupt another UT.
 func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
@@ -118,7 +120,19 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
+	// Start each fixture from the runner's defaults and its own explicit overrides.
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		if strings.HasPrefix(key, "UT_") {
+			continue
+		}
+		switch key {
+		case "HEAVY_RACE_PARALLEL", "PLAN_RACE_PARALLEL", "PLAN_RACE_SHARDS", "MO_TEST_CLUSTER_ADMISSION_POOL_SIZE":
+			continue
+		}
+		cmd.Env = append(cmd.Env, value)
+	}
+	cmd.Env = append(cmd.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
 	if diagnostic != "" {
@@ -131,6 +145,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 }
 
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	t.Parallel()
 	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
 	// diagnostics without cloning a repository or changing this worktree.
 	gitDir := filepath.Join(t.TempDir(), "git")
@@ -158,31 +173,41 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, want      string
+		embeddedBatches string
 		args            []string
 		accepted        bool
 		validationError string
 	}{
-		{name: "serial-default", want: "4 1 1", accepted: true},
-		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "4 1 1", accepted: true},
-		{name: "issues-only-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "4 2 1", accepted: true},
-		{name: "embedded-only-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 1 2", accepted: true},
-		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
-		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
-		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
-		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
-		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "4 18446744073709551618 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
-		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 1 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
+		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
+		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
+		{name: "embedded-pool-serial-rollback", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=1"}, want: "8 2 1 0", accepted: true},
+		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "8 1 1 1", accepted: true},
+		{name: "prebuild-explicit-opt-in", args: []string{"UT_PREBUILD_EMBEDDED=1"}, want: "8 2 2 1", accepted: true},
+		{name: "prebuild-explicit-disable", args: []string{"UT_ISSUES_BATCHES=4", "UT_PREBUILD_EMBEDDED=0"}, want: "4 1 1 0", accepted: true},
+		{name: "four-batch-rollback", args: []string{"UT_ISSUES_BATCHES=4"}, want: "4 1 1 1", accepted: true},
+		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
+		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "8 18446744073709551618 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.embeddedBatches == "" {
+				tc.embeddedBatches = "4"
+			}
+			tc.want += " " + tc.embeddedBatches
 			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
 			cmd := exec.CommandContext(t.Context(), "make", args...)
 			cmd.Dir = ".."
-			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\"\n")
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\"\n")
 			// Test Make's defaults, not the enclosing UT's scheduling overrides.
 			for _, value := range os.Environ() {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)
@@ -213,14 +238,14 @@ grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
 `
 			out, err = scheduleHarness(t, script,
 				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
-				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
+				"UT_EMBEDDED_BATCHES="+values[4], "UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "UT_PREBUILD_EMBEDDED="+values[3], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
 				"EXPECT_VALIDATION_ERROR="+tc.validationError)
 			if err != nil {
 				t.Fatalf("runner config: %v\n%s", err, out)
 			}
 		})
 	}
-	for _, batches := range []string{"1", "4"} {
+	for _, batches := range []string{"1", "4", "8"} {
 		t.Run("direct-unset-defaults/batches="+batches, func(t *testing.T) {
 			script := `unset UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL
 UT_ISSUES_BATCHES="$BATCHES"
@@ -237,6 +262,7 @@ source ./run_ut.sh UT
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
 	}{
@@ -350,6 +376,7 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 }
 
 func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, budget, overlap, planParallel, engine, heavy, plan, expected string }{
 		{"default-safe", "", "1", "1", "0", "0", "0", "0"},
 		{"explicit-three", "3", "", "1", "0", "0", "0", "0"},
@@ -491,6 +518,7 @@ printf '\nREPORT\n'
 }
 
 func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
@@ -545,6 +573,7 @@ exit 0
 }
 
 func TestEngineChildRegistrationSurvivesCancellation(t *testing.T) {
+	t.Parallel()
 	transform := func(text string) string {
 		const anchor = "        \"$@\" &\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n"
 		if got := strings.Count(text, anchor); got != 1 {
@@ -597,6 +626,7 @@ exit 0
 }
 
 func TestEngineRaceHelperPublishesCompleteReport(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -642,6 +672,7 @@ exit 99
 // A failed build must still propagate; omitting DWARF must not bypass race,
 // tags, the bounded build parallelism, or module/vet policy.
 func TestRaceBinaryBuildPolicyAndFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, command string }{
 		{"engine", "run_engine_race_shards example/engine 1"},
 		{"plan", "run_plan_race_shards example/plan"},
@@ -677,6 +708,7 @@ exit 97
 }
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term", "marker-report-open", "marker-completion"} {
 		t.Run(mode, func(t *testing.T) {
 			transform := func(text string) string {
@@ -833,6 +865,7 @@ exit 99
 }
 
 func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
@@ -871,6 +904,7 @@ kill -TERM "$$"
 }
 
 func TestCancellationReportsCompletedSlowCases(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { printf "%s\n" "$2"; }
 UT_REPORT="$CASE_DIR/report.json"
@@ -902,6 +936,7 @@ exit 0
 }
 
 func TestCgroupResourceBreakdown(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkdir "$CASE_DIR/cgroup"
 printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
@@ -928,13 +963,14 @@ cgroup_resource_breakdown "$CASE_DIR/missing"
 }
 
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
 exec 9<> "$CASE_DIR/heartbeat-ready"
 trap 'stop_ut_heartbeat; exec 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
-    if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
+    if [[ "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ]]; then
         printf 'ready\n' >&9
     fi
 }
@@ -961,14 +997,18 @@ EOF
 cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
 EOF
+cat > "$G_WKSP/${G_TS}-embedded-batched-race-report.out.0" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/embedded","Test":"TestBatched"}
+EOF
 read -r -t 10 heartbeat_ready <&9 || exit 92
 stop_ut_heartbeat
 exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
-grep -q 'active_cases=2' "$CASE_DIR/ut.log"
+grep -q 'active_cases=3' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'TestBatched' "$CASE_DIR/ut.log"
 grep -q 'processes=9' "$CASE_DIR/ut.log"
 grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
 grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
@@ -985,6 +1025,7 @@ exit 0
 }
 
 func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-child"
 mkfifo "$CASE_DIR/heartbeat-release"
@@ -1117,6 +1158,7 @@ exit 0
 }
 
 func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	t.Parallel()
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
 exec 7<> "$CASE_DIR/heartbeat-ready"
@@ -1241,6 +1283,7 @@ exit 0
 }
 
 func TestLightIssuesOverlapPreservesReportsAndFailures(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *example/light-package* ]]; then
@@ -1310,6 +1353,7 @@ report=$(cat "$UT_REPORT")
 }
 
 func TestLightIssuesCancellationStopsWritersBeforeMerge(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *example/light-package* ]]; then
@@ -1346,6 +1390,7 @@ kill -TERM "$$"
 }
 
 func TestRunTestsPlacesHNSWBeforeLightIssuesOverlap(t *testing.T) {
+	t.Parallel()
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
@@ -1518,6 +1563,7 @@ fi
 // One outstanding TERM at a time tests parser reentry without a signal flood.
 // The main PID comes from Go; the subshell PID comes from its parent's $!.
 func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	script := scheduleFixturePID + `
@@ -1533,32 +1579,32 @@ read -r observed <&8
 wait "$child_pid"
 printf 'CHILD %s %s\n' "$observed" "$child_pid"
 handled=0
-ack_pending=0
-trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); ack_pending=1' TERM
+pending_ack=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); pending_ack=1' TERM
 (
+ # Unblock the main loop on protocol failure as well as normal completion.
+ trap ': > "$scratch/done"' EXIT
  for ((j=0; j<200; j++)); do
   kill -TERM "$main"
-  read -r acknowledgment <&7
-  [[ "$acknowledgment" == ack ]] || exit 98
+  read -r acknowledgment sequence pending <&7
+  [[ "$acknowledgment" == ack && "$sequence" == "$((j+1))" && "$pending" == 0 ]] || exit 98
  done
- touch "$scratch/done"
 ) &
 sender=$!
 trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
 while [[ ! -f "$scratch/done" ]]; do
+ # ACK means the previous trap has returned, so the sender can safely issue
+ # the next TERM. Publishing it inside the trap can lose that next signal.
+ if (( pending_ack )); then
+  pending_ack=0
+  printf 'ack %s %s\n' "$handled" "$pending_ack" >&7
+ fi
  # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
  # a child, whose output can be interrupted by TERM; its PID is checked
  # at startup, in the subshell, and by each TERM handler instead.
  if [[ -n "${BASHPID:-}" ]]; then
   fixture_self_pid observed
   [[ "$observed" == "$main" ]] || exit 99
- fi
- # Acknowledge only after the handler returns. Otherwise the sender can
- # deliver the next TERM while TERM is still blocked inside the handler,
- # and Bash can coalesce it with the signal already being handled.
- if (( ack_pending )); then
-  ack_pending=0
-  printf 'ack\n' >&7
  fi
 done
 wait "$sender"

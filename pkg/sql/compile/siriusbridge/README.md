@@ -50,7 +50,7 @@ bounded prefetch; this bridge milestone does not implement that SQL path.
   compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
   `/usr/local/cuda` is not required.
 - The Sirius commit pinned by MatrixOne at `third_party/sirius`. For a release,
-  that commit must be merged into `matrixorigin/sirius:upstream-dev-merge`; the
+  that commit must be merged into `matrixorigin/sirius:perf/embedded-mo-scan`; the
   `SIRIUS_MERGED_REF` used below must contain the exact SDK source revision.
   An unmerged pin requires an explicit development build and is not a release
   artifact.
@@ -67,7 +67,7 @@ export MO_SRC=/absolute/path/to/matrixone
 export SIRIUS_SRC="$MO_SRC/third_party/sirius"
 git -C "$MO_SRC" submodule update --init third_party/sirius
 cd "$SIRIUS_SRC"
-git fetch origin upstream-dev-merge
+git fetch origin perf/embedded-mo-scan
 git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
 pixi install --frozen -e mo
 pixi run --frozen -e mo mo-build-embedding-sdk
@@ -83,7 +83,7 @@ pixi run --frozen -e mo sh -c '
   cd "$MO_SRC"
   MO_CL_CUDA=1 MO_SIRIUS=1 \
     SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
-    SIRIUS_MERGED_REF=origin/upstream-dev-merge \
+    SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan \
     make -j8 build
 '
 ```

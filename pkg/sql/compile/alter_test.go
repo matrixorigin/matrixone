@@ -91,6 +91,243 @@ func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
 }
 
+func TestAlterTableHasRename(t *testing.T) {
+	rename := func(oldName, newName string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: oldName, NewName: newName},
+			},
+		}
+	}
+
+	require.False(t, alterTableHasRename(nil))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{}))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t")},
+	}))
+	require.True(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t2")},
+	}))
+}
+
+func TestIsClusterTableRename(t *testing.T) {
+	rename := &plan2.AlterTable_Action{
+		Action: &plan2.AlterTable_Action_AlterName{
+			AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+		},
+	}
+
+	require.True(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t"},
+			},
+		}},
+	}))
+
+	proc := testutil.NewProcess(t)
+	err := checkRoleRuleRenameAdmission(&Compile{proc: proc}, &plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	})
+	require.ErrorContains(t, err, "renaming a cluster table")
+}
+
+func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
+	rename := &plan2.AlterTable{
+		Database: "db",
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+			},
+		}},
+	}
+	frontier := timestamp.Timestamp{PhysicalTime: 20}
+
+	t.Run("non-rename is a no-op", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{}},
+			true,
+			true,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("cluster rename is rejected before transaction access", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{IsClusterTable: true, Actions: rename.Actions}},
+			false,
+			false,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "renaming a cluster table")
+	})
+
+	t.Run("temporary rename is excluded from role-rule admission", func(t *testing.T) {
+		temporaryRename := &plan2.AlterTable{
+			TableDef: &plan2.TableDef{IsTemporary: true},
+			Actions:  rename.Actions,
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{temporaryRename}, false, false, roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, false, roleRuleRenameAdmissionHooks{
+				hasRoleRules: func(context.Context) (bool, error) { return false, nil },
+			},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+	})
+
+	t.Run("lock and barrier precede the catalog existence query", func(t *testing.T) {
+		var (
+			events   []string
+			snapshot = timestamp.Timestamp{PhysicalTime: 10}
+		)
+		hooks := roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error {
+				events = append(events, "lock")
+				// Model a rule commit that completed before the lock was acquired.
+				return nil
+			},
+			acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+				events = append(events, "barrier")
+				return frontier, nil
+			},
+			currentSnapshot: func() timestamp.Timestamp { return snapshot },
+			updateSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+				events = append(events, "update-snapshot")
+				snapshot = ts
+				return nil
+			},
+			hasRoleRules: func(_ context.Context) (bool, error) {
+				events = append(events, "query")
+				return true, nil
+			},
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(t.Context(), []*plan2.AlterTable{rename}, true, true, hooks)
+		require.ErrorContains(t, err, "role rewrite rules exist")
+		require.Equal(t, []string{"lock", "barrier", "update-snapshot", "query"}, events)
+		require.Equal(t, frontier, snapshot)
+	})
+
+	t.Run("barrier and query failures are fail-closed", func(t *testing.T) {
+		barrierErr := errors.New("barrier failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules: func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+					return timestamp.Timestamp{}, barrierErr
+				},
+				currentSnapshot: func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after barrier failure")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after barrier failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, barrierErr)
+
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return timestamp.Timestamp{}, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after empty barrier")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after empty barrier")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "empty timestamp")
+	})
+
+	t.Run("snapshot update and query failures are fail-closed", func(t *testing.T) {
+		updateErr := errors.New("snapshot update failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return updateErr },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after snapshot failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, updateErr)
+
+		queryErr := errors.New("role-rule query failed")
+		snapshot := frontier
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return snapshot },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules:       func(context.Context) (bool, error) { return false, queryErr },
+			},
+		)
+		require.ErrorIs(t, err, queryErr)
+	})
+
+	t.Run("snapshot non-advancement and cancellation are fail-closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after non-advancement")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "snapshot did not advance")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err = checkRoleRuleRenameAdmissionWithHooks(ctx, []*plan2.AlterTable{rename}, true, true, roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error { t.Fatal("lock after cancellation"); return nil },
+		})
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
 func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
 	const sql = "insert into copy select * from source"
 	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
@@ -1437,6 +1674,9 @@ func TestAlterPartitionTablesKeepsAutoIncrementCleanupAtStatementBoundary(t *tes
 }
 
 type alterCopyInsertSpyExecutor struct {
+	createSQL       string
+	createCtx       context.Context
+	createErr       error
 	insertSQL       string
 	insertErr       error
 	insertCtx       context.Context
@@ -2119,6 +2359,10 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	e.executedSQLs = append(e.executedSQLs, sql)
+	if sql == e.createSQL {
+		e.createCtx = ctx
+		return executor.Result{}, e.createErr
+	}
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
@@ -2170,7 +2414,13 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 		skipPkDedup        bool
 		nilCtxBeforeInsert bool
 		wantPipelineFlush  bool
+		wide               bool
+		stale              bool
+		createErr          error
 	}{
+		{name: "wide create error restores context", wide: true, createErr: errors.New("create-copy failed")},
+		{name: "wide cancellation restores context", wide: true, createErr: context.Canceled},
+		{name: "wide stale generation rejects before CREATE", wide: true, stale: true},
 		{
 			name:               "skip pk dedup false",
 			skipPkDedup:        false,
@@ -2223,6 +2473,16 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 				TblId: 2,
 				Name:  "dept_copy",
 			}
+			if tc.wide {
+				tableDef.Version = 1
+				for i := 0; i < 4098; i++ {
+					col := &plan.ColDef{Name: fmt.Sprintf("c%d", i), ColId: uint64(i + 1), Typ: plan.Type{Id: int32(types.T_int32)}}
+					tableDef.Cols = append(tableDef.Cols, col)
+					if i < 4097 {
+						copyTableDef.Cols = append(copyTableDef.Cols, plan.DeepCopyColDef(col))
+					}
+				}
+			}
 			alterTable := &plan2.AlterTable{
 				Database:          "test",
 				TableDef:          tableDef,
@@ -2248,8 +2508,11 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
-			originRel.EXPECT().CopyTableDef(gomock.Any()).
-				Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
+			liveTableDef := plan.DeepCopyTableDef(tableDef, true)
+			if tc.stale {
+				liveTableDef.Version++
+			}
+			originRel.EXPECT().CopyTableDef(gomock.Any()).Return(liveTableDef).Times(1)
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
 			if tc.nilCtxBeforeInsert {
@@ -2275,12 +2538,30 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 			spyExec := &alterCopyInsertSpyExecutor{
+				createSQL: alterTable.CreateTmpTableSql,
+				createErr: tc.createErr,
 				insertSQL: alterTable.InsertTmpDataSql,
 				insertErr: insertErr,
 			}
 			rt := moruntime.DefaultRuntime()
+			priorExecutor, hadExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			priorRuntime := moruntime.ServiceRuntime(proc.GetService())
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+			t.Cleanup(func() {
+				if hadExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, priorExecutor)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+				}
+			})
 			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			t.Cleanup(func() {
+				if priorRuntime != nil {
+					moruntime.SetupServiceBasedRuntime(proc.GetService(), priorRuntime)
+				} else {
+					moruntime.CompareAndDeleteServiceBasedRuntime(proc.GetService(), rt)
+				}
+			})
 
 			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
 			c.pn = s.Plan
@@ -2288,6 +2569,20 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			origCtx := proc.Ctx
 
 			err := s.AlterTableCopy(c)
+			if tc.stale {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+				require.NotContains(t, spyExec.executedSQLs, alterTable.CreateTmpTableSql)
+				require.Same(t, origCtx, proc.Ctx)
+				return
+			}
+			require.NotNil(t, spyExec.createCtx)
+			require.NotSame(t, origCtx, spyExec.createCtx)
+			if tc.createErr != nil {
+				require.ErrorIs(t, err, tc.createErr)
+				require.Same(t, origCtx, proc.Ctx)
+				require.Nil(t, spyExec.insertCtx, "failed CREATE must not start copying rows")
+				return
+			}
 			require.ErrorIs(t, err, insertErr)
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
