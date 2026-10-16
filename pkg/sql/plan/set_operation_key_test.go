@@ -544,7 +544,7 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 	owner := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}}
 	floor, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion117, floor)
+	require.Equal(t, defines.MORPCVersion118, floor)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
 		original, present := rt.GetGlobalVariables(key)
@@ -556,15 +556,15 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 			}
 		})
 	}
-	for _, version := range []int64{defines.MORPCVersion116, defines.MORPCVersion117} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 		readErr := RequirePersistedExpressionProtocol(proc.Ctx, proc, owner)
 		writeErr := RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner)
-		if version == defines.MORPCVersion116 {
-			require.ErrorContains(t, readErr, "117")
-			require.ErrorContains(t, writeErr, "117")
+		if version == defines.MORPCVersion117 {
+			require.ErrorContains(t, readErr, "118")
+			require.ErrorContains(t, writeErr, "118")
 		} else {
 			require.NoError(t, readErr)
 			require.NoError(t, writeErr)
