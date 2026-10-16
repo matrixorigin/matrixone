@@ -4393,7 +4393,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
+			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
+				// SECOND consumes the source decimal value before integer coercion.
+				b.suppressDefaultValueBindType = true
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindTimestampAddSecondSourceAst(arg, depth)
+			} else if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
 				!(function.LegacySpecialConsumers(b.GetContext()) && (name == "format" || name == "makedate" || name == "maketime")) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
@@ -6836,6 +6842,12 @@ func bindFuncExprImplByPlanExpr(
 	if (strings.EqualFold(name, "extractvalue") || strings.EqualFold(name, "updatexml")) && len(args) >= 2 {
 		if !isXMLXPathConstant(args[1]) {
 			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
+		}
+	}
+	if name == "timestampadd" {
+		args, err = bindTimestampAddSecond(ctx, args)
+		if err != nil {
+			return nil, err
 		}
 	}
 	// DUMP/LOAD verifies old SQL origins against their historical physical

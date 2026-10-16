@@ -139,6 +139,9 @@ func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFea
 }
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.TimestampAddSecondIntervals {
+		return defines.MORPCVersion118
+	}
 	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
 		return defines.MORPCVersion98
 	}

@@ -39,9 +39,10 @@ type tableDumpBindingBudget struct {
 }
 
 type tableDumpExpressionVisitor struct {
-	nodes       int
-	hasDivision bool
-	hasSpecial  bool
+	nodes           int
+	hasDivision     bool
+	hasSpecial      bool
+	hasTimestampAdd bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -53,6 +54,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 		switch numericAstFunctionName(fn) {
 		case "format", "makedate", "maketime":
 			v.hasSpecial = true
+		case "timestampadd":
+			v.hasTimestampAdd = true
 		}
 	}
 	return e, false
@@ -147,9 +150,20 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool) (*planpb.Expr, error) {
+type tableDumpBindingMode uint8
+
+const (
+	tableDumpBindingCurrent tableDumpBindingMode = iota
+	tableDumpBindingLegacyTimestampAdd
+	tableDumpBindingLegacySpecial
+)
+
+func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	if legacy {
+	switch mode {
+	case tableDumpBindingLegacyTimestampAdd:
+		bindCtx = function.WithLegacyTimestampAddSecond(bindCtx)
+	case tableDumpBindingLegacySpecial:
 		bindCtx = function.WithLegacySpecialConsumers(bindCtx)
 	}
 	proc := ctx.GetProcess()
@@ -306,44 +320,45 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if visit.hasDivision {
 				maxIncrement = 30
 			}
-			var first, legacyFirst *planpb.Expr
-			var matchedLegacy bool
+			// Each migration era must reproduce the whole tree; no partial matching
+			// or semantic normalization is permitted for supplied expressions.
+			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
+			if visit.hasTimestampAdd {
+				modes = append(modes, tableDumpBindingLegacyTimestampAdd)
+			}
+			if visit.hasSpecial {
+				modes = append(modes, tableDumpBindingLegacySpecial)
+			}
+			var first [3]*planpb.Expr
+			var matchedMode tableDumpBindingMode
 			want := item.expr
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
 			for increment := int64(0); increment <= maxIncrement; increment++ {
-				budget.visits += visit.nodes
-				if budget.visits > tableDumpMaxCandidateVisits {
-					stmt.Free()
-					return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
-				}
-				candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, false)
-				if err == nil {
-					if first == nil {
-						first = candidate
-					} else if visit.hasDivision && !sameTableDumpBoundExpression(first, candidate) {
-						sensitive = true
+				for _, mode := range modes {
+					if mode != tableDumpBindingCurrent && matched && mode != matchedMode {
+						continue
 					}
-					matched = matched || sameTableDumpBoundExpression(want, candidate)
-				}
-				if visit.hasSpecial && (!matched || matchedLegacy) {
 					budget.visits += visit.nodes
 					if budget.visits > tableDumpMaxCandidateVisits {
 						stmt.Free()
 						return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					}
-					legacy, err := bindTableDumpExpression(ctx, target, item, ast, increment, true)
-					if err == nil {
-						if legacyFirst == nil {
-							legacyFirst = legacy
-						} else if visit.hasDivision && !sameTableDumpBoundExpression(legacyFirst, legacy) {
-							sensitive = true
+					candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, mode)
+					if err != nil {
+						continue
+					}
+					if first[mode] == nil {
+						first[mode] = candidate
+					} else if visit.hasDivision && !sameTableDumpBoundExpression(first[mode], candidate) {
+						sensitive = true
+					}
+					if sameTableDumpBoundExpression(want, candidate) {
+						if !matched {
+							matchedMode = mode
 						}
-						if sameTableDumpBoundExpression(want, legacy) {
-							matched = true
-							matchedLegacy = true
-						}
+						matched = true
 					}
 				}
 				if matched && sensitive {
