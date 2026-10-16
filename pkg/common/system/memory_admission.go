@@ -17,6 +17,7 @@ package system
 import (
 	"math"
 	"sync"
+	"time"
 )
 
 // MemoryAdmissionBudget is the process-wide physical memory ledger shared by
@@ -49,7 +50,9 @@ type MemoryAdmissionBudgetSnapshot struct {
 // deterministic tests and for an embedded service which intentionally owns a
 // separate memory domain.
 func NewMemoryAdmissionBudget(policy MemoryDomainReservePolicy) *MemoryAdmissionBudget {
-	if policy.MinimumBytes == 0 && policy.RuntimeBytes == 0 && policy.ObservedNonGoMultiplier == 0 {
+	if policy.MinimumBytes == 0 && policy.RuntimeBytes == 0 &&
+		policy.ObservedNonGoMultiplier == 0 && policy.MinimumPercent == 0 &&
+		policy.HostObservedNonGoMultiplier == 0 && policy.HostMinimumPercent == 0 {
 		policy = DefaultMemoryDomainReservePolicy()
 	}
 	if policy.ObservedNonGoMultiplier == 0 {
@@ -130,6 +133,17 @@ func (b *MemoryAdmissionBudget) Snapshot() MemoryAdmissionBudgetSnapshot {
 		return MemoryAdmissionBudgetSnapshot{}
 	}
 	snapshot, _ := CurrentMemoryDomain()
+	return b.Observe(snapshot)
+}
+
+// Observe publishes a caller-provided domain sample into the shared
+// calibration state and returns the resulting reserve/high-water view. The
+// execution budget uses this method when it already owns the sample, avoiding
+// a second read and ensuring that both gates use the same calibrated reserve.
+func (b *MemoryAdmissionBudget) Observe(snapshot MemoryDomainSnapshot) MemoryAdmissionBudgetSnapshot {
+	if b == nil {
+		return MemoryAdmissionBudgetSnapshot{}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if snapshot.Measured {
@@ -157,6 +171,31 @@ func (b *MemoryAdmissionBudget) Check(size uint64) (available uint64, measured, 
 	return available, true, available >= size
 }
 
+// WaitFor performs bounded statement-entry admission. It does not reserve the
+// requested bytes: actual MPool/workspace ownership is still charged by
+// TryReserve at allocation time. The wait only lets a closing statement or a
+// cache-reclamation cycle make room before the new statement is admitted.
+func (b *MemoryAdmissionBudget) WaitFor(size uint64, timeout time.Duration) (available uint64, measured, ok bool) {
+	if timeout <= 0 {
+		return b.Check(size)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		available, measured, ok = b.Check(size)
+		if ok {
+			return available, measured, true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return available, measured, false
+		}
+		if remaining > 10*time.Millisecond {
+			remaining = 10 * time.Millisecond
+		}
+		time.Sleep(remaining)
+	}
+}
+
 func (b *MemoryAdmissionBudget) Reserved() uint64 {
 	if b == nil {
 		return 0
@@ -170,6 +209,10 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 	if !snapshot.Measured || snapshot.Limit == 0 {
 		return 0
 	}
+	limit := snapshot.AdmissionLimit()
+	if limit == 0 {
+		return 0
+	}
 	if snapshot.NonGo > b.nonGoHighWater {
 		b.nonGoHighWater = snapshot.NonGo
 	}
@@ -180,10 +223,10 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 	if b.reserved > used {
 		used = b.reserved
 	}
-	if reserve >= snapshot.Limit || used >= snapshot.Limit-reserve {
+	if reserve >= limit || used >= limit-reserve {
 		return 0
 	}
-	return snapshot.Limit - reserve - used
+	return limit - reserve - used
 }
 
 func (b *MemoryAdmissionBudget) snapshotLocked(

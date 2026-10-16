@@ -487,6 +487,8 @@ func MemoryAvailable() uint64 {
 // with measured==true means the budget is genuinely exhausted; callers must
 // not conflate that with measured==false (unavailable), because the two
 // demand opposite responses -- fail the request vs. fall back to another bound.
+// When a domain exposes a soft limit, the returned headroom is bounded by that
+// soft limit so bulk sizing and physical admission stop at the same boundary.
 func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 	// Both execution admission and the resource throttlers consume this
 	// published sample. A refresh error keeps the last good sample available;
@@ -501,7 +503,7 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 	if err != nil {
 		logutil.Warnf("using stale memory domain sample after refresh failure: %v", err)
 	}
-	return snapshot.ReclaimableHeadroom(), true
+	return snapshot.AdmissionReclaimableHeadroom(), true
 }
 
 func MemoryUsed() uint64 {

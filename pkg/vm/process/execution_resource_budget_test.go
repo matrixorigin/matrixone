@@ -548,8 +548,8 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ceiling.EffectiveCN != 10*gib || ceiling.Reserve != 4*gib ||
-		ceiling.CNMemoryCap != 6*gib || ceiling.QueryCap != 2*gib {
+	if ceiling.EffectiveCN != 10*gib || ceiling.Reserve != gib ||
+		ceiling.CNMemoryCap != 9*gib || ceiling.QueryCap != 2*gib {
 		t.Fatalf("ceiling = %+v", ceiling)
 	}
 	if _, err = ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
@@ -594,9 +594,9 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 		want    uint64
 	}{
 		{
-			name:    "minimum runtime margin",
+			name:    "policy runtime margin",
 			ceiling: ExecutionMemoryCeiling{EffectiveCN: 12 * gib, Reserve: 4 * gib},
-			want:    gib,
+			want:    12 * gib / 20,
 		},
 		{
 			name:    "five percent on a large CN",
@@ -604,9 +604,9 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 			want:    5 * gib,
 		},
 		{
-			name:    "bounded by the startup reserve",
+			name:    "bounded by the measured policy reserve",
 			ceiling: ExecutionMemoryCeiling{EffectiveCN: 2 * gib, Reserve: gib / 2},
-			want:    gib / 2,
+			want:    256 * mpool.MB,
 		},
 	}
 	for _, test := range tests {

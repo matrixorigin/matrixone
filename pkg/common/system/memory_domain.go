@@ -42,8 +42,13 @@ const (
 // policy that explicitly permits reclaimable memory. Kernel includes the
 // kernel/socket/slab sub-account when the source exposes it.
 type MemoryDomainSnapshot struct {
-	Used        uint64
-	Limit       uint64
+	Used  uint64
+	Limit uint64
+	// SoftLimit is the pressure/admission limit. A zero value means that the
+	// domain does not expose a separate soft boundary. For cgroup v2 this is
+	// memory.high; for cgroup v1 it is memory.soft_limit_in_bytes; for a host it
+	// is the configured MO_MEMORY_HOST_SOFT_LIMIT value.
+	SoftLimit   uint64
 	Reclaimable uint64
 	Kernel      uint64
 	// NonGo is the measured portion of the domain which is not expected to be
@@ -58,6 +63,17 @@ type MemoryDomainSnapshot struct {
 
 func (s MemoryDomainSnapshot) IsCgroup() bool {
 	return s.Source == MemoryDomainSourceCgroupV1 || s.Source == MemoryDomainSourceCgroupV2
+}
+
+// AdmissionLimit is the soft boundary used by both physical admission gates.
+// The hard limit remains available through Limit for diagnostics and hard-OOM
+// headroom, but new work must stop at memory.high when the operator configured
+// one.
+func (s MemoryDomainSnapshot) AdmissionLimit() uint64 {
+	if s.SoftLimit > 0 && s.SoftLimit < s.Limit {
+		return s.SoftLimit
+	}
+	return s.Limit
 }
 
 // HardHeadroom does not credit reclaimable pages. It is the conservative
@@ -85,6 +101,22 @@ func (s MemoryDomainSnapshot) ReclaimableHeadroom() uint64 {
 	return s.Limit - used
 }
 
+// AdmissionReclaimableHeadroom is the clean-cache-credit view bounded by the
+// same soft limit used for new physical reservations.
+func (s MemoryDomainSnapshot) AdmissionReclaimableHeadroom() uint64 {
+	limit := s.AdmissionLimit()
+	used := s.Used
+	if s.Reclaimable >= used {
+		used = 0
+	} else {
+		used -= s.Reclaimable
+	}
+	if limit <= used {
+		return 0
+	}
+	return limit - used
+}
+
 // MemoryDomainReservePolicy converts observed non-Go charges into a reserve
 // which is removed from the physical admission budget.  The policy is kept in
 // this package so the execution gate and the write-path throttlers cannot
@@ -93,11 +125,17 @@ func (s MemoryDomainSnapshot) ReclaimableHeadroom() uint64 {
 // MinimumBytes and RuntimeBytes are deliberately small, data-independent
 // floors.  The normal reserve is driven by the observed high-water non-Go
 // charge.  A deployment can override the floors with
-// MO_MEMORY_NON_GO_RESERVE_BYTES and MO_MEMORY_RUNTIME_RESERVE_BYTES.
+// MO_MEMORY_NON_GO_RESERVE_BYTES, MO_MEMORY_RUNTIME_RESERVE_BYTES, and the
+// source-specific MO_MEMORY_* reserve/multiplier overrides.
 type MemoryDomainReservePolicy struct {
 	MinimumBytes            uint64
 	RuntimeBytes            uint64
 	ObservedNonGoMultiplier uint64
+	// HostObservedNonGoMultiplier and HostMinimumPercent let a bare host keep
+	// a larger neighbor/OS safety margin than an isolated cgroup. Zero uses the
+	// generic value, preserving deterministic custom policies.
+	HostObservedNonGoMultiplier uint64
+	HostMinimumPercent          uint64
 	// MinimumPercent is a domain-relative safety floor. It is intentionally
 	// lower than the old fixed 20% execution reserve; the measured non-Go high
 	// water is the primary input and this percentage covers counters the domain
@@ -121,6 +159,7 @@ func DefaultMemoryDomainReservePolicy() MemoryDomainReservePolicy {
 		RuntimeBytes:            defaultMemoryDomainRuntimeFloor,
 		ObservedNonGoMultiplier: defaultMemoryDomainNonGoMultiplier,
 		MinimumPercent:          defaultMemoryDomainReservePercent,
+		HostMinimumPercent:      defaultMemoryDomainReservePercent * 2,
 	}
 	if value, ok := memorySizeFromEnv("MO_MEMORY_NON_GO_RESERVE_BYTES"); ok {
 		policy.MinimumBytes = value
@@ -131,6 +170,15 @@ func DefaultMemoryDomainReservePolicy() MemoryDomainReservePolicy {
 	if value, ok := memoryPercentFromEnv("MO_MEMORY_RESERVE_PERCENT"); ok {
 		policy.MinimumPercent = value
 	}
+	if value, ok := memoryUintFromEnv("MO_MEMORY_NON_GO_MULTIPLIER"); ok {
+		policy.ObservedNonGoMultiplier = value
+	}
+	if value, ok := memoryPercentFromEnv("MO_MEMORY_HOST_RESERVE_PERCENT"); ok {
+		policy.HostMinimumPercent = value
+	}
+	if value, ok := memoryUintFromEnv("MO_MEMORY_HOST_NON_GO_MULTIPLIER"); ok {
+		policy.HostObservedNonGoMultiplier = value
+	}
 	return policy
 }
 
@@ -139,21 +187,32 @@ func DefaultMemoryDomainReservePolicy() MemoryDomainReservePolicy {
 // from wrapping into an unsafe small reserve.
 func (p MemoryDomainReservePolicy) Reserve(snapshot MemoryDomainSnapshot) uint64 {
 	reserve := p.MinimumBytes
-	if p.ObservedNonGoMultiplier == 0 {
-		p.ObservedNonGoMultiplier = 1
+	multiplier := p.ObservedNonGoMultiplier
+	minimumPercent := p.MinimumPercent
+	if snapshot.Source == MemoryDomainSourceHost {
+		if p.HostObservedNonGoMultiplier > 0 {
+			multiplier = p.HostObservedNonGoMultiplier
+		}
+		if p.HostMinimumPercent > 0 {
+			minimumPercent = p.HostMinimumPercent
+		}
+	}
+	if multiplier == 0 {
+		multiplier = 1
 	}
 	observed := snapshot.NonGo
-	if observed > ^uint64(0)/p.ObservedNonGoMultiplier {
+	if observed > ^uint64(0)/multiplier {
 		observed = ^uint64(0)
 	} else {
-		observed *= p.ObservedNonGoMultiplier
+		observed *= multiplier
 	}
 	if observed > reserve {
 		reserve = observed
 	}
-	if p.MinimumPercent > 0 {
-		percentReserve := snapshot.Limit / 100 * p.MinimumPercent
-		if snapshot.Limit%100 != 0 && (snapshot.Limit%100)*p.MinimumPercent > 0 {
+	if minimumPercent > 0 {
+		limit := snapshot.AdmissionLimit()
+		percentReserve := limit / 100 * minimumPercent
+		if limit%100 != 0 && (limit%100)*minimumPercent > 0 {
 			percentReserve++
 		}
 		if percentReserve > reserve {
@@ -176,6 +235,15 @@ func memoryPercentFromEnv(name string) (uint64, bool) {
 		return 0, false
 	}
 	return percent, true
+}
+
+func memoryUintFromEnv(name string) (uint64, bool) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	return parsed, err == nil
 }
 
 func memorySizeFromEnv(name string) (uint64, bool) {
@@ -204,6 +272,36 @@ func memorySizeFromEnv(name string) (uint64, bool) {
 		return 0, false
 	}
 	return bytes * multiplier, true
+}
+
+func hostMemorySoftLimit(total uint64) uint64 {
+	for _, name := range []string{"MO_MEMORY_HOST_SOFT_LIMIT", "MO_MEMORY_SOFT_LIMIT"} {
+		if value, ok := memorySizeFromEnv(name); ok && value > 0 {
+			if total > 0 && value < total {
+				return value
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
+// MemoryAdmissionWaitTimeout controls the bounded statement-entry wait used
+// when the shared physical ledger is temporarily full. A zero duration turns
+// the queue into an immediate reject; the default is short enough not to hold
+// frontend workers while still allowing an in-flight statement to release a
+// reservation.
+func MemoryAdmissionWaitTimeout() time.Duration {
+	const defaultWait = 250 * time.Millisecond
+	value := strings.TrimSpace(os.Getenv("MO_MEMORY_ADMISSION_WAIT"))
+	if value == "" {
+		return defaultWait
+	}
+	wait, err := time.ParseDuration(value)
+	if err != nil || wait < 0 {
+		return defaultWait
+	}
+	return wait
 }
 
 const memoryDomainRefreshInterval = 100 * time.Millisecond
@@ -252,6 +350,7 @@ func RefreshMemoryDomain() (MemoryDomainSnapshot, error) {
 type memoryDomainLevel struct {
 	dir       string
 	limitFile string
+	softFile  string
 	usageFile string
 	statFile  string
 	source    MemoryDomainSource
@@ -278,6 +377,7 @@ func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
 	return MemoryDomainSnapshot{
 		Used:        mem.Used,
 		Limit:       mem.Total,
+		SoftLimit:   hostMemorySoftLimit(mem.Total),
 		Reclaimable: reclaimable,
 		Kernel:      kernel,
 		NonGo:       nonGo,
@@ -339,7 +439,7 @@ func memoryDomainLevels(pid int) ([]memoryDomainLevel, bool) {
 				continue
 			}
 			return buildMemoryDomainLevels(dir, mountPoint, MemoryDomainSourceCgroupV2,
-				"memory.max", "memory.current", "memory.stat"), true
+				"memory.max", "memory.high", "memory.current", "memory.stat"), true
 		case "cgroup":
 			if v1MemoryPath == "" || !strings.Contains(","+right[2]+",", ",memory,") {
 				continue
@@ -349,20 +449,20 @@ func memoryDomainLevels(pid int) ([]memoryDomainLevel, bool) {
 				continue
 			}
 			return buildMemoryDomainLevels(dir, mountPoint, MemoryDomainSourceCgroupV1,
-				"memory.limit_in_bytes", "memory.usage_in_bytes", "memory.stat"), true
+				"memory.limit_in_bytes", "memory.soft_limit_in_bytes", "memory.usage_in_bytes", "memory.stat"), true
 		}
 	}
 	return nil, false
 }
 
 func buildMemoryDomainLevels(dir, mountPoint string, source MemoryDomainSource,
-	limitFile, usageFile, statFile string) []memoryDomainLevel {
+	limitFile, softFile, usageFile, statFile string) []memoryDomainLevel {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
 	levels := make([]memoryDomainLevel, 0, 4)
 	for {
 		levels = append(levels, memoryDomainLevel{
-			dir: dir, limitFile: limitFile, usageFile: usageFile,
+			dir: dir, limitFile: limitFile, softFile: softFile, usageFile: usageFile,
 			statFile: statFile, source: source,
 		})
 		if dir == mountPoint {
@@ -394,13 +494,21 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 				fmt.Errorf("read memory usage for %s", level.dir)
 		}
 		reclaimable, kernel, nonGo := readCgroupAccounting(filepath.Join(level.dir, level.statFile))
+		softLimit, _ := readCgroupLimit(filepath.Join(level.dir, level.softFile))
+		if softLimit == 0 || softLimit > limit {
+			softLimit = 0
+		}
+		admissionLimit := limit
+		if softLimit > 0 && softLimit < admissionLimit {
+			admissionLimit = softLimit
+		}
 		headroom := uint64(0)
-		if usage < limit {
-			headroom = limit - usage
+		if usage < admissionLimit {
+			headroom = admissionLimit - usage
 		}
 		if !found || headroom < selectedHeadroom {
 			selected = MemoryDomainSnapshot{
-				Used: usage, Limit: limit, Reclaimable: reclaimable,
+				Used: usage, Limit: limit, SoftLimit: softLimit, Reclaimable: reclaimable,
 				Kernel: kernel, NonGo: nonGo, Source: level.source, Measured: true,
 				ObservedAt: time.Now(),
 			}

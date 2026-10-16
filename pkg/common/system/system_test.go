@@ -661,27 +661,32 @@ func TestReadCgroupMemoryDomainSelectsTightestLevel(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
 	}
 	write(root, "memory.max", "max\n")
+	write(root, "memory.high", "max\n")
 	write(root, "memory.current", "1\n")
 	write(parent, "memory.max", strconv.FormatUint(10<<30, 10))
+	write(parent, "memory.high", strconv.FormatUint(9<<30, 10))
 	write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
 	write(parent, "memory.stat", fmt.Sprintf("file %d\nshmem 0\ninactive_file %d\nactive_file 0\nfile_dirty 0\nfile_writeback 0\nkernel 128\n", 2<<30, 2<<30))
 	write(child, "memory.max", strconv.FormatUint(20<<30, 10))
+	write(child, "memory.high", strconv.FormatUint(19<<30, 10))
 	write(child, "memory.current", strconv.FormatUint(15<<30, 10))
 	write(child, "memory.stat", fmt.Sprintf("file %d\nshmem 0\ninactive_file %d\nactive_file 0\nfile_dirty 0\nfile_writeback 0\nkernel 256\n", 4<<30, 4<<30))
 
 	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
-		"memory.max", "memory.current", "memory.stat")
+		"memory.max", "memory.high", "memory.current", "memory.stat")
 	snapshot, measured, err := readCgroupMemoryDomain(levels)
 	require.NoError(t, err)
 	require.True(t, measured)
 	require.Equal(t, uint64(7<<30), snapshot.Used)
 	require.Equal(t, uint64(10<<30), snapshot.Limit)
+	require.Equal(t, uint64(9<<30), snapshot.SoftLimit)
 	require.Equal(t, uint64(2<<30), snapshot.Reclaimable)
 	require.Equal(t, uint64(128), snapshot.Kernel)
 	require.Equal(t, uint64(128), snapshot.NonGo)
 	require.Equal(t, MemoryDomainSourceCgroupV2, snapshot.Source)
 	require.Equal(t, uint64(3<<30), snapshot.HardHeadroom())
 	require.Equal(t, uint64(5<<30), snapshot.ReclaimableHeadroom())
+	require.Equal(t, uint64(4<<30), snapshot.AdmissionReclaimableHeadroom())
 }
 
 func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
@@ -691,7 +696,7 @@ func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
 	}
 	write("memory.max", "1073741824\n")
 	levels := buildMemoryDomainLevels(root, root, MemoryDomainSourceCgroupV2,
-		"memory.max", "memory.current", "memory.stat")
+		"memory.max", "memory.high", "memory.current", "memory.stat")
 	_, measured, err := readCgroupMemoryDomain(levels)
 	require.Error(t, err)
 	require.False(t, measured)

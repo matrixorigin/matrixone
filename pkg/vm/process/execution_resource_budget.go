@@ -30,23 +30,17 @@ import (
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-// These values are retained only for deterministic legacy/test callers that do
-// not provide a MemoryDomain. Production CN budgets use the measured reserve
-// policy from pkg/common/system instead.
-const executionResourceLegacyMinimumReserve = uint64(4 << 30)
-const executionResourceLegacyRuntimeHeadroom = uint64(1 << 30)
-
 const (
 	executionResourceAllocationGenerationSlots = uint32(131_072)
 	// Account metadata lives outside the MPool payload cap. Bound its worst-case
-	// Go-heap footprint to half of executionResourceLegacyMinimumReserve: 128 bytes covers one
+	// Go-heap footprint to 2 GiB: 128 bytes covers one
 	// sparse pointer/lease-map entry, and 16,777,216 live entries consume at most
 	// 2 GiB by construction. Small aggregate caps use the tighter byte
 	// conservation bound because every physical allocation owns at least one
 	// byte. Slot exhaustion is real metadata capacity pressure, not an
 	// estimator rejection.
 	executionResourceAllocationMetadataBytesPerSlot = uint64(128)
-	executionResourceAllocationMetadataHeadroom     = executionResourceLegacyMinimumReserve / 2
+	executionResourceAllocationMetadataHeadroom     = uint64(2 << 30)
 	executionResourceAllocationMetadataMaxSlots     = executionResourceAllocationMetadataHeadroom / executionResourceAllocationMetadataBytesPerSlot
 )
 
@@ -861,10 +855,16 @@ func (b *ExecutionResourceBudget) mergeObservedCNCap(inputs ExecutionMemoryCeili
 	if inputs.MemoryDomain.Measured && inputs.MemoryDomain.Limit > 0 {
 		if !b.liveCapInputs.MemoryDomain.Measured ||
 			inputs.MemoryDomain.Limit < b.liveCapInputs.MemoryDomain.Limit ||
-			inputs.MemoryDomain.NonGo > b.liveCapInputs.MemoryDomain.NonGo {
+			inputs.MemoryDomain.NonGo > b.liveCapInputs.MemoryDomain.NonGo ||
+			(inputs.MemoryDomain.SoftLimit > 0 &&
+				(inputs.MemoryDomain.SoftLimit < b.liveCapInputs.MemoryDomain.SoftLimit ||
+					b.liveCapInputs.MemoryDomain.SoftLimit == 0)) {
 			b.liveCapInputs.MemoryDomain = inputs.MemoryDomain
 			b.liveCapInputs.CgroupMemoryMax = 0
 			b.liveCapInputs.HostMemTotal = 0
+		}
+		if inputs.MemoryDomainReserve > b.liveCapInputs.MemoryDomainReserve {
+			b.liveCapInputs.MemoryDomainReserve = inputs.MemoryDomainReserve
 		}
 	}
 	if inputs.FileCacheHint > b.liveCapInputs.FileCacheHint {
@@ -896,7 +896,9 @@ func (b *ExecutionResourceBudget) observedCNCapInputsCurrent(inputs ExecutionMem
 		current.MemoryDomain.Source != inputs.MemoryDomain.Source ||
 		current.MemoryDomain.Limit != inputs.MemoryDomain.Limit ||
 		current.MemoryDomain.Used != inputs.MemoryDomain.Used ||
-		current.MemoryDomain.NonGo != inputs.MemoryDomain.NonGo {
+		current.MemoryDomain.NonGo != inputs.MemoryDomain.NonGo ||
+		current.MemoryDomain.SoftLimit != inputs.MemoryDomain.SoftLimit ||
+		current.MemoryDomainReserve != inputs.MemoryDomainReserve {
 		return false
 	}
 	b.mu.Lock()
@@ -912,17 +914,22 @@ func (b *ExecutionResourceBudget) publishLiveCNCapInputs() {
 	b.liveCapInputsSnapshot.Store(&snapshot)
 }
 
-// sampleCNCap is invoked only while refreshMu is held. Physical process memory
-// remains fixed at the package-start snapshot; only runtime mpool and
-// file-cache inputs are sampled here. A runtime source reports unavailable as
-// zero, so resolveCNCapSample retains its last finite value rather than
-// interpreting a transient disappearance as extra memory.
+// sampleCNCap is invoked only while refreshMu is held. It refreshes the shared
+// memory-domain sample and its calibrated non-Go reserve when the runtime
+// source is available; the package-start cgroup/host inputs remain the
+// fallback. MPool and file-cache inputs are sampled alongside it. A runtime
+// source reports unavailable as zero, so resolveCNCapSample retains its last
+// finite value rather than interpreting a transient disappearance as extra
+// memory.
 func (b *ExecutionResourceBudget) sampleCNCap() (uint64, error) {
 	current := executionResourceProcessMemoryInputs
 	if snapshot, _ := system.CurrentMemoryDomain(); snapshot.Measured && snapshot.Limit > 0 {
 		current.MemoryDomain = snapshot
 		current.CgroupMemoryMax = 0
 		current.HostMemTotal = 0
+		if b.physicalLedger != nil {
+			current.MemoryDomainReserve = b.physicalLedger.Observe(snapshot).Reserve
+		}
 	}
 	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
 		current.GlobalMpoolCap = uint64(cap)
@@ -942,6 +949,7 @@ func (b *ExecutionResourceBudget) resolveCNCapSample(current ExecutionMemoryCeil
 		current.HostMemTotal = 0
 	} else if b.liveCapInputs.MemoryDomain.Measured && b.liveCapInputs.MemoryDomain.Limit > 0 {
 		current.MemoryDomain = b.liveCapInputs.MemoryDomain
+		current.MemoryDomainReserve = b.liveCapInputs.MemoryDomainReserve
 		current.CgroupMemoryMax = 0
 		current.HostMemTotal = 0
 	} else {
@@ -957,6 +965,9 @@ func (b *ExecutionResourceBudget) resolveCNCapSample(current ExecutionMemoryCeil
 	}
 	if current.FileCacheHint == 0 {
 		current.FileCacheHint = b.liveCapInputs.FileCacheHint
+	}
+	if current.MemoryDomain.Measured && current.MemoryDomainReserve == 0 {
+		current.MemoryDomainReserve = b.liveCapInputs.MemoryDomainReserve
 	}
 	ceiling, err := ResolveExecutionMemoryCeiling(current)
 	if err != nil {
@@ -1103,8 +1114,8 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
+		b.mu.Unlock()
 		return nil, &ExecutionResourceError{
 			Kind:    ExecutionResourceErrorClosed,
 			Message: ErrExecutionResourceClosed.Error(),
@@ -1113,6 +1124,7 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 
 	memoryCap := min(requestedMemoryCap, b.aggregateCap)
 	if memoryCap == 0 {
+		b.mu.Unlock()
 		return nil, &ExecutionResourceError{
 			Kind:      ExecutionResourceErrorInvalid,
 			Requested: requestedMemoryCap,
@@ -1120,7 +1132,8 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 			Message:   "zero live process execution resource generation cap",
 		}
 	}
-	if b.physicalLedger != nil {
+	physicalLedger := b.physicalLedger
+	if physicalLedger != nil {
 		policy := system.DefaultMemoryDomainReservePolicy()
 		entryFloor := policy.RuntimeBytes
 		if entryFloor == 0 {
@@ -1129,8 +1142,29 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 		if entryFloor > memoryCap {
 			entryFloor = memoryCap
 		}
-		if available, measured, ok := b.physicalLedger.Check(entryFloor); measured && !ok {
+		b.mu.Unlock()
+		available, measured, ok := physicalLedger.WaitFor(
+			entryFloor, system.MemoryAdmissionWaitTimeout())
+		if !measured || !ok {
 			return nil, newAdmissionError(entryFloor, 0, available)
+		}
+		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			return nil, &ExecutionResourceError{
+				Kind:    ExecutionResourceErrorClosed,
+				Message: ErrExecutionResourceClosed.Error(),
+			}
+		}
+		memoryCap = min(requestedMemoryCap, b.aggregateCap)
+		if memoryCap == 0 {
+			b.mu.Unlock()
+			return nil, &ExecutionResourceError{
+				Kind:      ExecutionResourceErrorInvalid,
+				Requested: requestedMemoryCap,
+				Cap:       b.aggregateCap,
+				Message:   "zero live process execution resource generation cap",
+			}
 		}
 	}
 
@@ -1148,14 +1182,16 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 	)
 	effectiveFDCap := min(configuredFDCap, b.spillFDCap)
 
-	return &ExecutionResourceGeneration{
+	g := &ExecutionResourceGeneration{
 		budget:               b,
 		id:                   id,
 		cap:                  memoryCap,
 		spillDiskCap:         spillDiskCap,
 		spillFDConfiguredCap: configuredFDCap,
 		spillFDCap:           effectiveFDCap,
-	}, nil
+	}
+	b.mu.Unlock()
+	return g, nil
 }
 
 // ID returns the execution generation identity.
@@ -1931,6 +1967,10 @@ type ExecutionMemoryCeilingInputs struct {
 	// measured, it takes precedence over the startup cgroup/host fields; those
 	// fields remain for deterministic callers and legacy integrations.
 	MemoryDomain system.MemoryDomainSnapshot
+	// MemoryDomainReserve is the calibrated reserve produced by the shared
+	// physical ledger. Zero means ResolveExecutionMemoryCeiling should derive a
+	// first reserve from the supplied sample.
+	MemoryDomainReserve uint64
 	// A positive process limitation narrows QueryCap.  Zero means no narrower
 	// override (the resolved CN cap remains the query cap).
 	ProcessLimitationSize uint64
@@ -1950,7 +1990,7 @@ func executionMemoryHeadroomSafety(ceiling ExecutionMemoryCeiling) uint64 {
 	safety := ceiling.EffectiveCN / 20
 	runtimeReserve := ceiling.RuntimeReserve
 	if runtimeReserve == 0 {
-		runtimeReserve = executionResourceLegacyRuntimeHeadroom
+		runtimeReserve = system.DefaultMemoryDomainReservePolicy().RuntimeBytes
 	}
 	if safety < runtimeReserve {
 		safety = runtimeReserve
@@ -1969,8 +2009,8 @@ func executionMemoryHeadroomSafety(ceiling ExecutionMemoryCeiling) uint64 {
 func ResolveExecutionMemoryCeiling(in ExecutionMemoryCeilingInputs) (ExecutionMemoryCeiling, error) {
 	effective := uint64(0)
 	physicalSources := []uint64{in.CgroupMemoryMax, in.HostMemTotal}
-	if in.MemoryDomain.Measured && in.MemoryDomain.Limit > 0 {
-		physicalSources = []uint64{in.MemoryDomain.Limit}
+	if in.MemoryDomain.Measured && in.MemoryDomain.AdmissionLimit() > 0 {
+		physicalSources = []uint64{in.MemoryDomain.AdmissionLimit()}
 	}
 	for _, candidate := range append(physicalSources, in.GlobalMpoolCap) {
 		if candidate == 0 || candidate == math.MaxUint64 {
@@ -1984,22 +2024,22 @@ func ResolveExecutionMemoryCeiling(in ExecutionMemoryCeilingInputs) (ExecutionMe
 		return ExecutionMemoryCeiling{}, &ExecutionResourceError{Kind: ExecutionResourceErrorCeilingMissing, Message: ErrExecutionMemoryCeilingMissing.Error()}
 	}
 
-	requested := executionResourceLegacyMinimumReserve
-	runtimeReserve := executionResourceLegacyRuntimeHeadroom
-	if in.MemoryDomain.Measured {
-		policy := system.DefaultMemoryDomainReservePolicy()
-		requested = policy.Reserve(in.MemoryDomain)
-		runtimeReserve = policy.RuntimeBytes
-	}
-	if !in.MemoryDomain.Measured {
-		// Preserve the legacy deterministic ceiling for callers which do not
-		// provide a MemoryDomain. Production callers use the calibrated reserve
-		// policy above, including its measured non-Go high-water and domain
-		// percentage floor.
-		if fifth := effective / 5; fifth > requested {
-			requested = fifth
+	policy := system.DefaultMemoryDomainReservePolicy()
+	reserveDomain := in.MemoryDomain
+	if !reserveDomain.Measured {
+		// Capacity-only callers still use the same policy. Their non-Go fields
+		// are unknown, so the policy's percentage/floor is the explicit safe
+		// fallback rather than a second fixed execution reserve.
+		reserveDomain = system.MemoryDomainSnapshot{
+			Limit:    effective,
+			Measured: true,
 		}
 	}
+	requested := policy.Reserve(reserveDomain)
+	if in.MemoryDomainReserve > requested {
+		requested = in.MemoryDomainReserve
+	}
+	runtimeReserve := policy.RuntimeBytes
 	if in.FileCacheHint > requested {
 		requested = in.FileCacheHint
 	}
@@ -2071,6 +2111,16 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 		initialInputs.CgroupMemoryMax = 0
 		initialInputs.HostMemTotal = 0
 	}
+	var physicalLedger *system.MemoryAdmissionBudget
+	if proc.Base.FileService != nil {
+		physicalLedger = system.DefaultMemoryAdmissionBudget()
+		if calibrated := physicalLedger.Snapshot(); calibrated.Measured && calibrated.Domain.Limit > 0 {
+			initialInputs.MemoryDomain = calibrated.Domain
+			initialInputs.MemoryDomainReserve = calibrated.Reserve
+			initialInputs.CgroupMemoryMax = 0
+			initialInputs.HostMemTotal = 0
+		}
+	}
 	initialInputs.GlobalMpoolCap = globalCap
 	initialInputs.FileCacheHint = fileCacheHint
 	initialInputs.ProcessLimitationSize = queryLimit
@@ -2099,9 +2149,7 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 			// A real CN query always has a FileService/domain owner. Bare process
 			// fixtures intentionally omit it and must remain deterministic instead
 			// of being rejected by the host running the unit test.
-			if proc.Base.FileService != nil {
-				b.physicalLedger = system.DefaultMemoryAdmissionBudget()
-			}
+			b.physicalLedger = physicalLedger
 			if automaticDiskAvailable != 0 {
 				if createErr = b.setAutomaticSpillDiskCapFromAvailable(automaticDiskAvailable); createErr != nil {
 					return nil
@@ -2121,6 +2169,13 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	}
 	if err != nil {
 		return nil, err
+	}
+	if physicalLedger != nil {
+		aggregate.mu.Lock()
+		if aggregate.physicalLedger == nil {
+			aggregate.physicalLedger = physicalLedger
+		}
+		aggregate.mu.Unlock()
 	}
 	if loaded && automaticDiskAvailable != 0 {
 		if err = aggregate.setAutomaticSpillDiskCapFromAvailable(automaticDiskAvailable); err != nil {

@@ -51,6 +51,35 @@ func TestMemoryAdmissionBudgetDoesNotDoubleChargeMeasuredAllocations(t *testing.
 	require.Equal(t, uint64(30), view.Reserved)
 }
 
+func TestMemoryAdmissionBudgetUsesDomainSoftLimit(t *testing.T) {
+	budget := NewMemoryAdmissionBudget(MemoryDomainReservePolicy{
+		ObservedNonGoMultiplier: 1,
+	})
+	snapshot := MemoryDomainSnapshot{
+		Used: 60, Limit: 100, SoftLimit: 80, Measured: true,
+	}
+	budget.mu.Lock()
+	require.Equal(t, uint64(20), budget.availableLocked(snapshot))
+	budget.mu.Unlock()
+}
+
+func TestHostMemorySoftLimitIsConfigurable(t *testing.T) {
+	t.Setenv("MO_MEMORY_HOST_SOFT_LIMIT", "8GiB")
+	require.Equal(t, uint64(8<<30), hostMemorySoftLimit(10<<30))
+	require.Zero(t, hostMemorySoftLimit(4<<30))
+}
+
+func TestReservePolicyUsesMoreConservativeHostProfile(t *testing.T) {
+	policy := DefaultMemoryDomainReservePolicy()
+	cgroup := policy.Reserve(MemoryDomainSnapshot{
+		Limit: 10 << 30, Source: MemoryDomainSourceCgroupV2,
+	})
+	host := policy.Reserve(MemoryDomainSnapshot{
+		Limit: 10 << 30, Source: MemoryDomainSourceHost,
+	})
+	require.Greater(t, host, cgroup)
+}
+
 func TestMemoryAdmissionBudgetAllowsZeroByteRequestWithoutMeasurement(t *testing.T) {
 	budget := NewMemoryAdmissionBudget(MemoryDomainReservePolicy{})
 	_, ok := budget.TryReserve(0)

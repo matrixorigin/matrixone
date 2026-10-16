@@ -327,10 +327,11 @@ type RSCThrottler interface {
 // cgroupMemorySample is immutable after publication. Admission reads one sample
 // per attempt so a refresh cannot mix usage with a different physical limit.
 type cgroupMemorySample struct {
-	usage  int64
-	limit  int64
-	cgroup bool
-	source system.MemoryDomainSource
+	usage     int64
+	limit     int64
+	softLimit int64
+	cgroup    bool
+	source    system.MemoryDomainSource
 }
 
 // All production throttlers observe the shared process memory domain. Component
@@ -477,9 +478,11 @@ type memThrottler struct {
 func (m *memThrottler) String() string {
 	sample := m.cgroupSnapshot()
 	var usage int64
+	var softLimit int64
 	var source system.MemoryDomainSource
 	if sample != nil {
 		usage = sample.usage
+		softLimit = sample.softLimit
 		source = sample.source
 	}
 	sharedReserved := uint64(0)
@@ -494,12 +497,13 @@ func (m *memThrottler) String() string {
 		sharedMeasured = shared.Measured
 	}
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, memory-domain-soft-limit=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
 		source,
+		common.HumanReadableBytes(int(softLimit)),
 		common.HumanReadableBytes(int(m.cgroup.Load())),
 		common.HumanReadableBytes(int(usage)),
 		common.HumanReadableBytes(int(m.rss.Load())),
@@ -687,7 +691,8 @@ func (m *memThrottler) publishMemoryDomain(snapshot *system.MemoryDomainSnapshot
 		return
 	}
 	destination.Store(&cgroupMemorySample{
-		usage: usage, limit: limit, cgroup: snapshot.IsCgroup(), source: snapshot.Source,
+		usage: usage, limit: limit, softLimit: uint64ToInt64(snapshot.SoftLimit),
+		cgroup: snapshot.IsCgroup(), source: snapshot.Source,
 	})
 }
 
@@ -736,13 +741,10 @@ func (m *memThrottler) currentMemoryUsage() int64 {
 	return rss
 }
 
-// admissionHeadroom returns a cgroup backstop only after the cgroup has
-// entered hard pressure. Before that point, the extra cgroup charge is often
-// reclaimable file cache, so using the whole cgroup usage as the normal
-// component admission usage would make Merge and Flush stop too early. Once
-// hard pressure is active, new reservations are capped by the remaining
-// physical cgroup headroom so the safety fix still prevents the cgroup from
-// crossing its limit while cache scavenging catches up.
+// admissionHeadroom uses an explicit soft domain limit whenever one exists.
+// Without a soft limit it retains the historical hard-pressure backstop: clean
+// file cache is not charged to ordinary component admission until the domain
+// is close to its hard boundary.
 func (sample *cgroupMemorySample) admissionHeadroom() int64 {
 	if sample == nil {
 		return math.MaxInt64
@@ -753,6 +755,9 @@ func (sample *cgroupMemorySample) admissionHeadroom() int64 {
 	}
 
 	usage := sample.usage
+	if sample.softLimit > 0 && sample.softLimit < total {
+		return max(0, sample.softLimit-usage)
+	}
 	hardEnter := int64(float64(total) * rssPressureHardEnter)
 	if usage <= 0 || usage < hardEnter {
 		return math.MaxInt64
