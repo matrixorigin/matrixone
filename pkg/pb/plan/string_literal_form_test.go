@@ -307,6 +307,51 @@ func TestNumericBinaryLiteralProvenanceFeatureTracksFlowControlOutputs(t *testin
 	}
 }
 
+func numericProvenanceFlowControlFixture(depth int, mixedMarker bool) *Expr {
+	stringType := Type{Id: planVarcharTypeID}
+	text := &Expr{Typ: stringType, Expr: &Expr_Lit{Lit: &Literal{
+		Value:       &Literal_Sval{Sval: "1"},
+		LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+	}}}
+	value := text
+	if mixedMarker {
+		value = &Expr{Typ: stringType, Expr: &Expr_Lit{Lit: &Literal{
+			Value:       &Literal_Sval{Sval: "1"},
+			IsBin:       true,
+			LiteralForm: StringLiteralForm_STRING_LITERAL_HEX,
+		}}}
+	}
+	condition := &Expr{Typ: Type{Id: planBooleanTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	for range depth {
+		value = &Expr{Typ: stringType, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(caseFunctionID) << 32, ObjName: "case"},
+			Args: []*Expr{condition, value, text},
+		}}}
+	}
+	return value
+}
+
+func TestNumericBinaryLiteralValueClassifierMemoizesNestedFlow(t *testing.T) {
+	const depth = 256
+	for _, mixedMarker := range []bool{false, true} {
+		expr := numericProvenanceFlowControlFixture(depth, mixedMarker)
+		var classifier numericBinaryLiteralValueClassifier
+		class := classifier.classify(expr)
+
+		require.Equal(t, mixedMarker, class.hasMarkedValue)
+		wantClasses := depth + 1 // each CASE plus the shared text leaf
+		if mixedMarker {
+			wantClasses++ // the marked HEX leaf
+		}
+		require.Len(t, classifier.classes, wantClasses,
+			"each unique value expression should be classified at most once")
+
+		features, err := RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		require.Equal(t, mixedMarker, features.NumericBinaryLiteralProvenance)
+	}
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}

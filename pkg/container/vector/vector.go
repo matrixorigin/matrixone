@@ -945,7 +945,7 @@ func (v *Vector) normalizeNumericBinaryLiteralRows() {
 func (v *Vector) clearNumericBinaryLiteralAt(row int) {
 	if v.numericBinaryLiteralRowsActive {
 		v.numericBinaryLiteralRows.Remove(uint64(row))
-		v.normalizeNumericBinaryLiteralRows()
+		v.normalizeNumericBinaryLiteralRowsAfterSingleUpdate()
 	} else if v.AllNull() {
 		v.SetIsBin(false)
 	}

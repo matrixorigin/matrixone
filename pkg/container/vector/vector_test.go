@@ -6749,6 +6749,57 @@ func TestUnionOneEmptyMarkerSets(t *testing.T) {
 	}
 }
 
+func TestUnionOneNullAppendsPreserveMixedNumericBinaryLiteralRows(t *testing.T) {
+	const nullRows = 1024
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendNull(source, mp))
+	require.NoError(t, AppendFixedList(destination, []int64{10, 20, 30}, nil, mp))
+	require.NoError(t, destination.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	for range nullRows {
+		require.NoError(t, destination.UnionOne(source, 0, mp))
+	}
+
+	require.Equal(t, 3+nullRows, destination.Length())
+	require.True(t, destination.HasIsBinRows(), "the mixed prefix retains row-exact markers")
+	require.False(t, destination.GetIsBin(), "mixed markers keep a conservative scalar summary")
+	for row, expected := range []bool{true, false, true} {
+		require.Equal(t, expected, destination.GetIsBinAt(row))
+	}
+	for row := 3; row < destination.Length(); row++ {
+		require.True(t, destination.IsNull(uint64(row)))
+		require.False(t, destination.GetIsBinAt(row), "NULL appends must not acquire a marker")
+	}
+}
+
+func TestNumericBinaryLiteralSingleUpdateCollapsesEmptyAndAllNullMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vector := NewVec(types.T_int64.ToType())
+	defer func() {
+		vector.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vector, []int64{10, 20}, nil, mp))
+	require.NoError(t, vector.SetIsBinRowsWithMP([]bool{true, false}, mp))
+
+	vector.SetNull(0)
+	require.False(t, vector.GetIsBinAt(0))
+	require.False(t, vector.HasIsBinMetadata(), "removing the last marked row collapses an empty sidecar")
+	require.False(t, vector.AllNull())
+
+	vector.SetNull(1)
+	require.True(t, vector.AllNull())
+	require.False(t, vector.HasIsBinMetadata(), "all-NULL vectors carry no numeric binary-literal marker")
+	require.False(t, vector.GetIsBin())
+}
+
 func TestUnionOneSourceMarkerLookup(t *testing.T) {
 	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
 		t.Run(scenario, func(t *testing.T) {
