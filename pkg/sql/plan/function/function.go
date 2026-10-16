@@ -524,6 +524,9 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 			evaluateLength = 1
 		}
 	}
+	// Value constancy survives diagnostics; only effect-free folding may reduce
+	// the evaluation length. Keep this proof if the probe rejects folding.
+	scalarValue := fold
 
 	if err = result.PreExtendAndReset(evaluateLength); err != nil {
 		result.Free()
@@ -545,7 +548,6 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	if probe != nil && (err != nil || probe.Warned()) {
 		// The probe has no statement-visible effects. Re-evaluate at the
 		// requested cardinality so the caller owns diagnostics and errors.
-		fold = false
 		if err = result.PreExtendAndReset(length); err == nil {
 			err = exec(inputs, result, proc, length, nil)
 		}
@@ -556,7 +558,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	}
 
 	vec := result.GetResultVector()
-	if fold {
+	if scalarValue {
 		vec.ToConst()
 		vec.SetLength(length)
 	}

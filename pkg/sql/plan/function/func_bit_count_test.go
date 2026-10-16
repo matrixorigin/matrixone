@@ -398,7 +398,7 @@ func TestBitCountDirectDiagnostics(t *testing.T) {
 						require.Empty(t, session.warnings)
 					}
 					if length > 0 {
-						require.Equal(t, !tc.warns, result.IsConst())
+						require.True(t, result.IsConst())
 					}
 					for row := 0; row < length; row++ {
 						require.Equal(t, tc.null, result.IsNull(uint64(row)))

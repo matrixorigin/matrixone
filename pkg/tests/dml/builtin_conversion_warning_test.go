@@ -69,6 +69,20 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			})
 		}
 		t.Run("constant_consumers", func(t *testing.T) {
+			t.Run("malformed", func(t *testing.T) {
+				for _, tc := range []struct{ name, query, want string }{
+					{"ceil", "select ceil(12.345,bit_count('3x')) = 12.35", "1"},
+					{"extractvalue", "select extractvalue('<a>x</a>',concat('/a[',bit_count('1x'),']'))", "x"},
+					{"updatexml", "select updatexml('<a>x</a>',concat('/a[',bit_count('1x'),']'),'<b/>')", "<b/>"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						require.Equal(t, [][]string{{tc.want}}, queryStringRows(t, ctx, db, tc.query))
+						warnings := queryStringRows(t, ctx, db, "show warnings")
+						require.Len(t, warnings, 1)
+						require.Equal(t, "1292", warnings[0][1])
+					})
+				}
+			})
 			for _, tc := range []struct{ name, query, want string }{
 				{"ceil_text", "select ceil(12.345,bit_count('3')) = 12.35", "1"},
 				{"ceil_numeric", "select ceil(12.345,bit_count(3)) = 12.35", "1"},
@@ -93,14 +107,19 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 				defer stmt.Close()
 				execSQLDB(t, ctx, db, "prepare warning_xpath from '"+strings.ReplaceAll(query, "'", "''")+"'")
 				defer execSQLDB(t, ctx, db, "deallocate prepare warning_xpath")
-				for _, tc := range []struct{ input, want string }{{"1", "x"}, {"3", "y"}, {"1", "x"}} {
+				for _, tc := range []struct{ input, want string }{{"1", "x"}, {"3x", "y"}, {"1x", "x"}, {"3", "y"}, {"1x", "x"}} {
 					var got string
 					require.NoError(t, stmt.QueryRowContext(ctx, tc.input).Scan(&got))
 					require.Equal(t, tc.want, got)
-					require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+					warnings := queryStringRows(t, ctx, db, "show warnings")
+					if strings.HasSuffix(tc.input, "x") {
+						require.Equal(t, [][]string{{"Warning", "1292", "Truncated incorrect INTEGER value: '" + tc.input + "'"}}, warnings)
+					} else {
+						require.Empty(t, warnings)
+					}
 					execSQLDB(t, ctx, db, "set @warning_xpath_arg='"+tc.input+"'")
 					require.Equal(t, [][]string{{tc.want}}, queryStringRows(t, ctx, db, "execute warning_xpath using @warning_xpath_arg"))
-					require.Empty(t, queryStringRows(t, ctx, db, "show warnings"))
+					require.Equal(t, warnings, queryStringRows(t, ctx, db, "show warnings"))
 				}
 			})
 		})
@@ -124,6 +143,11 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			}{
 				{"bit_count_constant", "bit_count('3x')", "", [][]string{{"2"}, {"2"}, {"2"}}, 3},
 				{"bit_count_nested", "bit_count('3x')+1", "", [][]string{{"3"}, {"3"}, {"3"}}, 3},
+				{"ceil_constant", "cast(ceil(12.345,bit_count('3x')) = 12.35 as char)", "", [][]string{{"1"}, {"1"}, {"1"}}, 3},
+				{"ceil_partial", "if(id=1,'safe',cast(ceil(12.345,bit_count('3x')) = 12.35 as char))", "", [][]string{{"safe"}, {"1"}, {"1"}}, 2},
+				{"xml_partial", "if(id=1,'safe',extractvalue('<a>x</a>',concat('/a[',bit_count('3x')-1,']')))", "", [][]string{{"safe"}, {"x"}, {"x"}}, 2},
+				{"xml_inactive", "if(id>0,'safe',updatexml('<a>x</a>',concat('/a[',bit_count('3x')-1,']'),'<b/>'))", "", [][]string{{"safe"}, {"safe"}, {"safe"}}, 0},
+				{"ceil_empty", "cast(ceil(12.345,bit_count('3x')) as char)", " where id<0", nil, 0},
 				{"bit_count_partial_if", "if(id=1,0,bit_count('3x'))", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
 				{"bit_count_partial_case", "case when id=1 then 0 else bit_count('3x') end", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
 				{"bit_count_partial_coalesce", "coalesce(if(id=1,0,null),bit_count('3x'))", "", [][]string{{"0"}, {"2"}, {"2"}}, 2},
