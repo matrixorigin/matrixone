@@ -53,7 +53,7 @@ SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) A
 FROM mo_catalog.mo_tables
 WHERE reldatabase = 'collation_expression_test' AND relname = 'least_protocol_view';
 ➤ required_protocol[-5,64,0]  𝄀
-114
+117
 DROP VIEW least_protocol_view;
 SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
 ➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
@@ -364,4 +364,28 @@ SELECT HEX(@collated_value);
 5A
 DEALLOCATE PREPARE collated_set;
 SET @collated_value = NULL;
+SELECT LENGTH(CAST(REPEAT('a',65536) AS BINARY) COLLATE binary) AS binary_length;
+➤ binary_length[-5,64,0]  𝄀
+65536
+CREATE TABLE bitwise_collation (b BLOB);
+INSERT INTO bitwise_collation VALUES (X'0F'), (X'03');
+SELECT HEX(BIT_AND(SUBSTRING(b,1,511))) AS and_hex,
+HEX(BIT_OR(SUBSTRING(b,1,511))) AS or_hex,
+HEX(BIT_XOR(SUBSTRING(b,1,511))) AS xor_hex
+FROM bitwise_collation;
+➤ and_hex[-1,16383,0]  ¦  or_hex[-1,16383,0]  ¦  xor_hex[-1,16383,0]  𝄀
+03  ¦  0F  ¦  0C
+SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'03' AS BINARY) COLLATE binary) AS and_equal,
+BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0F' AS BINARY) COLLATE binary) AS or_equal,
+BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0C' AS BINARY) COLLATE binary) AS xor_equal
+FROM bitwise_collation;
+➤ and_equal[-7,1,0]  ¦  or_equal[-7,1,0]  ¦  xor_equal[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+Illegal mix of collations (binary,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
+SELECT BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+Illegal mix of collations (binary,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
+SELECT BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+Illegal mix of collations (binary,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
+DROP TABLE bitwise_collation;
 DROP DATABASE collation_expression_test;

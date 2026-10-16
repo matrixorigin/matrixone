@@ -227,4 +227,21 @@ EXECUTE collated_set;
 SELECT HEX(@collated_value);
 DEALLOCATE PREPARE collated_set;
 SET @collated_value = NULL;
+
+-- 二进制位聚合保留输入的隐式/显式 collation provenance，且不改变字节结果。
+SELECT LENGTH(CAST(REPEAT('a',65536) AS BINARY) COLLATE binary) AS binary_length;
+CREATE TABLE bitwise_collation (b BLOB);
+INSERT INTO bitwise_collation VALUES (X'0F'), (X'03');
+SELECT HEX(BIT_AND(SUBSTRING(b,1,511))) AS and_hex,
+       HEX(BIT_OR(SUBSTRING(b,1,511))) AS or_hex,
+       HEX(BIT_XOR(SUBSTRING(b,1,511))) AS xor_hex
+FROM bitwise_collation;
+SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'03' AS BINARY) COLLATE binary) AS and_equal,
+       BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0F' AS BINARY) COLLATE binary) AS or_equal,
+       BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0C' AS BINARY) COLLATE binary) AS xor_equal
+FROM bitwise_collation;
+SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+SELECT BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+SELECT BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
+DROP TABLE bitwise_collation;
 DROP DATABASE collation_expression_test;
