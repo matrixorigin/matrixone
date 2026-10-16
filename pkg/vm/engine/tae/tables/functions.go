@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -310,70 +311,123 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 
 func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, rowIDs, blkID, loader, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
+	blockRows := vec.Length()
+	data := vec.GetDownstreamVector()
+	// The immutable block is consumed sequentially. Index repeated probes with
+	// bounded samples: hashing and retained memory must not grow with key width.
+	// Full bytes are checked before MVCC is loaded, including bucket collisions.
+	// Links retain reverse row order for duplicate versions.
+	bucketKey := func(value []byte) [2]uint64 {
+		n := min(len(value), 16)
+		return [2]uint64{xxhash.Sum64(value[:n]), xxhash.Sum64(value[len(value)-n:]) ^ uint64(len(value))}
+	}
+	lookup := struct {
+		probes int
+		heads  map[[2]uint64]int
+		next   []int
+	}{}
 	return func(v1 []byte, _ bool, rowOffset int) error {
 		if !rowIDs.IsNull(rowOffset) {
 			return nil
 		}
-		return containers.ForeachWindowVarlen(
-			vec.GetDownstreamVector(),
-			0,
-			vec.Length(),
-			true,
-			func(v2 []byte, _ bool, row int) (err error) {
-				// logutil.Infof("row=%d,v1=%v,v2=%v", row, v1, v2)
-				if !rowIDs.IsNull(rowOffset) {
-					return nil
-				}
-				if compute.CompareBytes(v1, v2) != 0 {
-					return
-				}
-				tsVec, abortVec, err := loader.get()
-				if err != nil {
-					return err
-				}
-				if isAborted(abortVec, row) {
-					return nil
-				}
-				// Legacy objects and TN rewrites containing CN-created rows may
-				// not carry row commit timestamps. Incremental dedup is only a
-				// fallback for lock/recheck paths, so it skips that unverifiable
-				// row rather than reintroducing rewrite false positives during
-				// upgrades. Strict policies stay conservative. This avoids
-				// adding lineage or an upgrade protocol to every merge.
-				if missingCommitTS(tsVec, row) {
-					if txn.GetDedupType().SkipTargetOldCommitted() {
-						return nil
+		if lookup.heads == nil && blockRows > 32 {
+			lookup.probes++
+			if lookup.probes > 32 {
+				lookup.heads = make(map[[2]uint64]int, blockRows)
+				lookup.next = make([]int, blockRows)
+				for row := 0; row < blockRows; row++ {
+					var value []byte
+					if !vec.IsNull(row) {
+						value = data.GetBytesAt(row)
 					}
-					rowID := objectio.NewRowid(&blkID, uint32(row))
-					rowIDs.Update(rowOffset, rowID, false)
-					return nil
+					key := bucketKey(value)
+					lookup.next[row] = lookup.heads[key]
+					lookup.heads[key] = row + 1
 				}
-				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
-				if commitTS.Equal(&txnif.UncommitTS) {
+			}
+		}
+		visitMatch := func(row int) (err error) {
+			tsVec, abortVec, err := loader.get()
+			if err != nil {
+				return err
+			}
+			if isAborted(abortVec, row) {
+				return nil
+			}
+			// Legacy objects and TN rewrites containing CN-created rows may
+			// not carry row commit timestamps. Incremental dedup is only a
+			// fallback for lock/recheck paths, so it skips that unverifiable
+			// row rather than reintroducing rewrite false positives during
+			// upgrades. Strict policies stay conservative. This avoids
+			// adding lineage or an upgrade protocol to every merge.
+			if missingCommitTS(tsVec, row) {
+				if txn.GetDedupType().SkipTargetOldCommitted() {
 					return nil
-				}
-				startTS := txn.GetStartTS()
-				// `from` is the first timestamp in the dedup window. Callers
-				// advance their exclusive watermark with Next(), so equality
-				// must remain visible here.
-				if commitTS.LT(&from) {
-					return nil
-				}
-				if commitTS.GT(&to) {
-					return nil
-				}
-				if commitTS.GT(&startTS) {
-					logutil.Info("Dedup-WW",
-						zap.String("txn", txn.Repr()),
-						zap.Int("row offset", row),
-						zap.String("commit ts", commitTS.ToString()),
-					)
-					return txnif.ErrTxnWWConflict
 				}
 				rowID := objectio.NewRowid(&blkID, uint32(row))
 				rowIDs.Update(rowOffset, rowID, false)
 				return nil
-			}, nil, nil)
+			}
+			commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
+			if commitTS.Equal(&txnif.UncommitTS) {
+				return nil
+			}
+			startTS := txn.GetStartTS()
+			// `from` is the first timestamp in the dedup window. Callers
+			// advance their exclusive watermark with Next(), so equality
+			// must remain visible here.
+			if commitTS.LT(&from) {
+				return nil
+			}
+			if commitTS.GT(&to) {
+				return nil
+			}
+			if commitTS.GT(&startTS) {
+				logutil.Info("Dedup-WW",
+					zap.String("txn", txn.Repr()),
+					zap.Int("row offset", row),
+					zap.String("commit ts", commitTS.ToString()),
+				)
+				return txnif.ErrTxnWWConflict
+			}
+			rowID := objectio.NewRowid(&blkID, uint32(row))
+			rowIDs.Update(rowOffset, rowID, false)
+			return nil
+		}
+		if lookup.heads != nil {
+			for pos := lookup.heads[bucketKey(v1)]; pos != 0; pos = lookup.next[pos-1] {
+				var value []byte
+				if !vec.IsNull(pos - 1) {
+					value = data.GetBytesAt(pos - 1)
+				}
+				if compute.CompareBytes(v1, value) != 0 {
+					continue
+				}
+				if err := visitMatch(pos - 1); err != nil {
+					return err
+				}
+				if !rowIDs.IsNull(rowOffset) {
+					return nil
+				}
+			}
+			return nil
+		}
+		for row := blockRows - 1; row >= 0; row-- {
+			var value []byte
+			if !vec.IsNull(row) {
+				value = data.GetBytesAt(row)
+			}
+			if compute.CompareBytes(v1, value) != 0 {
+				continue
+			}
+			if err := visitMatch(row); err != nil {
+				return err
+			}
+			if !rowIDs.IsNull(rowOffset) {
+				return nil
+			}
+		}
+		return nil
 	}
 }
 
