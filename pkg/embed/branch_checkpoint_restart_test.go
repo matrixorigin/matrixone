@@ -341,17 +341,20 @@ func assertDiskGCReclaimsProbe(
 		require.NoError(t, err, statement)
 	}
 
-	nameRows, err := db.QueryContext(ctx,
-		fmt.Sprintf("select object_name from metadata_scan('%s', 'id') m", probeTable))
-	require.NoError(t, err)
-	var objectNames []string
-	for nameRows.Next() {
-		var name string
-		require.NoError(t, nameRows.Scan(&name))
-		objectNames = append(objectNames, name)
-	}
-	require.NoError(t, nameRows.Err())
-	require.NoError(t, nameRows.Close())
+	objectNames := func() []string {
+		nameRows, err := db.QueryContext(ctx,
+			fmt.Sprintf("select object_name from metadata_scan('%s', 'id') m", probeTable))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, nameRows.Close()) }()
+		var names []string
+		for nameRows.Next() {
+			var name string
+			require.NoError(t, nameRows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, nameRows.Err())
+		return names
+	}()
 	require.NotEmpty(t, objectNames, "probe table produced no flushed objects to track")
 
 	sharedRoot := filepath.Join(c.(*cluster).options.dataPath, "s3")
@@ -361,7 +364,7 @@ func assertDiskGCReclaimsProbe(
 			"probe object %s must exist in the TN shared storage root before the drop", name)
 	}
 
-	_, err = db.ExecContext(ctx, fmt.Sprintf("drop table %s", probeTable))
+	_, err := db.ExecContext(ctx, fmt.Sprintf("drop table %s", probeTable))
 	require.NoError(t, err)
 
 	stopHeartbeat, heartbeatDone := startCommitHeartbeat(ctx, db)
@@ -470,16 +473,19 @@ func assertBranchScenario(t *testing.T, ctx context.Context, db *sql.DB, sc bran
 		"data branch diff %s.%s against %s.%s",
 		sc.database, sc.leafTable, sc.database, sc.rootTable,
 	)
-	rows, err := db.QueryContext(ctx, diffQuery)
-	require.NoError(t, err, diffQuery)
-	var got []dataBranchRow
-	for rows.Next() {
-		var row dataBranchRow
-		require.NoError(t, rows.Scan(&row.scope, &row.flag, &row.id, &row.v))
-		got = append(got, row)
-	}
-	require.NoError(t, rows.Err())
-	require.NoError(t, rows.Close())
+	got := func() []dataBranchRow {
+		rows, err := db.QueryContext(ctx, diffQuery)
+		require.NoError(t, err, diffQuery)
+		defer func() { require.NoError(t, rows.Close()) }()
+		var out []dataBranchRow
+		for rows.Next() {
+			var row dataBranchRow
+			require.NoError(t, rows.Scan(&row.scope, &row.flag, &row.id, &row.v))
+			out = append(out, row)
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}()
 	require.ElementsMatch(t, sc.wantDiffRows, got, diffQuery)
 
 	var count int
