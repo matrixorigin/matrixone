@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -240,6 +241,9 @@ func (e *Engine) Close() error {
 		// Linearize statistics admission before waiting on any engine-owned
 		// resource. A callback must not start work after engine teardown begins.
 		e.dynamicCtx.closed.Store(true)
+		if e.globalStats != nil && e.globalStats.cancel != nil {
+			e.globalStats.cancel()
+		}
 
 		// The scheduler reads pClient and snapshotMgr. Stop and join it before
 		// retiring either dependency so a tick already in flight cannot use a
@@ -253,6 +257,16 @@ func (e *Engine) Close() error {
 			<-done
 		}
 
+		// Statistics roots and accepted jobs can issue internal SQL and subscribe
+		// through pClient. Cancel and join producers before closing logtail.
+		if err := e.dynamicCtx.Close(); err != nil {
+			e.closeErr = err
+			return
+		}
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
+
 		if err := e.pClient.Close(); err != nil {
 			e.closeErr = err
 		}
@@ -263,15 +277,12 @@ func (e *Engine) Close() error {
 			e.snapshotMgr.Close()
 		}
 
-		if e.globalStats != nil {
-			e.globalStats.Close()
-		}
 		if e.gcPool != nil {
-			if err := e.gcPool.ReleaseContext(context.Background()); e.closeErr == nil {
-				e.closeErr = err
+			if err := e.gcPool.ReleaseContext(context.Background()); err != nil {
+				e.closeErr = errors.Join(e.closeErr, err)
+				return
 			}
 		}
-		e.dynamicCtx.Close()
 		e.cloneTxnCache = nil
 		e.ccprTxnCache = nil
 	})
