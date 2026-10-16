@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package issues
+package isolated
 
 import (
 	"context"
@@ -29,60 +29,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-// TestIssue24971LockWaitBackpressureRecovery is a regression guard for
-// https://github.com/matrixorigin/matrixone/issues/24971.
+// TestIssue24971LockWaitBackpressureRecovery is the end-to-end regression
+// guard for https://github.com/matrixorigin/matrixone/issues/24971.
 //
-// Before the explicit pipeline termination protocol, a DML pipeline whose
-// consumer side was blocked on a row lock could lose its terminal (End)
-// notification during cleanup backpressure. Once the blocking lock was
-// released, the query stayed stuck in PipelineSignalReceiver while still
-// holding its acquired row locks, so later writers on the same keys queued
-// behind it until the session was killed.
+// On the pre-#25273 protocol, a DML pipeline whose consumer side was blocked
+// on a row lock could lose its terminal (End) notification during cleanup
+// backpressure. Once the blocking lock was released, the query stayed stuck
+// in PipelineSignalReceiver while still holding its acquired row locks, so
+// later writers on the same keys queued behind it until the session was
+// killed. This test locks in the recovery behavior on the current protocol:
 //
-// This test builds the same shape on a single embedded CN: a REPLACE INTO
-// ... SELECT whose plan has a merge/connector edge (Sink Scan) above Lock,
-// with session A holding a row lock and session B running the REPLACE. After
-// a backpressure window longer than the (shortened) terminal send timeout,
-// releasing A's lock must let B finish successfully with all rows written and
-// all locks released, and a third session must not be blocked.
+//   - End is a durable edge state recorded even when the receiver channel is
+//     full, and the receiver synthesizes any End that did not fit after
+//     draining buffered data. The channel-full terminal contract itself is
+//     guarded by the component-level tests
+//     TestConnectorResetRecordsEndWhenDataChannelIsFull,
+//     TestConnectorResetDurableEndWakesReceiverAfterBufferedData, and
+//     TestConnectorResetAbortsSpoolWhenTerminalSignalCannotBeDelivered in
+//     pkg/sql/colexec/connector.
+//   - This test guards the SQL-level outcome: with the producer side held in
+//     data-phase backpressure (WaitPipelineSignalCapacity) by a lock-waiting
+//     consumer, releasing the blocking lock must let the query finish with
+//     all rows written, all locks released, and later statements unblocked.
 //
-// It must not assert on the absence of cleanup warnings: falling back to the
-// abort path is also a valid outcome; the guarded contract is recovery
-// correctness, not a specific cleanup path.
+// It intentionally does NOT assert the absence of cleanup warnings: falling
+// back to the abort path is also a valid outcome; the guarded contract is
+// recovery correctness, not a specific cleanup path. Likewise it cannot wait
+// for a "terminal send" barrier from SQL: under the current protocol the
+// producer is backpressured in the data phase while the consumer waits on
+// the lock, so no terminal send happens during the hold window by design.
 func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
-	// Shorten the terminal-signal send timeout so the backpressure window is
-	// seconds instead of minutes. Other tests (e.g. compile/remoterun_test.go
-	// and colexec/connector/types_test.go) adjust the same variable.
-	oldTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 2 * time.Second
-	defer func() { process.PipelineSignalSendTimeout = oldTimeout }()
-
-	c, err := embed.NewCluster(embed.WithCNCount(1), embed.WithPreStart(func(svc embed.ServiceOperator) {
-		svc.Adjust(func(cfg *embed.ServiceConfig) {
-			cfg.Log.Level = "error"
-			if svc.ServiceType() == metadata.ServiceType_CN {
-				cfg.CN.Frontend.SkipCheckUser = true
+	cluster, err := embed.StartTestCluster(
+		embed.WithCNCount(1),
+		embed.WithPreStart(func(service embed.ServiceOperator) {
+			if service.ServiceType() != metadata.ServiceType_CN {
+				return
 			}
-		})
-	}))
+			service.Adjust(func(config *embed.ServiceConfig) {
+				config.CN.Frontend.SkipCheckUser = true
+			})
+		}),
+	)
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() { require.NoError(t, c.Close()) }()
-	cn, err := c.GetCNService(0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
-	t.Logf("single CN=%s, data dir=%s, SQL port=%d", cn.ServiceID(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().CN.Frontend.Port)
+	t.Logf("single CN=%s, SQL port=%d", cn.ServiceID(), cn.GetServiceConfig().CN.Frontend.Port)
 
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?timeout=10s&readTimeout=120s&writeTimeout=10s", cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(6)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
 	admin, err := db.Conn(ctx)
 	require.NoError(t, err)
 	defer admin.Close()
@@ -105,16 +110,17 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 	require.NotNil(t, ls)
 
 	// The two-row recursive CTE keeps the data tiny while steering the plan to
-	// a single-CN shape with a merge/connector edge above Lock, which is the
-	// shape that was vulnerable to terminal-signal loss under backpressure.
+	// a single-CN shape with a merge/connector edge (Sink Scan) above Lock,
+	// which is the shape that was vulnerable to terminal-signal loss under
+	// backpressure on the old protocol.
 	query := "replace into issue24971.file with recursive seeds(k) as (select 0 union all select k+1 from seeds where k<1) " +
 		"select w.id, w.v from issue24971.file_working w join seeds s on w.id % 2 = s.k"
 	issue24971RequirePlanShape(t, ctx, admin, query)
 
-	for _, delayed := range []bool{false, true} {
-		name := "release_before_terminal_window"
-		if delayed {
-			name = "release_after_terminal_window"
+	for _, holdWindow := range []time.Duration{0, 8 * time.Second} {
+		name := "release_immediately"
+		if holdWindow > 0 {
+			name = "release_after_backpressure_window"
 		}
 		if !t.Run(name, func(t *testing.T) {
 			exec("truncate table issue24971.file")
@@ -151,12 +157,22 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 			}), "query B never entered a real lock wait")
 			require.False(t, work.finished(), "query B returned while A still held the lock: %v", work.result())
 
-			if delayed {
-				// Hold the backpressure window well past the shortened terminal
-				// send timeout so a cleanup attempt inside the window would
-				// already have had to deliver (or drop) its terminal signal.
-				deadline := time.Now().Add(8 * time.Second)
-				for time.Now().Before(deadline) && !work.finished() {
+			if holdWindow > 0 {
+				// Hold the backpressure state well past any terminal-send
+				// timeout that a regression could reintroduce, asserting the
+				// lock wait (and therefore the consumer-side backpressure on
+				// the producer) stays live for the whole window. The window is
+				// a scenario parameter, not a synchronization point: on the
+				// current protocol the producer is parked in the data phase
+				// and no terminal send occurs while the consumer waits.
+				deadline := time.Now().Add(holdWindow)
+				for time.Now().Before(deadline) {
+					if work.finished() {
+						break
+					}
+					state := issue24971Locks(ls, tableID)
+					require.NotEmpty(t, state.waiters,
+						"query B left the lock wait during the hold window (finished=%t)", work.finished())
 					time.Sleep(100 * time.Millisecond)
 				}
 				require.False(t, work.finished(), "query B finished during the hold window: %v", work.result())
@@ -172,7 +188,7 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 				return issue24971Locks(ls, tableID).count == 0
 			}), "locks were not released after query B finished: %+v", issue24971Locks(ls, tableID))
 
-			// A third session on the same key must not be blocked by B.
+			// A third statement on the same key must not be blocked by B.
 			follower := issue24971StartQuery(ctx, probe, "update issue24971.file set v=v+1 where id=1")
 			defer issue24971StopQuery(t, admin, cid, follower)
 			require.True(t, issue24971Until(ctx, 20*time.Second, follower.finished),
@@ -253,8 +269,8 @@ func (q *issue24971Query) result() error {
 	return fmt.Errorf("query is still running")
 }
 
-// issue24971StopQuery best-effort cleanup for a query this test owns: kill
-// the query, then the connection, with bounded waits. Cleanup waits must
+// issue24971StopQuery is best-effort cleanup for a query this test owns:
+// kill the query, then the connection, with bounded waits. Cleanup waits must
 // tolerate a pipeline that legitimately needs a couple of short timeouts to
 // tear down, so they are not treated as a failure of the guarded contract.
 func issue24971StopQuery(t *testing.T, admin *sql.Conn, id uint64, q *issue24971Query) {
