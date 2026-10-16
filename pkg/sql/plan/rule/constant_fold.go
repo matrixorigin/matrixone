@@ -141,7 +141,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	return r.foldExpr(expr, proc, false)
 }
 
-func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, capabilitiesChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -161,7 +161,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
+				exprList[i] = r.foldExpr(exprList[i], proc, capabilitiesChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -232,16 +232,17 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	// Preserve the v90 spatial requirement before evaluating any child. A
 	// successful scan covers this entire subtree, so recursive folding can
 	// reuse it instead of scanning every descendant again.
-	if !spatialChecked {
+	if !capabilitiesChecked {
 		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
 			return expr
 		}
-		spatialChecked = true
-	}
-	// Admission must still see JSON ELT after optimization; selected-subtree
-	// constant evaluation belongs to its lazy expression executor.
-	if requiresJSON, err := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); err != nil || requiresJSON {
-		return expr
+		// Admission must still see JSON ELT after optimization; selected-subtree
+		// constant evaluation belongs to its lazy expression executor. A JSON-free
+		// subtree stays JSON-free while folding, just as for spatial expressions.
+		if requiresJSON, err := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); err != nil || requiresJSON {
+			return expr
+		}
+		capabilitiesChecked = true
 	}
 	if f.CannotFold() { // function cannot be fold
 		return expr
@@ -261,7 +262,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, capabilitiesChecked)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {

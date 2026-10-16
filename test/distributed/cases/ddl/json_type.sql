@@ -123,6 +123,11 @@ select min(j1) from json_table_1 ;
 
 -- Issue #28869: scalar, JSON null, SQL NULL, window, grouped, view, and CTAS.
 create table json_minmax_issue28869(id int, grp int, j json);
+-- MAX_BY has no typed JSON comparator for either ordering position.
+select max_by(id,j,id) from json_minmax_issue28869;
+select max_by(id,id,j) from json_minmax_issue28869;
+select max_by_non_null(id,j,id) from json_minmax_issue28869;
+select max_by_non_null(id,id,j) from json_minmax_issue28869;
 insert into json_minmax_issue28869 values (1, 1, 'null'), (2, 1, 'false'), (3, 1, 'true'), (4, 1, '1'), (5, 1, '"a"'), (6, 1, null), (7, 2, '[1]'), (8, 2, '[1, 2]'), (9, 2, '{"a": 1}'), (10, 2, null), (11, 3, null);
 select json_type(min(j)) = 'NULL' as scalar_min_json_null, json_type(max(j)) = 'BOOLEAN' as scalar_max_boolean, min(j) = cast('null' as json) as scalar_min_value, max(j) = cast('true' as json) as scalar_max_value from json_minmax_issue28869 where grp = 1;
 select grp, json_type(min(j)) as group_min_type, json_type(max(j)) as group_max_type, min(j) = cast('{"a": 1}' as json) as group_min_value, max(j) = cast('[1, 2]' as json) as group_max_value from json_minmax_issue28869 where grp = 2 group by grp;

@@ -731,6 +731,9 @@ func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 	}
 	if !typeInList(casts[0].Oid, AnyValueSupportedTypes) ||
+		// MAX_BY compares ordering/tie values as bytes for varlen types. MIN/MAX
+		// has a typed JSON comparator, but these consumers do not yet share it.
+		casts[1].Oid == types.T_json || casts[2].Oid == types.T_json ||
 		!typeInList(casts[1].Oid, MinMaxSupportedTypes) ||
 		!typeInList(casts[2].Oid, MinMaxSupportedTypes) {
 		return newCheckResultWithFailure(failedAggParametersWrong)

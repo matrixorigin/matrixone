@@ -62,4 +62,13 @@ drop index ix on multi_fi;
 select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='multi_fi' and attr_has_generated=1;
 drop index im on multi_fi;
 select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='multi_fi' and attr_has_generated=1;
+-- COPY refreshes transitive generated dependencies without widening their declarations.
+create table transitive_fi(id int primary key,a varchar(40),g varchar(40) as (lower(a)) virtual,h varchar(40) as (upper(g)) virtual,index ix((lower(h))));
+insert into transitive_fi(id,a) values(1,'ABC'),(2,'def');
+alter table transitive_fi modify a varchar(60), algorithm=copy;
+select id,g,h from transitive_fi force index(ix) where lower(h)='abc' order by id;
+select id,g,h from transitive_fi ignore index(ix) where lower(h)='abc' order by id;
+select column_name,character_maximum_length from information_schema.columns where table_schema='functional_index_bvt' and table_name='transitive_fi' and column_name in ('a','g','h') order by column_name;
+update transitive_fi set a='AbC' where id=2;
+select id from transitive_fi force index(ix) where lower(h)='abc' order by id;
 drop database functional_index_bvt;

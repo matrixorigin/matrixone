@@ -126,7 +126,7 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 		}
 		if col.GeneratedCol != nil {
 			visiting[pos] = true
-			ok := functionalExpressionEligible(col.GeneratedCol.Expr, cols, visiting)
+			ok := functionalGeneratedExpressionEligible(col, cols, visiting)
 			delete(visiting, pos)
 			return ok
 		}
@@ -210,6 +210,42 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 	default:
 		return false
 	}
+}
+
+// Visible generated columns retain their declared assignment width during COPY.
+// A strict VARCHAR width check can reject a row but cannot change a successfully
+// assigned value with the session timezone or SQL mode. Admit only this wrapper
+// at the generated-column boundary; arbitrary casts remain deny-by-default.
+func functionalGeneratedExpressionEligible(col *ColDef, cols []*ColDef, visiting map[int32]bool) bool {
+	expr := col.GeneratedCol.Expr
+	if expr == nil || !sameFunctionalValueType(expr.Typ, col.Typ) {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast_strict" {
+		if len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil ||
+			!sameFunctionalValueType(fn.Args[1].Typ, col.Typ) {
+			return false
+		}
+		from, to := fn.Args[0].Typ, col.Typ
+		if from.Id != int32(types.T_varchar) || to.Id != int32(types.T_varchar) || from.Width <= 0 || to.Width <= 0 {
+			return false
+		}
+		from.Width = to.Width
+		if !sameFunctionalValueType(from, to) {
+			return false
+		}
+		inputType, inputOK := functionalRuntimeType(fn.Args[0].Typ)
+		targetType, targetOK := functionalRuntimeType(to)
+		if !inputOK || !targetOK {
+			return false
+		}
+		resolved, err := function.GetFunctionByName(context.Background(), "cast_strict", []types.Type{inputType, targetType})
+		if err != nil || resolved.GetEncodedOverloadID() != fn.Func.Obj {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return functionalExpressionEligible(expr, cols, visiting)
 }
 
 // Validate the serialized identity using the same registry/type checker as the
@@ -522,9 +558,10 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 }
 
 // COPY MODIFY/CHANGE updates the source schema before replaying its CREATE SQL.
-// Refresh the owned backing values at that boundary so strict catalog validation
-// never compares an old argument width with the new source column. The caller
-// validates the original metadata before changing the planner-owned table.
+// Refresh backing values and their generated dependency closure at that boundary
+// so strict catalog validation never compares old argument types with the new
+// source schema. Visible generated columns keep their declared assignment types.
+// The caller validates the original metadata before changing the planner-owned table.
 func rebindFunctionalIndexColumns(ctx CompilerContext, table *TableDef) error {
 	names := make([]string, len(table.Cols))
 	colTypes := make([]Type, len(table.Cols))
@@ -547,16 +584,51 @@ func rebindFunctionalIndexColumns(ctx CompilerContext, table *TableDef) error {
 		}
 		return NewGeneratedColBinder(ddlExpressionContext(ctx, ctx.GetContext()), names, colTypes).BindExpr(clause.Exprs[0].Expr, 0, true)
 	}
-	for i, col := range table.Cols {
-		if !isFunctionalColumn(col) {
-			continue
+	state := make([]uint8, len(table.Cols))
+	var rebind func(int) error
+	rebind = func(i int) error {
+		col := table.Cols[i]
+		if col.GeneratedCol == nil || state[i] == 2 {
+			return nil
+		}
+		if state[i] == 1 {
+			return moerr.NewInvalidInput(ctx.GetContext(), "cyclic functional index dependency")
+		}
+		state[i] = 1
+		if err := pb.VisitExprTree(col.GeneratedCol.Expr, func(expr *Expr) error {
+			if ref := expr.GetCol(); ref != nil {
+				if ref.RelPos != 0 || ref.ColPos < 0 || int(ref.ColPos) >= len(table.Cols) {
+					return moerr.NewInvalidInput(ctx.GetContext(), "invalid functional index dependency")
+				}
+				return rebind(int(ref.ColPos))
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		expr, err := bind(col)
 		if err != nil {
 			return err
 		}
-		col.GeneratedCol.Expr, col.Typ = expr, expr.Typ
+		if isFunctionalColumn(col) {
+			col.Typ = expr.Typ
+		} else {
+			expr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), expr, col.Typ)
+			if err != nil {
+				return err
+			}
+		}
+		col.GeneratedCol.Expr = expr
 		colTypes[i] = col.Typ
+		state[i] = 2
+		return nil
+	}
+	for i, col := range table.Cols {
+		if isFunctionalColumn(col) {
+			if err := rebind(i); err != nil {
+				return err
+			}
+		}
 	}
 	return validateFunctionalTable(ctx.GetContext(), table)
 }

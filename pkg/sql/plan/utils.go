@@ -1957,7 +1957,7 @@ func constantFoldWithPreparedExactSource(
 	varAndParamIsConst bool,
 	foldInExpr bool,
 	preservePreparedExactSource bool,
-	spatialChecked bool,
+	capabilitiesChecked bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
@@ -1973,7 +1973,7 @@ func constantFoldWithPreparedExactSource(
 		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := constantFoldWithPreparedExactSource(
-				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, capabilitiesChecked)
 			if err != nil {
 				return nil, err
 			}
@@ -2052,16 +2052,17 @@ func constantFoldWithPreparedExactSource(
 	// the whole subtree is known to be spatial-free, its children need no scan:
 	// folding constants cannot introduce a spatial function. Rechecking every
 	// descendant would make folding a deep expression quadratic.
-	if !spatialChecked {
+	if !capabilitiesChecked {
 		if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
 			return expr, nil
 		}
-		spatialChecked = true
-	}
-	// Keep the selected-consumer ELT identity visible to remote and persisted
-	// admission. Its executor owns lazy folding of the selected value subtree.
-	if requiresJSON, jsonErr := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
-		return expr, nil
+		// Keep ELT identity visible to admission and its selected subtree lazy.
+		// Propagate a negative scan: folding cannot introduce JSON ELT, and
+		// rescanning every descendant would make an arithmetic chain quadratic.
+		if requiresJSON, jsonErr := plan.RequiresMORPCVersion117JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
+			return expr, nil
+		}
+		capabilitiesChecked = true
 	}
 	if f.CannotFold() {
 		return expr, nil
@@ -2081,7 +2082,7 @@ func constantFoldWithPreparedExactSource(
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
-			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, capabilitiesChecked)
 		if errFold != nil {
 			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for

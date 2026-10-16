@@ -16,7 +16,12 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -25,7 +30,6 @@ import (
 	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
@@ -40,6 +44,8 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 		{sql: "elt(0,cast('bad' as json),'ok')", null: true},
 		{sql: "elt(3,cast('bad' as json),'ok')", null: true},
 		{sql: "elt(1,cast('bad' as json),'ok')", fail: true},
+		{sql: "concat('prefix-',elt(1,'ok',cast('bad' as json)))", want: "prefix-ok"},
+		{sql: "concat('prefix-',elt(1,cast('bad' as json),'ok'))", fail: true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+tc.sql, 1)
@@ -80,6 +86,39 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// Keep the input nonconstant and bind it before timing so this measures the
+// recursive folders, including their capability scans, rather than parsing.
+func BenchmarkConstantFoldArithmeticChain(b *testing.B) {
+	for _, depth := range []int{128, 1024} {
+		for _, mode := range []string{"api", "optimizer"} {
+			b.Run(fmt.Sprintf("%s/depth_%d", mode, depth), func(b *testing.B) {
+				proc := testutil.NewProcess(b)
+				defer proc.Free()
+				stmt, err := parsers.ParseOne(b.Context(), dialect.MYSQL, "select id"+strings.Repeat("+1", depth), 1)
+				require.NoError(b, err)
+				defer stmt.Free()
+				ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+				expr, err := NewGeneratedColBinder(b.Context(), []string{"id"}, []Type{types.T_int64.ToType().PlanType()}).BindExpr(ast, 0, false)
+				require.NoError(b, err)
+				node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
+				folder := planrule.NewConstantFold(false)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if mode == "api" {
+						_, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+						if err != nil {
+							b.Fatal(err)
+						}
+					} else {
+						folder.Apply(node, nil, proc)
+					}
+				}
+			})
+		}
 	}
 }
 

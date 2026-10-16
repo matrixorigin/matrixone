@@ -186,6 +186,54 @@ func TestFunctionalIndexCopyColumnTypeRefresh(t *testing.T) {
 	}
 }
 
+func TestFunctionalIndexCopyGeneratedDependencyRefresh(t *testing.T) {
+	for _, change := range []string{"modify a varchar(60)", "modify a varchar(60) first"} {
+		t.Run(change, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table fi(id int primary key,a varchar(40),g varchar(40) as (lower(a)) virtual,h varchar(40) as (upper(g)) virtual,index ix((lower(h))))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := p.GetDdl().GetCreateTable().TableDef
+			copyTable := DeepCopyTableDef(original, true)
+			alter, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table fi "+change, 1)
+			require.NoError(t, err)
+			defer alter.Free()
+			option := alter.(*tree.AlterTable).Options[0].(*tree.AlterTableModifyColumnClause)
+			_, err = updateNewColumnInTableDef(ctx, copyTable, FindColumn(copyTable.Cols, "a"), option.NewColumn, option.Position)
+			require.NoError(t, err)
+			require.Equal(t, int32(60), FindColumn(copyTable.Cols, "a").Typ.Width)
+			for _, name := range []string{"g", "h"} {
+				col := FindColumn(copyTable.Cols, name)
+				require.Equal(t, int32(40), col.Typ.Width, "visible assignment type must be preserved")
+				require.True(t, sameFunctionalValueType(col.Typ, col.GeneratedCol.Expr.Typ))
+			}
+			require.NoError(t, validateFunctionalTable(t.Context(), copyTable))
+			for _, damage := range []string{"overload", "charset", "target_width"} {
+				t.Run(damage, func(t *testing.T) {
+					bad := DeepCopyTableDef(copyTable, true)
+					assignment := FindColumn(bad.Cols, "g").GeneratedCol.Expr.GetF()
+					require.Equal(t, "cast_strict", assignment.Func.ObjName)
+					switch damage {
+					case "overload":
+						assignment.Func.Obj++
+					case "charset":
+						assignment.Args[0].Typ.Charset ^= 1
+					case "target_width":
+						assignment.Args[1].Typ.Width++
+					}
+					require.Error(t, validateFunctionalTable(t.Context(), bad))
+				})
+			}
+			_, _, err = constructCreateTableSQL(ctx, copyTable, nil, false, nil, false, nil)
+			require.NoError(t, err)
+			require.NoError(t, validateFunctionalTable(t.Context(), original))
+			require.Equal(t, int32(40), FindColumn(original.Cols, "a").Typ.Width)
+		})
+	}
+}
+
 func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())

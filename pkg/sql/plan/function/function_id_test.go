@@ -94,6 +94,24 @@ func TestMinMaxAcceptJSON(t *testing.T) {
 	}
 }
 
+func TestMaxByRejectsJSONOrdering(t *testing.T) {
+	for _, name := range []string{"max_by", "max_by_non_null"} {
+		t.Run(name, func(t *testing.T) {
+			for _, position := range []int{1, 2} {
+				inputs := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+				inputs[position] = types.T_json.ToType()
+				_, err := GetFunctionByName(t.Context(), name, inputs)
+				require.Error(t, err, "JSON ordering argument %d must remain unsupported", position)
+			}
+			for _, value := range []types.T{types.T_varchar, types.T_json} {
+				fn, err := GetFunctionByName(t.Context(), name, []types.Type{value.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+				require.NoError(t, err)
+				require.Equal(t, value, fn.GetReturnType().Oid)
+			}
+		})
+	}
+}
+
 func TestInOverloadWireIDsRemainAppendOnly(t *testing.T) {
 	// GetFunctionByName encodes the matched slice index, and remote executors
 	// decode that index directly. These pre-existing mappings are therefore a
