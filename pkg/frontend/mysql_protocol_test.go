@@ -2729,7 +2729,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		require.Equal(t, "result", resultColumn.name)
 		require.Equal(t, uint16(charsetBinary), resultColumn.charset)
 		require.Equal(t, uint32(31), resultColumn.length)
-		require.Equal(t, defines.MYSQL_TYPE_DECIMAL, resultColumn.typ)
+		require.Equal(t, defines.MYSQL_TYPE_NEWDECIMAL, resultColumn.typ)
 		require.Equal(t, uint16(0), resultColumn.flags)
 		require.Equal(t, uint8(0), resultColumn.decimals)
 		require.Equal(t, byte(defines.EOFHeader), packets[5][0])
@@ -2781,8 +2781,8 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
-		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
-		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
+		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_NEWDECIMAL, resultDecimals: 6},
+		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_NEWDECIMAL, resultDecimals: 6},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

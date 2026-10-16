@@ -91,7 +91,7 @@ func TestTPCHNumericEligibilityInventory(t *testing.T) {
 				read.ObjRef.Obj = 42
 			}
 
-			candidate, err := Export(query)
+			candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 			numericSignatures := numericFunctionSignatures(query)
 			if tc.eligibleOutput == nil {
 				require.Nil(t, candidate)
