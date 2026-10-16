@@ -14,7 +14,11 @@
 
 package compile
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // sequenceStatementState is the session-visible sequence state at the start
 // of a statement attempt. Sequence functions update SeqAddValues and
@@ -48,14 +52,18 @@ func (c *Compile) restoreSequenceStatementState() {
 	if c == nil || c.proc == nil {
 		return
 	}
-	info := c.proc.GetSessionInfo()
-	info.SeqCurValues = cloneSequenceValues(c.sequenceState.curValues)
-	info.SeqAddValues = cloneSequenceValues(c.sequenceState.addValues)
-	info.SeqDeleteKeys = append([]uint64(nil), c.sequenceState.deleteKeys...)
+	c.sequenceState.apply(c.proc)
+}
+
+func (state sequenceStatementState) apply(proc *process.Process) {
+	info := proc.GetSessionInfo()
+	info.SeqCurValues = cloneSequenceValues(state.curValues)
+	info.SeqAddValues = cloneSequenceValues(state.addValues)
+	info.SeqDeleteKeys = append([]uint64(nil), state.deleteKeys...)
 	if len(info.SeqLastValue) == 0 {
 		info.SeqLastValue = make([]string, 1)
 	}
-	info.SeqLastValue[0] = c.sequenceState.lastValue
+	info.SeqLastValue[0] = state.lastValue
 }
 
 func cloneSequenceValues(values map[uint64]string) map[uint64]string {
@@ -67,4 +75,45 @@ func cloneSequenceValues(values map[uint64]string) map[uint64]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// internalSequenceState is a synchronous CTAS handoff. The child owns its
+// cloned attempt state; only a successful child supplies an output snapshot.
+// The outer statement remains responsible for frontend publication and rollback.
+type internalSequenceState struct {
+	input  sequenceStatementState
+	output *sequenceStatementState
+}
+
+type internalSequenceStateKey struct{}
+
+func attachInternalSequenceState(ctx context.Context, proc *process.Process) (context.Context, *internalSequenceState) {
+	state := &internalSequenceState{input: captureSequenceStatementState(proc)}
+	return context.WithValue(ctx, internalSequenceStateKey{}, state), state
+}
+
+func consumeInternalSequenceState(ctx context.Context) (context.Context, *internalSequenceState) {
+	state, _ := ctx.Value(internalSequenceStateKey{}).(*internalSequenceState)
+	if state == nil {
+		return ctx, nil
+	}
+	// Nested metadata SQL inherits this context. It must not consume or publish
+	// the population statement's handoff while a sequence allocation is active.
+	return context.WithValue(ctx, internalSequenceStateKey{}, (*internalSequenceState)(nil)), state
+}
+
+func initInternalSequenceState(proc *process.Process, database string, state *internalSequenceState) {
+	proc.GetSessionInfo().Database = database
+	proc.InitSeq()
+	if state != nil {
+		state.input.apply(proc)
+		// A caller without prior sequence state still needs writable containers.
+		info := proc.GetSessionInfo()
+		if info.SeqCurValues == nil {
+			info.SeqCurValues = make(map[uint64]string)
+		}
+		if info.SeqAddValues == nil {
+			info.SeqAddValues = make(map[uint64]string)
+		}
+	}
 }
