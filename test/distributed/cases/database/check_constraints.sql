@@ -115,3 +115,37 @@ create table multi_chk (a int, check (a > 0), constraint named_chk check (a < 10
 show create table multi_chk;
 
 drop database check_names_30343;
+-- @case
+-- @desc:RENAME TABLE carries generated CHECK names so the old table name can be recreated; TRUNCATE keeps them (#30343)
+-- @label:bvt
+
+drop database if exists check_rename_30343;
+create database check_rename_30343;
+use check_rename_30343;
+
+-- renaming moves the generated name with its table
+create table t (a int, check (a > 0));
+rename table t to u;
+show create table u;
+
+-- the released old name can own a fresh generated CHECK again
+create table t (a int, check (a < 100));
+show create table t;
+
+insert into u values (-1);
+insert into t values (200);
+select count(*) from u;
+select count(*) from t;
+
+-- TRUNCATE recreates the table internally but keeps its CHECK identity
+truncate table u;
+show create table u;
+insert into u values (-1);
+select count(*) from u;
+
+select constraint_name, check_clause
+from information_schema.check_constraints
+where constraint_schema = 'check_rename_30343'
+order by constraint_name;
+
+drop database check_rename_30343;

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -394,6 +395,48 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 				}
 			}
 			require.Contains(t, createSQL, tc.persistedText)
+		})
+	}
+}
+
+// Snapshot/account restore reuses the LIKE planner branch but must keep the
+// captured constraint identity: a restored table has to come back with its
+// original explicit CHECK names, while an ordinary LIKE (and an ordinary
+// CLONE) regenerates <dst>_chk_<n>.
+func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		restore  bool
+		wantName string
+	}{
+		{name: "like regenerates", wantName: "clone_t_chk_1"},
+		{name: "restore preserves", restore: true, wantName: "ck_positive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, source.Checks, 1)
+			mock.ctxt.tables["source_t"] = source
+
+			raw, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer raw.Free()
+			createStmt := raw.(*tree.CreateTable)
+			var cloneStmt *tree.CloneTable
+			if tc.restore {
+				cloneStmt = &tree.CloneTable{IsRestore: true}
+			}
+			got, err := buildCreateTable(mock.CurrentContext(), createStmt, cloneStmt, false)
+			require.NoError(t, err)
+			clone := got.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, clone.Checks, 1)
+			require.Equal(t, tc.wantName, clone.Checks[0].Name)
+			require.Equal(t, "`a` > 0", clone.Checks[0].OriginSql)
 		})
 	}
 }
