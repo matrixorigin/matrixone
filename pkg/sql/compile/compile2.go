@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -530,6 +531,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
+		if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
+			return nil, err
+		}
 		err = c.runSiriusRead(execTopContext)
 		warningsSucceeded = err == nil
 		return queryResult, err
