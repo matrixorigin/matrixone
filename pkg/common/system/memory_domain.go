@@ -351,13 +351,14 @@ func RefreshMemoryDomain() (MemoryDomainSnapshot, error) {
 }
 
 type memoryDomainLevel struct {
-	dir       string
-	limitFile string
-	softFile  string
-	usageFile string
-	statFile  string
-	source    MemoryDomainSource
-	mountRoot bool
+	dir           string
+	limitFile     string
+	softFile      string
+	usageFile     string
+	statFile      string
+	source        MemoryDomainSource
+	mountRoot     bool
+	hierarchyRoot bool
 }
 
 func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
@@ -442,7 +443,8 @@ func memoryDomainLevels(pid int) ([]memoryDomainLevel, bool) {
 			if !ok {
 				continue
 			}
-			return buildMemoryDomainLevels(dir, mountPoint, MemoryDomainSourceCgroupV2,
+			return buildMemoryDomainLevelsWithHierarchyRoot(dir, mountPoint, MemoryDomainSourceCgroupV2,
+				filepath.Clean(mountRoot) == string(os.PathSeparator),
 				"memory.max", "memory.high", "memory.current", "memory.stat"), true
 		case "cgroup":
 			if v1MemoryPath == "" || !strings.Contains(","+right[2]+",", ",memory,") {
@@ -461,6 +463,15 @@ func memoryDomainLevels(pid int) ([]memoryDomainLevel, bool) {
 
 func buildMemoryDomainLevels(dir, mountPoint string, source MemoryDomainSource,
 	limitFile, softFile, usageFile, statFile string) []memoryDomainLevel {
+	// Unit tests which construct a synthetic tree use mountPoint as the
+	// hierarchy root. The production resolver passes the mountinfo root
+	// explicitly so a bind-mounted cgroup subtree is not mistaken for it.
+	return buildMemoryDomainLevelsWithHierarchyRoot(dir, mountPoint, source, true,
+		limitFile, softFile, usageFile, statFile)
+}
+
+func buildMemoryDomainLevelsWithHierarchyRoot(dir, mountPoint string, source MemoryDomainSource,
+	hierarchyRoot bool, limitFile, softFile, usageFile, statFile string) []memoryDomainLevel {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
 	levels := make([]memoryDomainLevel, 0, 4)
@@ -468,6 +479,7 @@ func buildMemoryDomainLevels(dir, mountPoint string, source MemoryDomainSource,
 		levels = append(levels, memoryDomainLevel{
 			dir: dir, limitFile: limitFile, softFile: softFile, usageFile: usageFile,
 			statFile: statFile, source: source, mountRoot: dir == mountPoint,
+			hierarchyRoot: hierarchyRoot && dir == mountPoint,
 		})
 		if dir == mountPoint {
 			break
@@ -481,6 +493,47 @@ func buildMemoryDomainLevels(dir, mountPoint string, source MemoryDomainSource,
 	return levels
 }
 
+// cgroupMemoryInterfaceStructurallyAbsent distinguishes a controller which is
+// not applicable to a level from a damaged or unreadable memory interface.
+// In cgroup v2, the controller interface files are created in a child only
+// when memory is enabled in the parent's cgroup.subtree_control. A true
+// hierarchy root is the other structural exception: controller interface
+// files need not exist there. A mounted non-root subtree must be checked using
+// cgroup.controllers; its mount position alone is not evidence of structural
+// absence.
+func cgroupMemoryInterfaceStructurallyAbsent(level memoryDomainLevel) (bool, error) {
+	if level.source != MemoryDomainSourceCgroupV2 {
+		return false, nil
+	}
+
+	for _, name := range []string{level.limitFile, level.softFile, level.usageFile} {
+		if _, err := os.Stat(filepath.Join(level.dir, name)); err == nil {
+			return false, nil
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+
+	if level.hierarchyRoot {
+		return true, nil
+	}
+
+	controllerFile := filepath.Join(filepath.Dir(level.dir), "cgroup.subtree_control")
+	if level.mountRoot {
+		controllerFile = filepath.Join(level.dir, "cgroup.controllers")
+	}
+	data, err := os.ReadFile(controllerFile)
+	if err != nil {
+		return false, err
+	}
+	for _, controller := range strings.Fields(string(data)) {
+		if strings.TrimPrefix(controller, "+") == "memory" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, bool, error) {
 	var (
 		selected         MemoryDomainSnapshot
@@ -488,15 +541,21 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		found            bool
 	)
 	for _, level := range levels {
+		structurallyAbsent, err := cgroupMemoryInterfaceStructurallyAbsent(level)
+		if err != nil {
+			return MemoryDomainSnapshot{}, false,
+				moerr.NewInternalErrorNoCtxf("inspect memory controller for %s: %v", level.dir, err)
+		}
+		if structurallyAbsent {
+			continue
+		}
 		limit, state := readCgroupLimitState(filepath.Join(level.dir, level.limitFile))
-		if state == cgroupLimitUnavailable ||
-			(state == cgroupLimitMissing && !level.mountRoot) {
+		if state == cgroupLimitUnavailable || state == cgroupLimitMissing {
 			return MemoryDomainSnapshot{}, false,
 				moerr.NewInternalErrorNoCtxf("read memory limit for %s", level.dir)
 		}
 		softLimit, softState := readCgroupLimitState(filepath.Join(level.dir, level.softFile))
-		if softState == cgroupLimitUnavailable ||
-			(softState == cgroupLimitMissing && !level.mountRoot) {
+		if softState == cgroupLimitUnavailable || softState == cgroupLimitMissing {
 			return MemoryDomainSnapshot{}, false,
 				moerr.NewInternalErrorNoCtxf("read memory soft limit for %s", level.dir)
 		}

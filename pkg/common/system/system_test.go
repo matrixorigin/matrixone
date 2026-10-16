@@ -721,6 +721,97 @@ func TestReadCgroupMemoryDomainSkipsStructuralMountRoot(t *testing.T) {
 	require.Zero(t, snapshot)
 }
 
+func TestReadCgroupMemoryDomainSkipsChildWithoutMemoryController(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	// The parent owns the memory controller and its five-unit headroom. It is
+	// not enabled in subtree_control, so the child legitimately has no
+	// memory.* interface files. The reader must retain the governing parent
+	// rather than treating the child as a broken observation.
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "100")
+	write(parent, "memory.high", "max")
+	write(parent, "memory.current", "95")
+	write(parent, "cgroup.subtree_control", "")
+
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+}
+
+func TestReadCgroupMemoryDomainDoesNotSkipConstrainedMountedRoot(t *testing.T) {
+	root := t.TempDir()
+	mountPoint := filepath.Join(root, "mounted")
+	child := filepath.Join(mountPoint, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(mountPoint, "memory.max", "100")
+	write(mountPoint, "memory.high", "max")
+	write(mountPoint, "memory.current", "95")
+	write(child, "memory.max", "200")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	write(mountPoint, "cgroup.controllers", "memory")
+
+	// mountPoint is a cgroup subtree mounted into a namespace, not the true
+	// hierarchy root. Missing one of its binding limits must retain the
+	// fail-closed behavior; the mount position alone is not structural proof.
+	levels := buildMemoryDomainLevelsWithHierarchyRoot(child, mountPoint,
+		MemoryDomainSourceCgroupV2, false,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	for _, name := range []string{"memory.max", "memory.high"} {
+		require.NoError(t, os.Remove(filepath.Join(mountPoint, name)))
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		if name == "memory.max" {
+			write(mountPoint, name, "100")
+		} else {
+			write(mountPoint, name, "max")
+		}
+	}
+
+	// If all memory interfaces are absent and the mounted cgroup says that
+	// memory is unavailable, the level is genuinely inapplicable. This is the
+	// structural exception; a mounted root with memory available is not.
+	for _, name := range []string{"memory.max", "memory.high", "memory.current"} {
+		require.NoError(t, os.Remove(filepath.Join(mountPoint, name)))
+	}
+	write(mountPoint, "cgroup.controllers", "cpu io")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+
+	// The same missing files are an observation failure when the controller is
+	// available at the mounted root.
+	write(mountPoint, "cgroup.controllers", "memory")
+	_, measured, err = readCgroupMemoryDomain(levels)
+	require.Error(t, err)
+	require.False(t, measured)
+}
+
 func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
 	root := t.TempDir()
 	write := func(name, content string) {
