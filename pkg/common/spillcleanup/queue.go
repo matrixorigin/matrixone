@@ -16,10 +16,11 @@
 package spillcleanup
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Capacity bounds all live named spill files, including empty files and files
@@ -29,7 +30,7 @@ const Capacity = 16 * 1024
 
 const maxWorkers = 4
 
-var ErrCapacity = errors.New("spill file metadata capacity exhausted")
+var ErrCapacity error = moerr.NewInternalErrorNoCtx("spill file metadata capacity exhausted")
 var admitted atomic.Int64
 
 // Reservation is move-only file ownership. Release is legal only when creation
