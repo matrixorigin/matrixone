@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -440,9 +442,60 @@ func TestDropIndexAdmissionDoesNotHoldNamesWhileWaiting(t *testing.T) {
 	})
 }
 
+// Every statement of TestTruncatePreservesMaterializedForeignKeyIdentity owns a
+// separate bounded operation context, so a saturated runner reports the
+// genuinely slow statement instead of failing an arbitrary later victim of one
+// aggregate budget (issue 30351). A statement whose operation context died is
+// never a valid oracle result, so it fails the test immediately instead of
+// being returned: bare negative assertions must not mistake a timeout for the
+// expected SQL rejection.
+const boundedStatementTimeout = 30 * time.Second
+
+type boundedSQLRunner interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func boundedExec(t testing.TB, ctx context.Context, runner boundedSQLRunner, q string, args ...any) error {
+	t.Helper()
+	opCtx, stop := context.WithTimeout(ctx, boundedStatementTimeout)
+	defer stop()
+	_, err := runner.ExecContext(opCtx, q, args...)
+	if err != nil && opCtx.Err() != nil {
+		t.Fatalf("statement budget exhausted, exec failed: %s (%v)", q, err)
+	}
+	return err
+}
+
+// Scan runs before stop() releases the operation context: returning a lazily
+// consumed *sql.Row would bind it to an already canceled context.
+func boundedQueryRow(t testing.TB, ctx context.Context, runner boundedSQLRunner, dest any, q string, args ...any) error {
+	t.Helper()
+	opCtx, stop := context.WithTimeout(ctx, boundedStatementTimeout)
+	defer stop()
+	err := runner.QueryRowContext(opCtx, q, args...).Scan(dest)
+	if err != nil && opCtx.Err() != nil {
+		t.Fatalf("statement budget exhausted, query failed: %s (%v)", q, err)
+	}
+	return err
+}
+
+// requireSQLRejection proves the server itself rejected the statement. A
+// deadline, cancellation or transport failure can never satisfy it, so a
+// timed-out negative statement fails the test instead of masquerading as the
+// expected rejection.
+func requireSQLRejection(t testing.TB, ctx context.Context, runner boundedSQLRunner, q string) {
+	t.Helper()
+	err := boundedExec(t, ctx, runner, q)
+	var serverErr *mysqlDriver.MySQLError
+	require.ErrorAsf(t, err, &serverErr, "expected a server-side SQL rejection for: %s, got: %v", q, err)
+}
+
 func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		// The umbrella bound keeps the case finite; the per-statement budget and
+		// rejection guard live in the bounded helpers above.
+		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -450,7 +503,7 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		const database = "truncate_fk_identity"
-		execSQLRequire(t, ctx, db, "create database "+database)
+		require.NoError(t, boundedExec(t, ctx, db, "create database "+database), "exec failed: create database "+database)
 		defer func() {
 			clean, stop := context.WithTimeout(context.Background(), 20*time.Second)
 			defer stop()
@@ -464,46 +517,50 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 			"insert into " + database + ".child values(1,7)",
 			"truncate table " + database + ".child",
 		} {
-			execSQLRequire(t, ctx, db, q)
+			require.NoErrorf(t, boundedExec(t, ctx, db, q), "exec failed: %s", q)
 		}
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
-		_, err = conn.ExecContext(ctx, "set foreign_key_checks=0")
-		require.NoError(t, err)
-		_, err = conn.ExecContext(ctx, "truncate table "+database+".parent")
-		require.Error(t, err, "referenced parents cannot be truncated even with checks disabled")
+		require.NoErrorf(t, boundedExec(t, ctx, conn, "set foreign_key_checks=0"), "exec failed: set foreign_key_checks=0")
+		requireSQLRejection(t, ctx, conn, "truncate table "+database+".parent") // referenced parents cannot be truncated even with checks disabled
 		var parentBefore, parentAfter uint64
-		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentBefore))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, conn, &parentBefore,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database),
+			"query failed: parent rel_id before transactional DELETE")
 		for _, q := range []string{"begin", "delete from " + database + ".parent", "rollback"} {
-			_, err = conn.ExecContext(ctx, q)
-			require.NoError(t, err, q)
+			require.NoErrorf(t, boundedExec(t, ctx, conn, q), "exec failed: %s", q)
 		}
-		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentAfter))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, conn, &parentAfter,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database),
+			"query failed: parent rel_id after rollback")
 		require.Equal(t, parentBefore, parentAfter, "transactional DELETE rollback restores the parent generation")
 		var parentRows int
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+database+".parent where id=1 and v=7").Scan(&parentRows))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, conn, &parentRows,
+			"select count(*) from "+database+".parent where id=1 and v=7"),
+			"query failed: parent rows after rollback")
 		require.Equal(t, 1, parentRows, "transactional DELETE rollback restores parent rows")
-		_, err = conn.ExecContext(ctx, "delete from "+database+".parent")
-		require.NoError(t, err)
-		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentAfter))
+		require.NoErrorf(t, boundedExec(t, ctx, conn, "delete from "+database+".parent"), "exec failed: whole-table delete from parent")
+		require.NoErrorf(t, boundedQueryRow(t, ctx, conn, &parentAfter,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database),
+			"query failed: parent rel_id after whole-table delete")
 		require.NotEqual(t, parentBefore, parentAfter, "whole-table DELETE exercises its internal truncate optimization")
-		_, err = conn.ExecContext(ctx, "set foreign_key_checks=1")
-		require.NoError(t, err)
+		require.NoErrorf(t, boundedExec(t, ctx, conn, "set foreign_key_checks=1"), "exec failed: set foreign_key_checks=1")
 		require.NoError(t, conn.Close())
-		execSQLRequire(t, ctx, db, "insert into "+database+".parent values(1,7)")
+		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".parent values(1,7)"),
+			"exec failed: recreate parent row")
 		var selected string
-		require.NoError(t, db.QueryRowContext(ctx, "select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database).Scan(&selected))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, db, &selected,
+			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
+			"query failed: selected referenced key after recreation")
 		require.Equal(t, "z", selected, "recreation must preserve the declared selected key")
-		_, err = db.ExecContext(ctx, "drop index z on "+database+".parent")
-		require.Error(t, err, "engine FK protection must agree with the catalog key")
-		_, err = db.ExecContext(ctx, "drop index a on "+database+".parent")
-		require.NoError(t, err, "new compatible key was not selected by the existing FK")
-		_, err = db.ExecContext(ctx, "insert into "+database+".child values(1,999)")
-		require.Error(t, err)
-		execSQLRequire(t, ctx, db, "insert into "+database+".child values(1,7)")
-		_, err = db.ExecContext(ctx, "insert into "+database+".child values(2,7)")
-		require.Error(t, err, "unrelated uniqueness must survive")
+		requireSQLRejection(t, ctx, db, "drop index z on "+database+".parent") // engine FK protection must agree with the catalog key
+		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index a on "+database+".parent"),
+			"new compatible key was not selected by the existing FK")
+		requireSQLRejection(t, ctx, db, "insert into "+database+".child values(1,999)")
+		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".child values(1,7)"),
+			"exec failed: reinsert child")
+		requireSQLRejection(t, ctx, db, "insert into "+database+".child values(2,7)") // unrelated uniqueness must survive
 		// Explicit DROP/CREATE owns a new schema generation and uses normal key selection.
 		conn, err = db.Conn(ctx)
 		require.NoError(t, err)
@@ -514,29 +571,31 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 			"create table " + database + ".parent(id int primary key,v int,unique key z(v),unique key a(v))",
 			"set foreign_key_checks=1",
 		} {
-			_, err = conn.ExecContext(ctx, q)
-			require.NoError(t, err, q)
+			require.NoErrorf(t, boundedExec(t, ctx, conn, q), "exec failed: %s", q)
 		}
-		require.NoError(t, conn.QueryRowContext(ctx, "select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database).Scan(&selected))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, conn, &selected,
+			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
+			"query failed: selected key after explicit parent recreation")
 		require.Equal(t, "a", selected, "ordinary new-parent binding keeps its default selection policy")
-		_, err = conn.ExecContext(ctx, "drop index z on "+database+".parent")
-		require.NoError(t, err)
-		_, err = conn.ExecContext(ctx, "drop index a on "+database+".parent")
-		require.Error(t, err)
+		require.NoErrorf(t, boundedExec(t, ctx, conn, "drop index z on "+database+".parent"),
+			"exec failed: drop index z after explicit recreation")
+		requireSQLRejection(t, ctx, conn, "drop index a on "+database+".parent")
 		require.NoError(t, conn.Close())
 		for _, q := range []string{
 			"create table " + database + ".self(id int primary key,pid int,constraint fk_self foreign key(pid) references " + database + ".self(id))",
 			"insert into " + database + ".self values(1,1)",
 			"truncate table " + database + ".self",
 		} {
-			execSQLRequire(t, ctx, db, q)
+			require.NoErrorf(t, boundedExec(t, ctx, db, q), "exec failed: %s", q)
 		}
 		var rows int
-		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name='self'", database).Scan(&rows))
+		require.NoErrorf(t, boundedQueryRow(t, ctx, db, &rows,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name='self'", database),
+			"query failed: self FK catalog rows")
 		require.Equal(t, 1, rows)
-		_, err = db.ExecContext(ctx, "insert into "+database+".self values(1,999)")
-		require.Error(t, err)
-		execSQLRequire(t, ctx, db, "insert into "+database+".self values(1,1)")
+		requireSQLRejection(t, ctx, db, "insert into "+database+".self values(1,999)")
+		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".self values(1,1)"),
+			"exec failed: reinsert self-referencing row")
 	})
 }
 
