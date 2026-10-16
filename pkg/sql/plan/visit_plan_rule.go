@@ -2398,6 +2398,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "timestampadd_second_interval" && len(fn.Args) == 1 {
+		rewritten, err = rule.rebindTimestampAddSecondInterval(e)
 	} else if hasSourceDependentIntegerArguments(e) {
 		fallbackSource = nil
 		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)

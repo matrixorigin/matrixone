@@ -96,12 +96,15 @@ DROP TABLE IF EXISTS timestampadd_fractional;
 CREATE TABLE timestampadd_fractional (
   id INT PRIMARY KEY, n DECIMAL(12,7), dt DATETIME,
   added DATETIME(6) GENERATED ALWAYS AS (TIMESTAMPADD(SECOND, n, dt)) STORED,
+  txt VARCHAR(16) DEFAULT '1.5',
+  text_added DATETIME(6) GENERATED ALWAYS AS (TIMESTAMPADD(SECOND,txt,dt)) STORED,
   INDEX added_idx(added)
 );
 INSERT INTO timestampadd_fractional(id,n,dt) VALUES
  (1,1.4,'2024-01-01'),(2,1.5,'2024-01-01'),(3,-1.5,'2024-01-01'),
  (4,0.000001,'2024-01-01'),(5,-0.0000009,'2024-01-01'),(6,NULL,'2024-01-01');
 SELECT id, CAST(TIMESTAMPADD(SECOND,n,dt) AS CHAR) AS computed, CAST(added AS CHAR) AS added FROM timestampadd_fractional ORDER BY id;
+SELECT CAST(text_added AS CHAR) AS generated_text FROM timestampadd_fractional WHERE id=1;
 SELECT id FROM timestampadd_fractional FORCE INDEX(added_idx) WHERE added='2024-01-01 00:00:01.500000';
 -- Binary literals keep their numeric meaning before mixed branch reconciliation.
 SELECT id, CAST(TIMESTAMPADD(SECOND, IF(id=1,0x31,n),dt) AS CHAR) AS selected_seconds
@@ -135,8 +138,8 @@ EXECUTE binary_seconds USING @choose_hex;
 DEALLOCATE PREPARE binary_seconds;
 -- Stored ENUM/SET ordinals survive selection; FLOAT uses its promoted value.
 DROP TABLE IF EXISTS timestampadd_sources;
-CREATE TABLE timestampadd_sources(id INT PRIMARY KEY,e ENUM('label','1.5'),s SET('label','1.5'),f FLOAT,dt DATETIME(6));
-INSERT INTO timestampadd_sources VALUES (1,'label','label',1677721.625,'2024-01-01'),(2,'1.5','1.5',-1677721.625,'2024-01-01'),(3,NULL,NULL,1.000001,'2024-01-01');
+CREATE TABLE timestampadd_sources(id INT PRIMARY KEY,e ENUM('label','1.5'),s SET('label','1.5'),f FLOAT,dt DATETIME(6),flag BOOL,bin_value BINARY(9),varbin_value VARBINARY(9),blob_value BLOB);
+INSERT INTO timestampadd_sources VALUES (1,'label','label',1677721.625,'2024-01-01',TRUE,'000000001','000000001','000000001'),(2,'1.5','1.5',-1677721.625,'2024-01-01',FALSE,'1.5','1.5','1.5'),(3,NULL,NULL,1.000001,'2024-01-01',NULL,NULL,NULL,NULL);
 SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,e,dt)) AS enum_direct, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,s,dt)) AS set_direct, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,e,1.5),dt)) AS enum_if, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,CASE WHEN id=1 THEN 1.5 ELSE s END,dt)) AS set_case, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,NULLIF(e,'label'),dt)) AS enum_nullif, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(TRUE,CAST(e AS CHAR),1.5),dt)) AS text_control FROM timestampadd_sources ORDER BY id;
 SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,f,dt)) AS float_seconds FROM timestampadd_sources ORDER BY id;
 SELECT TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(TRUE,e,1.5),dt)) AS projected_enum FROM (SELECT e,dt FROM timestampadd_sources WHERE id=2) AS source;
@@ -146,4 +149,6 @@ EXECUTE source_seconds USING @choose_source;
 SET @choose_source=0;
 EXECUTE source_seconds USING @choose_source;
 DEALLOCATE PREPARE source_seconds;
+SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,flag,1.5),dt)) AS selected_bool, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,bin_value,1.5),dt)) AS selected_binary, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,varbin_value,1.5),dt)) AS selected_varbinary, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,blob_value,1.5),dt)) AS selected_blob FROM timestampadd_sources ORDER BY id;
 DROP TABLE timestampadd_sources;
+SELECT CAST(TIMESTAMPADD(SECOND,IF(TRUE,TRUE,1.5),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS boolean_seconds, CAST(TIMESTAMPADD(SECOND,IF(TRUE,CAST('000000001' AS BINARY),'2'),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS binary_seconds, CAST(TIMESTAMPADD(SECOND,IF(TRUE,_binary '1.5',1.5),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS introduced_text_seconds;

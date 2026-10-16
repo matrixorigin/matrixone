@@ -119,7 +119,7 @@ func TestBindTimestampAddFractionalSecond(t *testing.T) {
 		source     types.T
 		normalized bool
 	}{
-		{"SECOND", types.T_decimal64, true}, {"SECOND", types.T_decimal128, true}, {"SECOND", types.T_decimal256, true}, {"SECOND", types.T_float64, true}, {"SECOND", types.T_varchar, true}, {"SECOND", types.T_int64, false}, {"DAY", types.T_decimal64, false}, {"MICROSECOND", types.T_decimal64, false},
+		{"SECOND", types.T_bool, false}, {"SECOND", types.T_binary, false}, {"SECOND", types.T_varbinary, false}, {"SECOND", types.T_blob, false}, {"SECOND", types.T_decimal64, true}, {"SECOND", types.T_decimal128, true}, {"SECOND", types.T_decimal256, true}, {"SECOND", types.T_float64, true}, {"SECOND", types.T_varchar, true}, {"SECOND", types.T_int64, false}, {"DAY", types.T_decimal64, false}, {"MICROSECOND", types.T_decimal64, false},
 	} {
 		t.Run(tc.unit+tc.source.String(), func(t *testing.T) {
 			src := &plan.Expr{Typ: plan.Type{Id: int32(tc.source), Width: 18, Scale: 7}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
@@ -192,6 +192,19 @@ func TestTimestampAddSecondBinarySources(t *testing.T) {
 		want  string
 		null  bool
 	}{
+		{"IF(TRUE,TRUE,1.5)", "2024-01-01 00:00:01.000000", false},
+		{"IFF(FALSE,1.5,FALSE)", "2024-01-01 00:00:00.000000", false},
+		{"CASE WHEN TRUE THEN TRUE ELSE 1.5 END", "2024-01-01 00:00:01.000000", false},
+		{"CASE 1 WHEN 1 THEN TRUE ELSE 1.5 END", "2024-01-01 00:00:01.000000", false},
+		{"NULLIF(TRUE,FALSE)", "2024-01-01 00:00:01.000000", false},
+		{"NULLIF(TRUE,TRUE)", "", true},
+		{"IF(FALSE,TRUE,1.5)", "2024-01-01 00:00:01.500000", false},
+		{"CAST('000000001' AS BINARY)", "2024-01-01 00:00:01.000000", false},
+		{"IF(TRUE,CAST('000000001' AS BINARY),'2')", "2024-01-01 00:00:01.000000", false},
+		{"CAST('1.5' AS BINARY)", "2024-01-01 00:00:01.000000", false},
+		{"IF(TRUE,CAST('1.5' AS BINARY),1.5)", "2024-01-01 00:00:01.000000", false},
+		{"IF(FALSE,CAST('1.5' AS BINARY),1.5)", "2024-01-01 00:00:01.500000", false},
+		{"IF(TRUE,CAST(CAST('1.5' AS BINARY) AS CHAR),1.5)", "2024-01-01 00:00:01.500000", false},
 		{"0x31", "2024-01-01 00:00:49.000000", false},
 		{"X'31'", "2024-01-01 00:00:49.000000", false},
 		{"B'110001'", "2024-01-01 00:00:49.000000", false},
@@ -216,6 +229,8 @@ func TestTimestampAddSecondBinarySources(t *testing.T) {
 		{"COALESCE(0x31,0x32)", "2024-01-01 00:00:01.000000", false},
 		{"'1.5'", "2024-01-01 00:00:01.500000", false},
 		{"_binary '1.5'", "2024-01-01 00:00:01.500000", false},
+		{"IF(TRUE,_binary '1.5',1.5)", "2024-01-01 00:00:01.500000", false},
+		{"IF(TRUE,_binary '000000001.5','2')", "2024-01-01 00:00:01.500000", false},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, fmt.Sprintf("select timestampadd(second,%s,cast('2024-01-01' as datetime(6)))", tc.input), 1)
@@ -319,5 +334,68 @@ func TestTimestampAddSecondStoredSelection(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestTimestampAddSecondStoredIntegerDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_bool, types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := types.New(oid, 9, 0)
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select timestampadd(second,if(p,v,1.5),cast('2024-01-01' as datetime(6)))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			expr, err := NewGeneratedColBinder(proc.Ctx, []string{"p", "v"}, []plan.Type{{Id: int32(types.T_bool)}, makePlan2Type(&typ)}).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
+			input.Vecs[1] = vector.NewVec(typ)
+			if oid == types.T_bool {
+				require.NoError(t, vector.AppendFixedList(input.Vecs[1], []bool{true, false, false}, []bool{false, false, true}, proc.Mp()))
+			} else {
+				for i, value := range []string{"000000001", "1.5", ""} {
+					require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), i == 2, proc.Mp()))
+				}
+			}
+			input.SetRowCount(3)
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, "2024-01-01 00:00:01.000000", vector.GetFixedAtWithTypeCheck[types.Datetime](result, 0).String2(6))
+			require.Equal(t, "2024-01-01 00:00:01.500000", vector.GetFixedAtWithTypeCheck[types.Datetime](result, 1).String2(6))
+			require.True(t, result.IsNull(2))
+		})
+	}
+}
+
+func TestPreparedTimestampAddSecondIntegerSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	prepared := buildPreparedAggregatePlan(t, `select timestampadd(second,if(true,?,1.5),cast("2024-01-01" as datetime(6)))`)
+	original := DeepCopyPlan(prepared.Plan)
+	for _, tc := range []struct {
+		source ParamValue
+		want   string
+	}{
+		{ParamValue{Value: true, SourceType: types.T_bool.ToType(), HasSourceType: true}, "2024-01-01 00:00:01.000000"},
+		{ParamValue{Value: "000000001", SourceType: types.New(types.T_varbinary, 9, 0), HasSourceType: true}, "2024-01-01 00:00:01.000000"},
+		{ParamValue{Value: "1.5", SourceType: types.New(types.T_varbinary, 9, 0), HasSourceType: true}, "2024-01-01 00:00:01.000000"},
+		{ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, "2024-01-01 00:00:01.500000"},
+	} {
+		t.Run(tc.source.SourceType.String(), func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(proc.Ctx, prepared.Plan, []any{tc.source})
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(filled, "timestampadd")
+			require.NotNil(t, expr)
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[types.Datetime](result, 0).String2(6))
+			require.True(t, proto.Equal(original, prepared.Plan))
+		})
 	}
 }
