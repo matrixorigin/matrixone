@@ -198,7 +198,7 @@ Approval is design-only; implementation conformity, execution evidence and final
 
 ## Main synchronization amendment (2026-10-16)
 
-Main `7c61f67e` already uses v114-v117. The nonblocking admission binding moves
+Main `5c10d8a9` already uses v114-v117. The nonblocking admission binding moves
 to v118; methods, wire fields, ownership and SQL semantics are unchanged. Tests
 reject v113-v117 before dispatch and admit v118. Pipeline generation preserves
 main's statement-runtime SELECT field. Obsolete fulltext integration fixes and
