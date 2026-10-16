@@ -1,9 +1,10 @@
 # Sirius integration cleanup
 
-Owner: #28966. Follow-up to #30251. Implementation PR: pending.
+Owner: #28966. Follow-up to #30251. Implementation: the PR containing this
+document, on `refactor/embedded-cleanup`.
 
 The user approved this design in the cleanup plan and requested implementation
-on 2026-10-16. The subsequent scope decision preserves existing native TAE and
+on 2026-10-16. The scope decision preserves existing native TAE and
 manifest functionality; adding MO TAE execution or automatic source selection
 is outside this PR.
 
@@ -40,6 +41,11 @@ node, JSON response types/conversion, response-size limit, offload sentinel,
 debug-address state and setter, and their dedicated tests. Retain active hint
 and statement-isolation tests under Sirius names. Remove obsolete configuration
 registrations without aliases or special unknown-variable handling.
+The existing catalog loader ignores unregistered variable names and SHOW
+enumerates registered definitions, so persisted old values need no migration
+or special compatibility list. Remove the old request smoke test that discards
+all results after recovered failures; the public GPU fixture and retained
+statement-context tests provide concrete selection oracles.
 
 Delete `SidecarReadProtector` and its tests. Remove `SyncProtectionGuard`,
 `EnsureSyncProtection`, terminal registration/release, guard rollback, and
@@ -79,6 +85,14 @@ negotiation, active embedded input/result leases, unrelated uses of the word
 sidecar, and the abandoned sidecar repository are outside the deletion closure.
 The pinned native source and SDK artifacts do not change. Old Flight deployments
 still use the previous release to drain and recover before upgrading.
+
+Local GPU validation reuses SDK manifest
+`878c0ec8b2d27f8efbac9325159903fb5ba87d5448692ab95938f10cb18077bc`
+from its original native worktree. Its clean native source revision
+`06400cf48073e51955067bfd75c5c4defe955a72` matches this PR's submodule pin.
+The SDK consumer prepare/package/verification checks remain enabled. This
+qualifies local consumer execution without rebuilding or relabeling the SDK;
+the normal release build's source-path binding is unchanged.
 
 ## Validation and delivery
 

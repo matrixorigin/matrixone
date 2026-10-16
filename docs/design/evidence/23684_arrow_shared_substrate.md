@@ -1,5 +1,10 @@
 # #23684 shared Arrow substrate
 
+Historical evidence: this note describes the implementation and validation at
+#23684. #30251 subsequently removed the Sirius `sidecarflight` consumer. Arrow
+File/Stream LOAD continues to use the shared substrate. Package references and
+commands below record the original validation, not current test targets.
+
 This note records the reusable Arrow boundary introduced while implementing
 Arrow IPC LOAD. It is intentionally narrower than either the static-file LOAD
 protocol or the Python UDF/Flight design.
@@ -41,9 +46,9 @@ constructs a conversion plan; it must not call `BindLoad` as an ABI shortcut.
 
 ## Reuse status
 
-The shared IPC validator is used by Arrow File/Stream LOAD and the existing
-Sirius `sidecarflight` decoder. The container bridge is used by LOAD. This is
-shared infrastructure, not a Python UDF implementation: the Function Catalog,
+At the recorded revision, the shared IPC validator was used by Arrow File/Stream
+LOAD and the Sirius `sidecarflight` decoder. The container bridge is used by
+LOAD. This is shared infrastructure, not a Python UDF implementation: the Function Catalog,
 UDF operator, MO-to-Arrow encoder, exact SDK v1 binder, Flight invocation
 envelope, trusted Supervisor, TOCTOU-safe output publication, and sandbox
 runtime remain separate work.
