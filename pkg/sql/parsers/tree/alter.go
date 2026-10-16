@@ -1220,6 +1220,8 @@ const (
 	AlterTableDropKey
 	AlterTableDropPrimaryKey
 	AlterTableDropForeignKey
+	AlterTableDropCheck
+	AlterTableDropConstraint
 )
 
 type AlterOptionDrop struct {
@@ -1253,6 +1255,12 @@ func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
 		ctx.WriteString("primary key")
 	case AlterTableDropForeignKey:
 		ctx.WriteString("foreign key ")
+		node.Name.Format(ctx)
+	case AlterTableDropCheck:
+		ctx.WriteString("check ")
+		node.Name.Format(ctx)
+	case AlterTableDropConstraint:
+		ctx.WriteString("constraint ")
 		node.Name.Format(ctx)
 	}
 }
