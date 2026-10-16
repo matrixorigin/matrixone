@@ -613,8 +613,14 @@ func (s *service) closeService() error {
 			return
 		}
 		withdrawErr := s.withdrawViewMetadataAdmission()
+		// Engine-owned statistics and cleanup transactions still use txn/RPC/
+		// lock services. An incomplete engine drain cannot certify that those
+		// dependencies are unused, even when remote ingress is withdrawn.
+		if err := s.closeStoreEngine(); err != nil {
+			s.closeErr = errors.Join(withdrawErr, err)
+			return
+		}
 		localErr := closeCNServiceSteps(
-			s.closeStoreEngine,
 			s.stopRPCs,
 			func() error {
 				// stop I/O pipeline
@@ -961,31 +967,33 @@ func (s *service) handleRequest(
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
-	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
-	s.cancelMoServerFunc = cancelMoServerFunc
+	frontendCtx, cancelFrontend := context.WithCancel(ctx)
+	s.cancelMoServerFunc = cancelFrontend
 
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
-	err = s.initEngine(ctx, cancelMoServerCtx, pu)
+	// Background transactions may still be finishing after frontend shutdown.
+	// Engine.Close owns their logtail dependency; frontend cancellation must
+	// not stop it before task and pipeline producers have drained.
+	err = s.initEngine(ctx, pu)
 	if err != nil {
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm)
+	s.createMOServer(frontendCtx, pu, aicm)
 	return nil
 }
 
 func (s *service) initEngine(
 	ctx context.Context,
-	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
 	switch s.cfg.Engine.Type {
 
 	case EngineDistributedTAE:
-		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
+		if err := s.initDistributedTAE(ctx, pu); err != nil {
 			return err
 		}
 
