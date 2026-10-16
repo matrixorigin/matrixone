@@ -34,7 +34,7 @@ Duplicate entry '10' for key '(.*)'
 insert into auto_increment02 values(100);
 select last_insert_id();
 last_insert_id()
-12
+10
 Select * from auto_increment02;
 col1
 10

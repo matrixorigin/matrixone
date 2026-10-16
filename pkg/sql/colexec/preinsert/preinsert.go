@@ -508,6 +508,16 @@ retryInsertValues:
 		}
 	}
 
-	proc.SetLastInsertID(lastInsertValue)
+	// A zero return means this table generated no user-visible auto-increment
+	// value: nothing was generated, or only the hidden fake primary key of a
+	// PK-less table (the hidden fulltext/vector index tables among them) was
+	// (#29903). It publishes nothing, so it neither clobbers the base table's
+	// value nor reports a value the statement did not generate. A generated
+	// value becomes this statement's OK-packet insert id and the
+	// session-visible LAST_INSERT_ID. Parallel scopes of one statement share
+	// the process state; the largest generated value is published to both.
+	if lastInsertValue != 0 {
+		proc.SetStatementLastInsertIDIfLater(lastInsertValue)
+	}
 	return nil
 }

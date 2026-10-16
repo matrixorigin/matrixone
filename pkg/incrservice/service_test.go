@@ -2003,3 +2003,154 @@ func checkStoreCachesUncommitted(
 	defer store.Unlock()
 	require.Equal(t, n, len(store.uncommitted[string(txnOp.Txn().ID)][0]))
 }
+
+func TestInsertValuesExcludesInternalFakePKFromLastInsertID(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 1,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: true}}, op))
+			require.NoError(t, s.Create(ctx, 2,
+				[]AutoColumn{{ColName: "id", ColIndex: 0, Step: 1}}, op))
+			require.NoError(t, s.Create(ctx, 3,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: false}}, op))
+			require.NoError(t, s.Create(ctx, 4, []AutoColumn{
+				{ColName: "id", ColIndex: 0, Step: 1},
+				{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// internal-only (a PK-less table's hidden fake primary key): not returned
+			v := gen()
+			last, err := s.InsertValues(ctx, 1, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "hidden fake PK must not surface as LAST_INSERT_ID")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](v)[0], "fake PK column still populated")
+
+			// user-visible auto column: returned
+			v = gen()
+			last, err = s.InsertValues(ctx, 2, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last)
+
+			// a user column named like the fake PK but visible (isInternal=false): returned (P2-1)
+			v = gen()
+			last, err = s.InsertValues(ctx, 3, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last, "a visible column named __mo_fake_pk_col must still surface")
+
+			// mixed: user auto column given an explicit value, only the hidden fake PK
+			// generates -> LAST_INSERT_ID stays unchanged (P2-2)
+			idVec := explicit(100)
+			fakeVec := gen()
+			last, err = s.InsertValues(ctx, 4, 0, nil, []*vector.Vector{idVec, fakeVec}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "when only the hidden fake PK generates, nothing surfaces")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0], "fake PK still populated")
+		})
+}
+
+// ownershipStore models the SQL store's ownership read over committed rows: a column is internal only
+// when the table GetColumns resolves ownership against (the replacement table under
+// autoColumnPolicyTableKey) has a hidden __mo_fake_pk_col.
+type ownershipStore struct {
+	IncrValueStore
+	hidden map[uint64]bool
+}
+
+func (s *ownershipStore) GetColumns(ctx context.Context, tableID uint64, _ client.TxnOperator) ([]AutoColumn, error) {
+	// the committed rows: memStore keys a txn's view by its uncommitted writes only
+	cols, err := s.IncrValueStore.GetColumns(ctx, tableID, nil)
+	if err != nil {
+		return nil, err
+	}
+	owner := tableID
+	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
+		owner = replacement
+	}
+	for i := range cols {
+		cols[i].isInternal = cols[i].ColName == catalog.FakePrimaryKeyColName && s.hidden[owner]
+	}
+	return cols, nil
+}
+
+// TRUNCATE (DELETE optimized to truncate) recreates the table and Reset moves the
+// counters to the new ID after the old catalog rows are gone. The hidden fake
+// primary key must stay internal: an explicit user id then publishes nothing.
+func TestResetResolvesFakePKOwnershipFromReplacementTable(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := &ownershipStore{IncrValueStore: NewMemStore(), hidden: map[uint64]bool{5: true}}
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		u64 := types.New(types.T_uint64, 0, 0)
+		gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+		explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 5, []AutoColumn{
+			{ColName: "id", ColIndex: 0, Step: 1},
+			{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+		}, op))
+		require.NoError(t, op.Commit(ctx))
+
+		last, err := s.InsertValues(ctx, 5, 0, nil, []*vector.Vector{gen(), gen()}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+
+		// the truncate removed table 5's catalog rows and created table 6
+		store.hidden = map[uint64]bool{6: true}
+		op, err = tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Reset(ctx, 5, 6, true, op))
+		require.NoError(t, op.Commit(ctx))
+
+		fakeVec := gen()
+		last, err = s.InsertValues(ctx, 6, 0, nil, []*vector.Vector{explicit(100), fakeVec}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), last, "the hidden fake PK must not surface after reset")
+		require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0])
+	})
+}
+
+// With several user auto_increment columns the statement reports the first
+// generated value, as on main: an explicit value in an earlier column defers to a
+// later generated one.
+func TestInsertValuesReportsFirstGeneratedUserColumn(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 7, []AutoColumn{
+				{ColName: "a", ColIndex: 0, Step: 1, Offset: 10},
+				{ColName: "b", ColIndex: 1, Step: 1, Offset: 20},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			last, err := s.InsertValues(ctx, 7, 0, nil, []*vector.Vector{gen(), gen()}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(11), last, "both generated: the first column")
+
+			last, err = s.InsertValues(ctx, 7, 0, nil, []*vector.Vector{explicit(500), gen()}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(22), last, "first explicit: the later generated column")
+		})
+}

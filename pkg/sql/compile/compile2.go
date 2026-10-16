@@ -260,6 +260,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}()
 
 	// running and retry.
+	c.lastInsertIDBaseline = c.proc.GetLastInsertID()
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
@@ -812,6 +813,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
 		return e
 	}
+	// A retry is a new statement execution generation. Do not let a generated
+	// value from the rolled-back attempt win the new attempt's result, and
+	// restore the LAST_INSERT_ID this statement started with until the retry
+	// generates a replacement value.
+	c.proc.SetStatementLastInsertID(0)
+	c.proc.SetLastInsertID(c.lastInsertIDBaseline)
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()

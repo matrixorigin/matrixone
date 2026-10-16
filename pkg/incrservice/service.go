@@ -177,7 +177,11 @@ func (s *service) Reset(
 		zap.Uint64("new-table-id", newTableID),
 	)
 
-	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
+	// The old catalog rows may already be deleted by TRUNCATE. Read allocator
+	// state from the old ID but column ownership from its replacement in the
+	// same txn.
+	policyCtx := context.WithValue(ctx, autoColumnPolicyTableKey{}, newTableID)
+	cols, err := s.store.GetColumns(policyCtx, oldTableID, txnOp)
 	if err != nil {
 		return err
 	}
