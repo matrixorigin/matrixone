@@ -151,6 +151,9 @@ const (
 	// contract without reusing main's codes or the digest dependency's 20338/20339.
 	ErrInvalidJSONPathWildcard  uint16 = 20340
 	ErrCollationCharsetMismatch uint16 = 20341
+	// ErrDuplicateCheckConstraintName reports a CHECK constraint name already
+	// used by another table in the same schema (MySQL 3822).
+	ErrDuplicateCheckConstraintName uint16 = 20342
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -483,6 +486,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSyntaxError:             {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
 	ErrParseError:              {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
 	ErrConstraintViolation:     {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicateCheckConstraintName: {ER_CHECK_CONSTRAINT_DUP_NAME, []string{MySQLDefaultSqlState}, "Duplicate check constraint name '%-.192s'"},
 	ErrDuplicate:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:       {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 	ErrDuplicateEntry:          {ER_DUP_ENTRY, []string{"23000"}, "Duplicate entry '%s' for key '%s'"},
@@ -1307,6 +1311,12 @@ func NewConstraintViolationf(ctx context.Context, format string, args ...any) *E
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
+}
+
+// NewDuplicateCheckConstraintName reports MySQL's ER_CHECK_CONSTRAINT_DUP_NAME
+// (3822): another table in the same schema already uses the CHECK name.
+func NewDuplicateCheckConstraintName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrDuplicateCheckConstraintName, name)
 }
 
 func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {

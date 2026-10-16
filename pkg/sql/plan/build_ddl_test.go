@@ -1392,7 +1392,8 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
 		require.NoError(t, err)
 		require.Len(t, tableDef.Checks, 1)
-		require.Equal(t, "__mo_chk_1", tableDef.Checks[0].Name)
+		// Unnamed CHECKs are named after their owning table, MySQL-style.
+		require.Equal(t, "t_chk_1", tableDef.Checks[0].Name)
 		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
 	})
 
