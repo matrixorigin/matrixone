@@ -2086,11 +2086,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	collectAggregateDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2102,6 +2102,9 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 			if wire == nil {
 				continue
 			}
+			if wire.Op>>32 == aggexec.AggIdOfVectorMatmul>>32 {
+				features.LowPrecisionFloatContracts = true
+			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
@@ -2111,7 +2114,7 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 		}
 	}
 	for _, child := range p.Children {
-		collectDecimalStatisticalDescriptorFeatures(child, features)
+		collectAggregateDescriptorFeatures(child, features)
 	}
 }
 
@@ -2294,8 +2297,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
-		return moerr.NewNotSupportedNoCtxf("low-precision float integer arguments require MORPC protocol version %d", defines.MORPCVersion117)
+	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", defines.MORPCVersion117)
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")

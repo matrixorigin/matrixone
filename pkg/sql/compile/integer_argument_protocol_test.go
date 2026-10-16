@@ -263,7 +263,7 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
-			require.True(t, features.LowPrecisionFloatIntegerArguments)
+			require.True(t, features.LowPrecisionFloatContracts)
 			require.True(t, features.Any())
 
 			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
@@ -296,6 +296,6 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 	expr := integerProtocolExpr(function.IntegerArgumentCastOverload)
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
-	require.False(t, features.LowPrecisionFloatIntegerArguments)
+	require.False(t, features.LowPrecisionFloatContracts)
 	require.True(t, features.IntegerParameterCoercion)
 }

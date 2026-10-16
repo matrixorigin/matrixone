@@ -139,19 +139,23 @@ runs MORPC protocol version 117 or later, the same statement runs.
   floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
 - **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`
   included) and `ALTER TABLE ... ADD`, `MODIFY` and `CHANGE COLUMN` whose column type is one
-  of these types are refused below 116. While an older service is live no table with these
+  of these types are refused below 117. While an older service is live no table with these
   types exists, so no older binary reads one from the catalog, the log or object storage.
-- **Remote execution.** A pipeline whose expressions carry one of these types (a literal,
-  a column reference, a function argument or result, a CAST source or target) is refused
-  for a destination below 116. The private integer CAST 5..8 sources are one case of this
+- **Remote execution.** A pipeline that carries one of these types (a literal, a column
+  reference, a function argument or result, a CAST source or target, a table definition
+  column, a group key or an aggregate argument or result type) is refused
+  for a destination below 117. The private integer CAST 5..8 sources are one case of this
   rule.
 - **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
   constraint whose expression carries one of these types requires persisted-expression
-  protocol 116.
+  protocol 117.
 - **Downgrade.** The upgrade is one-way. Once a table with these types exists, running
-  any service below 116 is unsupported: an older binary does not read the data.
-- **Tests.** Every refusal point has a test below 116 (refused, nothing created or sent)
-  and one at 116 (runs).
+  any service below 117 is unsupported: an older binary does not read the data.
+- **Tests.** Every refusal point has a test below 117 (refused, nothing created or sent)
+  and one at 117 (runs): `TestLowPrecisionFloatCatalogAuthoringProtocolFence` (authoring),
+  `TestLowPrecisionFloatContractRemoteBoundaries` (placement, send, receiver),
+  `TestLowPrecisionFloatContractFeatures` (remote and persisted floors) and
+  `TestLowPrecisionFloatIntegerArgumentProtocol` (private CAST 5..8).
 
 ## Out of scope (separate work)
 

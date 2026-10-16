@@ -120,7 +120,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
-	if features.LowPrecisionFloatIntegerArguments {
+	if features.LowPrecisionFloatContracts {
 		return defines.MORPCVersion117
 	}
 	if features.JSONScalarLiteralContracts {

@@ -2802,9 +2802,10 @@ func buildCreateTable(
 	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
 	// Old CNs can deserialize that metadata but do not enforce the narrower write
-	// domain, so only author the schema after the cluster protocol fence opens.
+	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.
+	// Only author the schema after the cluster protocol fence opens.
 	for _, col := range createTable.TableDef.Cols {
-		if err = requireMediumIntProtocolForAuthoring(
+		if err = requireColumnTypeProtocolForAuthoring(
 			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
 			return nil, err
 		}

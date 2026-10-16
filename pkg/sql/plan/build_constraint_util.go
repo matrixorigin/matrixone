@@ -1513,6 +1513,18 @@ func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Pro
 	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
 }
 
+// requireColumnTypeProtocolForAuthoring gates catalog column types that older
+// CNs cannot enforce (MEDIUMINT) or decode (bf16/float16/float8/float4/vecf8/vecf4).
+func requireColumnTypeProtocolForAuthoring(ctx context.Context, proc *process.Process, colType Type) error {
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, colType); err != nil {
+		return err
+	}
+	if proc == nil || !plan.IsLowPrecisionFloatContractType(colType.Id) {
+		return nil
+	}
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion117)
+}
+
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
