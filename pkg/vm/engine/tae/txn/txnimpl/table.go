@@ -2064,15 +2064,42 @@ func (tbl *txnTable) contains(
 		workspaceRowids := vector.MustFixedColWithTypeCheck[types.Rowid](
 			workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
 		)
-		for j := 0; j < keys.Length(); j++ {
+		// Keep small probes allocation-free. For two large batches, index the
+		// smaller side so a small candidate set cannot duplicate a huge workspace.
+		keyCount := keys.Length()
+		liveKeys := keyCount - keys.NullCount()
+		var deleted map[types.Rowid]bool
+		if liveKeys > 32 && len(workspaceRowids) > 32 {
+			deleted = make(map[types.Rowid]bool, min(liveKeys, len(workspaceRowids)))
+			if len(workspaceRowids) <= liveKeys {
+				for _, rowid := range workspaceRowids {
+					deleted[rowid] = true
+				}
+			} else {
+				for j := 0; j < keyCount; j++ {
+					if !keys.IsNull(j) {
+						deleted[keyRowids[j]] = false
+					}
+				}
+				for _, rowid := range workspaceRowids {
+					if _, candidate := deleted[rowid]; candidate {
+						deleted[rowid] = true
+					}
+				}
+			}
+		}
+		for j := 0; j < keyCount; j++ {
 			if keys.IsNull(j) {
 				continue
 			}
-			for i := 0; i < workspaceDeleteBatch.Length(); i++ {
-				if keyRowids[j] == workspaceRowids[i] {
-					containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
+			if deleted != nil {
+				if !deleted[keyRowids[j]] {
+					continue
 				}
+			} else if !slices.Contains(workspaceRowids, keyRowids[j]) {
+				continue
 			}
+			containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
 		}
 	}
 	for _, stats := range tbl.tombstoneTable.tableSpace.stats {

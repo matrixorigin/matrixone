@@ -813,6 +813,8 @@ func TestIssuesRootDispatchDrainsHeartbeat(t *testing.T) {
 		{"failed-drain-prebuild", "prebuild", "125", "2", "2", 125},
 		{"ordinary-failure", "none", "7", "2", "2", 1},
 		{"success", "none", "0", "2", "2", 0},
+		{"four-process-success", "none", "0", "4", "2", 0},
+		{"four-process-failed-drain", "none", "125", "4", "2", 125},
 		{"serial-budget-rollback", "none", "0", "1", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
