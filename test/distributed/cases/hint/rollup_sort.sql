@@ -1,6 +1,6 @@
 -- @suite
 -- @case
--- @desc: Forced sort ROLLUP preserves GROUPING metadata and empty-input totals
+-- @desc: Forced sort ROLLUP preserves GROUPING metadata and empty-input suppression
 -- @label:bvt
 
 drop database if exists rollup_sort_bvt;
@@ -86,6 +86,33 @@ select a, b, count(*) as cnt, sum(amount) as total,
        grouping(a) as grouping_a, grouping(b) as grouping_b
 from t_rollup_sort
 group by a, b with rollup;
+
+-- Both spellings and HASH preserve the empty-input contract from main.
+select a, b, count(*) as cnt, sum(amount) as total,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by rollup(a, b);
+
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup;
+
+-- A real NULL row must still produce all three prefix groups.
+insert into t_rollup_sort values (null, null, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(amount) as total,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b;
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b;
 
 set session rollup_algorithm = default;
 drop database rollup_sort_bvt;

@@ -113,7 +113,38 @@ select a, b, count(*) as cnt, sum(amount) as total,
 grouping(a) as grouping_a, grouping(b) as grouping_b
 from t_rollup_sort
 group by a, b with rollup;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]
+select a, b, count(*) as cnt, sum(amount) as total,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by rollup(a, b);
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]
+insert into t_rollup_sort values (null, null, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(amount) as total,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
-null  ¦  null  ¦  0  ¦  null  ¦  1  ¦  1
+null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  1  ¦  null  ¦  1  ¦  1
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  1  ¦  null  ¦  1  ¦  1
 set session rollup_algorithm = default;
 drop database rollup_sort_bvt;

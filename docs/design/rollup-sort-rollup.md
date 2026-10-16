@@ -1,8 +1,8 @@
 # Sort-based ROLLUP design
 
-Status: design revision R1.1 is accepted for implementation; implementation and
-follow-up validation are complete. Independent implementation approval remains
-pending on the existing PR review lane.
+Status: implementation follows revision R1.2, aligning R1.1 with official-main
+ROLLUP semantics. Independent implementation approval remains pending on the
+existing PR review lane.
 
 Owner issue: [#20653](https://github.com/matrixorigin/matrixone/issues/20653)
 
@@ -67,6 +67,13 @@ count.
   `01a0ad87-7730-7b41-8c81-55c3533cc2a9`). It found no remaining design
   blocker; this is an AI design-gate result, not independent human approval
   or implementation-validation evidence.
+- Compatibility revision R1.2: adopt official main's merged #30169 contract:
+  empty ROLLUP input emits zero rows. The streaming executor suppresses EOF
+  finalization when no row was observed; real source NULLs still contribute
+  all prefixes. The existing GROUPING SETS/CUBE and scalar-aggregate paths
+  retain their empty-input identities. This alignment introduces no new wire
+  capability, owner or resource budget. R1.1's acceptance above is historical;
+  it does not constitute independent approval of R1.2.
 - Independent human approval remains `PENDING`; this record does not grant or
   substitute for it. Implementation validation and normal BVT comparison are
   recorded separately after the patch is tested.
@@ -138,8 +145,12 @@ subtotal for k1                  0            1
 grand total                      1            1
 ```
 
-All rollup key output types are nullable. Empty input still emits exactly one
-grand-total row (`COUNT(*) = 0`, other standard aggregates NULL).
+All rollup key output types are nullable. Empty input emits no rows, matching
+the MySQL contract adopted by official main in #30169. EOF closes prefixes only
+after an input row has been observed; a real source-NULL row still contributes
+detail, subtotal and grand total. Explicit
+GROUPING SETS/CUBE and scalar aggregation retain their separate empty-input
+identities on the existing execution paths.
 
 The comparator used by the boundary state machine is the same SQL ORDER BY
 comparator used by the sort/merge operator. The first implementation applies a
@@ -470,7 +481,8 @@ low-NDV case remains a counterexample where adding a global sort is not better
 than parallel hash. These measurements are calibration evidence, not
 machine-independent elapsed-time constants; the planner keeps a cost margin
 and falls back to hash when statistics or order proof is uncertain.
-Known empty-table statistics remain valid and estimate one grand-total group.
+Known empty-table statistics remain valid. Their one-group capacity estimate is
+a conservative upper bound; actual empty-input ROLLUP output has zero rows.
 
 The last row models the concrete derived-table query shape:
 
@@ -520,9 +532,10 @@ input work and before output publication; unordered input sorting remains
 responsible for its own workspace/spill limit.
 
 `prepareSortRollup` allocates and structurally validates the state but
-deliberately does not perform a memory admission check. The first input chunk,
-empty-input finalization, and every output materialization call
-`checkSortRollupCapacity`; exceeding the threshold returns an OOM error before
+deliberately does not perform a memory admission check. The first non-empty
+input chunk and every output materialization call `checkSortRollupCapacity`;
+empty EOF publishes no batch and leaves prepared state with its cleanup owner.
+Exceeding the threshold returns an OOM error before
 the output is published, and `Free` releases partially built state. This timing
 preserves the reusable `Prepare` contract and is the explicit experimental
 boundary, not a claim of streaming spill support. Forced `SORT` remains a
