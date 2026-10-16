@@ -6907,9 +6907,20 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	defer ses.ExitFPrint(FPExecRequest)
 
 	var span trace.Span
+	requestCtx := execCtx.reqCtx
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	if execCtx.reqCtx != nil {
+		policyRequest := &rewritePolicyRequest{owner: ses}
+		execCtx.reqCtx = context.WithValue(execCtx.reqCtx, rewritePolicyRequestKey{}, policyRequest)
+		defer func() {
+			policyRequest.mu.Lock()
+			policyRequest.valid, policyRequest.ended = false, true
+			policyRequest.mu.Unlock()
+			execCtx.reqCtx = requestCtx
+		}()
+	}
 
 	var sql string
 	ses.Debugf(execCtx.reqCtx, "cmd %v", req.GetCmd())

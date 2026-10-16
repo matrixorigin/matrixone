@@ -16,14 +16,200 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedRefreshFailureReleasesProtocolResources(t *testing.T) {
+	for _, command := range []CommandType{COM_STMT_EXECUTE, COM_STMT_FETCH} {
+		for _, failure := range []string{"rule read", "canceled", "deadline"} {
+			t.Run(fmt.Sprintf("command_%d/%s", command, failure), func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+				seedRewriteRuleCacheProofForTest(ses)
+				ses.ruleCache = map[string]string{}
+				bh := &backgroundExecTest{}
+				bh.init()
+				bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
+				want := errors.New("rule read failed")
+				bh.sql2err[getSqlForRoleRulesOfRoleIDs([]int64{10})] = want
+				proofErr := errors.New("proof unavailable")
+				if failure == "canceled" {
+					proofErr, want = context.Canceled, context.Canceled
+				} else if failure == "deadline" {
+					proofErr, want = context.DeadlineExceeded, context.DeadlineExceeded
+				}
+				ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { return nil, proofErr }
+				stub := gostub.StubFunc(&NewBackgroundExec, bh)
+				defer stub.Reset()
+				stmt := &PrepareStmt{Name: getPrepareStmtName(321), proc: ses.GetProc(), rewritePolicyCaptured: true}
+				defer stmt.Close()
+				ses.prepareStmts[stmt.Name] = stmt
+				const retained = 16
+				require.True(t, ses.tryReservePreparedCursorBytes(retained, 1024))
+				stmt.cursor = &preparedStmtCursor{owner: ses, bytes: retained, result: &MysqlResultSet{Data: [][]interface{}{{1}}}}
+				if command == COM_STMT_EXECUTE {
+					stmt.params = vector.NewVec(types.T_text.ToType())
+					require.NoError(t, vector.AppendBytes(stmt.params, []byte("pending"), false, ses.GetProc().Mp()))
+					stmt.getFromSendLongData = map[int]struct{}{0: {}}
+				}
+				data := make([]byte, 8)
+				binary.LittleEndian.PutUint32(data, 321)
+				binary.LittleEndian.PutUint32(data[4:], 1)
+				ctx := context.Background()
+				execCtx := newTestExecCtx(ctx, ctrl)
+				resp, err := ExecRequest(ses, execCtx, &Request{cmd: command, data: data})
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				require.Equal(t, ErrorResponse, resp.category)
+				require.ErrorIs(t, resp.GetData().(error), want)
+				require.Nil(t, stmt.cursor)
+				require.Zero(t, ses.preparedCursorBytes.Load())
+				require.Nil(t, stmt.params)
+				require.Empty(t, stmt.getFromSendLongData)
+				require.Equal(t, ctx, execCtx.reqCtx, "request marker must not survive ExecCtx reuse")
+				before := len(bh.executedSQLs)
+				got, err := ses.getPrepareStmtAllowInvalidated(ctx, stmt.Name)
+				require.NoError(t, err)
+				require.Same(t, stmt, got)
+				require.Len(t, bh.executedSQLs, before, "cleanup-only lookup performs no I/O")
+			})
+		}
+	}
+}
+
+func TestPreparedFreshnessAdmissionRequestScope(t *testing.T) {
+	for _, change := range []string{"stable", "text capture", "next request", "different session", "principal", "generation", "revision", "canceled", "failure retry", "ended request"} {
+		t.Run(change, func(t *testing.T) {
+			ses := newSes(&privilege{}, gomock.NewController(t))
+			ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+			ses.ruleCache = map[string]string{}
+			seedRewriteRuleCacheProofForTest(ses)
+			calls := 0
+			var proofErr error
+			ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { calls++; return 1, proofErr }
+			stmt := &PrepareStmt{Name: "saved", rewritePolicyCaptured: true}
+			ses.prepareStmts[stmt.Name] = stmt
+			ctx := context.WithValue(context.Background(), rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
+			lookup := func(ctx context.Context) {
+				t.Helper()
+				got, err := ses.GetPrepareStmt(ctx, stmt.Name)
+				require.NoError(t, err)
+				require.Same(t, stmt, got)
+			}
+			if change == "text capture" {
+				_, err := captureRewritePolicy(ctx, ses)
+				require.NoError(t, err)
+			}
+			lookup(ctx)
+			lookup(ctx)
+			lookup(ctx)
+			require.Equal(t, 1, calls, "parse, wrapper and parameter checks share one role-proof admission")
+			switch change {
+			case "stable", "text capture":
+				return
+			case "next request":
+				ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
+			case "different session":
+				ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: &Session{}})
+			case "principal":
+				// An identity change invalidates the marker even when another
+				// owner has already installed an equal cache for that identity.
+				ses.tenant.UserID++
+				ses.ruleCacheIdentity = rewriteRuleSessionIdentity(ses)
+			case "generation":
+				ses.bumpRewritePolicyGeneration()
+			case "revision":
+				ses.ruleCacheMu.Lock()
+				ses.ruleCacheRevision++
+				ses.ruleCacheMu.Unlock()
+			case "canceled":
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				got, err := ses.GetPrepareStmt(canceled, stmt.Name)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Same(t, stmt, got)
+				require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+				return
+			case "failure retry":
+				proofErr = context.DeadlineExceeded
+				_, err := captureRewritePolicy(ctx, ses)
+				require.ErrorIs(t, err, proofErr)
+				require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+				proofErr = nil
+				_, err = captureRewritePolicy(ctx, ses)
+				require.NoError(t, err)
+				require.Equal(t, 3, calls)
+				return
+			case "ended request":
+				request := rewritePolicyRequestFor(ctx, ses)
+				request.mu.Lock()
+				request.valid, request.ended = false, true
+				request.mu.Unlock()
+				_, err := captureRewritePolicy(ctx, ses)
+				require.NoError(t, err)
+				require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses), "a retained context cannot reactivate the request")
+				return
+			}
+			lookup(ctx)
+			require.Equal(t, 2, calls)
+		})
+	}
+}
+
+func TestPreparedFreshnessRequestEndsDuringRefresh(t *testing.T) {
+	ses := newSes(&privilege{}, gomock.NewController(t))
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
+	request := &rewritePolicyRequest{owner: ses}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, request)
+	entered, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	ses.ruleCacheVersionProvider = func(ctx context.Context, _ *Session) (any, error) {
+		close(entered)
+		select {
+		case <-resume:
+			return 1, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		defer close(done)
+		_, err := captureRewritePolicy(ctx, ses)
+		result <- err
+	}()
+	t.Cleanup(func() { release(); <-done })
+	select {
+	case <-entered:
+	case <-done:
+		t.Fatal("refresh did not reach snapshot admission")
+	}
+	// Ending a request never waits for its outstanding catalog admission.
+	request.mu.Lock()
+	request.valid, request.ended = false, true
+	request.mu.Unlock()
+	release()
+	<-done
+	require.NoError(t, <-result)
+	require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses), "late success must not reactivate the ended request")
+}
 
 // SQL-recording session fixtures have no versioned catalog. Give only these
 // synthetic caches a stable private proof; freshness cases replace the provider

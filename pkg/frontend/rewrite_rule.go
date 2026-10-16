@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -174,6 +175,47 @@ func rewriteRuleSessionIdentity(ses *Session) rewriteRuleIdentity {
 	return rewriteRuleIdentity{tenant.TenantID, tenant.UserID, tenant.DefaultRoleID, tenant.useAllSecondaryRole}
 }
 
+type rewritePolicyRequestKey struct{}
+
+type rewritePolicyRefreshStamp struct {
+	identity             rewriteRuleIdentity
+	generation, revision uint64
+}
+
+// A successful role-policy admission can serve the later prepared lookups in
+// the same protocol request. This records no policy or resource, and cannot be
+// reused by a different session or request. Never hold mu across catalog I/O.
+type rewritePolicyRequest struct {
+	mu    sync.Mutex
+	owner *Session
+	stamp rewritePolicyRefreshStamp
+	valid bool
+	ended bool
+}
+
+func rewritePolicyRequestFor(ctx context.Context, ses *Session) *rewritePolicyRequest {
+	r, _ := ctx.Value(rewritePolicyRequestKey{}).(*rewritePolicyRequest)
+	if r != nil && r.owner == ses {
+		return r
+	}
+	return nil
+}
+
+func preparedPolicyAlreadyRefreshed(ctx context.Context, ses *Session) bool {
+	r := rewritePolicyRequestFor(ctx, ses)
+	if r == nil {
+		return false
+	}
+	identity := rewriteRuleSessionIdentity(ses)
+	ses.ruleCacheMu.RLock()
+	defer ses.ruleCacheMu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.valid = r.valid && !r.ended && ctx.Err() == nil && r.stamp.identity == identity &&
+		r.stamp.generation == ses.rewritePolicyGeneration && r.stamp.revision == ses.ruleCacheRevision
+	return r.valid
+}
+
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
 	versionOf := ses.ruleCacheVersionProvider
 	if versionOf == nil {
@@ -187,6 +229,13 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 	versionOf func(context.Context, *Session) (any, error),
 ) (*rewritePolicySnapshot, error) {
+	request := rewritePolicyRequestFor(ctx, ses)
+	if request != nil {
+		request.mu.Lock()
+		request.valid = false
+		request.mu.Unlock()
+	}
+	var stamp rewritePolicyRefreshStamp
 
 	sessionEnabled := ses.rewriteEnabled.Load()
 	policy := &rewritePolicySnapshot{
@@ -245,6 +294,9 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 			}
 			ses.ruleCacheMu.RLock()
 			unchanged := generation == ses.rewritePolicyGeneration && ses.ruleCache != nil && ses.ruleCacheRevision == revision
+			if unchanged {
+				stamp = rewritePolicyRefreshStamp{identity, generation, revision}
+			}
 			ses.ruleCacheMu.RUnlock()
 			if !unchanged {
 				continue
@@ -278,6 +330,7 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 		ses.ruleCacheRevision++
 		policy.generation = ses.rewritePolicyGeneration
 		policy.roleRules = cloneRewriteMap(rules)
+		stamp = rewritePolicyRefreshStamp{identity, ses.rewritePolicyGeneration, ses.ruleCacheRevision}
 		ses.ruleCacheMu.Unlock()
 		ses.mu.Unlock()
 		cacheReloaded = true
@@ -296,6 +349,14 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 		// Every cache reload, including one after a failed SET ROLE, closes the
 		// generation boundary for handles published under the previous policy.
 		ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if request != nil {
+		request.mu.Lock()
+		request.stamp, request.valid = stamp, !request.ended
+		request.mu.Unlock()
 	}
 	return policy, nil
 }

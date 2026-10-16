@@ -3105,9 +3105,11 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 		stmt := ses.prepareStmts[normalizedName]
 		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() {
 			ses.mu.Unlock()
-			_, err := captureRewritePolicy(ctx, ses)
-			if err != nil {
-				return nil, err
+			if !preparedPolicyAlreadyRefreshed(ctx, ses) {
+				if _, err := captureRewritePolicy(ctx, ses); err != nil {
+					// EXECUTE and FETCH own the error cleanup of this known handle.
+					return stmt, err
+				}
 			}
 			ses.mu.Lock()
 		}
