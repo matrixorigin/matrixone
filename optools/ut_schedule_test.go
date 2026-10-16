@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func scheduleHarnessMock() string {
@@ -146,6 +148,25 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	t.Parallel()
+	workflowData, err := os.ReadFile("../.github/workflows/entrypoint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			With struct {
+				Parallel int `yaml:"ut_parallel"`
+			} `yaml:"with"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflowData, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	ciParallel := workflow.Jobs["matrixone-ci"].With.Parallel
+	if ciParallel <= 0 {
+		t.Fatal("CI workflow must supply a positive UT parallel budget")
+	}
+
 	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
 	// diagnostics without cloning a repository or changing this worktree.
 	gitDir := filepath.Join(t.TempDir(), "git")
@@ -181,7 +202,8 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
 		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
-		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 2 0", accepted: true},
+		{name: "ci-issues-budget", args: []string{"UT_PARALLEL=" + strconv.Itoa(ciParallel)}, want: "8 4 4 0", accepted: true},
+		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 4 0", accepted: true},
 		{name: "seven-core-linux-default", args: []string{"UT_PARALLEL=7"}, want: "8 2 2 0", accepted: true},
 		{name: "eight-core-darwin-default", args: []string{"UNAME_S=darwin", "UT_PARALLEL=8"}, want: "8 2 2 0", accepted: true},
 		{name: "explicit-three-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=3"}, want: "8 3 2 0", accepted: true},
@@ -189,6 +211,9 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "issues-parallel-above-cap", args: []string{"UT_ISSUES_BATCH_PARALLEL=5"}, want: "8 5 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 2 0", accepted: true},
 		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-three-embedded-workers", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=3"}, want: "8 2 3 0", accepted: true},
+		{name: "explicit-four-embedded-workers", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=4"}, want: "8 2 4 0", accepted: true},
+		{name: "embedded-parallel-above-cap", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=5"}, want: "8 2 5 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 		{name: "embedded-pool-serial-rollback", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=1"}, want: "8 2 1 0", accepted: true},
 		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "8 1 1 1", accepted: true},
 		{name: "prebuild-explicit-opt-in", args: []string{"UT_PREBUILD_EMBEDDED=1"}, want: "8 2 2 1", accepted: true},
