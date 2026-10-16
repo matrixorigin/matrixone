@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -29,6 +30,101 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPersistedByteDedupSelectedProbes(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_text, types.T_datalink, types.T_array_float32, types.T_array_float64,
+	} {
+		for _, start := range []int64{10, 20} {
+			t.Run(fmt.Sprintf("%s/start=%d", oid, start), func(t *testing.T) {
+				rng := rand.New(rand.NewPCG(29, 65))
+				keyFor := func(n int) []byte {
+					key := []byte(fmt.Sprintf("0123456789abcdef%08dfedcba9876543210", n))
+					if oid == types.T_json {
+						value, err := types.ParseStringToByteJson(fmt.Sprintf("%q", key))
+						require.NoError(t, err)
+						key, err = types.EncodeJson(value)
+						require.NoError(t, err)
+					}
+					return key
+				}
+				data := containers.MakeVector(oid.ToType(), common.DefaultAllocator)
+				defer data.Close()
+				keys := containers.MakeVector(oid.ToType(), common.DefaultAllocator)
+				defer keys.Close()
+				rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
+				defer rows.Close()
+				loader := &commitTSLoader{loaded: true}
+				defer loader.close()
+				loader.commitTS = containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+				loader.abort = containers.MakeVector(types.T_bool.ToType(), common.DefaultAllocator)
+				values := make([][]byte, 65)
+				timestamps, aborted := make([]int64, len(values)), make([]bool, len(values))
+				for i := range values {
+					// Equal edges and length deliberately put distinct values in one bucket.
+					values[i] = keyFor(rng.IntN(8))
+					timestamps[i], aborted[i] = int64(rng.IntN(16)), rng.IntN(4) == 0
+					data.Append(values[i], false)
+					loader.commitTS.Append(types.BuildTS(timestamps[i], 0), false)
+					loader.abort.Append(aborted[i], false)
+				}
+				var selected nulls.Bitmap
+				want := make([]int, 160)
+				var wantErr error
+				for i := range want {
+					key := keyFor(99)
+					if i >= 80 {
+						key = values[rng.IntN(len(values))]
+					}
+					keys.Append(key, false)
+					want[i] = -1
+					if i%11 == 0 {
+						rows.Append(objectio.NewRowid(&types.Blockid{}, 999), false)
+						want[i] = 999
+					} else {
+						rows.Append(nil, true)
+					}
+					if i%3 == 0 {
+						continue
+					}
+					selected.Add(uint64(i))
+					if want[i] >= 0 || wantErr != nil {
+						continue
+					}
+					// Scalar oracle: last visible matching row wins; the first conflict
+					// stops the whole selected batch without modifying later outputs.
+					for j := len(values) - 1; j >= 0; j-- {
+						if !bytes.Equal(key, values[j]) || aborted[j] || timestamps[j] < 5 || timestamps[j] > 12 {
+							continue
+						}
+						if timestamps[j] > start {
+							wantErr = txnif.ErrTxnWWConflict
+						} else {
+							want[i] = j
+						}
+						break
+					}
+				}
+				txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(start, 0))
+				op := containers.MakeForeachVectorOp(oid, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.BuildTS(5, 0), types.BuildTS(12, 0))
+				err := containers.ForeachVector(keys, op, &selected)
+				if wantErr != nil {
+					require.ErrorIs(t, err, wantErr)
+				} else {
+					require.NoError(t, err)
+				}
+				for i, row := range want {
+					require.Equal(t, row < 0, rows.IsNull(i), "probe %d", i)
+					if row >= 0 {
+						rowID := rows.Get(i).(types.Rowid)
+						require.Equal(t, uint32(row), rowID.GetRowOffset(), "probe %d", i)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestPersistedByteDedupProbePaths(t *testing.T) {
 	readErr := errors.New("read MVCC metadata")
