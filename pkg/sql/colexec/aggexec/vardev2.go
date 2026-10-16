@@ -27,7 +27,7 @@ import (
 
 type varStdDevExec[
 	T float64 | types.Decimal128,
-	A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256] struct {
+	A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256] struct {
 	aggExec
 	isVar       bool
 	isPop       bool
@@ -36,7 +36,7 @@ type varStdDevExec[
 	f2t         func(float64, int32) (T, error)
 }
 
-func numericToFloat64[A types.Ints | types.UInts | types.Floats](a A, scale int32) float64 {
+func numericToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear](a A, scale int32) float64 {
 	return float64(a)
 }
 
@@ -269,7 +269,7 @@ func (exec *varStdDevExec[T, A]) batchMergeLegacy(other *varStdDevExec[T, A], of
 // case, use the finite float64 operands instead. This fallback is only used
 // when the exact subtraction cannot be represented, so it does not affect
 // the small-deviation path above.
-func decimalDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](value, origin A, oid types.T, scale int32) (float64, error) {
+func decimalDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](value, origin A, oid types.T, scale int32) (float64, error) {
 	switch oid {
 	case types.T_decimal64:
 		value64 := any(value).(types.Decimal64)
@@ -314,7 +314,7 @@ func hasExactVarianceOrigin(oid types.T) bool {
 // after subtracting the operands in their native domain. This preserves small
 // integer variation above 2^53 while still allowing the stable floating-point
 // recurrence to represent very large signed and unsigned ranges.
-func exactVarianceDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](
+func exactVarianceDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](
 	value, origin A, oid types.T, scale int32,
 ) (float64, error) {
 	switch oid {
@@ -846,6 +846,8 @@ func makeVarStdDevExec(mp *mpool.MPool,
 		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_bit:
 		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
+	case types.T_year:
+		return newVarStdDevExec[float64, types.MoYear](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_float32:
 		return newVarStdDevExec[float64, float32](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_float64:
@@ -861,7 +863,7 @@ func makeVarStdDevExec(mp *mpool.MPool,
 	}
 }
 
-func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](mp *mpool.MPool, isVar bool, isPop bool, aggID int64, isDistinct bool, param types.Type, a2f func(A, int32) float64, f2t func(float64, int32) (T, error), legacyState bool) AggFuncExec {
+func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](mp *mpool.MPool, isVar bool, isPop bool, aggID int64, isDistinct bool, param types.Type, a2f func(A, int32) float64, f2t func(float64, int32) (T, error), legacyState bool) AggFuncExec {
 	var exec varStdDevExec[T, A]
 	exec.mp = mp
 	exec.isVar = isVar
