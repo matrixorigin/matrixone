@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -253,14 +254,79 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 	}
 }
 
-func TestGetTypeFromAstRejectsMediumIntAliases(t *testing.T) {
+func TestGetTypeFromAstCharCastCharset(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		charset   string
+		id        types.T
+		width     int32
+		charsetID uint32
+	}{
+		{charset: "utf8mb4", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8mb3", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "binary", id: types.T_varbinary, width: 3, charsetID: uint32(types.CharsetBinary)},
+	} {
+		t.Run(tc.charset, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+tc.charset+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			typ, err := getTypeFromAst(ctx, cast.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.id), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+			require.Equal(t, tc.charsetID, typ.Charset)
+			if tc.charset == "utf8mb4" || tc.charset == "utf8" || tc.charset == "utf8mb3" {
+				identity, ok := collation.ResolveCharset(tc.charset)
+				require.True(t, ok)
+				require.Equal(t, collation.UTF8MB4GeneralCIIdentity, identity)
+			}
+		})
+	}
+}
+
+func TestGetTypeFromAstCharCastCharsetRejectsUnsupportedCharsets(t *testing.T) {
+	ctx := context.Background()
+	for _, charset := range []string{"", "ascii", "latin1", "unknown_charset"} {
+		t.Run(charset, func(t *testing.T) {
+			charsetSQL := charset
+			if charsetSQL == "" {
+				charsetSQL = "''"
+			}
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+charsetSQL+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			_, err = getTypeFromAst(ctx, cast.Type)
+			require.ErrorContains(t, err, "unsupported character set '"+charset+"' for CHAR cast")
+		})
+	}
+}
+
+func TestGetTypeFromAstBuildsMediumIntAliases(t *testing.T) {
 	testCases := []struct {
 		definition string
-		wantError  string
+		wantOID    types.T
+		wantWidth  int32
 	}{
-		{definition: "mediumint", wantError: "mediumint"},
-		{definition: "mediumint unsigned", wantError: "mediumint unsigned"},
-		{definition: "int3", wantError: "int3"},
+		{definition: "mediumint", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "mediumint unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "int3", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "int3 unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "mediumint zerofill", wantOID: types.T_uint32, wantWidth: 24},
+		// Integer display width is not physical width and must not make INT(24)
+		// acquire MEDIUMINT semantics.
+		{definition: "int(24)", wantOID: types.T_int32, wantWidth: 32},
+		{definition: "int(24) unsigned", wantOID: types.T_uint32, wantWidth: 32},
 	}
 
 	for _, testCase := range testCases {
@@ -271,28 +337,10 @@ func TestGetTypeFromAstRejectsMediumIntAliases(t *testing.T) {
 			defer stmt.Free()
 
 			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			_, err = getTypeFromAst(context.Background(), column.Type)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
-			require.Contains(t, strings.ToLower(err.Error()), testCase.wantError)
-		})
-	}
-
-	for _, definition := range []string{"int", "int unsigned"} {
-		t.Run(definition+" remains supported", func(t *testing.T) {
-			stmt, err := mysql.ParseOne(context.Background(),
-				"create table t (v "+definition+")", 1)
-			require.NoError(t, err)
-			defer stmt.Free()
-
-			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			typ, err := getTypeFromAst(context.Background(), column.Type)
 			require.NoError(t, err)
-			if strings.Contains(definition, "unsigned") {
-				require.Equal(t, int32(types.T_uint32), typ.Id)
-			} else {
-				require.Equal(t, int32(types.T_int32), typ.Id)
-			}
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantWidth, typ.Width)
 		})
 	}
 }
@@ -1493,5 +1541,37 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
 		require.NoError(t, err)
 		require.True(t, null.GetLit().GetIsnull())
+	}
+}
+
+func TestEmptyDomainTypeReplay(t *testing.T) {
+	for _, tc := range []struct {
+		ddl               string
+		oid               types.T
+		domain, formatted string
+	}{
+		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+	} {
+		t.Run(tc.ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), typ.Id)
+			require.Equal(t, tc.domain, typ.Enumvalues)
+			require.Equal(t, tc.formatted, FormatColType(typ))
+			encoded, err := typ.Marshal()
+			require.NoError(t, err)
+			var recovered plan.Type
+			require.NoError(t, recovered.Unmarshal(encoded))
+			require.Equal(t, typ, recovered)
+			replay, err := mysql.ParseOne(context.Background(), "create table replay(v "+FormatColType(recovered)+")", 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			replayType, err := getTypeFromAst(context.Background(), replay.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, typ, replayType)
+		})
 	}
 }

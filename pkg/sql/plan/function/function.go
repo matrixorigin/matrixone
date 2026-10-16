@@ -405,6 +405,7 @@ func getFunctionByName(
 	}
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
+		r.applyDecimalModMetadata(args)
 	}
 
 	return r, err
@@ -432,6 +433,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.retType = f.Overloads[r.overloadId].retType(args)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
+		r.applyDecimalModMetadata(args)
 		return r, true
 
 	case succeedWithCast:
@@ -441,6 +443,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
+		r.applyDecimalModMetadata(args)
 		return r, true
 
 	default:
@@ -479,6 +482,7 @@ func GetFunctionByNameWithOverload(
 	r.retType = f.Overloads[overloadID].retType(args)
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	r.applyDivPrecisionIncrement(ctx, originalArgs)
+	r.applyDecimalModMetadata(originalArgs)
 	return r, nil
 }
 
@@ -672,14 +676,14 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
-		POW, EXP, COT,
+		POW, EXP, COT, ACOSH, ATANH,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,
 		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
 		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
-		TO_INTERVAL, TO_INTERVAL_MICROSECOND:
+		TO_INTERVAL, TO_INTERVAL_MICROSECOND, TO_CALENDAR_INTERVAL:
 		return false
 	}
 	if ProducesNoNull(overloadID) {

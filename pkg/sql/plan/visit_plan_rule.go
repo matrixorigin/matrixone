@@ -3135,7 +3135,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var rewrittenArg *plan.Expr
 			numericTemporalArg := false
 			switch functionName {
-			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+			case "to_interval_microsecond", "to_calendar_interval", "time", "from_unixtime", "sec_to_time":
 				numericTemporalArg = i == 0
 			case "date_add", "date_sub":
 				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
@@ -3890,6 +3890,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		return rewritten, nil
 	case *plan.Expr_List:
+		// A raw window interval keeps its original string unit until operator
+		// Prepare. Specialize its source domain without normalizing its value:
+		// cached plan restoration must continue to interpret the next value in
+		// the original unit (e.g. seconds, not already-scaled microseconds).
+		if e.Typ.Id == int32(types.T_interval) && exprImpl.List != nil && len(exprImpl.List.List) == 2 &&
+			exprImpl.List.List[1].GetLit() != nil && types.T(exprImpl.List.List[1].Typ.Id).IsMySQLString() {
+			if param := exprImpl.List.List[0].GetP(); param != nil {
+				pos := int(param.Pos)
+				if source, handled, sourceErr := rule.preparedRuntimeSourceExpr(pos, true); sourceErr != nil {
+					return nil, sourceErr
+				} else if handled {
+					exprImpl.List.List[0] = source
+					return e, nil
+				}
+				if pos >= 0 && pos < len(rule.params) && rule.params[pos] != nil {
+					exprImpl.List.List[0] = DeepCopyExpr(rule.params[pos])
+					return e, nil
+				}
+			}
+		}
 		dependent := false
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
@@ -4528,6 +4548,7 @@ func preparedFixedDecimalCommonType(
 func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 	hasDecimal := false
 	hasFloat := false
+	decimalCarrier := types.T_decimal64
 	maxIntegralWidth := int32(0)
 	maxScale := int32(0)
 	for _, operand := range operands {
@@ -4542,6 +4563,9 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 			hasFloat = true
 		case typ.Oid.IsDecimal():
 			hasDecimal = true
+			if typ.Oid.TypeLen() > decimalCarrier.TypeLen() {
+				decimalCarrier = typ.Oid
+			}
 			width := typ.Width
 			if width <= 0 {
 				width = typ.Oid.ToType().Width
@@ -4569,9 +4593,12 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 		width = 1
 	}
 	switch {
-	case width <= types.T_decimal64.ToType().Width:
+	// Keep an exact source's physical carrier even when its declared domain
+	// fits a smaller one. Narrowing a native column adds an unnecessary cast
+	// and hides it from block/index filters without changing width or scale.
+	case width <= types.T_decimal64.ToType().Width && decimalCarrier == types.T_decimal64:
 		return types.New(types.T_decimal64, width, maxScale), true
-	case width <= types.T_decimal128.ToType().Width:
+	case width <= types.T_decimal128.ToType().Width && decimalCarrier != types.T_decimal256:
 		return types.New(types.T_decimal128, width, maxScale), true
 	case width <= types.T_decimal256.ToType().Width:
 		return types.New(types.T_decimal256, width, maxScale), true

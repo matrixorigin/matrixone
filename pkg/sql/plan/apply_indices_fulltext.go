@@ -25,18 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ftplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // The idea is as follows:
 // 1. Find fulltext_match() function from projection (projNode) and filters (ScanNode)
-// and then convert fulltext_match() to table function fulltext_index_scan().
-// 2. Do INNER JOIN fulltext_index_scan tables and source table with key doc_id
-// 3. Add SORT node with score key DESC if SORT node does not exist.  If SORT node exists,
-// Add the JOIN node to SORT node.
-// 4. Replace the fulltext_match() in project list with ColRef score in fulltext_index_scan()
+// and then convert fulltext_match() to a fulltext index search scan.
+// 2. Do INNER JOIN the search scans and source table with key doc_id
+// 3. Add SORT with score key DESC unless an explicit sort replaces that order
+// before any consumer observes it. An existing local SORT keeps the JOIN as its input.
+// 4. Replace the fulltext_match() in project list with ColRef score of the search scan
 //
 // explain  select *, match(body, title) against('red')  from src where match(body) against('red');
 // +------------------------------------------------------------------------------------------+
@@ -52,17 +54,19 @@ import (
 // |               ->  Join                                                                   |
 // |                     Join Type: INNER                                                     |
 // |                     Join Cond: (mo_fulltext_alias_1.doc_id = mo_fulltext_alias_0.doc_id) |
-// |                     ->  Table Function on fulltext_index_scan                            |
-// |                           ->  Values Scan "*VALUES*"                                     |
-// |                     ->  Table Function on fulltext_index_scan                            |
-// |                           ->  Values Scan "*VALUES*"                                     |
+// |                     ->  Fulltext Index Scan on ftidx                                     |
+// |                     ->  Fulltext Index Scan on ftidx                                     |
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
 	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, orderOverwritten bool) (int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
+	// The scan can carry pagination independently of the projection. Such a
+	// consumer still needs relevance order before it selects its rows.
+	orderOverwritten = orderOverwritten && projNode.Limit == nil && projNode.Offset == nil &&
+		scanNode.Limit == nil && scanNode.Offset == nil
 
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
@@ -77,7 +81,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		paginationLimit, paginationOffset = sortNode.Limit, sortNode.Offset
 	}
 	internalLimit, internalOffset := paginationLimit, paginationOffset
-	if sortNode != nil || builder.sqlCalcFoundRows {
+	if sortNode != nil || orderOverwritten || builder.sqlCalcFoundRows {
 		// The fulltext function returns relevance order. It is not safe to
 		// truncate that stream before an explicit sort on another expression.
 		// SQL_CALC_FOUND_ROWS likewise needs the complete stream before its
@@ -87,7 +91,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	// Covered fast path (Phase 6): a fully-covered SELECT over a single fulltext2 index
 	// WITH include columns can DROP the base-table JOIN and serve pk/score/include-cols
-	// straight from the fulltext2_search TVF. Purely additive: when not covered, falls
+	// straight from the fulltext2 search scan. Purely additive: when not covered, falls
 	// through to the existing JOIN path below byte-for-byte.
 	//
 	// A wrapped MATCH that survived deduplication is by definition a DIFFERENT match than the
@@ -97,7 +101,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	if len(wrappedExprs) == 0 {
 		if handled, herr := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
 			filterids, filterIndexDefs, projids, projIndexDef, eqmap,
-			paginationLimit, paginationOffset); herr != nil {
+			paginationLimit, paginationOffset, orderOverwritten); herr != nil {
 			return -1, herr
 		} else if handled {
 			return nodeID, nil
@@ -121,6 +125,8 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		sortNode.Limit = DeepCopyExpr(paginationLimit)
 		sortNode.Offset = DeepCopyExpr(paginationOffset)
 
+	} else if orderOverwritten {
+		projNode.Children[0] = idxID
 	} else {
 
 		// create sort node with order by score DESC
@@ -275,8 +281,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 // |               Join Type: INNER                                 |
 // |               Join Cond: (src.id = mo_fulltext_alias_0.doc_id) |
 // |               ->  Table Scan on eric.src                       |
-// |               ->  Table Function on fulltext_index_scan        |
-// |                     ->  Values Scan "*VALUES*"                 |
+// |               ->  Fulltext Index Scan on ftidx                 |
 // +----------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
@@ -522,7 +527,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	//
 	//	Join
 	//	  Table Scan   Filter Cond: (fulltext_match('hello', 0, body) > 0)   <- throws
-	//	  Table Function on fulltext_index_scan                              <- index IS used
+	//	  Fulltext Index Scan on ftidx                                       <- index IS used
 	//
 	// Take them off the scan here; they are re-attached above the join once the score column
 	// exists, with each inner MATCH rewritten to reference the scan built for THAT match.
@@ -550,7 +555,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// fulltext2 INCLUDE/pk prefilter pushdown: when the driving index is a fulltext2 index
 	// WITH INCLUDE columns, peel the WHERE predicates on those INCLUDE columns (and the pk)
-	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which fulltext2_search
+	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which the fulltext2 search reader
 	// evaluates against the stored per-doc values inside the WAND walk (bounding the pushed
 	// LIMIT to the filtered set). Reusing buildFilterPredicateJSON keeps this correctness-safe:
 	// it peels only NUMERIC + pk predicates exactly and leaves varchar/others residual (so a
@@ -634,8 +639,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 		mode := modeLit.GetI64Val()
 
-		// Dispatch the per-match TVF by the resolved index's algo: fulltext2 ->
-		// fulltext2_search, classic fulltext -> fulltext_index_scan. Both emit the same
+		// Dispatch the per-match search scan by the resolved index's algo: fulltext2 or
+		// classic fulltext. Both emit the same
 		// (doc_id, score) shape and take the search pattern as an EXPRESSION (fn.Args[0]),
 		// so a prepared-statement '?' pattern flows through either path unchanged. This
 		// 2-member dispatch stays inline (not an index-plugin hook) because building the
@@ -646,53 +651,33 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if cfgErr != nil {
 				return -1, nil, nil, nil, cfgErr
 			}
-			exprs := []*plan.Expr{
-				makePlan2StringConstExprWithType(cfg),
-				DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
-				DeepCopyExpr(fn.Args[1]), // mode (a constant)
-			}
+			opts := ft2plan.ScanOptions{Config: cfg, Mode: mode}
 			// Push this stream's score bounds into the engine: fulltext2 scores documents
 			// itself, so it can drop out-of-range ones before they cross into the join. Taken
 			// from the predicates the lift moved above the join -- they stay there too, so the
 			// pushed (deliberately widened) range can only ever remove work, not rows.
-			var scoreRangeJSON string
 			if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
 				rb, rerr := json.Marshal(rng)
 				if rerr != nil {
 					return -1, nil, nil, nil, rerr
 				}
-				scoreRangeJSON = string(rb)
+				opts.ScoreRange = string(rb)
 			}
-			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING TVF (i==0). With
+			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING scan (i==0). With
 			// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
 			// filtered stream constrains the whole result — the predicate need only ride the
 			// driving stream.
-			// argVecs[3] is the INCLUDE/pk predicate JSON and argVecs[4] the score range;
-			// both optional, but positional, so an empty 3rd is passed when only 4 is needed.
-			preds := ""
 			if i == 0 {
-				preds = ft2PredsJSON
+				opts.IncludePreds = ft2PredsJSON
 			}
-			if preds != "" || scoreRangeJSON != "" {
-				exprs = append(exprs, makePlan2StringConstExprWithType(preds))
-			}
-			if scoreRangeJSON != "" {
-				exprs = append(exprs, makePlan2StringConstExprWithType(scoreRangeJSON))
-			}
-			// Optional 6th argument: the zero-relevance guard for a threshold only known
-			// at EXECUTE. Arguments are positional, so the two optional JSON slots are
-			// padded when only the guard is needed.
+			// The zero-relevance guard for a threshold only known at EXECUTE.
 			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
-			if guard != nil {
-				for len(exprs) < 5 {
-					exprs = append(exprs, makePlan2StringConstExprWithType(""))
-				}
-				exprs = append(exprs, guard)
-			}
-			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
+			// pattern (fn.Args[0]) may be a bound '?' parameter.
+			curr_ftnode_id, err = builder.buildFulltext2SearchScan(
+				ctx, scanNode, idxdef, opts, fn.Args[0], guard, ft2SearchBaseColDefs())
 			if err != nil {
 				return -1, nil, nil, nil, err
 			}
@@ -708,32 +693,19 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				sql = fullTextSQL
 			}
 
-			exprs := []*plan.Expr{
-				makePlan2StringConstExprWithType(srctblname),
-				makePlan2StringConstExprWithType(idxtblname),
-				DeepCopyExpr(fn.Args[0]),
-				DeepCopyExpr(fn.Args[1]),
-			}
-			// Optional 5th argument: the zero-relevance guard for a threshold only known
-			// at EXECUTE. See fulltextRuntimeScoreGuard.
+			// The zero-relevance guard for a threshold only known at EXECUTE. See
+			// fulltextRuntimeScoreGuard.
 			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
-			if guard != nil {
-				exprs = append(exprs, guard)
-			}
-			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
+			// pattern (fn.Args[0]) may be a bound '?' parameter.
+			curr_ftnode_id, err = builder.buildFullTextSearchScan(ctx, scanNode, idxdef, idxObjRef,
+				ftplan.ScanOptions{SourceTable: srctblname, IndexTable: idxtblname, Mode: mode},
+				fn.Args[0], guard, sql)
 			if err != nil {
 				return -1, nil, nil, nil, err
 			}
-		}
-		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27941).
-		builder.qry.Nodes[curr_ftnode_id].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
-		if scanNode.ObjRef.PubInfo != nil {
-			fulltextFunc := builder.qry.Nodes[curr_ftnode_id].TableDef.TblFunc
-			fulltextFunc.FulltextSourceRef = DeepCopyObjectRef(scanNode.ObjRef)
-			fulltextFunc.FulltextIndexRef = DeepCopyObjectRef(idxObjRef)
 		}
 		// this scan answers ft_filters[i]; wrapped MATCHes equal to it now resolve to its score
 		served[i].nodeID = curr_ftnode_id
@@ -777,7 +749,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		// pushdown limit
 		if limitExpr != nil {
-			curr_ftnode.Limit = DeepCopyExpr(limitExpr)
+			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
 		}
 
 		// change doc_id type to the primary type here
@@ -840,7 +812,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// Determine join structure based on whether scanNode still has non-fulltext filters.
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
-	// to reduce the number of doc_ids that fulltext_index_scan must process.
+	// to reduce the number of doc_ids that the fulltext search scan must process.
 	var joinnodeID int32
 
 	if pushdownEnabled {
@@ -1175,7 +1147,7 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
 // projection over a SINGLE fulltext2 index WITH include columns drops the base-table JOIN
-// and reads pk/score/include-cols straight from the fulltext2_search TVF. It returns
+// and reads pk/score/include-cols straight from the fulltext2 search scan. It returns
 // (handled=true) only when EVERY guard holds:
 //
 //	(a) a single MATCH driving a single fulltext2 index (len(filterids)==1, and any
@@ -1192,7 +1164,7 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 // existing JOIN path unchanged.
 func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
-	eqmap map[int32]int32, paginationLimit, paginationOffset *plan.Expr) (bool, error) {
+	eqmap map[int32]int32, paginationLimit, paginationOffset *plan.Expr, orderOverwritten bool) (bool, error) {
 
 	// (a) exactly one MATCH filter, driving one index.
 	if len(filterids) != 1 || len(filterIndexDefs) != 1 {
@@ -1299,6 +1271,10 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	}
 
 	// ---- All guards passed: build the covered plan. From here on we mutate. ----
+	// All qualification now runs inside the search. Only its own score order
+	// permits early truncation; another ordering must keep the full stream.
+	searchLimit := builder.coveredFulltext2ScoreLimit(nodeID, projNode, sortNode,
+		scanNode, projids, paginationLimit, paginationOffset)
 	ctx := builder.ctxByNode[nodeID]
 
 	// Remove the MATCH filter from the base scan (it is fully served by the TVF now). This is
@@ -1309,21 +1285,18 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	if cfgErr != nil {
 		return false, cfgErr
 	}
-	exprs := []*plan.Expr{
-		makePlan2StringConstExprWithType(cfg),
-		DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
-		DeepCopyExpr(fn.Args[1]), // mode (a constant)
-	}
-	if ft2PredsJSON != "" {
-		exprs = append(exprs, makePlan2StringConstExprWithType(ft2PredsJSON))
-	}
-	ftnodeID, err := builder.buildFulltext2SearchNodeCovered(ctx, exprs, nil, scanNode, incCols)
+	colDefs, err := builder.ft2CoveredColDefs(scanNode, incCols)
 	if err != nil {
 		return false, err
 	}
-	// Snapshot read TS for the covered fast path too (#27941).
-	builder.qry.Nodes[ftnodeID].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
+	// pattern (fn.Args[0]) may be a bound '?' parameter.
+	ftnodeID, err := builder.buildFulltext2SearchScan(ctx, scanNode, idxdef,
+		ft2plan.ScanOptions{Config: cfg, Mode: mode, IncludePreds: ft2PredsJSON}, fn.Args[0], nil, colDefs)
+	if err != nil {
+		return false, err
+	}
 	ftnode := builder.qry.Nodes[ftnodeID]
+	ftnode.IndexSearchScan.CandidateLimit = searchLimit
 	ftTag := ftnode.BindingTags[0]
 
 	// The TVF's doc_id (col 0) carries the source pk; retype it to the pk's real type, as the
@@ -1338,8 +1311,8 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		builder.nameByColRef[[2]int32{ftTag, int32(colPos)}] = "mo_fulltext_alias_0." + colDef.Name
 	}
 
-	// Keep the score-DESC SORT above the TVF (heap tie order is unspecified, so the Sort
-	// stays). No JOIN: the SORT/PROJECT reads directly from the TVF.
+	// Keep the default score-DESC SORT unless an ancestor explicit order makes it
+	// unused. No JOIN: the SORT/PROJECT reads directly from the TVF.
 	//
 	// On an EXPLICIT ORDER BY (sortNode != nil) we simply repoint its child at the TVF and do
 	// NOT remap sortNode.OrderBy here — that is correct, not a bug. A review flagged that the
@@ -1365,6 +1338,8 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		sortNode.Children[0] = ftnodeID
 		sortNode.Limit = DeepCopyExpr(paginationLimit)
 		sortNode.Offset = DeepCopyExpr(paginationOffset)
+	} else if orderOverwritten {
+		projNode.Children[0] = ftnodeID
 	} else {
 		sortLimit, sortOffset := paginationLimit, paginationOffset
 		if builder.sqlCalcFoundRows {
@@ -1427,6 +1402,100 @@ func isProjIndexPosition(projids []int32, i int32) bool {
 		}
 	}
 	return false
+}
+
+// coveredFulltext2ScoreLimit is called only after exact predicate and projection
+// coverage has been proved. OFFSET remains on the outer sort; the search keeps
+// LIMIT+OFFSET score-ranked candidates, including legal arbitrary cutoff ties.
+func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+	projids []int32, limit, offset *plan.Expr) *plan.Expr {
+	if limit == nil || builder.sqlCalcFoundRows || projNode.RankOption != nil || scanNode.RankOption != nil {
+		return nil
+	}
+	if sortNode != nil {
+		if sortNode.RankOption != nil || len(sortNode.OrderBy) != 1 || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+			return nil
+		}
+		col := sortNode.OrderBy[0].Expr.GetCol()
+		ctx := builder.ctxByNode[nodeID]
+		if col == nil || ctx == nil || col.RelPos != ctx.projectTag || col.ColPos < 0 ||
+			!isProjIndexPosition(projids, col.ColPos) {
+			return nil
+		}
+	}
+	bound, ok := buildCandidateLimit(limit, offset)
+	if !ok {
+		return nil
+	}
+	return bound
+}
+
+// pushCoveredFulltext2ScoreLimitFromSort handles the bound SQL shape where the
+// explicit ORDER BY score LIMIT is above the covered projection. Only a direct
+// column projection and, when present, an equivalent implicit score sort may
+// separate the outer sort from the search; joins and residual filters decline.
+func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
+	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
+		len(sortNode.Children) != 1 || len(sortNode.OrderBy) != 1 || len(sortNode.FilterList) != 0 {
+		return
+	}
+	bound, ok := buildCandidateLimit(sortNode.Limit, sortNode.Offset)
+	if !ok || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+		return
+	}
+	keyCol := sortNode.OrderBy[0].Expr.GetCol()
+	project := builder.qry.Nodes[sortNode.Children[0]]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
+		len(project.BindingTags) != 1 || len(project.FilterList) != 0 ||
+		project.Limit != nil || project.Offset != nil || project.RankOption != nil ||
+		keyCol == nil || keyCol.RelPos != project.BindingTags[0] || keyCol.ColPos < 0 ||
+		int(keyCol.ColPos) >= len(project.ProjectList) {
+		return
+	}
+	// An explicit ORDER BY can overwrite the implicit relevance ordering.
+	var innerSort *plan.Node
+	search := builder.qry.Nodes[project.Children[0]]
+	if search.NodeType == plan.Node_SORT {
+		innerSort = search
+		if len(innerSort.Children) != 1 || len(innerSort.OrderBy) != 1 ||
+			len(innerSort.FilterList) != 0 || innerSort.Limit != nil ||
+			innerSort.Offset != nil || innerSort.RankOption != nil ||
+			!fulltext2ScoreDescending(innerSort.OrderBy[0]) {
+			return
+		}
+		search = builder.qry.Nodes[innerSort.Children[0]]
+	}
+	spec := search.IndexSearchScan
+	if search.NodeType != plan.Node_INDEX_SEARCH_SCAN || spec == nil ||
+		!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) ||
+		len(search.BindingTags) != 1 || spec.CandidateLimit != nil ||
+		search.Limit != nil || search.Offset != nil || search.RankOption != nil || len(search.FilterList) != 0 {
+		return
+	}
+	scoreTag := search.BindingTags[0]
+	if innerSort != nil {
+		innerKey := innerSort.OrderBy[0].Expr.GetCol()
+		if innerKey == nil || innerKey.RelPos != scoreTag || innerKey.ColPos != 1 {
+			return
+		}
+	}
+	projectScore := project.ProjectList[keyCol.ColPos].GetCol()
+	if projectScore == nil || projectScore.RelPos != scoreTag || projectScore.ColPos != 1 {
+		return
+	}
+	for _, expr := range project.ProjectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != scoreTag {
+			return
+		}
+	}
+	spec.CandidateLimit = bound
+}
+
+func fulltext2ScoreDescending(key *plan.OrderBySpec) bool {
+	return key != nil && key.Expr != nil && key.Flag&plan.OrderBySpec_DESC != 0 &&
+		key.Flag&plan.OrderBySpec_ASC == 0 &&
+		key.Flag&(plan.OrderBySpec_NULLS_FIRST|plan.OrderBySpec_NULLS_LAST) == 0
 }
 
 // coveredBaseColRefs walks expr and invokes visit(colPos, name) for every base-scan ColRef
@@ -2000,7 +2069,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 		// A fulltext2 index has two hidden-table defs (storage + metadata) sharing the
 		// IndexName; resolve against the STORAGE def so IndexTableName/Parts are the ones
-		// the fulltext2_search TVF expects. Classic fulltext has a single def.
+		// the fulltext2 search scan expects. Classic fulltext has a single def.
 		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
 			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
 				continue
@@ -2422,10 +2491,10 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 }
 
 // fulltext2ScoreRangeFromFilters builds the relevance interval implied by the AND-reachable
-// `MATCH(...) <op> const` comparisons on ONE served match, for pushing into fulltext2_search.
+// `MATCH(...) <op> const` comparisons on ONE served match, for pushing into the fulltext2 search scan.
 //
 // Only fulltext2 has an engine that can use it (the WAND search scores documents itself);
-// classic fulltext_index_scan has no equivalent, so callers only build this for fulltext2.
+// classic fulltext search has no equivalent, so callers only build this for fulltext2.
 //
 // Two rules keep it safe:
 //

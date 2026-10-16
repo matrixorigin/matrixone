@@ -1483,6 +1483,7 @@ func doSetVar(
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
+		setNamesCollation       string
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
@@ -1506,9 +1507,12 @@ func doSetVar(
 	}
 	for _, assign := range sv.Assignments {
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				captureSystemReplayability(name)
 			}
 		} else if assign.System {
@@ -1573,12 +1577,62 @@ func doSetVar(
 				}
 			}
 		}
+		// SET NAMES DEFAULT is represented by a synthetic "names" assignment,
+		// so it cannot use the ordinary system-variable DEFAULT resolution above.
+		// The generic expression evaluator intentionally materializes DEFAULT as
+		// a boolean marker; resolve the SET NAMES form to the effective server
+		// default character set before the string system-variable setters see it.
+		if assign.SetNames {
+			if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				value, evalErr = ses.GetGlobalSysVar("character_set_server")
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				if value == nil {
+					value = gSysVarsDefs["character_set_server"].Default
+				}
+			}
+		}
 		if err := validateCharsetAssignment(assign, value); err != nil {
 			return evaluatedAssignment{}, err
+		}
+		setNamesCollation := ""
+		if assign.SetNames {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			switch {
+			case assign.Reserved != nil:
+				literal, literalOK := assign.Reserved.(*tree.NumVal)
+				if !literalOK {
+					return evaluatedAssignment{}, moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
+				}
+				setNamesCollation = literal.String()
+			case isDefault:
+				setNamesCollation, evalErr = resolveSetNamesDefaultCollation(ses)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				// character_set_server and collation_server are stored
+				// independently. Validate their effective pair before the
+				// session setters run so an inconsistent historical/global
+				// configuration cannot publish a partial SET NAMES DEFAULT
+				// state.
+				if evalErr = validateCharsetCollationPair(value, setNamesCollation); evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			default:
+				setNamesCollation, evalErr = resolveImplicitSetNamesCollation(ses, value)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			}
+			if evalErr = validateCharsetSystemVariable("collation_connection", setNamesCollation); evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
 		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
+			setNamesCollation:       setNamesCollation,
 			userVarIsBin:            isBin,
 			userVarRuntimeDomain:    runtimeDomain,
 			valueType:               valueType,
@@ -1648,9 +1702,12 @@ func doSetVar(
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				mark(name, replayable)
 			}
 			return
@@ -1687,16 +1744,22 @@ func doSetVar(
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
-			//replaced into three system variable:
-			//character_set_client, character_set_connection, and character_set_results
+			// SET NAMES updates the three character-set variables. An explicit
+			// COLLATE clause additionally updates collation_connection below.
 			replacedBy := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
 			for _, rb := range replacedBy {
-				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
+				err = setVarFunc(true, false, rb, value, sql)
 				if err != nil {
 					return err
 				}
+			}
+			// SET NAMES always changes the implicit connection collation when
+			// COLLATE is omitted. Explicit COLLATE and DEFAULT resolution were
+			// validated while evaluating the assignment, before any writes.
+			if err = setVarFunc(true, false, "collation_connection", item.setNamesCollation, sql); err != nil {
+				return err
 			}
 		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 			switch scope {
@@ -2609,7 +2672,7 @@ func writeExplainResult(
 	if err != nil {
 		return err
 	}
-	if explainSchedulingEnabled(ses) {
+	if es.Format != explain.EXPLAIN_FORMAT_JSON && explainSchedulingEnabled(ses) {
 		if rawSQL == "" {
 			rawSQL = ses.GetSql()
 		}
@@ -2633,6 +2696,9 @@ func writeExplainResult(
 	//2. fill the result set
 	//column
 	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		explainColName = "EXPLAIN"
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName(explainColName)
@@ -2789,9 +2855,16 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 	if scanner.CommentFlag {
 		scanner.TakeExecutableCommentEnd()
 		var commentEnd int
+		previousToken := mysql.FROM
 		for commentEnd == 0 {
 			previousPos := scanner.Pos
-			token, _ := scanner.Scan()
+			var token int
+			if previousToken == int('.') {
+				token, _ = scanner.ScanAfterDot()
+			} else {
+				token, _ = scanner.Scan()
+			}
+			previousToken = token
 			commentEnd = scanner.TakeExecutableCommentEnd()
 			if commentEnd == 0 &&
 				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
@@ -2828,6 +2901,13 @@ func doPrepareStmtInSession(
 	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(owner))
 	if err != nil {
 		return nil, err
+	}
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		// Background/procedure PREPARE has raw SQL but no frontend request
+		// snapshot. Reparse it under the owner's policy before planning; the
+		// caller's old AST must not be stamped with a newly captured generation.
+		return doPrepareStringWithParamTypes(owner, executionSes, execCtx,
+			&tree.PrepareString{Name: st.Name, Sql: originSql}, paramTypes)
 	}
 	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, originSql, st, st.Stmt)
 	if err != nil {
@@ -2885,9 +2965,62 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 }
 
 func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
+	return doPrepareStringWithParamTypes(owner, executionSes, execCtx, st, nil)
+}
+
+func preparedOwnerPolicyCaptured(execCtx *ExecCtx) bool {
+	return execCtx.input != nil && execCtx.input.rewritePolicy != nil && execCtx.input.rewritePolicy.captured
+}
+
+// capturePreparedOwnerPolicy closes the producer boundary for background SQL
+// without changing the immutable snapshot of an existing frontend request.
+// Catalog I/O stays outside the session locks. The temporary context belongs
+// only to this PREPARE, not to later statements in a procedure.
+func capturePreparedOwnerPolicy(execCtx *ExecCtx, owner *Session) (bool, func(), error) {
+	if preparedOwnerPolicyCaptured(execCtx) {
+		return false, func() {}, nil
+	}
+	if execCtx.input != nil && execCtx.input.rewritePolicyMaterialized {
+		return false, nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement has materialized SQL without a captured owner policy")
+	}
+	policy, err := captureRewritePolicy(execCtx.reqCtx, owner)
+	if err != nil {
+		return false, nil, err
+	}
+	previousInput, previousEnabled, previousRemap := execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb
+	input := &UserInput{}
+	if previousInput != nil {
+		*input = *previousInput
+	}
+	input.rewritePolicy = policy
+	execCtx.input, execCtx.rewriteEnabled = input, policy.enabled
+	return true, func() {
+		execCtx.input, execCtx.rewriteEnabled, execCtx.remapDb = previousInput, previousEnabled, previousRemap
+	}, nil
+}
+
+func doPrepareStringWithParamTypes(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString, paramTypes []byte) (*PrepareStmt, error) {
+	capturedNow, restore, err := capturePreparedOwnerPolicy(execCtx, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql ||
 		statementSQLSource(st.Sql, sessionSQLModeForParser(owner)) == constant.CloudNoUserSql
-	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, owner, st.Sql)
+	var rewritten string
+	var innerStmt tree.Statement
+	var remapDb map[string]string
+	if capturedNow {
+		// A materialized outer hint does not exist on this producer. Apply the
+		// actual owner snapshot to the raw inner SQL, including mandatory rules
+		// when the optional enable_remap_hint switch is disabled.
+		rewritten, err = execCtx.input.rewritePolicy.rewrite(execCtx.reqCtx, st.Sql, sessionSQLModeForParser(owner))
+		if err == nil {
+			rewritten, innerStmt, remapDb, err = parsePreparedStatement(execCtx, owner, rewritten)
+		}
+	} else {
+		rewritten, innerStmt, remapDb, err = prepareStringStatement(execCtx, owner, st.Sql)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2907,6 +3040,9 @@ func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *E
 		return nil, err
 	}
 	prepareStmt.IsCloudNonuser = nonuser
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 
 	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
@@ -2930,7 +3066,10 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			return sql, nil, nil, err
 		}
 	}
+	return parsePreparedStatement(execCtx, ses, rewritten)
+}
 
+func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (string, tree.Statement, map[string]string, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return rewritten, nil, nil, err
@@ -2987,6 +3126,11 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// Every executable handle must prove which policy actually participated
+	// in planning. Publication cannot repair missing provenance afterward.
+	if !preparedOwnerPolicyCaptured(execCtx) {
+		return nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement requires a captured owner policy before planning")
+	}
 	// Nested planning may change the session's current statement. Capture the
 	// owner statement now; neighboring statements in the request are irrelevant.
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql
@@ -3109,6 +3253,12 @@ func createPrepareStmtInSession(
 		schedulingSQLMode:          schedulingSQLMode,
 	}
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
+		execCtx.input.rewritePolicy.captured {
+		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
+		prepareStmt.rewritePolicyCaptured = true
+		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
+	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3195,10 +3345,15 @@ func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *Exec
 }
 
 func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
-	prepareStmt, err := ses.GetPrepareStmt(ctx, string(st.Name))
+	// RESET is a cleanup operation. It must remain reachable for an
+	// invalidated handle so clients can discard LONG_DATA and close a retained
+	// cursor before preparing a replacement. Execution paths continue to use
+	// the checked lookup and still reject the handle.
+	prepareStmt, err := ses.getPrepareStmtAllowInvalidated(ctx, string(st.Name))
 	if err != nil {
 		return err
 	}
+	prepareStmt.closeCursor()
 	prepareStmt.resetBinaryParamState()
 	return nil
 }
@@ -3937,43 +4092,85 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
 		return es, nil
-	} else {
-		for _, v := range options {
-			if strings.EqualFold(v.Name, tree.VerboseOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Verbose = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Verbose = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.AnalyzeOption) {
-				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Analyze = true
-				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Analyze = false
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.FormatOption) {
-				if strings.EqualFold(v.Value, "TEXT") {
-					es.Format = explain.EXPLAIN_FORMAT_TEXT
-				} else if strings.EqualFold(v.Value, "JSON") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else if strings.EqualFold(v.Value, "DOT") {
-					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
-				} else {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
-				}
-			} else if strings.EqualFold(v.Name, tree.CheckOption) {
-				if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
-					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
-				}
-			} else {
+	}
+
+	seen := make(map[string]struct{}, len(options))
+	phyplan := false
+	check := false
+	for _, v := range options {
+		name := strings.ToLower(strings.TrimSpace(v.Name))
+		if _, ok := seen[name]; ok {
+			return nil, moerr.NewInvalidInputf(reqCtx, "duplicate explain option '%s'", v.Name)
+		}
+		seen[name] = struct{}{}
+
+		switch name {
+		case "verbose":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
 				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
+			es.Verbose = value
+		case "analyze":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			es.Analyze = value
+		case "phyplan":
+			value, ok := parseExplainBool(v.Value)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+			phyplan = value
+		case "format":
+			value := strings.Trim(strings.TrimSpace(v.Value), "'")
+			value = strings.Trim(value, string('"'))
+			value = strings.ToUpper(value)
+			switch value {
+			case "TEXT":
+				es.Format = explain.EXPLAIN_FORMAT_TEXT
+			case "JSON":
+				es.Format = explain.EXPLAIN_FORMAT_JSON
+			case "DOT":
+				return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
+			default:
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+		case "check":
+			check = true
+			if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
+			}
+		default:
+			return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 		}
-		return es, nil
+	}
+	if es.Format == explain.EXPLAIN_FORMAT_JSON {
+		if es.Analyze {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+		}
+		if phyplan {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+		}
+		if check {
+			return nil, moerr.NewNotSupported(reqCtx, "EXPLAIN FORMAT=JSON does not support CHECK")
+		}
+	}
+	return es, nil
+}
+
+func parseExplainBool(value string) (bool, bool) {
+	value = strings.Trim(strings.TrimSpace(value), "'")
+	value = strings.Trim(value, string('"'))
+	value = strings.ToUpper(value)
+	switch value {
+	case "TRUE", "NULL":
+		return true, true
+	case "FALSE":
+		return false, true
+	default:
+		return false, false
 	}
 }
 
@@ -4383,6 +4580,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		execCtx.input.genSqlSourceType(ses)
+		// Binary execute carries the prepared plan directly in UserInput. Check
+		// the owning handle before the plan reaches privilege checks or Compile;
+		// parsing the packet already checks this in the normal protocol path, but
+		// this guard also covers internal callers that construct UserInput.
+		if execCtx.input.isBinaryProtExecute {
+			if _, err := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); err != nil {
+				return nil, err
+			}
+		}
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
@@ -4698,8 +4904,9 @@ func isSessionSQLModeSet(stmt tree.Statement) bool {
 	return false
 }
 
-func hasStatement(fragment string, parserSQLMode string) bool {
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+func hasStatement(input mysql.SQLContinuation, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, input.SQL, mysql.ParseSQLModeFlags(parserSQLMode))
+	scanner.CommentFlag = input.InExecutableComment
 	defer mysql.PutScanner(scanner)
 	for {
 		token, _ := scanner.Scan()
@@ -4723,7 +4930,7 @@ func prepareSQLModeStagedExecution(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	sql string,
-) (first string, remaining string, staged bool, err error) {
+) (first string, remaining mysql.SQLContinuation, staged bool, err error) {
 	lctn := parserLowerCaseTableNames(ses)
 	parserSQLMode := sessionSQLModeForParser(ses)
 	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
@@ -4738,34 +4945,34 @@ func prepareSQLModeStagedExecution(
 		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
 		freeStatements(stmts)
 		if !shouldStage {
-			return "", "", false, nil
+			return "", mysql.SQLContinuation{}, false, nil
 		}
 	} else {
-		probe := sql
+		probe := mysql.SQLContinuation{SQL: sql}
 		foundSQLModeSet := false
 		for hasStatement(probe, parserSQLMode) {
-			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			stmt, _, next, firstErr := p.ParseFirstStatementWithSQLMode(ctx, probe, lctn, parserSQLMode)
 			if firstErr != nil {
-				return "", "", false, parseErr
+				return "", mysql.SQLContinuation{}, false, parseErr
 			}
 			foundSQLModeSet = isSessionSQLModeSet(stmt)
 			stmt.Free()
-			probe = probe[end:]
+			probe = next
 			if foundSQLModeSet {
 				break
 			}
 		}
 		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
-			return "", "", false, parseErr
+			return "", mysql.SQLContinuation{}, false, parseErr
 		}
 	}
 
-	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(ctx, mysql.SQLContinuation{SQL: sql}, lctn, parserSQLMode)
 	if err != nil {
-		return "", "", false, err
+		return "", mysql.SQLContinuation{}, false, err
 	}
 	stmt.Free()
-	return sql[:end], sql[end:], true, nil
+	return first, next, true, nil
 }
 
 func nextSQLModeStatementInput(
@@ -4773,9 +4980,9 @@ func nextSQLModeStatementInput(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	input *UserInput,
-	sql string,
-) (*UserInput, string, error) {
-	stmt, end, err := p.ParseFirstWithSQLMode(
+	sql mysql.SQLContinuation,
+) (*UserInput, mysql.SQLContinuation, error) {
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(
 		ctx,
 		sql,
 		parserLowerCaseTableNames(ses),
@@ -4785,7 +4992,7 @@ func nextSQLModeStatementInput(
 		return nil, sql, err
 	}
 	stmt.Free()
-	return newSQLStatementInput(input, sql[:end]), sql[end:], nil
+	return newSQLStatementInput(input, first), next, nil
 }
 
 func newSQLStatementInput(input *UserInput, sql string) *UserInput {
@@ -5509,6 +5716,13 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	if backSes, ok := ses.(*backSession); ok {
+		if hook := backSes.processHook; hook != nil {
+			if err = hook(execCtx.reqCtx, execCtx.proc); err != nil {
+				return err
+			}
+		}
+	}
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
@@ -6046,7 +6260,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	executionInput := input
 	stagedSQLMode := false
-	stagedRemaining := ""
+	stagedRemaining := mysql.SQLContinuation{}
 	var err error
 	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
 		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
@@ -6391,7 +6605,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				stagedRemaining,
 			)
 			if nextErr != nil {
-				return recordParseError(newSQLStatementInput(input, stagedRemaining), nextErr)
+				failedSQL := stagedRemaining.SQL
+				if stagedRemaining.InExecutableComment {
+					failedSQL = "/*! " + failedSQL
+				}
+				return recordParseError(newSQLStatementInput(input, failedSQL), nextErr)
 			}
 			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
 			if nextErr != nil {
@@ -6523,7 +6741,7 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		}
 		return []string{sql}, []string{source}, nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6536,8 +6754,8 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 	byStatement := make([]string, 0, len(fragments))
 	bySource := sources[:0]
 	for i, fragment := range fragments {
-		if parsers.FragmentHasStatement(fragment) {
-			byStatement = append(byStatement, fragment)
+		if parsers.FragmentHasStatement(fragment.SQL) {
+			byStatement = append(byStatement, fragment.SQL)
 			bySource = append(bySource, sources[i])
 		}
 	}
@@ -6863,12 +7081,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		// Closing an invalidated handle must remain possible. Execution paths use
+		// GetPrepareStmt, which rejects the handle before any retained state is
+		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -6897,7 +7119,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
 			// This early return never reaches doComQuery, so set the state here.
@@ -6905,6 +7127,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		preStmt.closeCursor()
+		preStmt.resetBinaryParamState()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -6950,7 +7173,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	if preStmt.longDataErr != nil {
 		return "", preStmt, preStmt.longDataErr
@@ -6995,6 +7218,9 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
 	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
 	if err != nil {
+		if stmt != nil {
+			stmt.closeCursor()
+		}
 		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
 	}
 	if stmt.cursor == nil || stmt.cursor.result == nil {
@@ -7051,12 +7277,18 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) (e
 	pos += 4
 
 	stmtName := getPrepareStmtName(stmtID)
-	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	preStmt, err := ses.getPrepareStmtAllowInvalidated(reqCtx, stmtName)
 	if err != nil {
 		// MySQL silently discards long data for an unknown statement id.
 		return nil
 	}
 	if preStmt.longDataErr != nil {
+		return nil
+	}
+	if err = preStmt.checkRewritePolicy(reqCtx); err != nil {
+		// COM_STMT_SEND_LONG_DATA has no response packet. An invalidated
+		// handle cannot accept the upload, but the client must remain aligned
+		// for the following COM_STMT_EXECUTE, which reports ER_NEED_REPREPARE.
 		return nil
 	}
 	defer func() {

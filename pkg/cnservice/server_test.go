@@ -107,18 +107,18 @@ type closeOnlyRPCServer struct {
 	onClose  func()
 }
 
-type closeOnlySiriusBackend struct {
-	compile.SiriusBackend
+type closeOnlySiriusEngine struct {
+	compile.SiriusEngine
 	closeFn func() error
 }
 
-func (b closeOnlySiriusBackend) Close(context.Context) error { return b.closeFn() }
+func (b closeOnlySiriusEngine) Close(context.Context) error { return b.closeFn() }
 
 func TestCloseSiriusRuntimeRetainsFailedOwner(t *testing.T) {
 	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
 		failure := errors.New("runtime cleanup failed")
 		var closeErr error = failure
-		owner := &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error { return closeErr }}}
+		owner := &compile.SiriusRuntime{Engine: closeOnlySiriusEngine{closeFn: func() error { return closeErr }}}
 		s := &service{cfg: &Config{UUID: t.Name()}, siriusRuntime: owner}
 		rt.SetGlobalVariables(compile.SiriusRuntimeKey, owner)
 		t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, owner) })
@@ -1260,7 +1260,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			s.stopper.Stop()
 		})
 		var runtimeClosed bool
-		s.siriusRuntime = &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error {
+		s.siriusRuntime = &compile.SiriusRuntime{Engine: closeOnlySiriusEngine{closeFn: func() error {
 			select {
 			case <-handlerExited:
 				runtimeClosed = true

@@ -78,6 +78,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
+	case *tree.CollateExpr:
+		expr, err = b.bindCollateExpr(exprImpl, depth)
 
 	case *tree.OrExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -165,9 +167,50 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_INT24 {
+			// MySQL accepts MEDIUMINT in DDL but does not accept it as a CAST
+			// target. Keep that syntax boundary separate from internal assignment
+			// casts, which enforce the target column's 24-bit domain.
+			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
+			return
+		}
+		if castType, ok := exprImpl.Type.(*tree.T); ok && castType.InternalType.CastCharsetSpecified {
+			// Reuse the existing CONVERT USING charset owner for conversion and
+			// result metadata, then use the explicit CAST overload to enforce the
+			// requested CHAR width. This keeps conversion separate from assignment
+			// width validation and preserves the engine's admitted charset aliases.
+			charsetName := castType.InternalType.CastCharsetName
+			charsetLiteral := tree.NewNumVal(charsetName, charsetName, false, tree.P_char)
+			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
+			if err != nil {
+				return
+			}
+			if castType.InternalType.DisplayWith < 0 {
+				// With no explicit width, CONVERT already supplies the requested
+				// character set and the source-derived result width. Do not impose
+				// the internal default maximum as a cast width.
+				return
+			}
+			if types.T(typ.Id) == types.T_varbinary {
+				// A binary CHAR(N) cast truncates bytes without padding. SUBSTRING
+				// already uses byte offsets for binary string inputs; apply it before
+				// the VARBINARY(N) cast, whose normal width check rejects long input.
+				expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "substring", []*Expr{
+					expr,
+					makePlan2Int64ConstExprWithType(1),
+					makePlan2Int64ConstExprWithType(int64(typ.Width)),
+				})
+				if err != nil {
+					return
+				}
+			}
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 			return
 		}
 		parentParamType := b.numericParamType
@@ -984,6 +1027,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if source, ok := collationForExpression(subCtx.results[0]); ok {
+			source.apply(&returnExpr.Typ)
+		}
 	}
 
 	return returnExpr, nil
@@ -1799,6 +1845,9 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,
 	depth int32,
 ) (numericAstTypeScan, error) {
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return numericAstTypeScan{}, err
+	}
 	var owner *tree.Select
 	switch selectStmt := subquery.Select.(type) {
 	case *tree.Select:
@@ -4397,6 +4446,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
+		preparedSourceBindings(b.GetContext()) == nil {
+		var err error
+		args, err = bindPrepareCoalesceNumericArguments(b.GetContext(), args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if preparedBindingState(b.GetContext()) != nil {
 		var err error
 		if isIfNull && len(args) == 3 {
@@ -5068,40 +5125,38 @@ func bindFuncExprImplUdf(
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
-		var expr *plan.Expr
-
-		if !strings.Contains(sql, "select") {
+		expressionBody := !strings.Contains(sql, "select")
+		if expressionBody {
 			sql = "select " + sql
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
+		}
+		substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, stmt := range substmts {
+				stmt.Free()
 			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
-			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			subquery := tree.NewSubquery(substmts[0], false)
-			expr, err = b.impl.BindSubquery(subquery, false)
-			if err != nil {
-				return nil, err
+		}()
+		var bodyExpr tree.Expr
+		if expressionBody {
+			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		}
+		if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
+			b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
+			// The caller's VALUES AST does not contain subqueries introduced by
+			// a SQL UDF. Inspect the parsed expression as well as query bodies,
+			// before either binder can create a relational branch. SQL spelling
+			// and wrappers must not bypass the statement's admission boundary.
+			if !expressionBody || valueExprContainsSubquery(bodyExpr) {
+				return nil, moerr.NewNotSupported(b.GetContext(),
+					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
 		}
-		return expr, nil
+		if expressionBody {
+			return b.impl.BindExpr(bodyExpr, depth, false)
+		}
+		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5163,8 +5218,9 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 	var result strings.Builder
 	result.Grow(len(sql))
 	written := 0
+	previousToken := 0
 	for {
-		token, value := scanner.Scan()
+		token, value := scanSQLToken(scanner, &previousToken)
 		if token == 0 || token == mysqlparser.LEX_ERROR {
 			break
 		}
@@ -5187,6 +5243,19 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 
 	result.WriteString(sql[written:])
 	return result.String()
+}
+
+// scanSQLToken keeps secondary SQL scans consistent with qualified identifiers.
+func scanSQLToken(scanner *mysqlparser.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanAfterDot()
+	} else {
+		token, value = scanner.Scan()
+	}
+	*previousToken = token
+	return token, value
 }
 
 func (b *baseBinder) pushSQLUdfArguments(args map[string]*plan.Expr) func() {
@@ -5458,6 +5527,14 @@ func bindFuncExprAndConstFoldInternal(
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "ntile":
+		// The bucket count is execution configuration. Keep prepared parameters
+		// intact, but reject expressions whose value can vary with the input row.
+		args := retExpr.GetF().Args
+		if len(args) != 1 || !function.IsRuntimeConstant(args[0]) {
+			return nil, moerr.NewWrongArguments(ctx, "ntile")
+		}
+
 	case "nth_value":
 		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err
@@ -6732,6 +6809,10 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	args, err = normalizeExpressionCollations(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -7180,12 +7261,10 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
-		if bitmap, ok := storedSetBitmapExpr(args[0]); ok {
-			// SET's display wrapper is a VARCHAR presentation of a stored uint64
-			// bitmap. Bitwise aggregates are numeric consumers: use that bitmap
-			// directly so it retains the native uint64 aggregate path instead of
-			// routing an unsupported uint64 input through the numeric CAST4 helper.
-			args[0] = bitmap
+		if storage, ok := storedMySQLSpecialTypeExpr(args[0]); ok {
+			// ENUM/SET display labels must not enter the string conversion.
+			// Resolve their ordinals/bitmaps through the existing integer domains.
+			args[0] = storage
 		} else {
 			argType := makeTypeByPlan2Expr(args[0])
 			if isBitwiseAggregateConversionInput(argType) {
@@ -7489,7 +7568,11 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
-	lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	// MOD literal refinement is metadata-only; its existing casts must retain
+	// the integer's full storage domain.
+	if name != "mod" && name != "%" {
+		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		if state := preparedBindingState(ctx); state != nil {
@@ -7555,6 +7638,10 @@ func bindFuncExprImplByPlanExpr(
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
+	if name == "mod" || name == "%" {
+		metadataTypes := refineDecimalArithmeticLiteralLookupTypes(name, args, argsType)
+		returnType = function.DecimalModReturnType(metadataTypes, returnType)
+	}
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 	// Literal-domain refinement participates in overload lookup, so the
 	// physical arguments must honor a refined OID even when the selected
@@ -8067,8 +8154,11 @@ func bindFuncExprImplByPlanExpr(
 	case "lead", "lag":
 		// For lead/lag window functions, cast the default value (3rd arg)
 		// to match the value type (1st arg).
-		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
-			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		if len(args) >= 3 && !argsType[2].Eq(returnType) {
+			if len(argsCastType) == 0 {
+				argsCastType = append([]types.Type(nil), argsType...)
+			}
+			argsCastType[2] = returnType
 		}
 	}
 
@@ -8102,6 +8192,13 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 				typ := makePlan2Type(&castType)
+				if castType.Oid.IsMySQLString() && args[idx].Typ.CollationCoercibilitySet {
+					// Overload adaptation (including width promotion) is transparent
+					// to provenance. Runtime types do not carry these plan fields.
+					typ.CollationCoercibility = args[idx].Typ.CollationCoercibility
+					typ.CollationCoercibilitySet = true
+					typ.CollationMergeConflict = args[idx].Typ.CollationMergeConflict
+				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
@@ -8153,6 +8250,9 @@ func bindFuncExprImplByPlanExpr(
 		Typ.Enumvalues = args[2].Typ.Enumvalues
 	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
+		return nil, err
+	}
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
@@ -10006,7 +10106,7 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 // synthetic DECIMAL(38,s) bound would make a weak literal such as 0.5 force an
 // otherwise narrow prepared expression into Decimal256.
 func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs []types.Type) []types.Type {
-	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
+	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*" && name != "mod" && name != "%") {
 		return inputs
 	}
 	hasDecimalInput := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal()
@@ -10035,13 +10135,14 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication because the
+		// Integer literal precision matters for multiplication and MOD because the
 		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the product.  Addition and subtraction already derive
+		// spuriously widen the result. MOD uses this bound only for metadata.
+		// Addition and subtraction already derive
 		// their safe result precision from the integer domain; retaining their
 		// established Decimal128 coercion also avoids changing outer-join decimal
 		// expression execution paths.
-		if name == "*" && hasDecimalInput && inputs[i].IsIntOrUint() {
+		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue
@@ -10769,6 +10870,17 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 }
 
 func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if types.T(expr.Typ.Id).IsMySQLString() && types.T(toType.Id).IsMySQLString() &&
+		expr.Typ.Charset == toType.Charset && expr.Typ.CollationVersion == toType.CollationVersion &&
+		expr.Typ.CollationCoercibilitySet && !toType.CollationCoercibilitySet {
+		// Comparison canonicalization changes representation, not collation
+		// priority. PAD SPACE and window adapters rebuild targets from runtime
+		// types, which omit these plan-only fields. Keep an already resolved
+		// target's provenance when the caller supplies one.
+		toType.CollationCoercibility = expr.Typ.CollationCoercibility
+		toType.CollationCoercibilitySet = true
+		toType.CollationMergeConflict = expr.Typ.CollationMergeConflict
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
@@ -11040,9 +11152,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
-	// labels. Resolve storage before the generic string-numeric conversion.
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	// Numeric aggregates and BIT_COUNT consume ENUM ordinals and SET bitmaps.
+	// Resolve storage even when a display string matches a string overload.
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11074,6 +11186,18 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 		}
 	}
 	return result
+}
+
+func usesMySQLSpecialNumericInput(name string, argCount int) bool {
+	if argCount != 1 {
+		return false
+	}
+	switch name {
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor", "bit_count":
+		return true
+	default:
+		return false
+	}
 }
 
 // An IN list is represented as a plan.ExprList and is not assigned one scalar
@@ -11371,18 +11495,31 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
 		}
 	}
-	// DAY can carry a fractional day for these source types. Choose the
-	// result family from the static signature, including whole-valued rows;
-	// neither the spelling of a literal nor a row value may change metadata.
-	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+	// Calendar DAY uses integral days; SECOND truncates to microseconds.
+	// Preserve the evaluated source type so DECIMAL DAY can round while
+	// floating/text DAY truncate. TIME retains its separate raw contract above.
+	if dateExpr.Typ.Id != int32(types.T_time) && (intervalType == types.Day || intervalType == types.Second) {
 		switch types.T(firstExpr.Typ.Id) {
-		case types.T_float32, types.T_float64,
-			types.T_decimal64, types.T_decimal128, types.T_decimal256,
-			types.T_char, types.T_varchar, types.T_text, types.T_any:
-			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+		case types.T_char, types.T_varchar, types.T_text, types.T_any,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			number, err := BindFuncExprImplByPlanExpr(ctx, "to_calendar_interval", []*Expr{
+				firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+			})
 			if err != nil {
 				return nil, err
 			}
+			unit := intervalType
+			if intervalType == types.Second {
+				unit = types.MicroSecond
+				if dateExpr.Typ.Id == int32(types.T_date) {
+					dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime)})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			return []*Expr{dateExpr, number, makePlan2Int64ConstExprWithType(int64(unit))}, nil
 		}
 	}
 
@@ -11841,6 +11978,13 @@ func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool
 		return true
 	}
 	fn := arg.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast &&
+		len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		arg.Typ.CollationCoercibilitySet && arg.Typ.CollationCoercibility == 0 {
+		// COLLATE binds as a cast with explicit collation provenance. Validate
+		// its operand recursively instead of admitting arbitrary foldable code.
+		return validNameConstValueExpr(fn.Args[0], allowCanonicalStringCast)
+	}
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
 		return false
 	}
@@ -11873,6 +12017,8 @@ func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CollateExpr:
+		return validNameConstLiteralValueAst(value.Expr, allowCanonicalStringCast)
 	case *tree.CastExpr:
 		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:

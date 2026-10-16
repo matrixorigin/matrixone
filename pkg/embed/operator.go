@@ -222,13 +222,15 @@ func (op *operator) Start() error {
 	if err := op.cfg.validateClockConfiguration(); err != nil {
 		return err
 	}
-	if err := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType); err != nil {
-		return err
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
 	}
-	if op.serviceType == metadata.ServiceType_CN {
-		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
-			return err
-		}
+	if authErr != nil {
+		return authErr
 	}
 
 	if err := op.init(); err != nil {
@@ -349,9 +351,6 @@ func (op *operator) startTNServiceAfterReadyLocked(
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
-	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
-		return err
-	}
 	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
@@ -365,6 +364,9 @@ func (op *operator) startCNServiceLocked(
 	}
 	if op.testing {
 		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
 	}
 	s, err := cnservice.NewService(
 		&c,
@@ -381,16 +383,6 @@ func (op *operator) startCNServiceLocked(
 		return err
 	}
 	return nil
-}
-
-func (op *operator) verifySiriusBenchmarkNoGC() error {
-	// An individual embedded CN operator neither owns nor observes the TN that
-	// serves its snapshots. A sibling TN config is therefore not proof that GC
-	// is disabled on the actual TN, so embedded benchmark mode fails closed.
-	return cnservice.VerifySiriusBenchmarkNoGC(
-		&op.cfg.CN,
-		false,
-	)
 }
 
 func (op *operator) startConstructedServiceLocked(s service) error {

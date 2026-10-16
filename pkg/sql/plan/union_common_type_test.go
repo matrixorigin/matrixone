@@ -216,6 +216,57 @@ func TestUnionSignedUnsignedIntegerColumnCommonType(t *testing.T) {
 	require.False(t, root.ProjectList[0].Typ.NotNullable)
 }
 
+func TestUnionMediumIntColumnMetadata(t *testing.T) {
+	for _, oid := range []types.T{types.T_int32, types.T_uint32} {
+		for _, tc := range []struct {
+			left, right string
+			width       int32
+		}{
+			{"m", "i", 32},
+			{"i", "m", 32},
+			{"m", "m", 24},
+		} {
+			t.Run(oid.String()+"/"+tc.left+"_"+tc.right, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+				ctx.dbs["test"] = true
+				ctx.objects["union_medium"] = &planpb.ObjectRef{DbName: "test", ObjName: "union_medium", Obj: 1}
+				medium := types.New(oid, 24, -1).PlanType()
+				ordinary := types.New(oid, 32, -1).PlanType()
+				table := &planpb.TableDef{Name: "union_medium", DbName: "test", Cols: []*planpb.ColDef{
+					{Name: "m", Typ: medium}, {Name: "i", Typ: ordinary},
+				}}
+				ctx.tables["union_medium"] = table
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+					"select "+tc.left+" as x from test.union_medium union all select "+tc.right+" from test.union_medium", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				query := built.GetQuery()
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Equal(t, int32(oid), root.ProjectList[0].Typ.Id)
+				require.Equal(t, tc.width, root.ProjectList[0].Typ.Width)
+				var found bool
+				for _, node := range query.Nodes {
+					if node.NodeType != planpb.Node_UNION_ALL {
+						continue
+					}
+					found = true
+					require.Equal(t, tc.width, node.ProjectList[0].Typ.Width)
+					for _, child := range node.Children {
+						projection := query.Nodes[child].ProjectList[0]
+						require.Equal(t, tc.width, projection.Typ.Width)
+						require.NotNil(t, projection.GetCol(), "storage-compatible widening must not add a value cast")
+					}
+				}
+				require.True(t, found)
+				require.Equal(t, medium, table.Cols[0].Typ)
+				require.Equal(t, ordinary, table.Cols[1].Typ)
+			})
+		}
+	}
+}
+
 func TestCTASUnionSignedUnsignedIntegerMetadata(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_ctas_union_signed_unsigned as select cast(-1 as signed) as x union all select cast(18446744073709551615 as unsigned) as x", 1)
@@ -378,6 +429,67 @@ func TestSetOperationIntegerLiteralDecimalType(t *testing.T) {
 		actual, ok := setOperationIntegerLiteralDecimalType(expr)
 		require.False(t, ok, "invalid expression %d", i)
 		require.Equal(t, types.Type{}, actual)
+	}
+}
+
+func TestNarrowUnsignedBigintConsumerCommonType(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sql         string
+		prepare     bool
+		notNullable bool
+	}{
+		{"uint8 union all", "select u8 as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"uint16 reversed union", "select -9007199254740993 as x union select u16 from test.integer_common_type", false, false},
+		{"week union", "select week(d, 3) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"dayofyear union", "select dayofyear(d) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"quarter union", "select quarter(d) as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"null and multiple branches", "select null as x union all select u8 from test.integer_common_type union all select s from test.integer_common_type union all select u16 from test.integer_common_type", false, false},
+		{"coalesce", "select coalesce(u8, u16, s) as x from test.integer_common_type", false, false},
+		{"intersect", "select u8 as x from test.integer_common_type intersect select s from test.integer_common_type", false, false},
+		{"except", "select s as x from test.integer_common_type except select u16 from test.integer_common_type", false, false},
+		{"prepared union", "select u8 as x from test.integer_common_type union all select 9007199254740993", true, false},
+		{"prepared coalesce", "select coalesce(u16, 9007199254740993) as x from test.integer_common_type", true, true},
+		{"ctas", "create table integer_common_type_ctas as select u8 as x from test.integer_common_type union all select 9007199254740993", false, false},
+		{"empty ctas", "create table integer_common_type_ctas as select u16 as x from test.integer_common_type where false union all select s from test.integer_common_type where false", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			ctx.dbs["test"] = true
+			ctx.objects["integer_common_type"] = &planpb.ObjectRef{DbName: "test", ObjName: "integer_common_type", Obj: 1}
+			ctx.tables["integer_common_type"] = &planpb.TableDef{
+				Name: "integer_common_type", DbName: "test",
+				Cols: []*planpb.ColDef{
+					{Name: "u8", Typ: planpb.Type{Id: int32(types.T_uint8)}},
+					{Name: "u16", Typ: planpb.Type{Id: int32(types.T_uint16)}},
+					{Name: "s", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "d", Typ: planpb.Type{Id: int32(types.T_date)}},
+				},
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(ctx, stmt, test.prepare)
+			require.NoError(t, err)
+			var typ planpb.Type
+			if query := logicPlan.GetQuery(); query != nil {
+				require.NotEmpty(t, query.Steps)
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Len(t, root.ProjectList, 1)
+				typ = root.ProjectList[0].Typ
+			} else {
+				var visible []*planpb.ColDef
+				for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+					if !col.Hidden {
+						visible = append(visible, col)
+					}
+				}
+				require.Len(t, visible, 1)
+				typ = visible[0].Typ
+			}
+			require.Equal(t, int32(types.T_int64), typ.Id)
+			require.Equal(t, test.notNullable, typ.NotNullable)
+		})
 	}
 }
 

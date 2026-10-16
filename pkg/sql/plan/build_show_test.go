@@ -15,8 +15,12 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +42,8 @@ func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
 	// The mock optimizer doesn't have mo_user_grant table, so this should fail with a known error
 	sqls := []string{
 		"show grants for 'testuser'@'localhost'",
+		"show grants for current_user",
+		"show grants for current_user()",
 	}
 	// This is expected to fail in mock because mo_user_grant doesn't exist
 	for _, sql := range sqls {
@@ -297,8 +303,80 @@ func TestCoverage_buildShowTables(t *testing.T) {
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
+		"show full tables from tpch",
+		"show tables from tpch where Tables_in_tpch = 'nation'",
+		"show full tables from tpch where Table_type = 'VIEW'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+// Bootstrap discovers catalog tables before the privilege catalogs exist.
+type showTablesBootstrapContext struct {
+	CompilerContext
+	privilegeLookups int
+}
+
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
+		c.privilegeLookups++
+		return nil, nil, nil
+	}
+	return c.CompilerContext.Resolve(database, table, snapshot)
+}
+
+func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
+	for _, sql := range []string{
+		"show tables from mo_catalog",
+		"show full tables from mo_catalog",
+		"show tables from mo_catalog like 'mo_%'",
+		"show full tables from mo_catalog where Table_type = 'BASE TABLE'",
+	} {
+		for _, mode := range []string{"internal", "unmarked", "explicit false"} {
+			t.Run(mode+"/"+sql, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion41))
+				if mode != "unmarked" {
+					mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), defines.InternalExecutorKey{}, mode == "internal"))
+				}
+				ctx := &showTablesBootstrapContext{CompilerContext: mock.CurrentContext()}
+				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				if mode == "internal" {
+					require.NoError(t, err)
+					require.NotNil(t, built.GetQuery())
+					require.Zero(t, ctx.privilegeLookups)
+				} else {
+					// Missing catalogs must not turn ordinary user queries into
+					// unfiltered internal discovery, including for account 0.
+					require.Error(t, err)
+					require.Positive(t, ctx.privilegeLookups)
+				}
+			})
+		}
+	}
+}
+
+func TestShowTablesUserVisibilityPlan(t *testing.T) {
+	for _, version := range []int64{defines.MORPCVersion40, defines.MORPCVersion41} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			filtered := false
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+					filtered = true
+				}
+			}
+			require.Equal(t, version >= defines.MORPCVersion41, filtered)
+		})
+	}
 }
 
 func TestCoverage_buildShowColumns(t *testing.T) {

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -362,6 +363,19 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
 		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+
+	// Historical rows cannot be matched against current object grants. A
+	// subscription is admitted by subscriber-local broad authorization and keeps
+	// the publication allowlist below instead of using publisher role/object IDs.
+	// Trusted internal discovery also runs during bootstrap, before the role and
+	// privilege catalogs exist. It already bypasses frontend authorization.
+	// Below protocol 41 the frontend keeps the existing database-level gate.
+	// Do not narrow its full inherited-role authorization with legacy role SQL.
+	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
+		requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
+		sql = sysview.MetadataVisibilityCTE(defines.MORPCVersion41) + sql
+		sql += fmt.Sprintf(" and (EXISTS (SELECT 1 FROM __mo_visible_tables visible WHERE visible.account_id = mo_tables.account_id AND visible.rel_id = mo_tables.rel_id) or (account_id = 0 and (%s)))", mustShowTable+clusterTable)
+	}
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -699,6 +713,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
+	showColumnsCollation := "case internal_column_character_set(col.atttyp) " +
+		"WHEN 0 then 'utf8_general_ci' " +
+		"WHEN 1 then 'utf8mb4_bin' " +
+		"WHEN 3 then 'utf8mb4_general_ci' " +
+		"WHEN 4 then 'utf8_unicode_ci' " +
+		"WHEN 5 then 'utf8mb4_unicode_ci' " +
+		"else NULL end"
 
 	var sql string
 	if accountId == catalog.System_Account {
@@ -710,13 +731,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
 		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}

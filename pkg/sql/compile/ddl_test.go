@@ -1674,6 +1674,24 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 }
 
 func TestScope_CreateView(t *testing.T) {
+	t.Run("replace_rc_without_database", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, catalog.System_Account)
+		op := mock_frontend.NewMockTxnOperator(ctrl)
+		op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+		proc.Base.TxnOperator = op
+		// No engine, lockservice or Snapshot calls are permitted: an empty
+		// database must be rejected before lifecycle admission has side effects.
+		eng := mock_frontend.NewMockEngine(ctrl)
+		proc.Base.LockService = mock_lock.NewMockLockService(ctrl)
+		scope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateView{CreateView: &plan2.CreateView{
+				Replace: true, TableDef: &plan2.TableDef{Name: "v"},
+			}},
+		}}}}
+		require.True(t, moerr.IsMoErrCode(scope.CreateView(&Compile{proc: proc, e: eng}), moerr.ErrNoDB))
+	})
 	tableDef := &plan.TableDef{
 		Name: "v1",
 		Cols: []*plan.ColDef{
@@ -2166,6 +2184,84 @@ func TestAlterViewPreservesLogicalID(t *testing.T) {
 	require.ErrorIs(t, err, createErr)
 	require.NotNil(t, db.createCtx)
 	require.Equal(t, uint64(77), db.createCtx.Value(defines.LogicalIdKey{}))
+}
+
+func TestAlterViewUsesPlanDatabase(t *testing.T) {
+	// The planner resolves a schema-qualified ALTER VIEW target into the plan
+	// database. The executor must drop/recreate the view in that database
+	// rather than in the session's current database.
+	eng := newStubEngine()
+	target := newStubDatabase("target_db")
+	createErr := errors.New("stop after create is captured")
+	target.createErr = createErr
+	target.rels["v"] = &stubRelation{
+		name: "v", tableID: 101, tableDef: &plan2.TableDef{LogicalId: 77},
+	}
+	current := newStubDatabase("current_db")
+	// A same-named view in the current database must stay untouched.
+	current.rels["v"] = &stubRelation{name: "v", tableID: 202}
+	eng.dbs["target_db"] = target
+	eng.dbs["current_db"] = current
+
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{AlterView: &plan2.AlterView{
+			Database: "target_db", TableDef: &plan2.TableDef{Name: "v"},
+		}},
+	}}}}
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	c := NewCompile("test", "current_db", "alter view target_db.v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	err := s.AlterView(c)
+	require.ErrorIs(t, err, createErr)
+	// The old view is dropped in the target database...
+	_, exists := target.rels["v"]
+	require.False(t, exists)
+	// ...and the replacement create is issued against the target database.
+	require.NotNil(t, target.createCtx)
+	// The same-named view in the current database is untouched.
+	require.Nil(t, current.createCtx)
+	require.Contains(t, current.rels, "v")
+	require.Equal(t, uint64(202), current.rels["v"].tableID)
+}
+
+func TestAlterViewEmptyDatabaseFallsBackToSession(t *testing.T) {
+	// A plan without a resolved database (empty AlterView.Database) must
+	// fall back to the session's current database for drop/recreate.
+	eng := newStubEngine()
+	current := newStubDatabase("current_db")
+	createErr := errors.New("stop after create is captured")
+	current.createErr = createErr
+	current.rels["v"] = &stubRelation{
+		name: "v", tableID: 303, tableDef: &plan2.TableDef{LogicalId: 88},
+	}
+	eng.dbs["current_db"] = current
+
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{AlterView: &plan2.AlterView{
+			Database: "", TableDef: &plan2.TableDef{Name: "v"},
+		}},
+	}}}}
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	c := NewCompile("test", "current_db", "alter view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	err := s.AlterView(c)
+	require.ErrorIs(t, err, createErr)
+	// The fallback selected the session database for drop and recreate.
+	_, exists := current.rels["v"]
+	require.False(t, exists)
+	require.NotNil(t, current.createCtx)
 }
 
 func TestLockDroppedRelation(t *testing.T) {

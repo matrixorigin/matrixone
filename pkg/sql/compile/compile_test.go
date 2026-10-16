@@ -1905,7 +1905,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 	}
 	makeVectorPlan := func() *plan.Plan {
 		const vectorTag = int32(10)
-		vectorSpec := &plan.VectorIndexScan{
+		vectorSpec := &plan.IndexSearchScan{
 			SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 			SourceTableDef: sourceTable,
 			Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
@@ -1932,7 +1932,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 			Nodes: []*plan.Node{
 				{
 					NodeId:      0,
-					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					NodeType:    plan.Node_INDEX_SEARCH_SCAN,
 					BindingTags: []int32{vectorTag},
 					TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 						{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
@@ -1941,7 +1941,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 						{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
 					}},
 					ProjectList:     vectorProjectList,
-					VectorIndexScan: vectorSpec,
+					IndexSearchScan: vectorSpec,
 				},
 				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
 			},
@@ -3973,4 +3973,31 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 		require.Equal(t, 7, c.TxnOffset)
 	})
+}
+
+func TestWindowIntervalValidationPrecedesSourceInitialization(t *testing.T) {
+	c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	// Source initialization must never acquire the table for an invalid bound.
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	c.e = eng
+	c.scopes = []*Scope{{Proc: c.proc, DataSource: &Source{node: &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "test"}, TableDef: &plan.TableDef{Name: "d"},
+	}}}}
+	bound := &plan.Expr{Typ: plan.Type{Id: int32(types.T_interval)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+		plan2.MakePlan2StringConstExprWithType("-1"), plan2.MakePlan2StringConstExprWithType("second"),
+	}}}}
+	c.pn.GetQuery().Steps = []int32{1}
+	c.pn.GetQuery().Nodes = []*plan.Node{
+		{WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: &plan.FrameClause{
+			Type: plan.FrameClause_RANGE, Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: bound}, End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}}}}}},
+		{Children: []int32{0}, Limit: plan2.MakePlan2Uint64ConstExprWithType(0)},
+	}
+	started := false
+	err := c.runPipelineAttempt(func() error { started = true; return nil })
+	require.ErrorContains(t, err, "frame start or end is negative, NULL")
+	require.False(t, started)
+	require.Nil(t, c.scopes[0].DataSource.R)
 }

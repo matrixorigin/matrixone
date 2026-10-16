@@ -985,3 +985,104 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
+	cast := func(functionID int32, functionName string, target Type) *Expr {
+		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(functionID) << 32, ObjName: functionName},
+			Args: []*Expr{
+				{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+				{Typ: target, Expr: &Expr_T{T: &TargetType{}}},
+			},
+		}}}
+	}
+	arrayCast := func(typeName string) *Expr {
+		return &Expr{Typ: Type{Id: planJSONTypeID, Enumvalues: typeName}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(castJSONToArrayFunctionID) << 32, ObjName: "cast_json_to_array"},
+			Args: []*Expr{
+				{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: typeName}}}},
+				{Typ: Type{Id: planJSONTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+			},
+		}}}
+	}
+	widenedResult := func(functionID int32, functionName string) *Expr {
+		castExpr := cast(functionID, functionName, Type{Id: planInt32TypeID, Width: 24})
+		// UNION can widen only the outer result metadata while retaining the
+		// assignment CAST and its width-24 target argument.
+		castExpr.Typ.Width = 32
+		return castExpr
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "strict signed MEDIUMINT assignment", expr: cast(541, "cast_strict", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "strict assignment target after UNION result widening", expr: widenedResult(541, "cast_strict"), want: true},
+		{name: "signed MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "assignment target after UNION result widening", expr: widenedResult(554, "cast_assign"), want: true},
+		{name: "ignored signed MEDIUMINT assignment", expr: cast(555, "cast_ignore", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "ignore target after UNION result widening", expr: widenedResult(555, "cast_ignore"), want: true},
+		{name: "unsigned MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planUint32TypeID, Width: 24}), want: true},
+		{name: "ordinary INT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 32})},
+		{name: "generic CAST to MEDIUMINT", expr: cast(21, "cast", Type{Id: planInt32TypeID, Width: 24})},
+		{name: "signed typed array", expr: arrayCast("array(mediumint)"), want: true},
+		{name: "unsigned nested typed array", expr: arrayCast("array(array(mediumint unsigned))"), want: true},
+		{name: "ordinary INT typed array", expr: arrayCast("array(int)")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.MediumIntAssignmentBounds)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}
+
+func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		id, overload, result int32
+		want                 bool
+	}{
+		{"week date", 216, 0, 22, true}, {"week datetime", 216, 1, 22, true},
+		{"week date mode", 216, 2, 22, true}, {"week datetime mode", 216, 3, 22, true},
+		{"dayofyear", 206, 0, 22, true},
+		{"legacy week", 216, 2, 25, false}, {"legacy dayofyear", 206, 0, 26, false},
+		{"weekofyear control", 217, 0, 23, false}, {"other int function", 218, 0, 22, false},
+		{"unknown overload", 216, 4, 22, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: tc.result}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
+			data, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(data))
+			features, err := RequiredRemoteExpressionFeatures(&TableDef{Cols: []*ColDef{{Default: &Default{Expr: decoded}}}})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.DateNumericResultContracts)
+			if tc.want {
+				require.True(t, features.Any())
+			}
+			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
+		})
+	}
+}
+
+func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
+	for _, id := range []int64{583, 598} {
+		expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32}}}}
+		owner := &TableDef{Cols: []*ColDef{{Default: &Default{Expr: expr}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded TableDef
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, id == 598, features.CalendarIntervalNormalization)
+		if id == 598 {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
+}

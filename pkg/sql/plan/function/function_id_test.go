@@ -820,7 +820,15 @@ var predefinedFunids = map[int]int{
 	UPDATEXML:               582,
 	TO_INTERVAL_MICROSECOND: 583,
 	UUID_SHORT:              587,
-	FUNCTION_END_NUMBER:     591,
+	TANH:                    591,
+	COSH:                    592,
+	ASINH:                   593,
+	ACOSH:                   594,
+	ATANH:                   595,
+	FORMAT_BYTES:            596,
+	FORMAT_PICO_TIME:        597,
+	TO_CALENDAR_INTERVAL:    598,
+	FUNCTION_END_NUMBER:     599,
 }
 
 func Test_funids(t *testing.T) {

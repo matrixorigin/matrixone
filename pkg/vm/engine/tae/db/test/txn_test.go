@@ -41,7 +41,6 @@ import (
 )
 
 var wareHouse *catalog.Schema
-var district *catalog.Schema
 
 var app1db = "app1"
 var goods *catalog.Schema
@@ -54,10 +53,8 @@ var app1Conf *APP1Conf
 var errNotEnoughRepertory = moerr.NewInternalErrorNoCtx("not enough repertory")
 
 type APP1Conf struct {
-	Users         int
-	InitBalance   float64
-	GoodKinds     int
-	GoodRepertory int
+	Users     int
+	GoodKinds int
 }
 
 type APP1Client struct {
@@ -74,14 +71,7 @@ type APP1Goods struct {
 	Price float64
 }
 
-type APP1Repertory struct {
-	ID      uint64
-	GoodsID uint64
-	Count   uint64
-}
-
 type APP1 struct {
-	sync.RWMutex
 	Clients []*APP1Client
 	Goods   []*APP1Goods
 	DBName  string
@@ -90,10 +80,8 @@ type APP1 struct {
 
 func init() {
 	app1Conf = &APP1Conf{
-		Users:         100,
-		InitBalance:   1000000,
-		GoodKinds:     2000,
-		GoodRepertory: 100,
+		Users:     100,
+		GoodKinds: 2000,
 	}
 
 	var err error
@@ -110,24 +98,6 @@ func init() {
 	_ = wareHouse.AppendCol("W_TAX", types.T_float64.ToType())
 	_ = wareHouse.AppendCol("W_YTD", types.T_float64.ToType())
 	if err = wareHouse.Finalize(false); err != nil {
-		panic(err)
-	}
-
-	district = catalog.NewEmptySchema("DISTRICT")
-	district.Extra.BlockMaxRows = 40000
-	district.Extra.ObjectMaxBlocks = 40
-	_ = district.AppendPKCol("D_ID", types.T_int16.ToType(), 0)
-	_ = district.AppendCol("D_W_ID", types.T_uint8.ToType())
-	_ = district.AppendCol("D_NAME", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STREET_1", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STREET_2", types.T_varchar.ToType())
-	_ = district.AppendCol("D_CITY", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STATE", types.T_varchar.ToType())
-	_ = district.AppendCol("D_ZIP", types.T_varchar.ToType())
-	_ = district.AppendCol("D_TAX", types.T_float64.ToType())
-	_ = district.AppendCol("D_YTD", types.T_float64.ToType())
-	_ = district.AppendCol("D_NEXT_O_ID", types.T_int64.ToType())
-	if err = district.Finalize(false); err != nil {
 		panic(err)
 	}
 
@@ -210,10 +180,6 @@ func (c *APP1Client) Clone() *APP1Client {
 	}
 }
 
-func (c *APP1Client) String() string {
-	s := fmt.Sprintf("User:%d,%s", c.ID, c.Name)
-	return s
-}
 func (c *APP1Client) Bind(db handle.Database, txn txnif.AsyncTxn) {
 	if c.Txn != nil {
 		panic("logic error")
@@ -221,15 +187,6 @@ func (c *APP1Client) Bind(db handle.Database, txn txnif.AsyncTxn) {
 	c.Txn = txn
 	c.DB = db
 	c.Rel, _ = db.GetRelationByName(c.Name)
-}
-
-func (c *APP1Client) Unbind() {
-	if c.Txn == nil {
-		panic("logic error")
-	}
-	c.Txn = nil
-	c.DB = nil
-	c.Rel = nil
 }
 
 func (c *APP1Client) CheckBound() {
@@ -242,6 +199,7 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeObjectIt(false)
+	defer blockIt.Close()
 	found := false
 	for blockIt.Next() {
 		blk := blockIt.GetObject()
@@ -276,7 +234,6 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			}
 		}
 	}
-	blockIt.Close()
 	err = moerr.NewNotFoundNoCtx()
 	return
 }
@@ -402,7 +359,6 @@ func (app1 *APP1) Init(factor int) {
 	}
 	conf := *app1Conf
 	conf.GoodKinds *= factor
-	conf.GoodRepertory *= factor
 	conf.Users *= factor
 	balanceRel, err := db.GetRelationByName(balance.Name)
 	if err != nil {
@@ -523,12 +479,6 @@ func TestApp1(t *testing.T) {
 	}
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))
-	{
-		// txn := mgr.StartTxn(nil)
-		// db, _ := txn.GetDatabase(app1.DBName)
-		// rel, _ := db.GetRelationByName(repertory.Name)
-		// t.Log(rel.SimplePPString(common.PPL1))
-	}
 }
 
 func TestWarehouse(t *testing.T) {

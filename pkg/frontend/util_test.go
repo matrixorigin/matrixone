@@ -67,6 +67,35 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
+func TestCollectScalarSubqueriesCollate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"scalar", "select (select 'first') collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"argument order", "select concat((select 'first') collate utf8mb4_bin, (select 'second') collate utf8mb4_bin)", []string{"(select 'first')", "(select 'second')"}},
+		{"cast wrapper", "select cast((select 'first') as char) collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"outer subquery only", "select (select (select 'inner') collate utf8mb4_bin) collate utf8mb4_bin", []string{"(select ((select 'inner')) collate utf8mb4_bin)"}},
+		{"literal", "select 'literal' collate utf8mb4_bin", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			var subqueries []*tree.Subquery
+			collectScalarSubqueries(expr, &subqueries)
+			got := make([]string, len(subqueries))
+			for i, subquery := range subqueries {
+				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 type accountingMysqlWriter struct {
 	testMysqlWriter
 	bytes         int64
@@ -2014,6 +2043,27 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataMediumIntLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), signed: true, length: 9},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), signed: false, length: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tc.signed)
+			setMysqlColumnTypeMetadata(col, tc.typ)
+
+			require.Equal(t, tc.length, col.Length())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2316,6 +2366,25 @@ func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+		})
+	}
+}
+
+func TestMysqlMediumIntProtocolMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		sign bool
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), sign: true},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), sign: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, defines.MYSQL_TYPE_INT24, col.ColumnType())
+			require.Equal(t, tc.sign, col.IsSigned())
+			require.Zero(t, col.Decimal())
 		})
 	}
 }

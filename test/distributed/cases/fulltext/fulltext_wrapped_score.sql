@@ -35,7 +35,7 @@ select id, round(match(body) against('hello') + 1, 3) as r from docs where match
 select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
 
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
 
 -- ---------------- wrapped in a FILTER above a view ----------------------------
@@ -56,7 +56,7 @@ select id from v where sc > 0.05 and id > 1 order by id;
 select id from v where round(cast(sc as double) * 2, 3) > 0.1 order by id;
 
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v where round(sc, 4) > 0;
 
 -- ---------------- DISCRIMINATING thresholds ------------------------------------
@@ -137,7 +137,7 @@ select id from two where match(body) against('hello') > 0.005;
 select id from two where match(body) against('hello');
 
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from two where match(body) against('hello') > 0.015;
 
 -- a MATCH no INDEX can serve is still left alone and still raises 20105

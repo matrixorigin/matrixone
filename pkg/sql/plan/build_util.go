@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -147,6 +149,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	if err != nil {
 		return plan.Type{}, err
 	}
+	if astType, ok := typ.(*tree.T); ok && astType.InternalType.CastCharsetSpecified {
+		name := astType.InternalType.CastCharsetName
+		identity, ok := collation.ResolveCharset(name)
+		if !ok || (identity != collation.BinaryIdentity && identity != collation.UTF8MB4GeneralCIIdentity) {
+			return plan.Type{}, moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CHAR cast", name)
+		}
+		// This is an expression target, not a DDL column declaration. In
+		// particular, CHAR(N) CHARACTER SET binary must stay variable length;
+		// mapping it through the DDL CHAR->BINARY helper would pad short values.
+		if identity == collation.BinaryIdentity {
+			ret.Id = int32(types.T_varbinary)
+			ret.Charset = uint32(types.CharsetBinary)
+		} else {
+			// utf8 and utf8mb3 retain MatrixOne's existing utf8mb4 alias.
+			applyTextCharsetToPlanType(&ret, uint32(identity))
+		}
+		return ret, nil
+	}
 	// AST-authored types are new metadata. Assign their explicit charset here so
 	// CharsetLegacy remains reserved for types decoded from pre-collation catalogs.
 	ret.Charset = uint32(types.CharsetType(types.T(ret.Id)))
@@ -248,6 +268,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
+		case defines.MYSQL_TYPE_INT24:
+			if n.InternalType.Unsigned || n.InternalType.Zerofill {
+				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
+			}
+			return plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
@@ -440,12 +465,12 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
-			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
 				return plan.Type{}, err
 			}
 
-			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: setValues}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -943,7 +968,32 @@ func buildDefaultExprWithColumns(
 
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	// cast_assign remains an executable expression because its behavior depends
+	// on sql_mode, so rule.IsConstant rejects the outer function. Validate when
+	// its source value is constant, without eagerly evaluating volatile defaults.
+	constantMediumIntDefault := false
+	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
+		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
+			constantMediumIntDefault = rule.IsConstant(cast.Args[0], false)
+		}
+	}
+	if constantMediumIntDefault {
+		cast := newExpr.GetF()
+		strictExpr, strictErr := forceAssignmentCastExprWithName(
+			bindCtx, cast.Args[0], typ, "cast_strict")
+		if strictErr != nil {
+			err = strictErr
+		} else if strictExecutor, strictExecErr := colexec.NewExpressionExecutor(proc, strictExpr); strictExecErr != nil {
+			err = strictExecErr
+		} else {
+			_, err = strictExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			strictExecutor.Free()
+		}
+	}
 	if err != nil {
+		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
 	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
@@ -2966,4 +3016,20 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
+}
+
+// equalFoldKey produces the same equivalence classes used by strings.EqualFold
+// so callers can detect duplicates without pairwise comparisons.
+func equalFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }

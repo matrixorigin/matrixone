@@ -26,17 +26,10 @@ import (
 )
 
 // These tests share the canonical one-CN configuration and run sequentially.
-// Cleanup registered here runs after scenario cleanup, outside the fixture's
-// mutex. A failed scenario cannot leave a dirty cluster for the next test.
+// SharedTestCluster owns failure quarantine after scenario cleanup; this
+// wrapper only records the scenario's SQL execution time.
 func runSQLIntegration(t *testing.T, fn func(embed.Cluster)) {
 	t.Helper()
-	t.Cleanup(func() {
-		if t.Failed() {
-			if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
-				t.Errorf("close failed SQL integration fixture: %v", err)
-			}
-		}
-	})
 	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
 		started := time.Now()
 		defer func() {
@@ -50,6 +43,9 @@ func runSQLIntegration(t *testing.T, fn func(embed.Cluster)) {
 	})
 }
 
+// The UT runner may split roots into fresh processes: this TestMain only
+// closes the canonical fixture and propagates cleanup failure. It must not
+// accumulate cross-root assertions or depend on another root having executed.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if err := embed.CloseSingleCNBaseClusterTests(); err != nil {

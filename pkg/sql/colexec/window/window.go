@@ -159,9 +159,12 @@ func materializeWindowBound(
 	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
 		return runtimeBound, nil
 	}
-	// Temporal RANGE bounds are normalized interval expression lists at bind
-	// time. They are already immutable constants, not deferred parameters.
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
+		value, err := materializeWindowInterval(proc, planned.Val)
+		if err != nil {
+			return nil, err
+		}
+		runtimeBound.Val = value
 		return runtimeBound, nil
 	}
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetVec() != nil {
@@ -837,10 +840,10 @@ func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
 }
 
 // boundedSlidingRangeFrame recognizes a contiguous, finite RANGE frame whose
-// boundaries move monotonically and which always contains the current peer
-// group. Floating-point order keys stay on the ordinary evaluator because NaN
-// ordering is not suitable for inverse aggregation. TIMESTAMP stays there too:
-// session-civil frames can be disjoint across a daylight-saving-time fold.
+// boundaries move monotonically. NULL interval arithmetic can also produce
+// empty frames. Floating-point keys stay on the ordinary evaluator because NaN
+// ordering is not suitable for inverse aggregation. Non-NULL TIMESTAMP offsets
+// stay there too: civil frames can be disjoint across a daylight-saving fold.
 func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
 	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
 		frame.Start == nil || frame.End == nil ||
@@ -856,6 +859,10 @@ func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprE
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime, types.T_time:
 		return true
+	case types.T_timestamp:
+		// NULL arithmetic produces peer-only or empty frames without civil
+		// time calculations, so these frames cannot cross a DST fold.
+		return hasNullIntervalBound(frame)
 	default:
 		return false
 	}
@@ -1096,11 +1103,14 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			}
 			left = max(left, partitionStart)
 			right = min(right, currentPartitionEnd)
-			if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+			if left < ctr.runningLeft || right < ctr.runningRight || left > right {
 				return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
 			}
 
-			for row := ctr.runningLeft; row < left; row++ {
+			// Empty frames and gaps contain no rows to add or remove. Only
+			// remove rows that belonged to the old interval, and add rows that
+			// belong to the new one; never apply an inverse to an unadded row.
+			for row := ctr.runningLeft; row < min(left, ctr.runningRight); row++ {
 				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}
@@ -1109,7 +1119,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 					return nil, err
 				}
 			}
-			for row := ctr.runningRight; row < right; row++ {
+			for row := max(ctr.runningRight, left); row < right; row++ {
 				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}
@@ -1301,7 +1311,7 @@ func (ctr *container) ntileBucketCount(idx int) (int64, error) {
 		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
 	}
 	if bucketCount <= 0 {
-		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count must be positive")
 	}
 	return bucketCount, nil
 }
@@ -1737,7 +1747,7 @@ func (ctr *container) timestampRangeSelection(
 	// cross a timezone transition, so the ordinary RANGE path already has the
 	// complete peer interval and fold indexing must not address it by logical
 	// row position.
-	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) || hasNullIntervalBound(frame) {
 		return nil, nil
 	}
 	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
@@ -2154,6 +2164,14 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 }
 
 func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	if hasNullIntervalBound(frame) {
+		vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
+		// NULL current keys still form their ordinary peer group. Only a
+		// non-NULL temporal key has NULL interval arithmetic and an empty frame.
+		if !vec.IsConstNull() && !vec.GetNulls().Contains(uint64(rowIdx)) {
+			return rowIdx, rowIdx, nil
+		}
+	}
 	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
@@ -3172,11 +3190,16 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	// Confine the binary search to the non-NULL data range within [start, end).
 	// When NULLs sort last, the raw-value array is not monotonically sorted,
 	// so binary search must operate on the non-NULL subrange only.
+	// Trim the suffix first: a narrowed interval containing only trailing
+	// NULLs must retain its left insertion boundary for an empty frame.
+	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
+		end--
+	}
 	for start < end && vec.GetNulls().Contains(uint64(start)) {
 		start++
 	}
-	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
-		end--
+	if start >= end {
+		return start, nil
 	}
 	// See searchLeftWithLocation: resolve scalar storage against one physical
 	// row, then preserve the result's logical interval boundary.

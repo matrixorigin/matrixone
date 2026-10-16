@@ -136,7 +136,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +189,6 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		return nil, err
 	}
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -1022,16 +1019,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.Attrs,
-			Rets:                   t.Rets,
-			Args:                   t.Args,
-			Params:                 t.Params,
-			Name:                   t.FuncName,
-			IsSingle:               t.IsSingle,
-			IndexReaderParam:       t.IndexReaderParam,
-			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.FulltextSourceRef,
-			FulltextIndexRef:       t.FulltextIndexRef,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 		in.Limit = t.Limit
 
@@ -1201,22 +1194,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			VectorIndexScan: t.VectorIndexScan,
+			IndexSearchScan: t.IndexSearchScan,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:                  t.TableFunction.Attrs,
-				Rets:                   t.TableFunction.Rets,
-				Args:                   t.TableFunction.Args,
-				Params:                 t.TableFunction.Params,
-				Name:                   t.TableFunction.FuncName,
-				IsSingle:               t.TableFunction.IsSingle,
-				IndexReaderParam:       t.TableFunction.IndexReaderParam,
-				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+				Attrs:    t.TableFunction.Attrs,
+				Rets:     t.TableFunction.Rets,
+				Args:     t.TableFunction.Args,
+				Params:   t.TableFunction.Params,
+				Name:     t.TableFunction.FuncName,
+				IsSingle: t.TableFunction.IsSingle,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1692,10 +1681,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
-		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1857,7 +1842,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.VectorIndexScan = t.VectorIndexScan
+		arg.IndexSearchScan = t.IndexSearchScan
 		arg.VectorAttrs = t.VectorAttrs
 		arg.TxnOffset = int(t.TxnOffset)
 		if opr.TableFunction != nil {
@@ -1868,10 +1853,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		}
 		op = arg
 	case vm.MultiUpdate:
@@ -1997,6 +1978,11 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isDecimalStatisticalAggregate(agg) {
+			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
+				return err
+			}
+		}
 		if isVarianceAggregate(agg) &&
 			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
 			return moerr.NewNotSupportedNoCtx(
@@ -2090,6 +2076,60 @@ func orderedSetPercentileDiscUsesExtendedType(
 	default:
 		return true
 	}
+}
+
+// Native aggregate lowering removes the function expression and its result type.
+// Merge their explicit wire contracts into the same source/destination gates used
+// by expressions, including descriptors in child pipelines.
+func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return features, err
+	}
+	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	return features, nil
+}
+
+func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+	if p == nil {
+		return
+	}
+	for _, in := range p.InstructionList {
+		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) || in.Agg == nil {
+			continue
+		}
+		for _, wire := range in.Agg.Aggs {
+			if wire == nil {
+				continue
+			}
+			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			if isDecimalStatisticalAggregate(agg) {
+				features.DecimalStatisticalResultContracts = true
+				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
+					wire.ResultType == nil || types.T(wire.ResultType.Id) != types.T_float64
+			}
+		}
+	}
+	for _, child := range p.Children {
+		collectDecimalStatisticalDescriptorFeatures(child, features)
+	}
+}
+
+func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
+	args := agg.GetArgExpressions()
+	return isVarianceAggregate(agg) && len(args) == 1 && args[0] != nil &&
+		(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128)
+}
+
+func requireRemoteDecimalStatisticalResults(proc *process.Process) error {
+	version, known := int64(0), false
+	if proc != nil {
+		version, known = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if !known || version < defines.MORPCVersion113 {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	return nil
 }
 
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2224,7 +2264,7 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
@@ -2236,6 +2276,9 @@ func validateRemoteExpressionPipelineProtocol(
 func validateRemoteExpressionFeatures(proc *process.Process, features plan.RemoteExpressionFeatures) error {
 	if !features.Any() {
 		return nil
+	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
 	}
 	if features.InvalidTemporalResultContract {
 		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
@@ -2251,11 +2294,29 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
+		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
+	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
+	}
+	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")
+	}
+	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
+		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
+	}
+	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
+		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")
 	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
@@ -2870,6 +2931,10 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 			Expr:       a.GetArgExpressions(),
 			Config:     a.GetExtraConfig(),
 			ConfigType: a.GetConfigType(),
+		}
+		if isDecimalStatisticalAggregate(a) {
+			typ := types.T_float64.ToType().PlanType()
+			result[i].ResultType = &typ
 		}
 	}
 	return result

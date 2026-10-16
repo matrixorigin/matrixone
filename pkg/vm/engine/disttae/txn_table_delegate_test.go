@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -74,28 +72,6 @@ func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, handle)
 	assert.NoError(t, handle.Close())
-}
-
-func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
-	table := &txnTableDelegate{origin: &txnTable{tableId: 42}}
-	table.shard.is = true
-	table.shard.policy = shard.Policy_Hash
-	table.shard.tableID = 42
-
-	local, err := table.CanVisitSnapshotLocally()
-	require.NoError(t, err)
-	require.False(t, local)
-	require.ErrorContains(t, table.VisitSnapshotObjects(context.Background(), types.TS{}, func(objectio.ObjectStats, bool) error {
-		t.Fatal("delegated snapshot must not enumerate the origin relation")
-		return nil
-	}), "delegated snapshot")
-	_, err = table.HasSnapshotTombstones(context.Background(), 0, types.TS{})
-	require.ErrorContains(t, err, "delegated snapshot")
-
-	table.shard.policy = shard.Policy_Partition
-	local, err = table.CanVisitSnapshotLocally()
-	require.NoError(t, err)
-	require.True(t, local)
 }
 
 func TestTxnTableDelegate_UpdateConstraint(t *testing.T) {

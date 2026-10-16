@@ -1062,6 +1062,87 @@ func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWr
 }
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
+	err := newCastWithoutMediumIntBounds(parameters, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
+	if err != nil || !mode.isAssignment() || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
+		return err
+	}
+	return enforceMediumIntAssignmentBounds(
+		proc, *parameters[1].GetType(), result.GetResultVector(), length, selectList, mode)
+}
+
+func enforceMediumIntAssignmentBounds(
+	proc *process.Process,
+	targetType types.Type,
+	result *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+	mode castMode,
+) error {
+	min, max, ok := targetType.MediumIntBounds()
+	if !ok {
+		return nil
+	}
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	strict := !mode.isAssignment() || mode.strictStringWidth() ||
+		(mode == castModeAssignment && isStrictSqlMode(proc))
+
+	if targetType.Oid == types.T_int32 {
+		values := vector.MustFixedColWithTypeCheck[int32](result)
+		for row := 0; row < length; row++ {
+			if result.IsNull(uint64(row)) ||
+				(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+				continue
+			}
+			value := int64(values[row])
+			if value >= min && value <= max {
+				continue
+			}
+			if strict {
+				return moerr.NewOutOfRangef(ctx, "mediumint", "value '%d'", value)
+			}
+			if value < min {
+				values[row] = int32(min)
+			} else {
+				values[row] = int32(max)
+			}
+			appendMediumIntRangeWarning(proc, row)
+		}
+		return nil
+	}
+
+	values := vector.MustFixedColWithTypeCheck[uint32](result)
+	for row := 0; row < length; row++ {
+		if result.IsNull(uint64(row)) ||
+			(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+			continue
+		}
+		value := uint64(values[row])
+		if value <= uint64(max) {
+			continue
+		}
+		if strict {
+			return moerr.NewOutOfRangef(ctx, "mediumint unsigned", "value '%d'", value)
+		}
+		values[row] = uint32(max)
+		appendMediumIntRangeWarning(proc, row)
+	}
+	return nil
+}
+
+func appendMediumIntRangeWarning(proc *process.Process, row int) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
+			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", row+1))
+	}
+}
+
+func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
 	var err error
 	execProc := proc
 	// Cast Parameter1 as Type Parameter2
@@ -4927,7 +5008,11 @@ func timeToTime(
 		} else {
 			result := v
 			// Truncate to target scale if needed
-			if targetScale < 6 {
+			// A value at least one second beyond the endpoint cannot re-enter
+			// the assignment domain at any FSP. Preserve its sign before rounding
+			// can overflow int64; near-boundary values still normalize first.
+			const irrecoverableTime = types.MySQLTimeMax + types.MicroSecsPerSec
+			if targetScale < 6 && !(mode.isAssignment() && (v >= irrecoverableTime || v <= -irrecoverableTime)) {
 				if truncate {
 					result = result.TruncateToScaleWithoutRounding(targetScale)
 				} else {
@@ -4955,7 +5040,15 @@ func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Ti
 		appendTimeRangeWarning(proc, value, scale)
 		return types.ClampMySQLTimeForScale(value, scale), nil
 	}
-	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
+	var label string
+	if value == types.Time(math.MinInt64) {
+		// ClockFormat negates negative durations; MinInt64 has no positive
+		// int64 counterpart. Keep the original value truthful in write errors.
+		label = strconv.FormatInt(int64(value), 10) + " microseconds"
+	} else {
+		label = value.String2(scale)
+	}
+	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, label, value < 0, row)
 }
 
 func mysqlTimeOutOfRangeForCast(
@@ -8847,25 +8940,7 @@ func strToDate(proc *process.Process,
 // assignment/IGNORE diagnostics. Trimming here preserves ParseDatetime's
 // accepted trailing whitespace while still preventing scale-6 rounding.
 func truncateTemporalFractionForParse(s string, scale int32) string {
-	s = strings.TrimSpace(s)
-	dot := strings.LastIndexByte(s, '.')
-	if dot < 0 {
-		return s
-	}
-	end := dot + 1
-	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
-		end++
-	}
-	if end == dot+1 || end != len(s) {
-		return s
-	}
-	if end-dot-1 <= int(scale) {
-		return s
-	}
-	if scale == 0 {
-		return s[:dot]
-	}
-	return s[:dot+1+int(scale)]
+	return types.TruncateTemporalFractionForParse(s, scale)
 }
 
 func strToTime(

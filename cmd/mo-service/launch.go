@@ -79,8 +79,7 @@ func startCluster(
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	tnGCDisabled, err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC)
-	if err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
 	proxyOwns6001 := false
@@ -91,7 +90,7 @@ func startCluster(
 			return err
 		}
 	}
-	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, tnGCDisabled, proxyOwns6001); err != nil {
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, proxyOwns6001); err != nil {
 		return err
 	}
 	if *withProxy {
@@ -133,27 +132,25 @@ func startTNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
-) (bool, error) {
+) error {
 	if len(files) == 0 {
-		return false, moerr.NewBadConfig(context.Background(), "DN service config not set")
+		return moerr.NewBadConfig(context.Background(), "DN service config not set")
 	}
 
 	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_TN)
 	if err != nil {
-		return false, err
+		return err
 	}
-	gcDisabled := true
 	// mo boosting in standalone mode
 	for _, cfg := range configs {
 		cfg.IsStandalone = true
-		gcDisabled = gcDisabled && cfg.getTNServiceConfig().GCCfg.DisableGC
 	}
 	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return gcDisabled, nil
+	return nil
 }
 
 func startCNServiceCluster(
@@ -161,7 +158,6 @@ func startCNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
-	tnGCDisabled bool,
 	proxyOwns6001 ...bool,
 ) error {
 	if len(files) == 0 {
@@ -174,7 +170,6 @@ func startCNServiceCluster(
 	upstreams := make([]string, 0, len(files))
 
 	for _, cfg := range configs {
-		cfg.benchmarkTNNoGC = tnGCDisabled
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
 	}
 	for _, cfg := range configs {

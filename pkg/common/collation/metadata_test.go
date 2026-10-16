@@ -127,6 +127,43 @@ func TestDDLCompatibilityAliasesDoNotActivateSessionDomains(t *testing.T) {
 	require.Len(t, Definitions(), 12)
 }
 
+func TestSessionResolutionAdmitsOnlyImplementedNativeCollations(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity Identity
+		revision uint8
+	}{
+		{name: "utf8_general_ci", identity: UTF8MB4GeneralCIIdentity, revision: RevisionLegacy},
+		{name: "utf8mb4_0900_ai_ci", identity: UTF8MB4GeneralCIIdentity, revision: RevisionLegacy},
+		{name: "utf8_unicode_ci", identity: UTF8UnicodeCIIdentity, revision: RevisionV1},
+		{name: "utf8mb4_unicode_ci", identity: UTF8MB4UnicodeCIIdentity, revision: RevisionV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identity, revision, ok := ResolveSession(tc.name)
+			require.True(t, ok)
+			require.Equal(t, tc.identity, identity)
+			require.Equal(t, tc.revision, revision)
+			definition, err := EffectiveDefinition(uint32(identity), uint32(revision))
+			require.NoError(t, err)
+			require.True(t, IsProtocolAdmitted(definition))
+		})
+	}
+	for _, name := range []string{"utf8mb4_0900_bin", "ascii_bin", "gbk_bin", "unknown"} {
+		_, _, ok := ResolveSession(name)
+		require.False(t, ok, name)
+	}
+	for _, id := range []uint16{192, 224} {
+		definition, ok := LookupProtocol(id)
+		require.True(t, ok)
+		require.True(t, IsProtocolAdmitted(definition))
+	}
+	for _, id := range []uint16{28, 65, 87, 309} {
+		definition, ok := LookupProtocol(id)
+		require.True(t, ok)
+		require.False(t, IsProtocolAdmitted(definition), "protocol ID %d", id)
+	}
+}
+
 func TestCollationMetadataClosedDomain(t *testing.T) {
 	for _, pair := range [][2]uint32{{0, 1}, {4, 0}, {13, 1}, {255, 0}, {257, 0}, {3, 256}, {3, 2}} {
 		require.Error(t, ValidateMetadata(pair[0], pair[1]), "%v", pair)

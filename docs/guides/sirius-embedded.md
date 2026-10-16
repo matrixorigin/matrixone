@@ -12,14 +12,14 @@ Pixi profile:
 
 ```sh
 git submodule update --init --recursive
-git -C third_party/sirius fetch origin upstream-dev-merge
+git -C third_party/sirius fetch origin perf/embedded-mo-scan
 cd third_party/sirius
 pixi run --frozen -e mo mo-build-embedding-sdk
 cd ../..
 pixi run --frozen --manifest-path third_party/sirius/pixi.toml -e mo \
   make -j8 MO_SIRIUS=1 MO_CL_CUDA=1 \
   SIRIUS_SDK="$PWD/third_party/sirius/build/mo/extension/sirius/embedding-sdk" \
-  SIRIUS_MERGED_REF=origin/upstream-dev-merge
+  SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan
 ```
 
 The release build verifies that the pinned Sirius revision is contained in
@@ -40,11 +40,11 @@ room for every admitted input window and the result window.
 ```toml
 [cn.sirius]
 enabled = true
-backend = "embedded"
-input-mode = "mo"
 native-config-path = "/absolute/path/to/sirius.yaml"
 gpu-streams = 2
 max-waiting-queries = 16
+request-timeout = "15m"
+cleanup-timeout = "30s"
 ```
 
 Submit a SELECT through MO's normal MySQL endpoint:
@@ -53,12 +53,20 @@ Submit a SELECT through MO's normal MySQL endpoint:
 /*+ SIDECAR GPU */ SELECT n, s FROM example WHERE n > 0 ORDER BY n;
 ```
 
-The existing statement hint selects Sirius; it does not imply a sidecar process
-when the CN backend is `embedded`. Unsupported plans return an eligibility
-error instead of running on CPU or Flight. Wide exact-decimal support is tracked
-by [#28968](https://github.com/matrixorigin/matrixone/issues/28968); this reader
-integration is not an all-22 TPC-H readiness claim. Prepared-query offload,
-direct TAE, multi-CN producers and concurrent GPU queries are not enabled.
+The existing statement hint selects embedded Sirius. Unsupported plans return
+an eligibility error. Exact numeric support covers all 22 canonical TPC-H
+queries. Prepared-query offload, direct TAE, multi-CN producers and concurrent
+GPU queries are not enabled.
+
+These six fields are the complete CN configuration schema. Omitted timeouts
+use the values shown above. Unknown Sirius keys fail parsing even when
+`enabled = false`; remove old backend, input-mode and transport settings.
+
+Before upgrading an old Flight deployment, use its previous release to stop
+admission, drain consumers and finish lease recovery. Only start this release
+after the old owner has quiesced and recovered its state. This binary does not
+open or repair old journals. Rollback uses the previous binary and its matching
+configuration.
 
 ## Ownership and evidence
 

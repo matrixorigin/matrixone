@@ -890,13 +890,15 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
-// coalesceSignedUnsignedIntegerResult handles the integer domain that cannot
-// be represented by either signed or unsigned BIGINT. The ordinary overload
-// cost ranking prefers uint64 -> int64, so it must not be used when a uint64
-// branch and a signed integer branch are both present. Decimal128 with a
-// zero scale and twenty integral digits exactly covers that combined domain.
+// coalesceSignedUnsignedIntegerResult preserves mixed integer domains before
+// overload cost ranking can select a lossy conversion. BIGINT covers unsigned
+// integers up to uint32, but narrow unsigned casts can cost more than DOUBLE.
+// A uint64 branch with any signed integer instead needs decimal128 with twenty
+// integral digits, since neither signed nor unsigned BIGINT covers that domain.
 func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	hasSigned := false
+	hasInt64 := false
+	hasUnsigned := false
 	hasUint64 := false
 	for _, typ := range inputs {
 		switch {
@@ -905,7 +907,9 @@ func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Ty
 			// common type selected from value-bearing branches.
 		case typ.Oid.IsSignedInt():
 			hasSigned = true
+			hasInt64 = hasInt64 || typ.Oid == types.T_int64
 		case typ.Oid.IsInteger():
+			hasUnsigned = true
 			if typ.Oid == types.T_uint64 {
 				hasUint64 = true
 			}
@@ -913,12 +917,27 @@ func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Ty
 			return checkResult{}, false
 		}
 	}
-	if !hasSigned || !hasUint64 {
+	if !hasSigned || !hasUnsigned || (!hasUint64 && !hasInt64) {
 		return checkResult{}, false
 	}
 
-	target, overloadIndex, ok := coalesceDecimalResult(overloads, types.T_decimal128, inputs)
-	if !ok {
+	target := types.T_int64.ToType()
+	overloadIndex := -1
+	if hasUint64 {
+		var ok bool
+		target, overloadIndex, ok = coalesceDecimalResult(overloads, types.T_decimal128, inputs)
+		if !ok {
+			return newCheckResultWithFailure(failedFunctionParametersWrong), true
+		}
+	} else {
+		for i, over := range overloads {
+			if len(over.args) == 1 && over.args[0] == target.Oid {
+				overloadIndex = i
+				break
+			}
+		}
+	}
+	if overloadIndex == -1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong), true
 	}
 	castTypes := make([]types.Type, len(inputs))
@@ -1048,6 +1067,24 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				if len(over.args) == 1 && over.args[0] == retType.Oid {
 					return newCheckResultWithCast(i, castType)
 				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if retType, ok := CommonMediumIntType(inputs); ok {
+			for i, over := range overloads {
+				if len(over.args) != 1 || over.args[0] != retType.Oid {
+					continue
+				}
+				castTypes := make([]types.Type, len(inputs))
+				aligned := true
+				for j, input := range inputs {
+					castTypes[j] = retType
+					aligned = aligned && sameMediumIntCommonType(input, retType)
+				}
+				if aligned {
+					return newCheckResultWithSuccess(i)
+				}
+				return newCheckResultWithCast(i, castTypes)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
@@ -5315,6 +5352,9 @@ func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buf
 			buf.WriteRune(b)
 		}
 	}
+	if inPatternMatch {
+		buf.WriteByte('%')
+	}
 	return false, nil
 }
 
@@ -8320,7 +8360,7 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 			if memberPositions == nil || cachedDefinition != definition {
 				cachedDefinition = definition
 				memberPositions = make(map[string]uint64)
-				for i, member := range strings.Split(definition, ",") {
+				for i, member := range types.DecodeSetValues(definition) {
 					// Match types.ParseSet: SET definitions are normalized by
 					// trimming trailing ASCII spaces and folding case.
 					key := strings.ToLower(strings.TrimRight(member, " "))
@@ -8347,6 +8387,9 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	}
 
 	findInStrList := func(str, strlist string) Tr {
+		if strlist == "" {
+			return toResult(0)
+		}
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
 				return toResult(uint64(j + 1))
@@ -10701,7 +10744,8 @@ func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return overlayBinary("ST_UNION", geo.OpUnion)(ivecs, result, proc, length, selectList)
 }
 
-// StIntersection returns the polygon intersection of two areal geometries.
+// StIntersection returns the complete intersection of two areal geometries,
+// including exposed shared boundaries and isolated contact points.
 func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return overlayBinary("ST_INTERSECTION", geo.OpIntersection)(ivecs, result, proc, length, selectList)
 }

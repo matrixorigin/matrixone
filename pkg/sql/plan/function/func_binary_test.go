@@ -5757,6 +5757,43 @@ func TestFindInSetInt32ResultWrapper(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestFindInSetEmptyStringList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "needle", "", "", "", "", "needle", ""},
+				[]bool{false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "", ",", ",a", "a,", "a,,b", "", ""},
+				[]bool{false, false, false, false, false, false, true, false}),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{0, 0, 1, 1, 2, 2, 0, 0},
+			[]bool{false, false, false, false, false, false, true, true}),
+		FindInSet,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+func TestFindInSetEmptyStringListInt32ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "x", "", "a"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", ",a", "a,b"}, nil),
+		},
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{0, 0, 1, 1}, []bool{false, false, false, false}),
+		FindInSet,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+}
+
 func TestFindInSetSetDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	caseData := NewFunctionTestCase(
@@ -5784,11 +5821,11 @@ func TestFindInSetSetDefinitionEmptyMember(t *testing.T) {
 	caseData := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", ""}, nil),
-			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 2, 2}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{",a", ",a", "a,", "a,,b"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", "", "", ""}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 2, 2, 0, 1}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{",a", ",a", "a,", "a,,b", ",", ","}, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 2, 2}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 2, 2, 0, 1}, nil),
 		FindInSet,
 	)
 	succeed, info := caseData.RunAndFree()
@@ -12011,8 +12048,9 @@ func initTimeFormatTestCase() []tcTemp {
 	t5, _ := types.ParseTime("123:45:06", 6)
 	t6, _ := types.ParseTime("-123:45:06", 6)
 
-	return []tcTemp{
-		{
+	testCases := make([]tcTemp, 0, 18)
+	testCases = append(testCases,
+		tcTemp{
 			info: "test time_format - %H:%i:%s",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12024,7 +12062,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"15:30:45", "00:00:00", "23:59:59"},
 				[]bool{false, false, false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - %T",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12036,7 +12074,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"15:30:45", "123:45:06", "-123:45:06"},
 				[]bool{false, false, false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - negative time prefixes complete result",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12048,7 +12086,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"-elapsed=123:45:06"},
 				[]bool{false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - empty format returns null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12060,7 +12098,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"", ""},
 				[]bool{true, true}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - %h:%i:%s %p",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12072,7 +12110,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
 				[]bool{false, false, false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - %r",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12084,7 +12122,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
 				[]bool{false, false, false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - %H:%i:%s.%f",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12096,7 +12134,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{"23:59:59.123456", "12:34:56.789012"},
 				[]bool{false, false}),
 		},
-		{
+		tcTemp{
 			info: "test time_format - null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -12108,7 +12146,34 @@ func initTimeFormatTestCase() []tcTemp {
 				[]string{""},
 				[]bool{true}),
 		},
+	)
+	for _, tc := range []struct {
+		format   string
+		positive string
+		negative string
+	}{
+		{"%", "%", "-%"},
+		{"abc%", "abc%", "-abc%"},
+		{"%%", "%", "-%"},
+		{"%%%", "%%", "-%%"},
+		{"%%%%", "%%", "-%%"},
+		{"%H:%i:%s%", "15:30:45%", "-123:45:06%"},
+		{"%q", "q", "-q"},
+		{"%q%", "q%", "-q%"},
+		{"时刻%", "时刻%", "-时刻%"},
+		{"%界%", "界%", "-界%"},
+	} {
+		testCases = append(testCases, tcTemp{
+			info: "test time_format - percent termination: " + tc.format,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(), []types.Time{t1, t6}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.format}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{tc.positive, tc.negative}, nil),
+		})
 	}
+	return testCases
 }
 
 func TestTimeFormat(t *testing.T) {
@@ -12140,6 +12205,23 @@ func TestTimeFormatUsesPerRowFormat(t *testing.T) {
 			[]string{"03", "05", "07.000008"}, nil),
 		TimeFormat)
 	ok, info := caseWithRows.RunAndFree()
+	require.True(t, ok, info)
+
+	// Pending percent state and partial NULL results must not leak between rows.
+	caseWithPercentFormats := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(),
+				[]types.Time{times[0], times[1], times[2], times[0], times[0], times[0], times[0], times[0]},
+				[]bool{false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"%H%", "%H%M%", "%%%", "%%", "", "abc%", "%q%", "%"},
+				[]bool{false, false, false, false, false, true, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"03%", "", "%%", "%", "", "", "q%", ""},
+			[]bool{false, true, false, false, true, true, false, true}),
+		TimeFormat)
+	ok, info = caseWithPercentFormats.RunAndFree()
 	require.True(t, ok, info)
 
 	caseWithNullFormat := NewFunctionTestCase(proc,

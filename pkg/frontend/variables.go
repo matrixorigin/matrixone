@@ -1193,8 +1193,18 @@ func canonicalSystemVariableName(name string) string {
 		return transactionIsolationSystemVariable
 	case transactionReadOnlySystemVariableAlias:
 		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
 	}
 	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
@@ -3816,6 +3826,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("version_compile_zlib"),
 		Default:           "",
+	},
+	"window_partition_algorithm": {
+		Name:              "window_partition_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
+		Default:           "SORT",
 	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",

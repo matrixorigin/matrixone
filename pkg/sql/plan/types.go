@@ -390,6 +390,9 @@ type QueryBuilder struct {
 
 	qry     *plan.Query
 	compCtx CompilerContext
+	// Only buildValueScan owns this borrowed scope. Ordinary VALUES keep ctx nil;
+	// the actual subquery binder initializes it once and the owner restores it.
+	valuesSubqueryBinding valuesSubqueryBinding
 	// queryingSubscriptionMetadata is scoped to binding one account-wide
 	// subscription metadata branch. It complements CompilerContext's publisher
 	// routing state with subscriber-local table visibility.
@@ -506,7 +509,6 @@ type QueryBuilder struct {
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
-	isSkipResolveTableDef bool
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
@@ -521,7 +523,7 @@ type QueryBuilder struct {
 	jsonProbeFtNodes map[int32]bool
 
 	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
-	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// async index must SELF-COMPLETE: the fulltext2 search reader binds the generation it actually
 	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
 	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
 	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by
@@ -1167,8 +1169,8 @@ type boundColumn struct {
 type DefaultBinder struct {
 	baseBinder
 	typ           Type
-	cols          []string
-	colTypes      []Type
+	cols          []string // Name-only SHOW scope; mutually exclusive with columns.
+	columns       []*ColDef
 	allowSubquery bool
 }
 

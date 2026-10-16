@@ -148,6 +148,8 @@ func constructCreateTableSQL(
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
 	colIdToOriginName := make(map[uint64]string)
+	var columnSQL strings.Builder
+	columnSQL.WriteString(createStr)
 	for _, col := range tableDef.Cols {
 		if col.Hidden {
 			continue
@@ -238,12 +240,13 @@ func constructCreateTableSQL(
 			buf.WriteString("'")
 		}
 
-		createStr += buf.String()
+		columnSQL.Write(buf.Bytes())
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, col.Name)
 		}
 	}
+	createStr = columnSQL.String()
 
 	// If it is a composite primary key, get the component columns of the composite primary key
 	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
@@ -1245,6 +1248,9 @@ func formatColTypeForSQLMode(colType plan.Type, sqlMode string) string {
 			name = "SET"
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
+		if isSetPlanType(&colType) {
+			elements = types.DecodeSetValues(colType.Enumvalues)
+		}
 		for i := range elements {
 			elements[i] = formatStrLitForSQLMode(elements[i], sqlMode)
 		}

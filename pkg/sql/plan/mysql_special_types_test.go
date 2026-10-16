@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,6 +50,8 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"}
+	emptyEnum := plan.Type{Id: int32(types.T_enum)}
+	emptySet := plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}
 	yearType := plan.Type{Id: int32(types.T_year)}
 
 	for _, tc := range []struct {
@@ -59,13 +62,17 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 		wantSet  uint64
 		handled  bool
 	}{
+		{"empty enum label", emptyEnum, tree.NewNumVal("", "", false, tree.P_char), 1, 0, true},
+		{"empty enum overflow", emptyEnum, tree.NewNumVal(uint64(65537), "65537", false, tree.P_uint64), 0, 0, true},
+		{"empty set bitmap", emptySet, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), 0, 1, true},
+		{"plain uint64", plan.Type{Id: int32(types.T_uint64)}, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), 0, 0, false},
 		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), 2, 0, true},
 		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), 0, 0, true},
 		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), 1, 0, true},
 		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), 0, 0, true},
 		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), 0, 1, true},
 		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), 0, 3, true},
-		{"set negative numeric becomes empty", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), 0, 0, true},
+		{"set negative numeric keeps declared bits", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), 0, 7, true},
 		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), 0, 0, true},
 		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), 0, 0, false},
 		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), 0, 0, false},
@@ -92,7 +99,12 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	require.False(t, mysqlYearLiteralIsValid(tree.NewNumVal(uint64(^uint64(0)), "18446744073709551615", false, tree.P_uint64)))
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal("ignored", "ignored", false, tree.P_hexnum)))
 	require.Equal(t, uint64(7), mysqlSetValidBitmap("x,y,z"))
-	require.Equal(t, ^uint64(0), mysqlSetValidBitmap(strings.Repeat("x,", types.MaxSetMembers-1)+"x"))
+	labels := make([]string, types.MaxSetMembers)
+	for i := range labels {
+		labels[i] = strconv.Itoa(i)
+	}
+	require.Equal(t, ^uint64(0), mysqlSetValidBitmap(strings.Join(labels, ",")))
+	require.Equal(t, uint64(1), mysqlSetValidBitmap(","))
 }
 
 func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
@@ -114,15 +126,59 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	require.True(t, mysqlSpecialNumericTypeReversible(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
 	require.False(t, mysqlSpecialNumericTypeReversible(ambiguousSet))
+	singletonSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}
+	require.True(t, setTypeHasEmptyMember(singletonSet))
+	require.False(t, mysqlSpecialOrderTypeReversible(singletonSet))
+	require.False(t, mysqlSpecialNumericTypeReversible(&plan.Type{Id: int32(types.T_enum)}))
 	require.True(t, setTypeHasEmptyMember(emptyFirstSet))
 	require.True(t, setTypeHasEmptyMember(emptyMiddleSet))
 	require.True(t, setTypeHasEmptyMember(ambiguousSet))
 	require.False(t, setTypeHasEmptyMember(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
-	require.Equal(t, enumFoldKey("K"), enumFoldKey("K"))
+	require.Equal(t, equalFoldKey("K"), equalFoldKey("K"))
 	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
 	require.False(t, mysqlSpecialOrderTypesCompatible(enum, set))
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
+}
+
+func TestFuncCastForTypedArrayMediumIntKeepsBoundsValidation(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		typeName  string
+		sourceTyp plan.Type
+		wantCast  bool
+	}{
+		{
+			name:      "JSON source to MEDIUMINT array",
+			typeName:  "array(mediumint)",
+			sourceTyp: plan.Type{Id: int32(types.T_json)},
+			wantCast:  true,
+		},
+		{
+			name:      "same MEDIUMINT array type still validates legacy values",
+			typeName:  "array(mediumint unsigned)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(mediumint unsigned)"},
+			wantCast:  true,
+		},
+		{
+			name:      "same ordinary INT array keeps existing elision",
+			typeName:  "array(int)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(int)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := plan.Type{Id: int32(types.T_json), Enumvalues: tc.typeName}
+			source := &plan.Expr{Typ: tc.sourceTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			got, err := funcCastForTypedArrayType(ctx, source, target)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantCast, got.GetF() != nil)
+			if tc.wantCast {
+				require.Equal(t, moJsonCastToArrayFun, got.GetF().GetFunc().GetObjName())
+				require.Equal(t, tc.typeName, got.Typ.GetEnumvalues())
+			}
+		})
+	}
 }
 
 func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
@@ -150,26 +206,95 @@ func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBitwiseAggregateSetBindingUsesStoredBitmap(t *testing.T) {
+func TestSumAvgRawSetBindingUsesDoubleDomain(t *testing.T) {
 	ctx := context.Background()
-	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}
-	bitmap := &plan.Expr{
-		Typ:  setType,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	for _, name := range []string{"sum", "avg"} {
+		for _, members := range []string{"z,a,m", ""} {
+			label := "raw SET"
+			if members == "" {
+				label = "ordinary UINT64"
+			}
+			t.Run(name+"/"+label, func(t *testing.T) {
+				source := &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: members},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				original := DeepCopyExpr(source)
+				args, err := (*baseBinder)(nil).useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+					ctx, name, []*plan.Expr{source})
+				require.NoError(t, err)
+				require.Len(t, args, 1)
+				require.True(t, proto.Equal(original, source), "binding must not mutate caller-owned SET identity")
+				bitmap := args[0]
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bitmap.Typ.Id)
+					require.True(t, isCastOverload(bitmap, 0))
+					bitmap = bitmap.GetF().Args[0]
+					require.NotSame(t, source, bitmap)
+				} else {
+					require.Same(t, source, bitmap)
+				}
+				require.Equal(t, int32(types.T_uint64), bitmap.Typ.Id)
+				require.Empty(t, bitmap.Typ.Enumvalues)
+				require.Equal(t, source.GetCol(), bitmap.GetCol())
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				require.NoError(t, err)
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bound.Typ.Id)
+				} else {
+					require.NotEqual(t, int32(types.T_float64), bound.Typ.Id)
+				}
+			})
+		}
 	}
-	display, err := makeEnumOrSetDisplayValue(ctx, bitmap)
-	require.NoError(t, err)
+}
 
-	bound, err := BindFuncExprImplByPlanExpr(ctx, "bit_and", []*plan.Expr{display})
-	require.NoError(t, err)
-	fn := bound.GetF()
-	require.NotNil(t, fn)
-	require.Len(t, fn.Args, 1)
-	require.Equal(t, int32(types.T_uint64), fn.Args[0].Typ.Id)
-	require.Empty(t, fn.Args[0].Typ.Enumvalues)
-	require.NotNil(t, fn.Args[0].GetCol())
-	require.Equal(t, int32(1), fn.Args[0].GetCol().RelPos)
-	require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
+func TestBitwiseAggregateBindingUsesStoredValues(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name    string
+			typ     types.T
+			display bool
+		}{
+			{"set display", types.T_uint64, true},
+			{"enum display", types.T_enum, true},
+			{"raw enum", types.T_enum, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				storage := &plan.Expr{
+					Typ:  plan.Type{Id: int32(tc.typ), Enumvalues: "z,a,m"},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				arg := storage
+				if tc.display {
+					var err error
+					arg, err = makeEnumOrSetDisplayValue(ctx, storage)
+					require.NoError(t, err)
+				}
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_uint64), bound.Typ.Id)
+				fn := bound.GetF()
+				require.NotNil(t, fn)
+				require.Len(t, fn.Args, 1)
+				require.Empty(t, fn.Args[0].Typ.Enumvalues)
+				require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
+				raw := fn.Args[0]
+				if tc.typ == types.T_enum {
+					require.Equal(t, int32(types.T_uint16), raw.Typ.Id)
+					require.True(t, isCastOverload(raw, 0))
+					raw = raw.GetF().Args[0]
+					require.Equal(t, int32(types.T_enum), raw.Typ.Id)
+				} else {
+					require.Equal(t, int32(types.T_uint64), raw.Typ.Id)
+				}
+				require.NotNil(t, raw.GetCol())
+				require.Equal(t, int32(1), raw.GetCol().RelPos)
+				require.Equal(t, int32(0), raw.GetCol().ColPos)
+			})
+		}
+	}
 }
 
 func TestFindInSetRewriteHelpersRejectInvalidProvenance(t *testing.T) {

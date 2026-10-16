@@ -578,11 +578,57 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
 func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+}
+
+func validateExplainOptions(ctx context.Context, options []tree.OptionElem, mode string) error {
+	seen := make(map[string]struct{}, len(options))
+	formatJSON := false
+	analyze := false
+	phyplan := false
+	check := false
+	for _, option := range options {
+		name := strings.ToLower(strings.TrimSpace(option.Name))
+		if _, exists := seen[name]; exists {
+			return moerr.NewInvalidInputf(ctx, "duplicate explain option '%s'", option.Name)
+		}
+		seen[name] = struct{}{}
+
+		value := strings.Trim(strings.TrimSpace(option.Value), "'\"")
+		switch name {
+		case tree.FormatOption:
+			formatJSON = strings.EqualFold(value, "JSON")
+		case tree.AnalyzeOption:
+			analyze = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.PhyPlanOption:
+			phyplan = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.CheckOption:
+			check = true
+		}
+	}
+	if !formatJSON {
+		return nil
+	}
+	if mode == "ANALYZE" || analyze {
+		return moerr.NewNotSupported(ctx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+	}
+	if mode == "PHYPLAN" || phyplan {
+		return moerr.NewNotSupported(ctx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+	}
+	if check {
+		return moerr.NewNotSupported(ctx, "EXPLAIN FORMAT=JSON does not support CHECK")
+	}
+	return nil
 }
 
 func selectHasExportParam(stmt tree.SelectStatement) bool {
@@ -660,6 +706,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		applySQLSelectLimit(stmt.Select, queryPlan)
 		return queryPlan, nil
 	case *tree.ExplainStmt:
+		if err := validateExplainOptions(ctx.GetContext(), stmt.Options, ""); err != nil {
+			return nil, err
+		}
 		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 		if err != nil {
 			return nil, err
@@ -1015,8 +1064,8 @@ func findResultColumnSourceAtNode(
 		return nil
 	}
 
-	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		// VECTOR_INDEX_SCAN's TableDef describes the synthetic result schema
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		// INDEX_SEARCH_SCAN's TableDef describes the synthetic result schema
 		// (pkid, score, and optional included columns), not the source table.
 		// Resolve its output slots through the typed vector-index specification
 		// so a pkid or included column carries the same metadata as a regular
@@ -1031,7 +1080,7 @@ func findResultColumnSourceAtNode(
 				vectorRef = sourceExpr.GetCol()
 			}
 		}
-		return resultColumnSourceFromVectorIndexScan(node.VectorIndexScan, node.TableDef, vectorRef.ColPos)
+		return resultColumnSourceFromIndexSearchScan(node.IndexSearchScan, node.TableDef, vectorRef.ColPos)
 	}
 
 	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {

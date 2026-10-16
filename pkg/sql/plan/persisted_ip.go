@@ -92,6 +92,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if features.InvalidDecimalStatisticalResultContract {
+		return 0, moerr.NewNotSupportedNoCtx("persisted decimal statistical result contract requires rebinding")
+	}
 	if features.InvalidTemporalResultContract {
 		return 0, moerr.NewNotSupportedNoCtx("persisted temporal result vector contract mismatch requires rebinding")
 	}
@@ -110,6 +113,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.IntegerParameterCoercion && requiredVersion < defines.MORPCVersion85 {
 		requiredVersion = defines.MORPCVersion85
+	}
+	if features.MediumIntAssignmentBounds && requiredVersion < defines.MORPCVersion110 {
+		requiredVersion = defines.MORPCVersion110
 	}
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
@@ -133,7 +139,19 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = defines.MORPCVersion98
 	}
 	if features.JSONInputContracts || features.YearBitCast {
-		requiredVersion = defines.MORPCVersion101
+		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
+	}
+	if features.DateNumericResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.LeastGreatestCollationSemantics {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.DecimalStatisticalResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
 	return requiredVersion, nil
 }

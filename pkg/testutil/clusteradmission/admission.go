@@ -39,7 +39,7 @@ const (
 	ProcessPoolSizeEnv = "MO_TEST_CLUSTER_ADMISSION_POOL_SIZE"
 )
 
-var processAdmission = newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
+var processAdmission = NewManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
 
 // Mode combines independent permissions for same-process cluster borrowing
 // and bounded cross-process admission. Process scheduling never permits local
@@ -57,7 +57,7 @@ const (
 // last active lease is released, or automatically when the process exits.
 type Lease struct {
 	mu         sync.Mutex
-	manager    *manager
+	manager    *Manager
 	released   bool
 	requested  time.Time
 	acquired   time.Time
@@ -84,7 +84,7 @@ type Timing struct {
 // Combine both permissions for intentional borrowing in a pooled process.
 // Borrowing retains the active lease's lock mode and does not acquire a slot.
 func Acquire(ctx context.Context, mode Mode) (*Lease, error) {
-	return processAdmission.acquire(ctx, mode)
+	return processAdmission.Acquire(ctx, mode)
 }
 
 // Release relinquishes this cluster's share of the process admission.
@@ -137,7 +137,10 @@ func (l *Lease) timingLocked(now time.Time) Timing {
 	return timing
 }
 
-type manager struct {
+// Manager owns admission leases for one lock namespace. The package-level
+// Acquire shares the runner namespace; lifecycle unit tests can use a private
+// temporary path without reserving capacity from real test clusters.
+type Manager struct {
 	mu         sync.Mutex
 	path       string
 	retryDelay time.Duration
@@ -146,11 +149,15 @@ type manager struct {
 	references int
 }
 
-func newManager(path string, delay time.Duration) *manager {
-	return &manager{path: path, retryDelay: delay}
+// NewManager creates an independent admission owner. Managers using the same
+// path coordinate through the same locks, including across processes.
+func NewManager(path string, delay time.Duration) *Manager {
+	return &Manager{path: path, retryDelay: delay}
 }
 
-func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
+// Acquire grants a lease in this manager's namespace using the same admission
+// and release rules as the package-level Acquire.
+func (m *Manager) Acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	if ctx == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cluster admission requires a context")
 	}
@@ -186,7 +193,7 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 }
 
-func (m *manager) acquireFromProcessPool(ctx context.Context, requested time.Time) (*Lease, error) {
+func (m *Manager) acquireFromProcessPool(ctx context.Context, requested time.Time) (*Lease, error) {
 	poolSize, err := processPoolSize()
 	if err != nil {
 		return nil, err
@@ -264,7 +271,7 @@ func waitAdmissionRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (m *manager) release() error {
+func (m *Manager) release() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.references <= 0 || m.lock == nil {

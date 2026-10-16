@@ -716,11 +716,18 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		want string
 	}{
 		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"single empty enum", TableColumn{SQLType: "ENUM"}, "ENUM('')"},
+		{"single empty set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: ","}, "SET('')"},
+		{"plain uint64", TableColumn{SQLType: "BIGINT UNSIGNED"}, "BIGINT UNSIGNED"},
 		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
 		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
-		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
-		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
-		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"enum raw quotes", TableColumn{SQLType: "ENUM", EnumValues: `a,'b',"d"`}, `ENUM('a','''b''','"d"')`},
+		{"enum SQL-like member", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('ENUM(''x'')')"},
+		{"set parentheses in members", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('(x','y)')"},
+		{"enum mixed empty members", TableColumn{SQLType: "ENUM", EnumValues: ", x,"}, "ENUM('',' x','')"},
+		{"set leading whitespace", TableColumn{SQLType: "SET", EnumValues: " x,y"}, "SET(' x','y')"},
+		{"enum whitespace member", TableColumn{SQLType: "ENUM", EnumValues: " "}, "ENUM(' ')"},
+		{"set backslash member", TableColumn{SQLType: "SET", EnumValues: `a\b`}, `SET('a\\b')`},
 		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
 	}
 	for _, tc := range cases {
@@ -729,10 +736,6 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
-	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
-	require.True(t, isQuotedSQLString(`"x"`))
-	require.False(t, isQuotedSQLString(`x`))
 }
 
 func TestAppendColumnDDLAttributesBranches(t *testing.T) {
@@ -2425,6 +2428,29 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t
 		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `sink_file_path`(`sink_file_path`);",
 		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `source_file_path`(`source_file_path`);",
 	}, got)
+}
+
+func TestDecodeMoColumnEncodedSQLType_TextBlobFamily(t *testing.T) {
+	for _, tc := range []struct {
+		typ  types.Type
+		want string
+	}{
+		{types.New(types.T_text, 0, 0), "TEXT"},
+		{types.New(types.T_text, types.MaxTinyTextLen, 0), "TINYTEXT"},
+		{types.New(types.T_text, types.MaxMediumTextLen, 0), "MEDIUMTEXT"},
+		{types.New(types.T_text, types.MaxLongTextLen, 0), "LONGTEXT"},
+		{types.New(types.T_blob, types.MaxTinyTextLen, 0), "TINYBLOB"},
+		{types.New(types.T_blob, types.MaxStringSize, 0), "BLOB"},
+		{types.New(types.T_blob, types.MaxMediumTextLen, 0), "MEDIUMBLOB"},
+		{types.New(types.T_blob, types.MaxLongTextLen, 0), "LONGBLOB"},
+		{types.New(types.T_blob, 0, 0), "LONGBLOB"},
+	} {
+		t.Run(tc.want+fmt.Sprint(tc.typ.Width), func(t *testing.T) {
+			got, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, tc.typ))
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -439,6 +440,8 @@ func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.CastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.CollateExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.BitCastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.IntervalExpr:
@@ -800,17 +803,17 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
-		return vector.GetArrayAt[float32](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[float32](vec, 0)), nil
 	case types.T_array_float64:
-		return vector.GetArrayAt[float64](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[float64](vec, 0)), nil
 	case types.T_array_bf16:
-		return vector.GetArrayAt[types.BF16](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[types.BF16](vec, 0)), nil
 	case types.T_array_float16:
-		return vector.GetArrayAt[types.Float16](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[types.Float16](vec, 0)), nil
 	case types.T_array_int8:
-		return vector.GetArrayAt[int8](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[int8](vec, 0)), nil
 	case types.T_array_uint8:
-		return vector.GetArrayAt[uint8](vec, 0), nil
+		return slices.Clone(vector.GetArrayAt[uint8](vec, 0)), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
@@ -2074,6 +2077,18 @@ func mysqlDecimalType(precision, scale int32) types.Type {
 	}
 }
 
+// convertEngineColumnTypeToMysqlType preserves the logical integer subtype
+// when the physical vector OID is shared by INT and MEDIUMINT.
+func convertEngineColumnTypeToMysqlType(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	if typ.IsMediumInt() {
+		col.SetColumnType(defines.MYSQL_TYPE_INT24)
+	}
+	return nil
+}
+
 func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
 	if err := typ.ValidateCollation(); err != nil {
 		return err
@@ -2083,8 +2098,15 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 			return err
 		}
 	}
-	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
+	}
+	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
+		setMysqlColumnTypeMetadata(col, typ)
+		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+		return nil
 	}
 	if typ.Oid == types.T_blob {
 		length := uint32(math.MaxUint32)
@@ -2155,6 +2177,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.IsMediumInt() {
+		// ColumnDefinition41 uses MySQL's default MEDIUMINT display widths:
+		// 9 characters for signed values and 8 for unsigned values.
+		if col.IsSigned() {
+			col.SetLength(9)
+		} else {
+			col.SetLength(8)
+		}
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(4)
@@ -2424,6 +2454,22 @@ func hasSQLSourceTag(sql string) bool {
 	return strings.Contains(sql, cloudUserTag) || strings.Contains(sql, cloudNoUserTag) || strings.Contains(sql, saveResultTag)
 }
 
+// Source scans see ordinary comments, which are lexical space between a
+// qualification period and its identifier. Keep the previous significant token.
+func scanSQLSourceToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanWithCommentsAfterDot()
+	} else {
+		token, value = scanner.ScanWithComments()
+	}
+	if token != mysql.COMMENT {
+		*previousToken = token
+	}
+	return token, value
+}
+
 func statementSQLSource(sql, sqlMode string) string {
 	if !hasSQLSourceTag(sql) {
 		return constant.ExternSql
@@ -2431,8 +2477,9 @@ func statementSQLSource(sql, sqlMode string) string {
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	source := constant.ExternSql
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			source = sourceWithComment(source, comment)
 		}
@@ -2445,7 +2492,7 @@ func statementSQLSource(sql, sqlMode string) string {
 // sqlSourcesByFragment scans the whole lexical stream: a grammar fragment can
 // start inside a MySQL executable comment. Unfiltered fragments are ordered
 // trimmed slices of sql, so recovering their ends needs no second SQL parser.
-func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string, internalSource bool) ([]string, error) {
+func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []mysql.SQLFragment, internalSource bool) ([]string, error) {
 	scanSources := !internalSource && hasSQLSourceTag(sql)
 	var ends []int
 	if scanSources {
@@ -2458,13 +2505,10 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 		if internalSource {
 			sources[i] = constant.InternalSql
 		}
-		if fragment != "" {
-			offset := strings.Index(sql[cursor:], fragment)
-			if offset < 0 {
-				return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
-			}
-			cursor += offset + len(fragment)
+		if fragment.Start < cursor || !fragment.MatchesSource(sql) {
+			return nil, moerr.NewInternalError(ctx, "SQL fragment is not in its input")
 		}
+		cursor = fragment.End
 		if scanSources {
 			ends[i] = cursor
 		}
@@ -2475,8 +2519,9 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	i := 0
+	previousToken := 0
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		if token == mysql.COMMENT {
 			start := scanner.Pos - len(comment)
 			for i < len(ends) && start >= ends[i] {
@@ -2502,12 +2547,13 @@ func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	var records, sources []string
 	start := 0
 	source := constant.ExternSql
+	previousToken := 0
 	appendRecord := func(end int) {
 		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
 		sources = append(sources, source)
 	}
 	for {
-		token, comment := scanner.ScanWithComments()
+		token, comment := scanSQLSourceToken(scanner, &previousToken)
 		switch token {
 		case mysql.COMMENT:
 			source = sourceWithComment(source, comment)

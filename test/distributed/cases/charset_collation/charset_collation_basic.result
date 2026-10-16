@@ -166,6 +166,10 @@ INSERT INTO t_utf8 VALUES (1, '😀', '😀');
 SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name)[12,800,0]  ¦  HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀
 F09F9880  ¦  F09F9880  ¦  4  ¦  1
+SELECT HEX('😀' COLLATE utf8_general_ci), HEX(name COLLATE utf8mb3_general_ci),
+HEX('😀' COLLATE utf8_bin), HEX(name_mb3 COLLATE utf8mb3_bin) FROM t_utf8;
+➤ HEX((😀) collate utf8_general_ci)[12,8,0]  ¦  HEX((name) collate utf8mb3_general_ci)[12,800,0]  ¦  HEX((😀) collate utf8_bin)[12,8,0]  ¦  HEX((name_mb3) collate utf8mb3_bin)[12,8,0]  𝄀
+F09F9880  ¦  F09F9880  ¦  F09F9880  ¦  F09F9880
 ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀
@@ -910,9 +914,11 @@ FROM t_binary_default_general_columns;
 ➤ min_create[12,100,0]  ¦  max_create[12,100,0]  ¦  min_add[12,100,0]  ¦  max_add[12,100,0]  ¦  min_modify[12,100,0]  ¦  max_modify[12,100,0]  𝄀
 a  ¦  B  ¦  a  ¦  B  ¦  a  ¦  B
 SELECT CAST('test' AS CHAR CHARACTER SET utf8mb4);
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " CHARACTER SET utf8mb4);";
+➤ cast(test as char character set utf8mb4)[12,4,0]  𝄀
+test
 SELECT CAST('你好' AS CHAR(10) CHARACTER SET utf8mb4);
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " CHARACTER SET utf8mb4);";
+➤ cast(你好 as char(10) character set utf8mb4)[1,10,0]  𝄀
+你好
 CREATE TABLE t_edge_cases (
 id INT PRIMARY KEY,
 data VARCHAR(200)
