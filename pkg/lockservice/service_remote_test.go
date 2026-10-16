@@ -2674,14 +2674,16 @@ func TestInactiveRemoteRouteCacheDoesNotDriveHeartbeat(t *testing.T) {
 			// remove s1
 			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
 			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
-			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			futures, binds := keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Empty(t, futures)
+			require.Empty(t, binds)
 
-			// An inactive route may remain cached. It is validated lazily on the
-			// next use and must not keep an owner-side lease alive by itself.
+			// An idle route never keeps an owner-side lease alive. Once its CN
+			// leaves inventory, the background keeper also discards that route
+			// before the next transaction can record the departed generation.
 			v, err := s2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			require.NotNil(t, v)
-			require.Equal(t, s1.serviceID, v.getBind().ServiceID)
+			require.Nil(t, v)
 		},
 	)
 }

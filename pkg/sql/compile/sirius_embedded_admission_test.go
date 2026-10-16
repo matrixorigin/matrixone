@@ -34,7 +34,7 @@ import (
 )
 
 type embeddedAdmissionRecorder struct {
-	SiriusBackend
+	SiriusEngine
 	request      SiriusPrepareRequest
 	err          error
 	execution    SiriusExecution
@@ -46,6 +46,8 @@ func (b *embeddedAdmissionRecorder) Capabilities() uint64 {
 	b.capReads++
 	return b.capabilities
 }
+
+func (*embeddedAdmissionRecorder) Accepting() bool { return true }
 
 func (b *embeddedAdmissionRecorder) Prepare(_ context.Context, request SiriusPrepareRequest) (SiriusExecution, error) {
 	b.request = request
@@ -67,7 +69,7 @@ func TestEmbeddedSiriusAdmissionBindsWithoutStartingReaders(t *testing.T) {
 	eng := &readerPathCaptureEngine{}
 	execution := &siriusExecutionStub{}
 	backend := &embeddedAdmissionRecorder{execution: execution}
-	runtime := &SiriusRuntime{EmbeddedMO: true, Backend: backend, CleanupTimeout: time.Second, RequestTimeout: time.Minute}
+	runtime := &SiriusRuntime{Engine: backend, CleanupTimeout: time.Second, RequestTimeout: time.Minute}
 	c := &Compile{proc: proc, e: eng, ncpu: 2, TxnOffset: 3}
 	ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 7), time.Second)
 	defer cancel()
