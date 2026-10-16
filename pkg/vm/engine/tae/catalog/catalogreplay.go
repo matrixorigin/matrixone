@@ -668,6 +668,11 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 			obj.objData.TryUpgrade()
 		}
 	}
+	// A first-seen delete record creates both versions before initializing data.
+	// Both versions must share the same object, as in onReplayCheckpointObject.
+	if next := obj.GetNextVersion(); next != nil {
+		next.objData = obj.objData
+	}
 }
 func (catalog *Catalog) OnReplayObjectBatch(
 	replayer ObjectListReplayer,

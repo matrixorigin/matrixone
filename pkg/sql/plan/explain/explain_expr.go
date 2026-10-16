@@ -670,7 +670,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		}
 		buf.WriteString(")")
 	case function.UNKNOW_KIND_FUNCTION:
-		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
+		// Only the sequence functions (NEXTVAL/SETVAL/CURRVAL/LASTVAL) use
+		// this layout. They are ordinary calls from EXPLAIN's point of view;
+		// failing here rejected valid DISTINCT/GROUP BY plans (#30366).
+		buf.WriteString(funcExpr.Func.GetObjName() + "(")
+		for i := range funcExpr.Args {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			err = describeExpr(ctx, funcExpr.Args[i], options, buf)
+			if err != nil {
+				return err
+			}
+		}
+		buf.WriteString(")")
 	}
 	return nil
 }

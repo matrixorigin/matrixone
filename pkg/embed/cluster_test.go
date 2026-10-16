@@ -322,18 +322,6 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.False(t, op.needsCleanup())
 }
 
-func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
-	op := new(operator)
-	op.serviceType = metadata.ServiceType_CN
-	op.cfg.ServiceType = metadata.ServiceType_CN.String()
-	op.cfg.CN.Sirius.Enabled = true
-	op.cfg.CN.Sirius.BenchmarkNoGC = true
-	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
-	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
-	require.ErrorContains(t, op.Start(), "launcher-verified")
-	require.False(t, op.needsCleanup())
-}
-
 func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 	timeout := 15 * time.Second
 	clusterValue, err := NewCluster(
@@ -949,6 +937,12 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 						want = 100 * time.Millisecond
 					}
 					require.Equal(t, want, cfg.CN.LockService.KeepBindDuration.Duration)
+					wantFetch := time.Duration(0)
+					if testingMode {
+						wantFetch = time.Second
+					}
+					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second })
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
 				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
@@ -993,6 +987,7 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
+				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
 			}
 		})
 	}

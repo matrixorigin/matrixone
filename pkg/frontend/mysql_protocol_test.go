@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"reflect"
@@ -2396,9 +2397,13 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		allocator := NewLeakCheckAllocator()
+		t.Cleanup(func() { require.True(t, allocator.CheckBalance()) })
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", WithIOSessionAllocator(allocator))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, ioses.Close()) }()
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+		defer proto.Close()
 
 		proto.beginPacket()
 		convey.So(err, convey.ShouldBeNil)
@@ -2415,11 +2420,16 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		allocator := NewLeakCheckAllocator()
+		t.Cleanup(func() { require.True(t, allocator.CheckBalance()) })
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", WithIOSessionAllocator(allocator))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, ioses.Close()) }()
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+		defer proto.Close()
 		// fill proto.ses
 		ses := NewSession(context.TODO(), "", proto, nil)
+		defer ses.Close()
 		proto.ses = ses
 
 		err = proto.append(make([]byte, MaxPayloadSize)...)
@@ -2440,11 +2450,16 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		allocator := NewLeakCheckAllocator()
+		t.Cleanup(func() { require.True(t, allocator.CheckBalance()) })
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", WithIOSessionAllocator(allocator))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, ioses.Close()) }()
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+		defer proto.Close()
 		// fill proto.ses
 		ses := NewSession(context.TODO(), "", proto, nil)
+		defer ses.Close()
 		proto.ses = ses
 
 		proto.beginPacket()
@@ -2464,66 +2479,45 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		allocator := NewLeakCheckAllocator()
+		t.Cleanup(func() { require.True(t, allocator.CheckBalance()) })
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", WithIOSessionAllocator(allocator))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, ioses.Close()) }()
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+		defer proto.Close()
 
 		proto.tcpConn.maxBytesToFlush = 1024 * 1024 * 1024
-		mysqlPack := func(payload []byte) []byte {
-			n := len(payload)
-			var curLen int
-			var header [4]byte
-			var data []byte = nil
-			var sequenceId byte = 0
-			for i := 0; i < n; i += curLen {
-				curLen = min(int(MaxPayloadSize), n-i)
-				binary.LittleEndian.PutUint32(header[:], uint32(curLen))
-				header[3] = sequenceId
-				sequenceId++
-				data = append(data, header[:]...)
-				data = append(data, payload[i:i+curLen]...)
-				if i+curLen == n && curLen == int(MaxPayloadSize) {
-					binary.LittleEndian.PutUint32(header[:], uint32(0))
-					header[3] = sequenceId
-					sequenceId++
-					data = append(data, header[:]...)
-				}
-			}
-			return data
-		}
-
-		data16MB := func(cnt int) []byte {
-			data := make([]byte, cnt*int(MaxPayloadSize))
-			return data
-		}
 
 		type kase struct {
-			data []byte
+			size int
 			len  int
+			seq  byte
 		}
 
 		kases := []kase{
 			{
-				data: []byte{1, 2, 3, 4},
+				size: 4,
 				len:  HeaderLengthOfTheProtocol + 4,
 			},
 			{
-				data: data16MB(1),
+				size: 1 * int(MaxPayloadSize),
 				len:  HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol,
 			},
 			{
-				data: data16MB(2),
+				size: 2 * int(MaxPayloadSize),
 				len:  HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol,
 			},
 			{
-				data: data16MB(3),
+				size: 3 * int(MaxPayloadSize),
 				len: HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol,
 			},
 			{
-				data: data16MB(4),
+				size: 4 * int(MaxPayloadSize),
+				seq:  254, // Multiple packets cross the one-byte sequence boundary.
 				len: HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
@@ -2532,25 +2526,52 @@ func Test_beginPacket(t *testing.T) {
 			},
 		}
 
+		payloadWindow := make([]byte, 64<<10)
 		for _, c := range kases {
-			proto.SetSequenceID(0)
+			data := make([]byte, c.size)
+			if c.size == 4 {
+				copy(data, []byte{1, 2, 3, 4})
+			} else {
+				// Distinguish payload positions around every packet boundary.
+				for offset := 0; offset < len(data); offset += int(MaxPayloadSize) {
+					data[offset] = byte(offset/int(MaxPayloadSize) + 1)
+					data[min(offset+int(MaxPayloadSize), len(data))-1] = 0xa5
+				}
+			}
+			proto.SetSequenceID(c.seq)
+			require.NoError(t, proto.beginPacket())
+			require.NoError(t, proto.append(data...))
+			require.NoError(t, proto.finishedPacket())
+			require.Equal(t, c.len, proto.tcpConn.bufferLength)
 
-			proto.beginPacket()
-			convey.So(err, convey.ShouldBeNil)
-
-			proto.append(c.data...)
-
-			err = proto.finishedPacket()
-			convey.So(err, convey.ShouldBeNil)
-
-			want := mysqlPack(c.data)
-
-			convey.So(c.len, convey.ShouldEqual, len(want))
-
-			res := proto.tcpConn.bufferLength
-			convey.So(res, convey.ShouldEqual, len(want))
-
-			proto.flush()
+			// Read the real wire buffers without copying the entire expected packet.
+			wire := net.Buffers{proto.tcpConn.fixBuf.AvailableData()}
+			for node := proto.tcpConn.dynamicWrBuf.Front(); node != nil; node = node.Next() {
+				wire = append(wire, node.Value.(*MemBlock).AvailableData())
+			}
+			payloadOffset := 0
+			for packet := 0; packet <= len(data)/int(MaxPayloadSize); packet++ {
+				var header [HeaderLengthOfTheProtocol]byte
+				_, err := io.ReadFull(&wire, header[:])
+				require.NoError(t, err)
+				length := int(binary.LittleEndian.Uint32(header[:]) & 0xffffff)
+				wantLength := min(int(MaxPayloadSize), len(data)-payloadOffset)
+				require.Equal(t, wantLength, length)
+				require.Equal(t, c.seq+byte(packet), header[3])
+				for remaining := length; remaining > 0; {
+					n := min(remaining, len(payloadWindow))
+					_, err := io.ReadFull(&wire, payloadWindow[:n])
+					require.NoError(t, err)
+					require.True(t, bytes.Equal(data[payloadOffset:payloadOffset+n], payloadWindow[:n]),
+						"packet %d payload offset %d", packet, payloadOffset)
+					payloadOffset += n
+					remaining -= n
+				}
+			}
+			var extra [1]byte
+			_, err = wire.Read(extra[:])
+			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, proto.flush())
 		}
 	})
 
@@ -2708,7 +2729,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		require.Equal(t, "result", resultColumn.name)
 		require.Equal(t, uint16(charsetBinary), resultColumn.charset)
 		require.Equal(t, uint32(31), resultColumn.length)
-		require.Equal(t, defines.MYSQL_TYPE_DECIMAL, resultColumn.typ)
+		require.Equal(t, defines.MYSQL_TYPE_NEWDECIMAL, resultColumn.typ)
 		require.Equal(t, uint16(0), resultColumn.flags)
 		require.Equal(t, uint8(0), resultColumn.decimals)
 		require.Equal(t, byte(defines.EOFHeader), packets[5][0])
@@ -2760,8 +2781,8 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
 		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
-		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
-		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 6},
+		{name: "coalesce decimal", sql: "select coalesce(?,cast(0 as decimal(20,6))) as result", resultType: defines.MYSQL_TYPE_NEWDECIMAL, resultDecimals: 6},
+		{name: "coalesce reversed decimal", sql: "select coalesce(cast(0 as decimal(20,6)),?) as result", resultType: defines.MYSQL_TYPE_NEWDECIMAL, resultDecimals: 6},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -5120,7 +5141,8 @@ type kase struct {
 	bat *batch.Batch
 }
 
-func makeKases() []kase {
+func makeKases(t *testing.T) []kase {
+	t.Helper()
 	kases1 := []kase{
 		{
 			sql: "select bool",
@@ -5259,9 +5281,14 @@ func makeKases() []kase {
 	kases = append(kases, kases1...)
 	kases = append(kases, kases2...)
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
 	for i := 0; i < len(kases); i++ {
 		mrs := kases[i].mrs
 		bat := batch.NewWithSize(int(mrs.GetColumnCount()))
+		t.Cleanup(func() { bat.Clean(mp) })
 		for colIdx := uint64(0); colIdx < mrs.GetColumnCount(); colIdx++ {
 			col, err := mrs.GetColumn(context.TODO(), colIdx)
 			convey.So(err, convey.ShouldBeNil)
@@ -5468,13 +5495,18 @@ func Test_appendResultSet2(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			mrs := kse.mrs
 			bat := kse.bat
@@ -5510,13 +5542,18 @@ func Test_appendResultSet3(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			mrs := kse.mrs
 			bat := kse.bat
@@ -5552,13 +5589,18 @@ func Test_appendResultSet4(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			mrs := kse.mrs
 			bat := kse.bat
@@ -5751,13 +5793,18 @@ func Test_appendResultSet5(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			mrs := kse.mrs
 			bat := kse.bat

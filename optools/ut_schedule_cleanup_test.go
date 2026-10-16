@@ -125,6 +125,7 @@ func killScheduleProcess(root string, process *scheduleProcess) (bool, error) {
 
 func cleanupScheduleFixture(root string) (result string, cleanupErr error, survivors bool) {
 	var diagnostic strings.Builder
+	observations := 0
 	defer func() {
 		reports, err := scheduleFixtureDiagnostics(root)
 		result += reports
@@ -159,6 +160,13 @@ func cleanupScheduleFixture(root string) (result string, cleanupErr error, survi
 			}
 			live++
 			survivors = true
+			// The broad pre-cleanup snapshot can exhaust its budget before
+			// reaching this PID. Preserve bounded signal evidence for the
+			// already identified owner before killing it.
+			if observations < 32 {
+				diagnostic.WriteString(scheduleProcessSignalDiagnostics(root, process))
+				observations++
+			}
 			killed, err := killScheduleProcess(root, process)
 			if err != nil {
 				return diagnostic.String(), err, survivors
@@ -178,13 +186,36 @@ func cleanupScheduleFixture(root string) (result string, cleanupErr error, survi
 	return diagnostic.String(), nil, survivors
 }
 
-// Only the explicitly traced cancellation fixture collects these observations.
-// Never expose environment contents, and recheck process start identity.
-func scheduleFixtureProcessDiagnostics(root, phase string) string {
-	if runtime.GOOS != "linux" {
+// Capture only signal metadata for a still-owned process generation. This is
+// also used after a truncated global snapshot, immediately before cleanup.
+func scheduleProcessSignalDiagnostics(root string, process *scheduleProcess) string {
+	file, err := os.Open(fmt.Sprintf("/proc/%d/status", process.pid))
+	if err != nil {
 		return ""
 	}
-	if _, err := os.Stat(filepath.Join(root, "ut-signal-trace.log")); err != nil {
+	data, err := io.ReadAll(io.LimitReader(file, 4096))
+	_ = file.Close()
+	if err != nil {
+		return ""
+	}
+	current, err := scheduleOwnedProcess(process.pid, root)
+	if err != nil || current == nil || current.start != process.start {
+		return ""
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "process signals before-cleanup pid=%d start=%s\n", process.pid, process.start)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "Sig") || strings.HasPrefix(line, "ShdPnd:") {
+			fmt.Fprintln(&out, line)
+		}
+	}
+	return out.String()
+}
+
+// Failure paths collect bounded observations before emergency cleanup destroys
+// the evidence. Never expose environment contents; recheck process start identity.
+func scheduleFixtureProcessDiagnostics(root, phase string) string {
+	if runtime.GOOS != "linux" {
 		return ""
 	}
 	entries, err := os.ReadDir("/proc")
@@ -281,9 +312,6 @@ func TestScheduleHarnessForcedCleanup(t *testing.T) {
 	for _, phase := range []string{"cancel", "pipe-holder", "exit-143"} {
 		t.Run(phase, func(t *testing.T) {
 			root := t.TempDir()
-			if err := os.WriteFile(filepath.Join(root, "ut-signal-trace.log"), nil, 0600); err != nil {
-				t.Fatal(err)
-			}
 			neighbor := exec.Command("sleep", "30")
 			neighbor.Env = append(os.Environ(), "CASE_DIR="+root+"/neighbor")
 			if err := neighbor.Start(); err != nil {
@@ -410,6 +438,9 @@ func TestScheduleCleanupRejectsStaleIdentity(t *testing.T) {
 		t.Fatalf("missing live fixture identity: %v %v", process, err)
 	}
 	process.start += "-stale"
+	if got := scheduleProcessSignalDiagnostics(root, process); got != "" {
+		t.Fatalf("stale generation exposed signal metadata: %s", got)
+	}
 	killed, err := killScheduleProcess(root, process)
 	if err != nil || killed {
 		t.Fatalf("stale identity signalled: %v %v", killed, err)
