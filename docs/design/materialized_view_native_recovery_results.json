@@ -2,6 +2,7 @@
   "passed_cases": [
     "ordinary authenticated 4.0.14 deployment",
     "old nodes block MV catalog migration and new-CN login remains pending",
+    "mixed old nodes never receive MV cron or asynchronous task metadata",
     "SIGKILL after two catalog DDLs before migration commit",
     "interrupted migration recovers atomically with ordinary data intact",
     "repeated automatic upgrade has exactly four catalogs and one ready target",
@@ -41,12 +42,12 @@
       [
         "2",
         "50",
-        "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+        "fd36c85e-776d-40f7-b7b1-48c8590bd022",
         "2",
-        "1792132285233213565",
+        "1792136021515755183",
         "1",
         "SUCCEEDED",
-        "1792132285233213565",
+        "1792136021515755183",
         "1"
       ]
     ],
@@ -55,12 +56,12 @@
         [
           "2",
           "50",
-          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "fd36c85e-776d-40f7-b7b1-48c8590bd022",
           "2",
-          "1792132285233213565",
+          "1792136021515755183",
           "1",
           "SUCCEEDED",
-          "1792132285233213565",
+          "1792136021515755183",
           "1"
         ]
       ],
@@ -68,17 +69,17 @@
         [
           "2",
           "50",
-          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "fd36c85e-776d-40f7-b7b1-48c8590bd022",
           "2",
-          "1792132285233213565",
+          "1792136021515755183",
           "1",
           "SUCCEEDED",
-          "1792132285233213565",
+          "1792136021515755183",
           "1"
         ]
       ],
       "run": [
-        "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+        "3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa",
         "3",
         "RUNNING"
       ],
@@ -94,12 +95,12 @@
         [
           "2",
           "50",
-          "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+          "fd36c85e-776d-40f7-b7b1-48c8590bd022",
           "2",
-          "1792132285233213565",
+          "1792136021515755183",
           "1",
           "SUCCEEDED",
-          "1792132285233213565",
+          "1792136021515755183",
           "1"
         ]
       ],
@@ -107,12 +108,12 @@
         [
           "2",
           "80",
-          "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+          "3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa",
           "3",
-          "1792132375548443834",
+          "1792136132277860864",
           "1",
           "SUCCEEDED",
-          "1792132375548443834",
+          "1792136132277860864",
           "1"
         ]
       ]
@@ -122,12 +123,12 @@
         [
           "2",
           "80",
-          "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+          "3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa",
           "3",
-          "1792132375548443834",
+          "1792136132277860864",
           "1",
           "SUCCEEDED",
-          "1792132375548443834",
+          "1792136132277860864",
           "1"
         ]
       ],
@@ -135,17 +136,17 @@
         [
           "2",
           "120",
-          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
           "4",
-          "1792132395526261333",
+          "1792136172278460977",
           "1",
           "SUCCEEDED",
-          "1792132395526261333",
+          "1792136172278460977",
           "1"
         ]
       ],
       "run": [
-        "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+        "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
         "4",
         "SUCCEEDED"
       ],
@@ -161,12 +162,12 @@
         [
           "2",
           "120",
-          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
           "4",
-          "1792132395526261333",
+          "1792136172278460977",
           "1",
           "SUCCEEDED",
-          "1792132395526261333",
+          "1792136172278460977",
           "1"
         ]
       ],
@@ -174,12 +175,12 @@
         [
           "2",
           "120",
-          "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+          "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
           "4",
-          "1792132395526261333",
+          "1792136172278460977",
           "1",
           "SUCCEEDED",
-          "1792132395526261333",
+          "1792136172278460977",
           "1"
         ]
       ]
@@ -187,8 +188,8 @@
   },
   "binaries": {
     "service": {
-      "path": "/tmp/mo-service-mv-recovery",
-      "sha256": "40b350b84955db699b3b0bcbe26f84b8504f2b25ad37bba67c0fd187dd4fd97c"
+      "path": "/tmp/mo-service-mv-cron-gated",
+      "sha256": "de0956e779dffcb097f3c937518ca2732ae9220120b38519d13f3312147e3a78"
     },
     "old_service": {
       "path": "/tmp/mo-service-pre-migration",
@@ -201,7 +202,7 @@
   },
   "sql_observations": {
     "old: select 1": {
-      "attempts": 11,
+      "attempts": 10,
       "changes": [
         {
           "error": "dial tcp 127.0.0.1:6102: connect: connection refused",
@@ -285,7 +286,7 @@
       ]
     },
     "current: select 1": {
-      "attempts": 14,
+      "attempts": 12,
       "changes": [
         {
           "error": "context deadline exceeded",
@@ -348,6 +349,32 @@
           "rows": [
             [
               "1"
+            ]
+          ]
+        }
+      ]
+    },
+    "old: select count(*) from mo_task.sys_cron_task where task_metadata_executor=17": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
+            ]
+          ]
+        }
+      ]
+    },
+    "old: select count(*) from mo_task.sys_async_task where task_metadata_executor=17": {
+      "attempts": 1,
+      "changes": [
+        {
+          "error": "",
+          "rows": [
+            [
+              "0"
             ]
           ]
         }
@@ -443,12 +470,12 @@
             [
               "2",
               "30",
-              "679d450d-2461-487e-bf72-b85a371c7d9b",
+              "b5bbb393-cc30-4c50-a5c5-1ec4c41b54b1",
               "1",
-              "1792132283396247414",
+              "1792136019938335429",
               "1",
               "SUCCEEDED",
-              "1792132283396247414",
+              "1792136019938335429",
               "1"
             ]
           ]
@@ -459,12 +486,12 @@
             [
               "2",
               "50",
-              "c8630b8a-1ac9-45cc-80b9-ba77237af287",
+              "fd36c85e-776d-40f7-b7b1-48c8590bd022",
               "2",
-              "1792132285233213565",
+              "1792136021515755183",
               "1",
               "SUCCEEDED",
-              "1792132285233213565",
+              "1792136021515755183",
               "1"
             ]
           ]
@@ -475,12 +502,12 @@
             [
               "2",
               "80",
-              "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+              "3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa",
               "3",
-              "1792132375548443834",
+              "1792136132277860864",
               "1",
               "SUCCEEDED",
-              "1792132375548443834",
+              "1792136132277860864",
               "1"
             ]
           ]
@@ -491,12 +518,12 @@
             [
               "2",
               "120",
-              "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+              "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
               "4",
-              "1792132395526261333",
+              "1792136172278460977",
               "1",
               "SUCCEEDED",
-              "1792132395526261333",
+              "1792136172278460977",
               "1"
             ]
           ]
@@ -687,7 +714,7 @@
       ]
     },
     "current: select trigger_fault_point('mv_probe_waiters')": {
-      "attempts": 268,
+      "attempts": 430,
       "changes": [
         {
           "error": "",
@@ -730,7 +757,7 @@
           "error": "",
           "rows": [
             [
-              "afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd",
+              "3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa",
               "3",
               "RUNNING"
             ]
@@ -740,7 +767,7 @@
           "error": "",
           "rows": [
             [
-              "1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f",
+              "44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad",
               "4",
               "SUCCEEDED"
             ]
@@ -748,7 +775,7 @@
         }
       ]
     },
-    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:afca36464f1d43fcfe0ae6f111b9d845759da533'": {
+    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:3977acd36791a45c07a8ab808cfa6f54afff3a52'": {
       "attempts": 1,
       "changes": [
         {
@@ -762,7 +789,7 @@
         }
       ]
     },
-    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:afca36464f1d43fcfe0ae6f111b9d845759da533'": {
+    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:3977acd36791a45c07a8ab808cfa6f54afff3a52'": {
       "attempts": 41,
       "changes": [
         {
@@ -783,7 +810,7 @@
         }
       ]
     },
-    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='afca36464f1d43fcfe0ae6f111b9d845759da533e4f8a3e12714967f0fccbdbd'": {
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='3977acd36791a45c07a8ab808cfa6f54afff3a521f42d413ee4afd9502e210aa'": {
       "attempts": 1,
       "changes": [
         {
@@ -818,7 +845,7 @@
         }
       ]
     },
-    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:1ebdf54bad857a20da8493b4303477281bca44df'": {
+    "current: select task_status,task_runner from mo_task.sys_async_task where task_metadata_id='mv:44ea7a3b1a741901d0796cd38e36a13d57bbf72e'": {
       "attempts": 1,
       "changes": [
         {
@@ -832,7 +859,7 @@
         }
       ]
     },
-    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:1ebdf54bad857a20da8493b4303477281bca44df'": {
+    "current: select task_status from mo_task.sys_async_task where task_metadata_id='mv:44ea7a3b1a741901d0796cd38e36a13d57bbf72e'": {
       "attempts": 41,
       "changes": [
         {
@@ -853,7 +880,7 @@
         }
       ]
     },
-    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='1ebdf54bad857a20da8493b4303477281bca44dfc015ba284b6d6759f5de732f'": {
+    "current: select count(*) from mo_catalog.mo_mv_refresh_runs where run_id='44ea7a3b1a741901d0796cd38e36a13d57bbf72ed5d02c916b9ce8bba3e6f2ad'": {
       "attempts": 1,
       "changes": [
         {
@@ -937,7 +964,7 @@
       ]
     },
     "current: select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%'": {
-      "attempts": 7,
+      "attempts": 5,
       "changes": [
         {
           "error": "",
@@ -972,68 +999,57 @@
     "recovery-before_commit": -9,
     "recovery-after_commit": 0
   },
-  "elapsed_seconds": 288.7319877099944,
+  "elapsed_seconds": 324.1111938050017,
   "scope": {
-    "baseline": "d50c4c77513c08837cf6ba351fae047ff9728bd2",
+    "baseline": "f8a9127f8ba1851281db69c5e318c10b159a0aef",
+    "pre_delivery_vcs_modified": true,
     "old_source": "fcad62a8ff06000e682824802f1155cbeea02a2f",
-    "old_tracked_blob_count": 11132,
+    "old_source_tracked_blobs": 11132,
     "old_source_mismatches": 0,
-    "current_build_tag": "matrixone_mv_faults",
-    "current_vcs_modified": true,
+    "normal_authentication": true,
+    "source_input_count": 11042,
+    "source_input_ledger_sha256": "27640eaf8eb682d2aa260effc4292db01474ca66c82f5764a322c9b33e74ae47",
+    "instrumented_tag": "matrixone_mv_faults",
     "normal_production_build": "pass",
-    "authentication_bypass": false,
-    "source_input_count": 11041,
-    "source_input_ledger_sha256": "6e84e8b44fd3ad9654d8ed289be72b02e4499a21993aa0bb84dc66c4345ad881",
-    "local_run_command": "python3 optools/materialized_view_recovery.py --service /tmp/mo-service-mv-recovery --old-service /tmp/mo-service-pre-migration --probe /tmp/mv-native-probe --work-dir /tmp/mv-native-recovery-7",
-    "not_claimed": [
-      "general CI compatibility jobs passed",
-      "arbitrary release pairs",
-      "all network/WAL failures",
-      "operator downgrade preflight",
-      "cold-cache latency or scheduler scale",
-      "current-head speedup"
-    ]
+    "capture_command": "python3 optools/materialized_view_recovery.py --service /tmp/mo-service-mv-cron-gated --old-service /tmp/mo-service-pre-migration --probe /tmp/mv-native-probe --work-dir /tmp/mv-native-cron-after-1",
+    "supersedes": "The earlier 12-case capture did not assert absence of new task metadata during mixed-version migration. Its old-CN logs exposed executor 17 being claimed before catalog installation. This 13-case capture includes that explicit negative oracle."
   },
   "source_sha256": {
-    "optools/materialized_view_recovery.py": "d232dd8943c368c3e3f150c38c6f13fa82812a69709831691a11dd98f333e4de",
-    "test/materialized_view/native_probe/main.go": "2030ccc5981c5c56b636a82ce8056e902483221411dcd60377184ee7fd1d5fee",
-    "cmd/mo-service/materialized_view_faults.go": "ce2a4779bd0b1fba7f89c30fdc3cea075a921debaf1bc59e1bdda9a2f1fab126",
+    "pkg/mv/task.go": "45e33412e108e5dbd71f970136c84eb705cefc2c7f54db674da11fb7b0630834",
+    "pkg/mv/task_test.go": "f93b3a1171c253cfb860ec4b129509f19416c28f17fefac67e8b1e5a33ef5f28",
+    "pkg/cnservice/server_task.go": "420d8f16e201f58a5239166dbc26306f279ee952c2bc44c453ff1803ca2e1070",
+    "pkg/cnservice/server_task_test.go": "2ca0fc15483d4d4bd245156c7faa342a5c32327b5ee261119fc18da18bb29f97",
     "pkg/mv/service.go": "aa91a93269a8ddabb8f5c1e2de2fdf484ee0830a200ae08b537ffbdb02fe18ba",
-    "pkg/bootstrap/versions/v4_0_15/upgrade.go": "f1b02fc96a23c8b511aeca219e328361e3eb39adf6114646fbb0eee53ec42877"
+    "pkg/bootstrap/versions/v4_0_15/upgrade.go": "f1b02fc96a23c8b511aeca219e328361e3eb39adf6114646fbb0eee53ec42877",
+    "cmd/mo-service/materialized_view_faults.go": "8eeaece89993e635229e2b97eb68c2f55a9155f6f6b3bbe7849a0f3929b08ac4",
+    "optools/materialized_view_recovery.py": "7f36635de1219f084feb7da451eeb90b1d196192c1be92a5f3bddbbefcea333c",
+    "test/materialized_view/native_probe/main.go": "2030ccc5981c5c56b636a82ce8056e902483221411dcd60377184ee7fd1d5fee"
   },
   "local_validation": {
-    "normal_mv_seconds": 0.057,
-    "normal_v4_0_15_seconds": 0.044,
-    "normal_bootstrap_seconds": 12.835,
-    "race_root_measure_seconds": 0.01,
-    "race_root_final_repetitions": 100,
-    "race_root_final_package_seconds": 2.107,
-    "race_owning_mv_seconds": 1.223,
+    "normal_owning_seconds": {
+      "mv": 0.057,
+      "cnservice": 8.337
+    },
+    "focused_race": [
+      {
+        "test": "TestMaterializedViewCronRegistrationOwnsRetry",
+        "seconds": 0,
+        "count": 100,
+        "exit": 0
+      },
+      {
+        "test": "TestMaterializedViewCronAdmission",
+        "seconds": 0,
+        "count": 100,
+        "exit": 0
+      }
+    ],
+    "race_owning_seconds": {
+      "mv": 1.219,
+      "cnservice": 9.961
+    },
     "vet": "pass",
-    "configured_incremental_lint_issues": 0,
-    "prior_head_all_ci": {
-      "head": "d50c4c77513c08837cf6ba351fae047ff9728bd2",
-      "run": 38843251708,
-      "conclusion": "success"
-    },
-    "new_head_ci": "pending publication"
-  },
-  "capture_implementation_commit": "a9bff0c918e835da7aab474896d0f0476ded09c1",
-  "semantic_reuse_after_capture": {
-    "unchanged_source_paths": [
-      "pkg/mv/service.go",
-      "pkg/bootstrap/versions/v4_0_15/upgrade.go",
-      "test/materialized_view/native_probe/main.go"
-    ],
-    "initializer_license_only": {
-      "path": "cmd/mo-service/materialized_view_faults.go",
-      "code_from_build_tag_identical": true,
-      "current_file_sha256": "8eeaece89993e635229e2b97eb68c2f55a9155f6f6b3bbe7849a0f3929b08ac4"
-    },
-    "additional_test_only_changes": [
-      "optools/run_materialized_view_bvt.sh",
-      "test/materialized_view/native_probe/check.py"
-    ],
-    "explanation": "The 12-case native capture and its complete input ledger describe a9bff0c9. The follow-up corrects only the startup initializer license comment and adds covered JSON bridge checks to the existing CI consumer. The compiled native service and bridge behavior are unchanged; CI entry evidence is recorded separately."
+    "incremental_lint_issues": 0,
+    "full_cn_race_environment_note": "Initial run inherited author-added GOMEMLIMIT=3GiB and failed the unrelated default-memory-limit assertion (actual 3221225472 vs expected MaxInt64). Same code passes the complete package with the normal unset memory limit; no test/source assertion was changed. Raw failed and successful logs retained."
   }
 }

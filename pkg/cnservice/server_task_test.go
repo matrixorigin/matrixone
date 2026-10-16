@@ -523,7 +523,18 @@ func TestMaterializedViewCronRegistrationOwnsRetry(t *testing.T) {
 	defer cancel()
 	ticks := make(chan time.Time)
 	done := make(chan struct{})
-	go func() { defer close(done); s.registerCronTask(ctx, ts, metadata, mv.CronExpression, ticks) }()
+	admissions := 0
+	go func() {
+		defer close(done)
+		s.registerCronTask(ctx, metadata, func(ctx context.Context) error {
+			admissions++
+			if admissions == 1 {
+				attempts <- struct{}{}
+				return errors.New("MV catalogs are not ready")
+			}
+			return ts.CreateCronTask(ctx, metadata, mv.CronExpression)
+		}, ticks)
+	}()
 	select {
 	case <-attempts:
 	case <-time.After(2 * time.Second):
@@ -535,9 +546,20 @@ func TestMaterializedViewCronRegistrationOwnsRetry(t *testing.T) {
 		t.Fatal("MV registration did not enter its own retry wait")
 	}
 	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MV readiness retry did not reach task storage")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-time.After(2 * time.Second):
+		t.Fatal("MV task-store failure did not enter the same retry wait")
+	}
+	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("MV retry did not complete")
 	}
 	require.Equal(t, 2, calls)
+	require.Equal(t, 3, admissions)
 }

@@ -405,7 +405,9 @@ func (s *service) registerExecutorsLocked() {
 		if err := s.stopper.RunNamedTask("register materialized view cron", func(ctx context.Context) {
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
-			s.registerCronTask(ctx, ts, mv.CronMetadata(), mv.CronExpression, ticker.C)
+			s.registerCronTask(ctx, mv.CronMetadata(), func(ctx context.Context) error {
+				return service.(*mv.Service).RegisterCron(ctx, ts)
+			}, ticker.C)
 		}); err != nil {
 			s.logger.Error("failed to start materialized view cron registration", zap.Error(err))
 		}
@@ -424,17 +426,20 @@ func (s *service) registerExecutorsLocked() {
 }
 
 func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
-	s.registerCronTask(ctx, ts, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr, retry)
+	metadata := databranchutils.LineageGCTaskMetadata()
+	s.registerCronTask(ctx, metadata, func(ctx context.Context) error {
+		return ts.CreateCronTask(ctx, metadata, databranchutils.LineageGCTaskCronExpr)
+	}, retry)
 }
 
-func (s *service) registerCronTask(ctx context.Context, ts taskservice.TaskService, metadata task.TaskMetadata, expression string, retry <-chan time.Time) {
+func (s *service) registerCronTask(ctx context.Context, metadata task.TaskMetadata, create func(context.Context) error, retry <-chan time.Time) {
 	for {
 		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
 			return
 		}
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
 		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
-		err := ts.CreateCronTask(attempt, metadata, expression)
+		err := create(attempt)
 		cancel()
 		if err == nil || ctx.Err() != nil {
 			return

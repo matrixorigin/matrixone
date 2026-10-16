@@ -189,6 +189,7 @@ class Fixture:
         # installation must wait for the protocol barrier across this topology.
         current = self.start("new-mixed", fault="mv_catalog_upgrade_after_ddl#2:2::#wait#0##false")
         self.await_log("new-mixed", "requires all CNs to support protocol version 117", current)
+        self.await_log("new-mixed", "materialized view catalogs are not installed", current)
         control = self.q("select count(*) from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state')", old=True, allow_error=True)
         if not control["error"]:
             assert control["rows"] == [["0"]], control
@@ -196,7 +197,14 @@ class Fixture:
         # Login waits for the target upgrade state (bounded by the probe's
         # context), or reports the explicit earlier tenant-version fence.
         assert any(message in rejected["error"] for message in ("tenant upgrade requires", "context deadline exceeded")), rejected
+        # New executor metadata itself must not enter the old scheduler, even
+        # though no MV can yet be created. Unknown-executor failures on old CNs
+        # are not an acceptable way to implement capability exclusion.
+        for table in ("sys_cron_task", "sys_async_task"):
+            assert self.q(f"select count(*) from mo_task.{table} where task_metadata_executor=17", old=True) == [["0"]]
+        assert "executor with code 17 not exists" not in (self.root / "old-bootstrap.log").read_text(errors="replace")
         self.passed("old nodes block MV catalog migration and new-CN login remains pending", {"new_login": rejected, "old_catalog_control": control})
+        self.passed("mixed old nodes never receive MV cron or asynchronous task metadata")
         self.stop(current)
         self.stop(old)
         self.stop(storage)

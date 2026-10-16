@@ -1,25 +1,8 @@
 {
-  "baseline": "a9bff0c918e835da7aab474896d0f0476ded09c1",
-  "exact_failed_job": {
-    "run": 38862376845,
-    "job": 116847424049,
-    "step": "Static Code Analysis",
-    "cause": "one incomplete Apache notice in cmd/mo-service/materialized_view_faults.go"
-  },
-  "license_fix": {
-    "checker": "license-eye v0.4.0",
-    "policy": ".licenserc.yml unchanged; changed-path selection only",
-    "checked": 1,
-    "valid": 1,
-    "invalid": 0
-  },
-  "source_sha256": {
-    "cmd/mo-service/materialized_view_faults.go": "8eeaece89993e635229e2b97eb68c2f55a9155f6f6b3bbe7849a0f3929b08ac4",
-    "optools/run_materialized_view_bvt.sh": "81d4b89de74430970f1a550bc15c73b58c8289a8e3d3ecde702948207341c966",
-    "test/materialized_view/native_probe/check.py": "6611390c0b0572837296d2dc3d02863bcee4b9295631a58972dd25522e71d31e"
-  },
+  "baseline": "f8a9127f8ba1851281db69c5e318c10b159a0aef",
+  "change": "coordinator task publication admission",
   "consumer": "optools/run_materialized_view_bvt.sh",
-  "topology": "normal production native service, two separate CN processes sharing TN/LOG, same instance for both runs",
+  "topology": "same two-CN native production instance, separate CN processes sharing TN/LOG",
   "runs": [
     {
       "run": 1,
@@ -78,15 +61,22 @@
       }
     }
   ],
+  "normal_service_sha256": "52db5eaa5f3f9946b0075548262cec08002c59ed175c51501e85cac7b57900cf",
+  "native_service_vcs": "baseline f8a9127f with vcs.modified=true, pre-delivery build",
+  "source_sha256": {
+    "pkg/mv/task.go": "45e33412e108e5dbd71f970136c84eb705cefc2c7f54db674da11fb7b0630834",
+    "pkg/cnservice/server_task.go": "420d8f16e201f58a5239166dbc26306f279ee952c2bc44c453ff1803ca2e1070",
+    "optools/run_materialized_view_bvt.sh": "81d4b89de74430970f1a550bc15c73b58c8289a8e3d3ecde702948207341c966",
+    "test/materialized_view/native_probe/main.go": "2030ccc5981c5c56b636a82ce8056e902483221411dcd60377184ee7fd1d5fee",
+    "test/materialized_view/native_probe/check.py": "6611390c0b0572837296d2dc3d02863bcee4b9295631a58972dd25522e71d31e"
+  },
   "coverage": {
     "package": "test/materialized_view/native_probe",
     "blocks": 32,
     "covered_blocks": 28,
     "percent": 87.5,
-    "scope": "component counters only; not aggregate CI verdict",
-    "mode": "set",
+    "scope": "component counters, not aggregate CI verdict",
     "threshold_or_exclusion_changes": false
   },
-  "native_recovery_reuse": "12-case capture at a9bff0c9 retained; production and Go SQL bridge bytes unchanged, initializer body/build tag unchanged with expanded license comment",
   "new_head_ci": "pending publication"
 }

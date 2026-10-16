@@ -12,7 +12,7 @@ actual bootstrap, transaction, catalog, task-service and scheduler owners.
 | Scenario | Observable oracle |
 | --- | --- |
 | Real 4.0.14 deployment | Normal login, persisted ready version 4.0.14, no MV catalogs, two ordinary rows summing to 30 |
-| Mixed old/new nodes | Native protocol inventory blocks the first MV catalog DDL; new-node login waits for upgrade; an old-session catalog control, if still admitted, sees zero MV catalogs |
+| Mixed old/new nodes | Native protocol inventory blocks the first MV catalog DDL; registration visibly declines before task publication; the normal old session sees zero executor-17 cron and async rows; no unknown-executor log; new-node login waits for upgrade |
 | Interrupted migration | A tagged startup fault waits after the second real DDL in the owning transaction; stack confirms the handler's wait; SIGKILL ends only the upgrader |
 | Migration recovery/repetition | Restart with injection absent completes the pending route; all four catalogs exist exactly once, one 4.0.15/offset-4 target is ready, source rows survive; another normal restart preserves these assertions |
 | Unsafe downgrade | Start the actual old binary while a populated periodic MV exists; its normal startup must exit with the persisted protocol or cluster-version fence; no executor-17 task is assigned to it and the full result/provenance tuple survives |
@@ -101,10 +101,13 @@ latency or scheduler-scale performance. Optional compatibility jobs skipped in
 general CI remain skipped; the native run is separate evidence. External
 implementation re-review and final-head CI are still required.
 
-Final native execution: 12/12 groups passed in 288.732 seconds. Three CN
+The earlier 12-case capture passed its selected oracles but omitted mixed-version
+task-publication exclusion. Its raw old-CN log exposed a claimed unknown executor
+17. The corrected native execution passes 13/13 groups in 324.111 seconds,
+including zero cron/async task metadata before migration. Three CN
 processes exited by the expected SIGKILLs; the old binary exited at the expected
-protocol fence; all remaining owned services exited cleanly. Final MV owning
-race suite passed in 1.223 seconds, in addition to 100 exact-root repetitions.
+protocol fence; all remaining owned services exited cleanly. Current owning race suites pass for MV (1.219 s) and CN (9.961 s), with
+100 repetitions of each admission/retry root.
 
 
 ## Normal CI consumer of the SQL bridge
@@ -118,5 +121,25 @@ errors. It creates no database objects or service processes. Counters enter the
 existing BVT coverage producer with unchanged thresholds/exclusions. The normal
 entry still runs the 70 functional, five failure and nine two-CN cases.
 The separate `materialized_view_ci_bridge_results.json` records this consumer.
-The earlier recovery ledger retains its capture revision and explicitly
-qualifies the later license-comment-only initializer edit.
+The current recovery ledger supersedes the earlier capture after the task-
+publication counterexample, and identifies its current pre-delivery inputs.
+
+
+## Coordinator publication must precede execution eligibility
+
+A catalog migration barrier alone did not prevent the new CN from publishing
+its executor-17 reconcile cron while old CNs were still running. The original
+12-case run's old-CN log contains a fetched `materialized-view-reconcile-v1:1/17`
+and `executor with code 17 not exists`. This is a real counterexample to task
+capability exclusion, even though no MV object could yet be created.
+
+`mv.Service.RegisterCron` now checks all four installed catalogs and the
+existing common protocol inventory before `TaskService.CreateCronTask`.
+The CN's existing registration retry owner calls this operation; lineage GC
+uses the same retry owner with its unchanged task metadata and cron expression.
+There is no second scheduler, persistent state, new task code, feature-flag
+bypass or unbounded retry owner. While the old topology remains, the native
+suite observes an actual registration rejection and then requires zero typed
+cron and async rows. The strengthened suite still proves publication and task
+replay after upgrade. See `materialized_view_task_admission_results.json` for
+the original raw log excerpt, exact before/after source identity and results.

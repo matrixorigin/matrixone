@@ -36,6 +36,83 @@ import (
 type scheduledTasks struct {
 	taskservice.TaskService
 	batches [][]task.TaskMetadata
+	crons   []task.TaskMetadata
+	exprs   []string
+	cronErr error
+}
+
+func (s *scheduledTasks) CreateCronTask(_ context.Context, metadata task.TaskMetadata, expression string) error {
+	s.crons = append(s.crons, metadata)
+	s.exprs = append(s.exprs, expression)
+	return s.cronErr
+}
+
+func TestMaterializedViewCronAdmission(t *testing.T) {
+	for _, name := range []string{"ready", "missing catalogs", "partial catalogs", "catalog query failure", "old consumer", "protocol query failure", "empty inventory", "task store failure"} {
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			injected := errors.New("cron admission dependency unavailable")
+			protocolQueries := 0
+			sql := executor.NewMemExecutor(func(query string) (executor.Result, error) {
+				if query == CatalogReadinessSQL {
+					if name == "catalog query failure" {
+						return executor.Result{}, injected
+					}
+					count := int64(4)
+					if name == "missing catalogs" {
+						count = 0
+					} else if name == "partial catalogs" {
+						count = 2
+					}
+					r := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, mp)
+					r.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendFixedRows(r, 0, []int64{count}))
+					return r.GetResult(), nil
+				}
+				require.Equal(t, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')", query)
+				protocolQueries++
+				if name == "protocol query failure" {
+					return executor.Result{}, injected
+				}
+				if name == "empty inventory" {
+					return executor.Result{}, nil
+				}
+				value := `{"result":"cn-new:117,tn-new:117"}`
+				if name == "old consumer" {
+					value = `{"result":"cn-new:117,cn-old:116,tn-new:117"}`
+				}
+				r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+				r.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(r, 0, []string{value}))
+				return r.GetResult(), nil
+			})
+			tasks := &scheduledTasks{}
+			if name == "task store failure" {
+				tasks.cronErr = injected
+			}
+			err := NewService(sql).RegisterCron(t.Context(), tasks)
+			if name == "ready" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			if name == "ready" || name == "task store failure" {
+				require.Equal(t, []task.TaskMetadata{CronMetadata()}, tasks.crons)
+				require.Equal(t, []string{CronExpression}, tasks.exprs)
+			} else {
+				require.Empty(t, tasks.crons, "no new task code may be published before admission")
+			}
+			if strings.Contains(name, "catalog") {
+				require.Zero(t, protocolQueries)
+			} else {
+				require.Equal(t, 1, protocolQueries)
+			}
+		})
+	}
 }
 
 type scheduledRefreshExecutor struct {

@@ -114,3 +114,40 @@ runs, exact changed input hashes, license proof and component coverage. The
 production Go service/bridge inputs are unchanged from the 12-case capture;
 only the startup initializer license comment changes. Final-head remote SCA,
 UT, coverage and BVT remain required separately.
+
+
+## Mixed-version task metadata: first-publisher correction
+
+The old native log exposed an omitted contract: the old CN claimed executor 17
+while catalog migration was blocked. The old 12-case result is superseded, not
+reused as proof of task exclusion. The current 13-case suite observes the real
+admission attempt and zero cron/async metadata, before proving normal task
+execution and same-run replay after upgrade.
+
+R3 ownership: MV service owns the catalog/protocol admission and task-service
+publication; CN stopper retains the same 30-second attempt/10-second retry and
+shutdown authority. The shared retry function accepts the create operation for
+two existing consumers, so MV admission and task-store errors have one lifetime;
+lineage GC's operation and identities are unchanged. No per-row work, new worker,
+state map or unbounded admission is added. Catalog queries and one existing
+inventory check run only during bounded startup registration attempts.
+
+Eight cheap component cases cover ready/missing/partial/error catalogs,
+old/empty/error protocol inventory and task-store failure. The channel-driven
+retry test retains system-account assertions and proves both admission and
+store failures before success. Both roots pass 100 exact-name race repetitions,
+and both owning packages pass normally and under race. Vet/lint/builds pass.
+A local author-set memory limit conflicted with an unrelated default-limit
+assertion; removing that execution-only override restores the full CN race pass
+without changing any test assertion. Native 13/13 passes with exact frozen input
+identity and normal authentication. The full existing two-CN BVT consumer is
+validated independently against the new production build.
+
+
+Final post-admission production-consumer proof: the exact entry passes twice
+on the same two-CN instance, each with 18 bridge requests and 70 functional,
+5 failure and 9 cross-CN checks. Independent cleanup counts are zero after
+each run and all services exit. Bridge counters remain 28/32 blocks; no
+coverage-policy change. All 11,042 frozen inputs match. The new source/result
+ledger supersedes the earlier consumer-only capture. Final-head remote CI
+remains separate.

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,6 +49,27 @@ func CronMetadata() task.TaskMetadata {
 	data, _ := json.Marshal(TaskSpec{Version: 1, Reconcile: true})
 	return task.TaskMetadata{ID: "materialized-view-reconcile-v1", Executor: task.TaskCode_MaterializedView, Context: data, Options: task.TaskOptions{Concurrency: 1}}
 }
+
+// RegisterCron publishes the new task code only after its catalogs and every
+// inventoried consumer are ready. Registering an executor on this CN alone
+// cannot prevent an old CN from claiming a globally scheduled reconcile task.
+// The CN's existing registration loop owns the deadline, retry and shutdown.
+func (s *Service) RegisterCron(ctx context.Context, ts taskservice.TaskService) error {
+	if err := s.SQL.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+		ready, err := CatalogReady(tx)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return moerr.NewInvalidStateNoCtx("materialized view catalogs are not installed")
+		}
+		return versions.CheckCommonProtocolVersion(tx, defines.MORPCVersion117)
+	}, executor.Options{}.WithAccountID(catalog.System_Account)); err != nil {
+		return err
+	}
+	return ts.CreateCronTask(ctx, CronMetadata(), CronExpression)
+}
+
 func runMetadata(key Key, epoch uint64, due int64) task.TaskMetadata {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%d:%d", key.Account, key.ID, epoch, due)))
 	id := hex.EncodeToString(digest[:])

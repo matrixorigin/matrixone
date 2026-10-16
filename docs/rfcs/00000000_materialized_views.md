@@ -660,6 +660,13 @@ must prevent old CNs from claiming new tasks and receiving MV plans through
 distributed execution. New capability bits and protocol numbers are allocated
 through existing owners during implementation, not fabricated in this RFC.
 
+P1's task publication owner must check installed MV catalogs and the existing
+common protocol inventory before creating the reconcile cron metadata. Merely
+registering the executor on a new CN does not exclude an old CN from claiming
+that globally visible task. The existing CN registration loop owns admission
+retries and shutdown; no second scheduler or readiness worker is introduced.
+Case C12 requires zero new cron/async task metadata while old nodes remain.
+
 Install catalog tables through fresh bootstrap and a new idempotent upgrade
 entry. Keep ordinary-view tables and their inactive gates unchanged. A crash
 mid-upgrade is repairable; no MV object can be created before admission succeeds.

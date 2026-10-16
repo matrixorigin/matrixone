@@ -842,3 +842,48 @@ runs, exact changed input hashes, license proof and component coverage. The
 production Go service/bridge inputs are unchanged from the 12-case capture;
 only the startup initializer license comment changes. Final-head remote SCA,
 UT, coverage and BVT remain required separately.
+
+
+### 2026-10-16: mixed-version coordinator publication counterexample
+
+Raw old-CN logs from the earlier 12-case capture show the old fcad62a8 CN
+fetching `materialized-view-reconcile-v1:1/17` and reporting `executor with code
+17 not exists` at 06:29:34 UTC. Catalog DDL was blocked correctly, but the CN
+registered the new reconcile cron independently of catalog/protocol readiness.
+The old native suite omitted that negative assertion. Its selected passes do
+not establish task exclusion; the current ledger supersedes it with 13 groups.
+
+Move admission to the first publisher: `mv.Service.RegisterCron` checks all
+four committed catalogs and common protocol >=117 before creating any cron
+metadata. Reuse the existing CN stopper-owned retry loop by passing its create
+operation as a callback; lineage GC retains its original metadata/expression.
+Missing/partial catalogs, inventory/query errors and old protocols publish no
+task metadata. No task-registry/scheduler/protocol/catalog-policy redesign.
+
+Eight admission scenarios pass; the retry fixture proves a readiness rejection,
+a subsequent task-store rejection and eventual registration under one retry
+owner. Full MV/CN owning suites pass normally (0.057/8.337 s) and under race
+(1.219/9.961 s). Both exact concurrency roots pass 100 race repetitions (T is
+below measured resolution, N=100). Initial full CN race inherited the author's
+3-GiB memory cap and failed the unrelated default-limit assertion: actual
+3221225472 versus expected MaxInt64. Same code passes with the normal unset
+limit; no assertion/skip/source fix was made. Both logs remain available.
+Two-package vet/incremental lint pass, 0 issues; tagged and normal builds pass.
+
+The strengthened native suite passes 13/13 groups in 324.111 s, with normal old
+login, observed registration denial, zero executor-17 cron/async rows while old
+nodes run, no old unknown-executor log, then successful upgrade, periodic
+publication and both real crash/replay boundaries. All 11,042 frozen tracked
+non-documentation inputs remain unchanged. Current binaries report f8a9127f
+plus vcs.modified=true. Full SQL/process and counterexample evidence are in
+`materialized_view_native_recovery_results.json` and
+`materialized_view_task_admission_results.json`. All owned processes exit.
+
+
+Final post-admission production-consumer proof: the exact entry passes twice
+on the same two-CN instance, each with 18 bridge requests and 70 functional,
+5 failure and 9 cross-CN checks. Independent cleanup counts are zero after
+each run and all services exit. Bridge counters remain 28/32 blocks; no
+coverage-policy change. All 11,042 frozen inputs match. The new source/result
+ledger supersedes the earlier consumer-only capture. Final-head remote CI
+remains separate.
