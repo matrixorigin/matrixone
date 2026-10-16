@@ -78,6 +78,8 @@ type sqlJSONNode struct {
 	Expressions  []string            `json:"expressions,omitempty"`
 	SourceSteps  []int32             `json:"source_steps,omitempty"`
 	Statistics   map[string]float64  `json:"statistics,omitempty"`
+	// Opaque plugin settings are encoded as base64 by encoding/json.
+	AlgorithmOptions []byte `json:"algorithm_options,omitempty"`
 }
 
 type sqlJSONOrderBy struct {
@@ -423,6 +425,7 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 			return moerr.NewInvalidInput(b.ctx, "index search scan metadata is missing")
 		}
 		item.TableName = sqlJSONTableName(node)
+		item.AlgorithmOptions = node.IndexSearchScan.AlgoOptions
 		item.Expressions, err = sqlJSONIndexSearchExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
 		if err != nil {
 			return err

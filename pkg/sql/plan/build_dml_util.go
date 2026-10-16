@@ -1060,7 +1060,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	// Temporary DELETE is transactional row DML. A physical replacement would
 	// enter the persistent-table lifecycle using its private physical name.
-	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary
+	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
 
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
@@ -7065,7 +7065,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	// Keep temporary index maintenance on the same row-delete path as its base
 	// table; skipping it would leave stale index entries after DELETE.
-	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary
+	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
 
 	accountId, err := ctx.GetAccountId()
 	if err != nil {

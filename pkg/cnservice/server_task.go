@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -399,6 +400,18 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
+	if service, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(mv.RuntimeKey); ok {
+		s.task.runner.RegisterExecutor(task.TaskCode_MaterializedView, service.(*mv.Service).TaskExecutor(ts, ieFactory))
+		if err := s.stopper.RunNamedTask("register materialized view cron", func(ctx context.Context) {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			s.registerCronTask(ctx, mv.CronMetadata(), func(ctx context.Context) error {
+				return service.(*mv.Service).RegisterCron(ctx, ts)
+			}, ticker.C)
+		}); err != nil {
+			s.logger.Error("failed to start materialized view cron registration", zap.Error(err))
+		}
+	}
 	// Register outside task.Lock and the heartbeat/startup command paths. The
 	// stopper owns both retries and cancellation before task storage is closed.
 	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
@@ -413,18 +426,25 @@ func (s *service) registerExecutorsLocked() {
 }
 
 func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+	metadata := databranchutils.LineageGCTaskMetadata()
+	s.registerCronTask(ctx, metadata, func(ctx context.Context) error {
+		return ts.CreateCronTask(ctx, metadata, databranchutils.LineageGCTaskCronExpr)
+	}, retry)
+}
+
+func (s *service) registerCronTask(ctx context.Context, metadata task.TaskMetadata, create func(context.Context) error, retry <-chan time.Time) {
 	for {
 		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
 			return
 		}
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
 		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
-		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		err := create(attempt)
 		cancel()
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		s.logger.Warn("failed to register cron task; retrying", zap.String("task", metadata.ID), zap.Error(err))
 		select {
 		case <-ctx.Done():
 			return

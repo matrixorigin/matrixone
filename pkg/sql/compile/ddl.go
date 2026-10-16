@@ -257,6 +257,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 		}
 	}
+	if err := c.guardMaterializedViewDatabaseDDL(dbName); err != nil {
+		return err
+	}
 	// RC admission already installed a TN-ordered applied snapshot after D;
 	// publication writers hold that same D key through their catalog write.
 	if err := ensureDatabaseNotPublished(c, db, dbName); err != nil {
@@ -1108,6 +1111,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
+	if !isTemp {
+		if err := c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
+		}
+	}
 	initialForeignKeyParents := foreignKeyParentIDs(oTableDef.Fkeys)
 
 	var hasUpdateConstraints bool
@@ -1895,6 +1903,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 	tblName := qry.GetTableDef().GetName()
 
+	if err := c.pinMaterializedViewSourceNames(qry, dbName); err != nil {
+		return err
+	}
 	if err := c.admitCreateNames(qry, dbName); err != nil {
 		return err
 	}
@@ -2428,6 +2439,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.registerMaterializedView(dbSource, dbName, tblName, qry.TableDef); err != nil {
+		return err
+	}
 	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
 		return err
 	}
@@ -3151,6 +3165,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
+	if err := c.guardMaterializedViewDDL(qry.Database, qry.Table, false); err != nil {
+		return err
+	}
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(r.GetExtraInfo().FeatureFlag) {
@@ -3530,6 +3547,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 		}
 	}
 
+	if err := c.guardMaterializedViewDDL(qry.Database, qry.Table, false); err != nil {
+		return err
+	}
 	// old tabledef
 	oldTableDef := r.CopyTableDef(c.proc.Ctx)
 	if err := plan2.CheckDropReferencedKeyForeignKeyDependency(c.proc.Ctx, oldTableDef, qry.IndexName, nil,
@@ -4095,6 +4115,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	if err := c.guardMaterializedViewDDL(db, table, false); err != nil {
+		return err
+	}
 	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
@@ -4784,6 +4807,11 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 
+	if !isTemp {
+		if err := c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
+		}
+	}
 	// if dbSource is a pub, update tableList
 	if !c.ignorePublish {
 		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {

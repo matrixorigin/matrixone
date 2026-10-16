@@ -1,0 +1,101 @@
+{
+  "reviewed_head": "15ef9e056fc44a076fd548a93403d40ecfff58b8",
+  "review_scope": "Three integration defects and revision-3 database/account lifecycle decision; published RFC and external re-review remain separate from author validation.",
+  "native_contracts": {
+    "functional": 70,
+    "failure": 5,
+    "multi-cn": 9
+  },
+  "functional_source_rows": 0,
+  "functional_wall_seconds": 208.264,
+  "normal_sql_bvt": {
+    "total": 58,
+    "passed": 58,
+    "failed": 0,
+    "ignored": 0
+  },
+  "owning_package_tests": [
+    {
+      "log": "review-lifecycle-owning-network.jsonl",
+      "package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+      "result": "pass",
+      "seconds": 9.07
+    },
+    {
+      "log": "review-lifecycle-owning-network.jsonl",
+      "package": "github.com/matrixorigin/matrixone/pkg/frontend",
+      "result": "pass",
+      "seconds": 25.296
+    },
+    {
+      "log": "review-lifecycle-final-owning.jsonl",
+      "package": "github.com/matrixorigin/matrixone/pkg/mv",
+      "result": "pass",
+      "seconds": 0.066
+    },
+    {
+      "log": "review-lifecycle-final-owning.jsonl",
+      "package": "github.com/matrixorigin/matrixone/pkg/frontend",
+      "result": "pass",
+      "seconds": 24.431
+    },
+    {
+      "log": "review-lifecycle-delivery-frontend.jsonl",
+      "package": "github.com/matrixorigin/matrixone/pkg/frontend",
+      "result": "pass",
+      "seconds": 23.609
+    }
+  ],
+  "vet": "pass",
+  "configured_lint_issues": 0,
+  "pre_migration": {
+    "receipt": {
+      "auto_upgrade": false,
+      "mv_catalogs": 0,
+      "state": 2,
+      "version": "4.0.14",
+      "version_offset": 1
+    },
+    "bootstrap_source": "fcad62a8ff06000e682824802f1155cbeea02a2f (pre-feature main; buildvcs=false for Git archive)",
+    "before_error": "alter table mv_validation_pre_migration.facts add column extra int: Error 1146 (42S02): SQL parser error: table \"mo_mv_dependencies\" does not exist",
+    "after": {
+      "pessimistic": [
+        "ordinary ALTER before MV migration",
+        "ordinary CREATE INDEX before MV migration",
+        "ordinary DROP INDEX before MV migration",
+        "ordinary TRUNCATE before MV migration",
+        "ordinary DROP TABLE before MV migration",
+        "ordinary DROP DATABASE before MV migration"
+      ],
+      "optimistic": [
+        "ordinary ALTER before MV migration",
+        "ordinary CREATE INDEX before MV migration",
+        "ordinary DROP INDEX before MV migration",
+        "ordinary TRUNCATE before MV migration",
+        "ordinary DROP TABLE before MV migration",
+        "ordinary DROP DATABASE before MV migration"
+      ]
+    },
+    "kernel_session_scope": "Only the separate 4.0.14 fixture sets skipCheckUser=true to bypass an earlier tenant-version admission fence. Privilege checks remain enabled, automatic upgrade remains false, no system schema/version rows were edited. Main two-CN account/ACL regressions use normal authentication.",
+    "standard_login_control": "Error 1815 (HY000): invalid state tenant upgrade requires current cn version 4.0.15 to match cluster latest version 4.0.14",
+    "not_claimed": "Normal fresh-login/mixed-version compatibility across 4.0.14/4.0.15 is not established by this kernel fixture."
+  },
+  "source_sha256": {
+    "pkg/mv/service.go": "7db13c2f954f16d52196720b30cfd58b04caf68c3b81d62db5a0204ae8ad63f3",
+    "pkg/sql/compile/materialized_view.go": "16c91fda1889016cbdc55b0e89d122d0fef61d29289d70d0a02abdf02eb0c87d",
+    "pkg/frontend/authenticate.go": "910d593e525e8a00fdf30a991dcfed96f9010a5f3f1c65cbb6a6f3c5eab00e4a",
+    "pkg/frontend/materialized_view.go": "8ed6a137646c9865102045cac905c9f89d1098fd44312361eba196483cba4a8b",
+    "pkg/frontend/internal_executor.go": "233d2e0dbe39060524201d0fd9bf53e8c0d1ecbc8311b07778df4bc464ec3e12",
+    "test/materialized_view/additional.go": "4dd4c494998f4e1d8243f124a57cdfdb8106cfdbb15ce25b79c367c192078f71",
+    "test/materialized_view/catalog.go": "30b92c170f2f40689ea4a678361f452296e1d8625efa0d1078c9c30189b28645"
+  },
+  "report_sha256": {
+    "functional": "93d1a2331ce229f1099370c0229b1b4628d0be5616fc21211609f73bb8d20427",
+    "failure": "62008676c98541e5938f0ccee6b2d8fde5de62be978e5fc345b1036afb9f8303",
+    "multi-cn": "f0c5e5ca8faa5be11cf6d26d0220fb5e5224bcdf1fb605d5cb7f5e542125cb22"
+  },
+  "native_binary_sha256": "5b21a20b2f7ddc332ff5727aeb76dfd0a2f40c75256974c2efc51adf85a46a3e",
+  "native_input_equivalence": "The native service predates only the final accessor refactor: materializedViewRetirementTxnID delegates to existing backgroundExecTxnOperator, which selects the identical backSession transaction and ID for valid account-drop executors. All other production inputs are unchanged. Final frontend UT and static checks cover the delivered accessor; native evidence is explicitly reused by this semantic equivalence, not relabeled as a byte-identical source build.",
+  "scheduler_oracle": "Real reconciler; durable typed run history plus Completed queue state or taskService completed-task GC. No product hooks, new retries, skip/assertion/coverage-policy changes.",
+  "coverage_scope": "Local service is not coverage-instrumented. Client counters are diagnostic only. Previous head CI passed; new-head CI must run independently."
+}

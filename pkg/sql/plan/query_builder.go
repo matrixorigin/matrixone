@@ -13023,6 +13023,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", err
 		}
 
+		if tableDef.TableType == catalog.SystemMaterializedViewRel && obj.PubInfo != nil {
+			return 0, "", moerr.NewNotSupported(builder.GetContext(), "materialized views through subscriptions/publications")
+		}
 		// Empty-result rewrites can remove scans, not semantic dependencies.
 		// Capture evidence before optimization, including intermediate Views,
 		// snapshots, and ordinary tables that may later be replaced by Views.
@@ -13263,6 +13266,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, "", moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
+		} else if tableDef.TableType == catalog.SystemMaterializedViewRel && (builder.isHistoricalSnapshot(snapshot) || IsSnapshotValid(builder.compCtx.GetSnapshot())) {
+			return 0, "", moerr.NewNotSupported(builder.GetContext(), "historical materialized view reads")
 		} else if tableDef.TableType == catalog.SystemViewRel {
 			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
 			// object. A same-named View resolved from an explicit historical

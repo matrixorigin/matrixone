@@ -5958,6 +5958,10 @@ func executeStmt(ses *Session,
 	}
 
 	switch st := execCtx.stmt.(type) {
+	case *tree.CreateMaterializedView:
+		if err = checkMaterializedViewTransaction(execCtx.reqCtx, ses); err != nil {
+			return
+		}
 	case *tree.Select:
 		if st.Ep != nil {
 			if getPu(ses.GetService()).SV.DisableSelectInto {
@@ -5991,6 +5995,12 @@ func executeStmt(ses *Session,
 		ses.InvalidatePrivilegeCache()
 		// if the droped database is the same as the one in use, database must be reseted to empty.
 		if string(st.Name) == ses.GetDatabaseName() {
+			previousDatabase := ses.GetDatabaseName()
+			defer func() {
+				if err != nil {
+					ses.SetDatabaseName(previousDatabase)
+				}
+			}()
 			ses.SetDatabaseName("")
 		}
 	case *tree.ExplainAnalyze:

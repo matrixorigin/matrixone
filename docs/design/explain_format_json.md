@@ -395,3 +395,16 @@ MySQL optimizer choices. Run focused UT, package regression, a single-CN
 protocol/BVT pass, and local scale fixtures. CGo package runs and a fixed
 MySQL 8.0.45 capture remain explicit QA evidence; they are not replaced by a
 successful text EXPLAIN comparison.
+
+
+### Index search protocol compatibility
+
+The renderer consumes `INDEX_SEARCH_SCAN` / `IndexSearchScan`, including the
+common `QueryPayload` and named `algo_exprs`. Vector output retains the
+`query_vector` label; fulltext output uses `query_payload`. Algorithm descriptions come from
+the existing search plugin `ExplainHooks`; the SQL layer does not decode
+algorithm-specific options. The optional node field `algorithm_options` carries
+opaque option bytes as a base64 JSON string, preserving settings not described
+by the hook and options belonging to unregistered plugins. Expression names and
+values must have matching lengths and nonempty names; malformed metadata or
+plugin options produce an error instead of partial output.

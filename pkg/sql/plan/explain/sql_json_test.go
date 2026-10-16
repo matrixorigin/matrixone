@@ -1272,3 +1272,59 @@ func TestBuildSQLJSONPlanRejectsMalformedIndexSearchMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildSQLJSONPlanIndexSearchMetadataBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec *plan.IndexSearchScan
+	}{
+		{"missing metadata", nil},
+		{"missing index", &plan.IndexSearchScan{}},
+		{"unpaired algorithm expression", &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)},
+		}},
+		{"empty algorithm expression name", &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexName: "idx"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}, AlgoExprNames: []string{""},
+		}},
+		{"malformed plugin options", &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"}, AlgoOptions: []byte(`{`),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildSQLJSONPlan(t.Context(), &plan.Query{
+				StmtType: plan.Query_SELECT, Steps: []int32{0},
+				Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: tc.spec}},
+			})
+			require.Error(t, err)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		node *plan.Node
+	}{
+		{"fulltext", fulltextSearchScanNode(t)},
+		{"opaque settings", &plan.Node{
+			NodeType: plan.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &plan.IndexSearchScan{
+				Index:       &plan.IndexDef{IndexName: "idx", IndexAlgo: "unregistered"},
+				AlgoOptions: []byte{0, 0xff, 1},
+			},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{
+				StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{tc.node},
+			})
+			require.NoError(t, err)
+			var decoded sqlJSONPlan
+			require.NoError(t, json.Unmarshal(data, &decoded))
+			require.Len(t, decoded.MatrixOne.Nodes, 1)
+			require.Equal(t, tc.node.IndexSearchScan.AlgoOptions, decoded.MatrixOne.Nodes[0].AlgorithmOptions)
+			if tc.name == "fulltext" {
+				require.Equal(t, "Fulltext Index Scan", decoded.MatrixOne.Nodes[0].Operator)
+				require.Contains(t, decoded.MatrixOne.Nodes[0].Expressions, "index=ft_body")
+			}
+		})
+	}
+}

@@ -2817,6 +2817,9 @@ func buildCreateTable(
 		case *tree.TableOptionProperties:
 			properties := make([]*plan.Property, len(opt.Preperties))
 			for idx, property := range opt.Preperties {
+				if property.Key == catalog.MaterializedViewProperty || (property.Key == catalog.SystemRelAttr_Kind && property.Value == catalog.SystemMaterializedViewRel) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "materialized view properties are reserved")
+				}
 				properties[idx] = &plan.Property{
 					Key:   property.Key,
 					Value: property.Value,
@@ -7672,6 +7675,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
 		return nil, err
+	}
+	if parentTableDef != nil && parentTableDef.TableType == catalog.SystemMaterializedViewRel {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "foreign keys referencing materialized views")
 	}
 	if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 		return nil, err

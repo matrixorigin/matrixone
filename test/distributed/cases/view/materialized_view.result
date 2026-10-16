@@ -1,0 +1,114 @@
+drop database if exists mv_bvt;
+create database mv_bvt;
+use mv_bvt;
+create table facts(id int primary key,k int,v bigint);
+insert into facts values(1,1,10),(2,1,20),(3,2,null);
+set experimental_materialized_view=0;
+create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by facts.k;
+not supported: enable experimental_materialized_view before creating a materialized view
+set experimental_materialized_view=1;
+create materialized view totals refresh manual as select k,count(*) as n,sum(v) as s from facts group by facts.k;
+select * from totals order by k;
+invalid input: MV_NOT_POPULATED: refresh materialized view before querying it
+refresh materialized view totals;
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  2  ¦  30  𝄀
+2  ¦  1  ¦  null
+insert into facts values(4,2,7);
+update facts set v=11 where id=1;
+delete from facts where id=2;
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  2  ¦  30  𝄀
+2  ¦  1  ¦  null
+refresh materialized view totals;
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+2  ¦  2  ¦  7
+refresh materialized view totals;
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+2  ¦  2  ¦  7
+create materialized view if not exists totals refresh manual as select id from facts;
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+2  ¦  2  ¦  7
+show create materialized view totals;
+➤ Materialized View[12,0,0]  ¦  Create Materialized View[12,0,0]  𝄀
+totals  ¦  create materialized view `mv_bvt`.`totals` refresh manual as select `facts`.`k` as `k`, count(*) as `n`, sum(`facts`.`v`) as `s` from `facts` group by `facts`.`k`
+insert into totals(k) values(9);
+invalid input: materialized view is read only
+update totals set s=0;
+invalid input: materialized view is read only
+delete from totals;
+invalid input: materialized view is read only
+truncate table totals;
+invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
+drop table totals;
+invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
+alter table totals add column extra int;
+invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
+alter table totals add column (batch_x int,batch_y varchar(8));
+invalid input: materialized view is read only; use DROP/ALTER MATERIALIZED VIEW
+alter table facts add column extra int;
+invalid input: source has dependent materialized views; drop them before changing its schema/identity
+alter table facts add column (batch_x int,batch_y varchar(8));
+invalid input: source has dependent materialized views; drop them before changing its schema/identity
+truncate table facts;
+invalid input: source has dependent materialized views; drop them before changing its schema/identity
+drop table facts;
+invalid input: source has dependent materialized views; drop them before changing its schema/identity
+drop database mv_bvt;
+invalid input: database contains materialized views; drop them first
+select database();
+➤ database()[12,65535,0]  𝄀
+mv_bvt
+select k,n,s from totals order by k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+2  ¦  2  ¦  7
+select id,k,v from facts order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+3  ¦  2  ¦  null  𝄀
+4  ¦  2  ¦  7
+begin;
+refresh materialized view totals;
+internal error: unclassified statement appears in uncommitted transaction
+rollback;
+create materialized view unsupported refresh manual as select rand() from facts;
+not supported: materialized view function rand
+create materialized view unsupported refresh manual as select distinct k from facts;
+not supported: materialized view query shape
+create materialized view unsupported refresh manual as select * from totals;
+not supported: materialized view sources must be persistent native tables
+create materialized view unsupported refresh every interval 1 second as select * from facts;
+invalid input: materialized view refresh interval must be at least 60 seconds
+show tables;
+➤ Tables_in_mv_bvt[12,5000,0]  𝄀
+facts  𝄀
+totals
+alter materialized view totals refresh every interval 1 minute;
+show create materialized view totals;
+➤ Materialized View[12,0,0]  ¦  Create Materialized View[12,0,0]  𝄀
+totals  ¦  create materialized view `mv_bvt`.`totals` refresh every interval 60 second as select `facts`.`k` as `k`, count(*) as `n`, sum(`facts`.`v`) as `s` from `facts` group by `facts`.`k`
+alter materialized view totals refresh manual;
+show create materialized view totals;
+➤ Materialized View[12,0,0]  ¦  Create Materialized View[12,0,0]  𝄀
+totals  ¦  create materialized view `mv_bvt`.`totals` refresh manual as select `facts`.`k` as `k`, count(*) as `n`, sum(`facts`.`v`) as `s` from `facts` group by `facts`.`k`
+drop materialized view totals;
+drop materialized view if exists totals;
+alter table facts add column extra int;
+alter table facts add column (batch_x int,batch_y varchar(8));
+select id,k,v,extra,batch_x,batch_y from facts order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[-5,64,0]  ¦  extra[4,32,0]  ¦  batch_x[4,32,0]  ¦  batch_y[12,8,0]  𝄀
+1  ¦  1  ¦  11  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  2  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  2  ¦  7  ¦  null  ¦  null  ¦  null
+drop table facts;
+drop database mv_bvt;
+set experimental_materialized_view=0;

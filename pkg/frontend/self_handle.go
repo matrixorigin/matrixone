@@ -137,6 +137,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.RefreshMaterializedView:
+		if err = handleRefreshMaterializedView(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropMaterializedView:
+		if err = handleDropMaterializedView(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterMaterializedView:
+		if err = handleAlterMaterializedView(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowMaterializedViews:
+		if err = handleShowMaterializedViews(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
 	case *tree.CreateSQLTask:
 		ses.EnterFPrint(FPCreateSQLTask)
 		defer ses.ExitFPrint(FPCreateSQLTask)

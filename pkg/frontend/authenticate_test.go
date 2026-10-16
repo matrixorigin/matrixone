@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -12175,6 +12176,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -12241,6 +12243,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -12290,6 +12293,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -12355,6 +12359,7 @@ func TestDoDropAccountSQLTaskCleanupFailureRollsBack(t *testing.T) {
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 	bh.sql2result["begin;"] = nil
 	bh.sql2result["rollback;"] = nil
 
@@ -12405,6 +12410,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 
 			bh := &backgroundExecTestWithHistory{}
 			bh.init()
+			bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 			stmt := &tree.DropAccount{
 				Name: boxExprStr("test_acc"),
@@ -12481,6 +12487,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 
 			bh := &backgroundExecTestWithHistory{}
 			bh.init()
+			bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 			stmt := &tree.DropAccount{
 				Name: boxExprStr("test_acc"),
@@ -12554,6 +12561,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 
 			bh := &backgroundExecTestWithHistory{}
 			bh.init()
+			bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 			gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
 			wantErr := errors.New("lifecycle gate failed")
 			bh.sql2result["begin;"] = nil
@@ -12582,6 +12590,7 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
+	bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 
 	stmt := &tree.DropAccount{Name: boxExprStr("acc")}
 	priv := determinePrivilegeSetOfStatement(stmt)
