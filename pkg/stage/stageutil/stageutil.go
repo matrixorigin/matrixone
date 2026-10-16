@@ -200,6 +200,12 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 	if err != nil {
 		return stage.StageDef{}, err
 	}
+	return UrlToStageDefFromURL(aurl, proc)
+}
+
+// UrlToStageDefFromURL borrows an already parsed URL. Neither the input URL nor
+// cached stage definitions are modified by resolution.
+func UrlToStageDefFromURL(aurl *url.URL, proc *process.Process) (s stage.StageDef, err error) {
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")

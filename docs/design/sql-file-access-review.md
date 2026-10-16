@@ -4,7 +4,7 @@ Issue: #30185. Implementation PR: #30212.
 
 This records the distinct design-first decisions for the complete change. The
 current consolidated design is `sql-file-access.md`, blob
-`012635892883493679c682a7ecf36bb3ca50fb1a`, delivered with this record. These approvals permit implementation;
+`96fd5ecab87c549cf59751d81bb72161fb074b7c`, delivered with this record. These approvals permit implementation;
 they do not turn missing runtime evidence into a pass.
 
 ## Recorded decisions
@@ -111,3 +111,39 @@ reconciled the 12 identical patches, unchanged 132 Go fingerprints and fresh
 focused normal/race plus 22 CPU static receipts: **PASS**, prior approval valid.
 Turn `01a13f4c-b0e7-70e3-bbcc-ea61a8b02e76`; reconciliation artifact SHA256:
 `d849e93e98ead0efa754d8b2a1fb67069acbab97cce93c5c50dee5c6fa3fdb27`.
+
+## Changed-column admission and parsed URL reuse
+
+Design accepted before this amendment by gpt-6.1-sol / xhigh, session
+`01a14284-3523-71e1-a83b-bda47043296f`, turn
+`01a14284-35aa-70a1-813e-44d98e3110e4`; actual rollout metadata verifies
+model and effort. Reviewed source `a2541cfeef5` on main `c46b893f616`,
+including the previously recorded reader-only candidate.
+
+The final-row owner selects assigned async Datalink columns from its existing
+projection map. Unchanged sources are not revalidated by unrelated UPDATE;
+recomputed values and repeated writable physical aliases retain admission.
+Datalink and stage resolution share already parsed operation-local URLs without
+changing CSV generation, stage-cache lifetime or acquisition policy. There is
+no new runtime state or execution owner. Earlier rejected optimization and
+performance records remain valid historical outcomes. Final readiness requires
+new functional, static and complete-candidate performance evidence.
+
+
+Rebase reconciliation: all 12 existing patches remain identical after rebase to
+main `ac55588b8d4` (head `380740aac56`). Current-base functional and static
+receipts are recorded separately from the prior source review. The complete
+Darwin performance cohort did not meet acceptance; two independent Linux
+preparations were invalidated by other compilation. Source acceptance does not
+waive the incomplete performance gate. The validation record retains these
+limits and the user-approved GPU-native exception.
+
+Final amendment review: **SOURCE ACCEPT; OVERALL NOT READY**, actual
+gpt-6.1-sol / xhigh, session `01a14284-3523-71e1-a83b-bda47043296f`,
+turn `01a1436d-7a01-7e80-bed0-1f7a26ba7203`. Artifact SHA256:
+`5d5e12f25781fa8298f5565e7011aae05ffbf6d6b3e92fb9186890f499553af8`.
+It reconciles all 12 unchanged rebased patches, 135 Go fingerprints, final
+normal/race/public/static receipts and the retained failed performance cohort.
+No new material source blocker remains. End-to-end performance is still a
+mandatory unresolved gate; this source decision does not authorize a push or
+waive that gate.

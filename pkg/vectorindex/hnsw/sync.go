@@ -768,11 +768,3 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 	full = (idxlen >= int64(s.last.MaxCapacity))
 	return s.last, full, nil
 }
-
-// generate SQL to update the secondary index tables
-// 1. sync the metadata table
-// 2. sync the index file to index table
-// ToSql emits the CDC sync's inserts. ts orders the generations (wall clock); buildTS is the
-// transaction SnapshotTS the content reflects. provenance says whether the metadata table has
-// the nrow/build_ts columns yet -- a CDC sync is the path most likely to meet a table created
-// before they existed, since it writes to indexes it did not create.

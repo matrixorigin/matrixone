@@ -115,7 +115,16 @@ back its database effects. NULL and unselected rows do not cause source access.
 
 The existing final-row planning owner and plugin async metadata determine which
 columns need this check. Column names are collected before index definitions are
-stripped and bound to the final row image. A nonfoldable runtime check in a barrier
+stripped and bound to the final row image. Modern UPDATE checks indexed sources
+assigned in that final projection, including explicit same-value assignments,
+automatic ON UPDATE expressions and generated values. Columns carried unchanged
+from OLD need no source resolution. Repeated writable aliases of one physical
+table retain full admission because later merging can recompute values; legacy
+UPDATE and insert/duplicate/replace paths retain their existing full checks.
+An unrelated UPDATE may therefore commit while a retained source is unavailable,
+disabled, retargeted or unsupported after upgrade. It introduces no source or
+file authority: acquisition still checks the actual provider, and an invalidated
+consumer still requires repair or migration before it can progress. A nonfoldable runtime check in a barrier
 filter validates only eligible rows, without reevaluating their source expressions.
 There is no new catalog privilege, persisted policy, worker or wire field. Unrelated columns and non-indexed ordinary SQL do not perform provider
 or stage resolution. Synchronous ordinary fulltext retains its foreground caller

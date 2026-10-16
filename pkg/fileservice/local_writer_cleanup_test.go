@@ -78,7 +78,9 @@ func TestLocalWriterCloseCleanup(t *testing.T) {
 					dir, err := os.Open(root)
 					require.NoError(t, err)
 					require.NoError(t, dir.Close())
-					parent, _ := filepath.Split(filepath.Join(root, target))
+					// ETL roots may resolve symlinks (for example /var on macOS).
+					// Inject at the actual writer's parent, as syncDir does.
+					parent, _ := filepath.Split(f.Name())
 					if old := dirs[parent]; old != nil {
 						require.NoError(t, old.Close())
 					}

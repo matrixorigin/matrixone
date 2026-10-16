@@ -17,9 +17,91 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
+
+func TestAsyncDatalinkUpdateFinalAssignments(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		auto, generated bool
+		assignment      string
+		checks          int
+	}{
+		{"carried sources", false, false, "val=val+1", 0},
+		{"explicit same value", false, false, "updated_at=updated_at", 1},
+		{"automatic source", true, false, "val=val+1", 1},
+		{"generated automatic source", true, true, "val=val+1", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext().(*MockCompilerContext)
+			table := ctx.tables["t_on_update_gen"]
+			table.Cols[2].Typ = planpb.Type{Id: int32(types.T_datalink)}
+			table.Cols[3].Typ = planpb.Type{Id: int32(types.T_datalink)}
+			table.Cols[2].OnUpdate = nil
+			table.Cols[3].GeneratedCol = nil
+			if tc.auto {
+				auto, err := forceCastExpr(ctx.GetContext(), makePlan2StringConstExprWithType("file:///tmp/owned.txt"), table.Cols[2].Typ)
+				require.NoError(t, err)
+				table.Cols[2].OnUpdate = &planpb.OnUpdate{Expr: auto, OriginString: "'file:///tmp/owned.txt'"}
+			}
+			if tc.generated {
+				table.Cols[3].GeneratedCol = &planpb.GeneratedCol{Expr: &planpb.Expr{Typ: table.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2, Name: "updated_at"}}}, IsStored: true, OriginString: "updated_at"}
+			}
+			table.Indexes = []*planpb.IndexDef{{IndexAlgo: "fulltext2", IndexName: "ft", Parts: []string{"updated_at", "g"}}}
+			stmts, err := mysql.Parse(ctx.GetContext(), "update constraint_test.t_on_update_gen set "+tc.assignment, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			checks := 0
+			for _, node := range p.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					require.NoError(t, planpb.VisitExprTree(filter, func(e *planpb.Expr) error {
+						if f := e.GetF(); f != nil && f.Func.GetObjName() == "_check_async_datalink_source" {
+							checks++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Equal(t, tc.checks, checks)
+		})
+	}
+}
+
+func TestAsyncDatalinkUpdateColumns(t *testing.T) {
+	ctx := &DMLContext{
+		tableDefs:            []*planpb.TableDef{{TblId: 1}, {TblId: 2}},
+		aliases:              []string{"d", "other"},
+		updateCol2Expr:       []map[string]tree.Expr{{"status": nil}, {"status": nil}},
+		asyncDatalinkColumns: map[int][]string{0: {"p1", "p2"}},
+	}
+	for _, tc := range []struct {
+		name  string
+		final map[string]int32
+		want  []string
+	}{
+		{"ordinary column", map[string]int32{"d.status": 0}, nil},
+		{"one assigned source", map[string]int32{"d.p2": 7}, []string{"p2"}},
+		{"both assigned sources", map[string]int32{"d.p1": 8, "d.p2": 7}, []string{"p1", "p2"}},
+		{"distinct target alias", map[string]int32{"other.p1": 7}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, asyncDatalinkUpdateColumns(ctx, 0, tc.final))
+			require.Equal(t, []string{"p1", "p2"}, ctx.asyncDatalinkColumns[0], "do not overwrite captured names")
+		})
+	}
+	// Repeated physical targets can recompute values after merging aliases,
+	// including UPDATE IGNORE. Preserve the full final-value check there.
+	ctx.tableDefs[1].TblId = 1
+	require.Equal(t, []string{"p1", "p2"}, asyncDatalinkUpdateColumns(ctx, 0, nil))
+	ctx.updateCol2Expr[1] = nil // a read-only alias cannot introduce a value.
+	require.Empty(t, asyncDatalinkUpdateColumns(ctx, 0, nil))
+	require.Empty(t, asyncDatalinkUpdateColumns(ctx, 1, nil))
+}
 
 func TestAsyncDatalinkColumnsAndFinalBinding(t *testing.T) {
 	table := &TableDef{Name: "docs", Cols: []*planpb.ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "path", Typ: planpb.Type{Id: int32(types.T_datalink)}}}, Indexes: []*planpb.IndexDef{

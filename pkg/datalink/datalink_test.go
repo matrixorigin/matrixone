@@ -71,6 +71,10 @@ func TestParseDatalink(t *testing.T) {
 			if !reflect.DeepEqual(got2, tt.wantUrlParams) {
 				t.Errorf("ParseDatalink() = %v, want %v", got2, tt.wantUrlParams)
 			}
+			dl, err := parseDatalink(tt.data, nil)
+			if err != nil || dl.MoPath != tt.wantMoUrl || dl.Offset != tt.wantUrlParams[0] || dl.Size != tt.wantUrlParams[1] {
+				t.Errorf("parsed Datalink = %+v, err=%v; want path=%s range=%v", dl, err, tt.wantMoUrl, tt.wantUrlParams)
+			}
 		})
 	}
 }

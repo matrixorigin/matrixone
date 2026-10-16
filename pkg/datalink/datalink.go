@@ -72,7 +72,7 @@ func parseDatalink(aurl string, proc *process.Process) (Datalink, error) {
 		return Datalink{}, err
 	}
 
-	moUrl, offsetSize, err := ParseDatalink(aurl, proc)
+	moUrl, offsetSize, err := parseDatalinkURL(u, proc)
 	if err != nil {
 		return Datalink{}, err
 	}
@@ -153,6 +153,11 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	if err != nil {
 		return "", nil, err
 	}
+	return parseDatalinkURL(u, proc)
+}
+
+func parseDatalinkURL(u *url.URL, proc *process.Process) (string, []int64, error) {
+	var err error
 
 	var moUrl string
 	// 1. get moUrl from the path
@@ -170,7 +175,12 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		w.Flush()
 		moUrl = fileservice.JoinPath(buf.String(), u.Path)
 	case stage.STAGE_PROTOCOL:
-		moUrl, _, err = stageutil.UrlToPath(fsPath, proc)
+		var source stage.StageDef
+		source, err = stageutil.UrlToStageDefFromURL(u, proc)
+		if err != nil {
+			return "", nil, err
+		}
+		moUrl, _, err = source.ToPath()
 		if err != nil {
 			return "", nil, err
 		}

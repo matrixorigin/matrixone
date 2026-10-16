@@ -108,6 +108,13 @@ func canonicalFilePaths(paths []string) ([]string, error) {
 }
 
 func parseService(str string) (service string, arguments []string, err error) {
+	// A nonempty unquoted single record needs no CSV buffering. Keep the
+	// original input for the CSV reader's quoting, blank-line and CRLF rules.
+	record := strings.TrimSuffix(str, "\n")
+	if record != "" && !strings.ContainsAny(record, "\"\r\n") {
+		fields := strings.Split(record, ",")
+		return fields[0], fields[1:], nil
+	}
 	r := csv.NewReader(strings.NewReader(str))
 	records, err := r.ReadAll()
 	if err != nil {

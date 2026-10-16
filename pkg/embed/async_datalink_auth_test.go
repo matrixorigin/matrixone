@@ -141,11 +141,53 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	var admitted bool
 	require.NoError(t, conn.QueryRowContext(t.Context(), "select _check_async_datalink_source(cast("+sqlquote.String(remote)+" as datalink),true)").Scan(&admitted))
 	require.True(t, admitted)
+	exec(fmt.Sprintf("create stage async_source_stable URL='s3://bucket/' CREDENTIALS={'AWS_KEY_ID'='id','AWS_SECRET_KEY'='secret','AWS_REGION'='us-east-1','PROVIDER'='amazon','ENDPOINT'=%s}", sqlquote.String(endpoint)))
+	defer admin.Exec("drop stage if exists async_source_stable")
+	stable := "stage://async_source_stable/content.txt"
+	exec("create table changed_sources(id bigint primary key,p1 datalink,p2 datalink,status int,fulltext2 changed_ft(p1,p2))")
+	exec("insert into changed_sources values(1," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0),(2," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0)")
+	var changedStorage string
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select index_table_name from mo_catalog.mo_indexes where name='changed_ft' and algo_table_type='ftv2_index' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='changed_sources') limit 1").Scan(&changedStorage))
+	changedTailSQL := "select coalesce(max(chunk_id),-1) from " + sqlquote.QualifiedIdent(database, changedStorage) + " where index_id='cdc_tail' and tag=1"
+	var changedBefore int64
+	require.Eventually(t, func() bool {
+		return conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&changedBefore) == nil && changedBefore >= 0
+	}, 30*time.Second, 100*time.Millisecond)
 	exec("alter stage async_source_remote set url=" + sqlquote.String("file://"+dir+"/"))
+	// Keeping an OLD source does not introduce a source or authorize a read.
+	exec("update changed_sources set status=1")
+	for _, q := range []string{
+		"update changed_sources set p2=p2,status=8 where id=1",
+		"update changed_sources set p1=" + sqlquote.String(local) + ",status=8 where id=1",
+		"update changed_sources a join changed_sources b on a.id=b.id set a.status=3,b.status=4 where a.id=1",
+	} {
+		_, err = conn.ExecContext(t.Context(), q)
+		require.ErrorContains(t, err, "asynchronous indexes require remote Datalink sources", q)
+		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where status=1").Scan(&count))
+		require.Equal(t, 2, count, "rejected assignments roll back all database effects")
+	}
+	// Validate the assigned source independently of a carried, invalidated peer.
+	exec("update changed_sources set p1=" + sqlquote.String(stable) + ",status=2 where id=1")
+	var storedP1, storedP2 string
+	var status int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select p1,p2,status from changed_sources where id=1").Scan(&storedP1, &storedP2, &status))
+	require.Equal(t, stable, storedP1)
+	require.Equal(t, remote, storedP2)
+	require.Equal(t, 2, status)
 	require.ErrorContains(t, backgroundRead(remote), "only the sys account moadmin role")
 	exec("alter stage async_source_remote set url='s3://bucket/'")
 	require.NoError(t, backgroundRead(remote))
 	require.Equal(t, "matrixone stage content", resolvedText)
+	exec("update changed_sources set p1='stage://async_source_stable/file-sample_100kB.docx',p2=NULL,status=3 where id=1")
+	require.Eventually(t, func() bool {
+		var now int64
+		return conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&now) == nil && now > changedBefore
+	}, 30*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where id=1 and match(p1,p2) against('Nulla facilisi' in natural language mode)").Scan(&count) == nil && count == 1
+	}, 30*time.Second, 100*time.Millisecond)
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where id=1 and match(p1,p2) against('matrixone')").Scan(&count))
+	require.Zero(t, count)
 
 	// Actual supported local lifecycle: acquire text with the foreground authority,
 	// then maintain committed TEXT through CDC, without synchronous rebuilding.

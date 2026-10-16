@@ -1,5 +1,61 @@
 # SQL file access validation record
 
+## Latest amendment: UPDATE ownership and performance status
+
+The 12 existing patches rebase unchanged onto main `ac55588b8d4` (prior-PR
+head `380740aac56`). This amendment selects async Datalink admission from the
+modern UPDATE owner's final assignment map. An unrelated UPDATE carries its
+old source without resolving it; explicit, automatic and generated source
+assignments remain checked. Repeated writable physical aliases retain full
+admission. Acquisition always checks its current resource policy. Datalink and
+stage resolution reuse the already parsed URL, and the shared service parser
+avoids CSV buffering only for a proven single unquoted record. No new cache,
+worker, persistent state, identity grant or normal-query policy hook is added.
+
+Current-base normal tests pass all four owning packages (plan, Datalink,
+stageutil, fileservice); focused race tests include the real final-assignment
+producer. All 22 derived CPU packages pass vet, molint and configured incremental
+golangci-lint; formatting, err-check and diff checks pass. GPU-tag-only owning
+packages remain outside this CPU scope under the explicit native exception. All three public SQL scenarios pass normal/race: authorization,
+tenant-stage CDC and two-CN persistence. The amended existing CDC fixture checks
+two source columns and rows, status-only writes after source retargeting,
+explicit same-value/repeated-alias denial with complete rollback, current-role
+acquisition denial, repair and actual durable-tail/search/old-term removal.
+Linux amd64's same tenant-stage CDC test also passes (96.56 seconds command).
+The Darwin writer fixture derives its injected directory from the actual
+writer's canonical filename; production behavior and failure assertions remain.
+
+**Performance acceptance is incomplete; do not infer no regression.** The
+complete Darwin cohort on main `c46b893f616` retained all 30 terminal passing
+processes, 288 bulk measurements, 72 cell verifications and 24 ordinary reports.
+[Every bulk pair and allocation median](sql-file-access-datalink-performance.csv)
+is retained, including failed timing gates. Indexed 16-stage status UPDATE
+allocation medians per 4096 rows were 178.09 MiB prior PR, 30.99 MiB main and
+30.18 MiB candidate. These process-wide cumulative allocations show the intended
+reduction; they are not retained heap or isolated validator allocations.
+
+The same cohort does **not** pass the timing criteria: unindexed one-stage
+source UPDATE had a paired median +27.54%, only 1/6 pairs within +10%, and other
+timing gates failed. Ordinary pair 4 lacks a valid measurement window; its main
+process took 2877 seconds with a recorded 1888-second observation gap. Unrelated
+compilation also overlapped part of the bulk work. These facts invalidate
+acceptance, without establishing that external load caused every slowdown.
+
+Independent Linux validation rebuilt all three latest-base binaries against
+one qualified native CPU generation. Both attempts were retained as
+ENVIRONMENT_INVALID because unrelated Rust compilation was observed. Attempt 1's
+qualification was stopped; attempt 2 stopped during its 60-second environment
+observation. No Linux diagnostic/formal cohort was run, and neither attempt is
+performance evidence. No other tasks/services were stopped and no replacement
+samples were selected. A quiet measurement window is still needed to complete
+the declared performance gates. GPU-native validation remains explicitly
+excepted; CI results after publication remain separate.
+
+The revision-qualified older results below are retained as historical evidence,
+not relabeled as this amendment's performance acceptance. Current amendment raw
+logs, accepted designs, all failed attempts and receipts are under the
+issue30185 task ledger's `revision-20261016/` directory.
+
 Issue #30185, PR #30212. Earlier broad validation snapshot:
 `9961057360d29b7afab0fb6d0afc7a1a92c32055`.
 Base: `461bc8e34920959e5fc141e3d1b37673a90894e1`.
@@ -214,9 +270,9 @@ closures are reused; new implementation, test and document hunks are reviewed
 separately. Design records are pinned in `sql-file-access-review.md`. No blanket
 internal identity, missing-context trusted fallback, policy store, worker or CI
 change remains. The source-owner inventory supplements real runtime tests and
-is not a proof about arbitrary future Go code. No new confirmed implementation
-blocker remains for PR update; the reproduced baseline failures and performance
-limits remain explicit. This record does not assert merge readiness or green CI.
+is not a proof about arbitrary future Go code. Earlier source reviews found no new confirmed implementation blocker; the
+current amendment's incomplete performance gate is stated above. Reproduced
+baseline failures and historical performance limits remain explicit. This record does not assert merge readiness or green CI.
 
 GPU-native CAGRA/IVF-PQ compilation/runtime remains unverified under the user's
 explicit exception. ONNX and live cloud/HDFS deployment execution are not proved

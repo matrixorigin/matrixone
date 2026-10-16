@@ -69,6 +69,28 @@ func asyncDatalinkColumns(table *TableDef) ([]string, error) {
 	return columns, nil
 }
 
+// asyncDatalinkUpdateColumns selects values produced by this UPDATE. The final
+// projection also includes automatic and generated assignments. Repeated
+// writable aliases may merge their values later, so retain full admission there.
+func asyncDatalinkUpdateColumns(dmlCtx *DMLContext, target int, finalColumns map[string]int32) []string {
+	columns := dmlCtx.asyncDatalinkColumns[target]
+	if len(columns) == 0 {
+		return nil
+	}
+	for i, table := range dmlCtx.tableDefs {
+		if i != target && table.TblId == dmlCtx.tableDefs[target].TblId && len(dmlCtx.updateCol2Expr[i]) > 0 {
+			return columns
+		}
+	}
+	var assigned []string
+	for _, name := range columns {
+		if _, ok := finalColumns[dmlCtx.aliases[target]+"."+name]; ok {
+			assigned = append(assigned, name)
+		}
+	}
+	return assigned
+}
+
 // appendAsyncDatalinkAdmission checks already computed final values. The scalar
 // owns eligibility masking before stage resolution; a boolean OR is insufficient.
 func appendAsyncDatalinkAdmission(builder *QueryBuilder, bindCtx *BindContext, table *TableDef, columns []string, nodeID, inputTag int32, lookup func(string) (int32, bool), eligible *plan.Expr) (int32, error) {

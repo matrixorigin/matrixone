@@ -236,6 +236,18 @@ func TestUrlToStageDefForExportDoesNotMutateCachedURL(t *testing.T) {
 	cached, ok = proc.GetStageCache().Get("exportstage")
 	require.True(t, ok)
 	require.Equal(t, dir, cached.Url.Path)
+
+	input, err := url.Parse("stage://exportstage/child.txt?offset=1&size=2")
+	require.NoError(t, err)
+	snapshot := *input
+	resolved, err := UrlToStageDefFromURL(input, proc)
+	require.NoError(t, err)
+	require.Equal(t, path.Join(dir, "child.txt"), resolved.Url.Path)
+	require.Equal(t, "offset=1&size=2", resolved.Url.RawQuery)
+	require.Equal(t, snapshot, *input)
+	cached, ok = proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
 }
 
 func Test_runSql(t *testing.T) {
