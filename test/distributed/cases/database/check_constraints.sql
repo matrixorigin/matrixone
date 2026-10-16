@@ -148,4 +148,23 @@ from information_schema.check_constraints
 where constraint_schema = 'check_rename_30343'
 order by constraint_name;
 
+-- a rename producing duplicate CHECK names within the table is rejected
+create table conflict_src (a int, check (a > 0), constraint u2_chk_1 check (a < 100));
+rename table conflict_src to u2;
+show create table conflict_src;
+
+-- a rename producing duplicate CHECK names across sibling tables is rejected
+create table owner (a int, constraint u3_chk_1 check (a < 0));
+create table mover (a int, check (a > 0));
+rename table mover to u3;
+show create table mover;
+
+-- a combined table+column rename carries the final CHECK names
+create table combo (a int, check (a > 0));
+alter table combo rename to combo2, rename column a to b;
+show create table combo2;
+insert into combo2 values (-1);
+create table combo (a int, check (a > 0));
+show create table combo;
+
 drop database check_rename_30343;

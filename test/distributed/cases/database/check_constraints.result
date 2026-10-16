@@ -180,4 +180,41 @@ order by constraint_name;
 ➤ constraint_name[12,64,0]  ¦  check_clause[12,65535,0]  𝄀
 t_chk_1  ¦  `a` < 100  𝄀
 u_chk_1  ¦  `a` > 0
+create table conflict_src (a int, check (a > 0), constraint u2_chk_1 check (a < 100));
+rename table conflict_src to u2;
+Duplicate check constraint name 'u2_chk_1'
+show create table conflict_src;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+conflict_src  ¦  CREATE TABLE `conflict_src` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `conflict_src_chk_1` CHECK (`a` > 0),
+  CONSTRAINT `u2_chk_1` CHECK (`a` < 100)
+)
+create table owner (a int, constraint u3_chk_1 check (a < 0));
+create table mover (a int, check (a > 0));
+rename table mover to u3;
+Duplicate check constraint name 'u3_chk_1'
+show create table mover;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mover  ¦  CREATE TABLE `mover` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `mover_chk_1` CHECK (`a` > 0)
+)
+create table combo (a int, check (a > 0));
+alter table combo rename to combo2, rename column a to b;
+show create table combo2;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+combo2  ¦  CREATE TABLE `combo2` (
+  `b` int DEFAULT NULL,
+  CONSTRAINT `combo2_chk_1` CHECK (`b` > 0)
+)
+insert into combo2 values (-1);
+constraint violation: Check constraint 'combo2_chk_1' is violated
+create table combo (a int, check (a > 0));
+show create table combo;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+combo  ¦  CREATE TABLE `combo` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `combo_chk_1` CHECK (`a` > 0)
+)
 drop database check_rename_30343;
