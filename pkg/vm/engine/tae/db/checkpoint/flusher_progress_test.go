@@ -16,11 +16,13 @@ package checkpoint
 
 import (
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -28,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/buffer"
+	"go.uber.org/zap/zapcore"
 )
 
 type flushReadyObject struct {
@@ -69,7 +73,7 @@ type flushSelectionFixture struct {
 	scheduler *flushAdmissionScheduler
 }
 
-func newFlushSelectionFixture(t *testing.T, dataReady, tombstoneReady []bool) *flushSelectionFixture {
+func newFlushSelectionFixture(t testing.TB, dataReady, tombstoneReady []bool) *flushSelectionFixture {
 	t.Helper()
 	c := catalog.MockCatalog(nil)
 	t.Cleanup(func() { require.NoError(t, c.Close()) })
@@ -210,6 +214,99 @@ func TestFlushDeadlineWaitsForAllData(t *testing.T) {
 				require.True(t, f.table.Stats.GetFlushDeadline().After(deadline))
 			} else {
 				require.Equal(t, deadline, f.table.Stats.GetFlushDeadline())
+			}
+		})
+	}
+}
+
+func TestFireFlushTabletailBoundsDeferredLogging(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		allReady  bool
+		busyTomb  bool
+		failAt    int
+		wantBusy  int64
+		wantScans int
+	}{
+		{name: "busy-across-chunks", wantBusy: 401, wantScans: 401},
+		{name: "ready-has-no-deferred-log", allReady: true, wantScans: 401},
+		{name: "busy-tombstone-early-return", busyTomb: true, wantBusy: 399, wantScans: 400},
+		{name: "scheduler-early-return", failAt: 1, wantBusy: 399, wantScans: 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readiness := make([]bool, 401)
+			for i := range readiness {
+				readiness[i] = tc.allReady
+			}
+			if tc.busyTomb || tc.failAt != 0 {
+				readiness[0] = true
+			}
+			f := newFlushSelectionFixture(t, readiness, []bool{!tc.busyTomb})
+			f.scheduler.failAt = tc.failAt
+			// Reuse the existing reporter seam; do not replace the package logger.
+			// The package's tests are serial, and cleanup restores the prior reporter.
+			previous := logutil.GetReportZapFunc()
+			var mu sync.Mutex
+			var counts []int64
+			logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: func(enc zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
+				if entry.Message == "flusher.data.prepare.compact.false" {
+					count := int64(-1)
+					for _, field := range fields {
+						if field.Key == "deferred-count" {
+							count = field.Integer
+						}
+					}
+					mu.Lock()
+					counts = append(counts, count)
+					mu.Unlock()
+				}
+				return previous(enc, entry, fields)
+			}})
+			t.Cleanup(func() { logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: previous}) })
+			err := f.flusher.fireFlushTabletail(f.table, f.end(), types.TS{})
+			if tc.wantBusy == 0 {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "got %v", err)
+			}
+			mu.Lock()
+			got := slices.Clone(counts)
+			mu.Unlock()
+			if tc.wantBusy == 0 {
+				require.Empty(t, got)
+			} else {
+				require.Equal(t, []int64{tc.wantBusy}, got)
+			}
+			var scans int
+			for _, object := range f.objects[:len(readiness)] {
+				scans += object.calls
+			}
+			require.Equal(t, tc.wantScans, scans)
+		})
+	}
+}
+
+func BenchmarkFireFlushTabletailSelection(b *testing.B) {
+	for _, allReady := range []bool{false, true} {
+		name := "busy"
+		if allReady {
+			name = "ready"
+		}
+		b.Run(name, func(b *testing.B) {
+			readiness := make([]bool, 400)
+			for i := range readiness {
+				readiness[i] = allReady
+			}
+			f := newFlushSelectionFixture(b, readiness, nil)
+			end := f.end()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				f.scheduler.scopes = f.scheduler.scopes[:0]
+				err := f.flusher.fireFlushTabletail(f.table, end, types.TS{})
+				if (allReady && err != nil) || (!allReady && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB)) {
+					b.Fatalf("unexpected admission result: %v", err)
+				}
 			}
 		})
 	}

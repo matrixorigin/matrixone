@@ -738,7 +738,16 @@ func (flusher *flushImpl) fireFlushTabletail(
 
 	metaChunks := slices.Chunk(metas, 400)
 	firstChunk := true
-	deferred := false
+	deferred := 0
+	defer func() {
+		// Scanning past busy peers must not turn one retry into an object-sized
+		// stream of diagnostics. Also report partial scans that exit on a conflict.
+		if deferred > 0 {
+			logutil.Info("flusher.data.prepare.compact.false",
+				zap.String("table", tableDesc),
+				zap.Int("deferred-count", deferred))
+		}
+	}()
 
 	for chunk := range metaChunks {
 		tombstoneOnly := len(chunk) == 1 && chunk[0] == nil
@@ -750,12 +759,7 @@ func (flusher *flushImpl) fireFlushTabletail(
 		scopes := make([]common.ID, 0, len(chunk))
 		for _, meta := range chunk {
 			if !meta.GetObjectData().PrepareCompact() {
-				logutil.Info(
-					"flusher.data.prepare.compact.false",
-					zap.String("table", tableDesc),
-					zap.String("obj", meta.ID().String()),
-				)
-				deferred = true
+				deferred++
 				continue
 			}
 			ready = append(ready, meta)
@@ -804,7 +808,7 @@ func (flusher *flushImpl) fireFlushTabletail(
 		}
 	}
 
-	if deferred {
+	if deferred > 0 {
 		// Partial admission must not postpone retries by resetting the deadline.
 		return moerr.GetOkExpectedEOB()
 	}
