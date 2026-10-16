@@ -28,6 +28,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBitwiseAggregateCollationProvenance(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		t.Run(name, func(t *testing.T) {
+			for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+				t.Run(oid.String(), func(t *testing.T) {
+					typ := oid.ToType()
+					if oid == types.T_varbinary {
+						typ.Width = 511
+					}
+					arg := &Expr{Typ: makePlan2Type(&typ), Expr: &pb.Expr_Col{Col: &pb.ColRef{}}}
+					arg.Typ.CollationCoercibilitySet = true
+					arg.Typ.CollationCoercibility = 0
+					expected := arg.Typ
+					result, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{arg})
+					require.NoError(t, err)
+					require.Equal(t, expected, arg.Typ)
+					expected.NotNullable = true
+					require.Equal(t, expected, result.Typ)
+				})
+			}
+			text := makePlan2StringConstExprWithType("3")
+			text.Typ.CollationCoercibilitySet = true
+			text.Typ.CollationCoercibility = 4
+			result, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{text})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_uint64), result.Typ.Id)
+			require.False(t, result.Typ.CollationCoercibilitySet)
+			for _, args := range [][]*Expr{nil, {text, text}} {
+				_, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
 func TestExplicitCollationConflicts(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	left := "_utf8mb4'a' collate utf8mb4_bin"

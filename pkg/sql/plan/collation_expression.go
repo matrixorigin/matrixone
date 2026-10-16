@@ -231,6 +231,10 @@ func expressionCollationIndexes(name string, arity int) []int {
 		return indexes
 	}
 	switch name {
+	case "bit_and", "bit_or", "bit_xor":
+		if arity == 1 {
+			return []int{0}
+		}
 	case "name_const":
 		if arity == 2 {
 			return []int{1}
