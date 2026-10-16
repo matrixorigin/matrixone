@@ -268,13 +268,13 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 
 			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion117))
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
 			}
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion117, required)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			require.Equal(t, plan2.LowPrecisionFloatProtocolVersion, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, plan2.LowPrecisionFloatProtocolVersion)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 			op := projection.NewArgument()
@@ -286,7 +286,7 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 				_, err = encodeRemoteScope(scope, c.proc)
 				require.ErrorContains(t, err, "remote destination")
 			}
-			client.version = defines.MORPCVersion117
+			client.version = plan2.LowPrecisionFloatProtocolVersion
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 		})

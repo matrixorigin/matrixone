@@ -75,7 +75,7 @@ func TestLowPrecisionFloatContractFeatures(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatContracts)
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion117, required)
+			require.Equal(t, plan2.LowPrecisionFloatProtocolVersion, required)
 		})
 	}
 
@@ -109,8 +109,8 @@ func TestLowPrecisionFloatContractVectorMatmulDescriptor(t *testing.T) {
 	require.True(t, features.LowPrecisionFloatContracts)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion117))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, plan2.LowPrecisionFloatProtocolVersion)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 	p.InstructionList[0].Agg.Aggs[0].Op = aggexec.AggIdOfCountColumn
@@ -141,7 +141,7 @@ func TestLowPrecisionFloatContractRemoteBoundaries(t *testing.T) {
 			}
 			place(defines.MORPCVersion116)
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			place(defines.MORPCVersion117)
+			place(plan2.LowPrecisionFloatProtocolVersion)
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 
 			op := projection.NewArgument()
@@ -151,14 +151,14 @@ func TestLowPrecisionFloatContractRemoteBoundaries(t *testing.T) {
 			client.version = defines.MORPCVersion116
 			_, err := encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err, "remote destination")
-			client.version = defines.MORPCVersion117
+			client.version = plan2.LowPrecisionFloatProtocolVersion
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion117))
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, plan2.LowPrecisionFloatProtocolVersion)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 		})
 	}

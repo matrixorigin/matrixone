@@ -388,9 +388,9 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
-// LowPrecisionFloatContracts requires MORPC v117 because older services cannot
-// decode bf16/float16/float8/float4/vecf8/vecf4 values or execute functions
-// 599..601 (VECTOR_MATMUL, VECBLOCK_JSON, VECBLOCK_BINARY).
+// LowPrecisionFloatContracts requires LowPrecisionFloatProtocolVersion
+// (pkg/sql/plan): older services cannot decode bf16/float16/float8/float4/
+// vecf8/vecf4 values or execute VECTOR_MATMUL, VECBLOCK_JSON or VECBLOCK_BINARY.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatContracts    bool
@@ -929,7 +929,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
 				}
-				if fid := id & 0x7fffffff; fid >= 599 && fid <= 601 { // VECTOR_MATMUL, VECBLOCK_JSON, VECBLOCK_BINARY; bit 31 is DISTINCT
+				if isLowPrecisionFloatContractFunction(fn.Func.Obj) {
 					features.LowPrecisionFloatContracts = true
 				}
 				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
@@ -1335,10 +1335,28 @@ func isNumericFormatFunction(function *Function) (bool, error) {
 	return isPlanNumericType(function.Args[0].Typ.Id), nil
 }
 
-// IsLowPrecisionFloatContractType reports bf16, float16, float8, float4
-// (73..76), vecf8 (230) and vecf4 (231).
+// LowPrecisionFloatContract recognizes the type IDs and function identities
+// (ObjectRef.Obj) that set LowPrecisionFloatContracts. pkg/sql/plan installs it
+// from container/types and the function registry, which import this package.
+type LowPrecisionFloatContract struct {
+	IsType     func(typeID int32) bool
+	IsFunction func(obj int64) bool
+}
+
+var lowPrecisionFloatContract LowPrecisionFloatContract
+
+// SetLowPrecisionFloatContract installs the contract; call it from init only.
+func SetLowPrecisionFloatContract(contract LowPrecisionFloatContract) {
+	lowPrecisionFloatContract = contract
+}
+
+// IsLowPrecisionFloatContractType reports the type IDs of the installed contract.
 func IsLowPrecisionFloatContractType(id int32) bool {
-	return (id >= 73 && id <= 76) || id == 230 || id == 231
+	return lowPrecisionFloatContract.IsType != nil && lowPrecisionFloatContract.IsType(id)
+}
+
+func isLowPrecisionFloatContractFunction(obj int64) bool {
+	return lowPrecisionFloatContract.IsFunction != nil && lowPrecisionFloatContract.IsFunction(obj)
 }
 
 // isPlanNumericType mirrors container/types.Type.IsNumeric without importing

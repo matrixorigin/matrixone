@@ -1519,10 +1519,10 @@ func requireColumnTypeProtocolForAuthoring(ctx context.Context, proc *process.Pr
 	if err := requireMediumIntProtocolForAuthoring(ctx, proc, colType); err != nil {
 		return err
 	}
-	if proc == nil || !plan.IsLowPrecisionFloatContractType(colType.Id) {
+	if proc == nil || !isLowPrecisionFloatContractType(colType.Id) {
 		return nil
 	}
-	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion117)
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, LowPrecisionFloatProtocolVersion)
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {

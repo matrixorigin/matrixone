@@ -587,24 +587,24 @@ and L2 (the square root) are not provided.
 
 The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
 `20260929-low-precision-scalar-floats.md`): there is no fallback, a statement that would hand
-an older binary something it cannot decode is refused below MORPC protocol version 117, and
-the upgrade is one-way. Here they cover:
+an older binary something it cannot decode is refused below
+`plan.LowPrecisionFloatProtocolVersion`, and the upgrade is one-way. Here they cover:
 
-- **Types.** `vecf8` (`T_array_float8`, 230) and `vecf4` (`T_array_float4`, 231): column
+- **Types.** `vecf8` (`T_array_float8`) and `vecf4` (`T_array_float4`): column
   authoring, expressions in a remote pipeline, and persisted expressions, as for the scalar
   types. The version-1 cell header describes a cell to a binary that knows these types; it
   does not make an older binary able to read them.
-- **Functions.** `VECTOR_MATMUL`, `VECBLOCK_JSON` and `VECBLOCK_BINARY` (599-601), and the
+- **Functions.** `VECTOR_MATMUL`, `VECBLOCK_JSON` and `VECBLOCK_BINARY`, and the
   overload slots this design appends to existing functions (`IN`, `NOT IN`, `COALESCE`,
   `VECTOR_DIMS`, `NORMALIZE_L2`): a pipeline that contains one is refused for a destination
-  below 117, and a persisted expression that contains one requires persisted-expression
-  protocol 117.
+  below that version, and a persisted expression that contains one requires
+  persisted-expression protocol `LowPrecisionFloatProtocolVersion`.
 - **Aggregate state.** The `vector_matmul` partial state (`AggIdOfVectorMatmul`) moves only
-  between pipelines of binaries at 117 or later: a pipeline that would ship it to an older
-  destination is refused by the function rule above, which also matches the lowered
-  aggregate descriptor (`TestLowPrecisionFloatContractVectorMatmulDescriptor`). Its own version byte versions the state
-  among those binaries.
-- **Tests.** Every refusal point has a test below 117 (refused) and one at 117 (runs).
+  between pipelines of binaries at that version or later: a pipeline that would ship it to an
+  older destination is refused by the function rule above, which also matches the lowered
+  aggregate descriptor (`TestLowPrecisionFloatContractVectorMatmulDescriptor`). Its own
+  version byte versions the state among those binaries.
+- **Tests.** Every refusal point has a test below that version (refused) and one at that version (runs).
 
 ## Phasing
 

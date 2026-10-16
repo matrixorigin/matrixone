@@ -5537,7 +5537,7 @@ func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
 		}
 	})
-	fence := fmt.Sprintf("protocol version %d", defines.MORPCVersion117)
+	fence := fmt.Sprintf("protocol version %d", LowPrecisionFloatProtocolVersion)
 	set := func(version, floor int64) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
@@ -5558,11 +5558,11 @@ func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
 				set(defines.MORPCVersion116, defines.MORPCVersion116)
 				_, err := runOneStmt(mock, t, stmt)
 				require.ErrorContains(t, err, fence, stmt)
-				set(defines.MORPCVersion117, defines.MORPCVersion116)
+				set(LowPrecisionFloatProtocolVersion, defines.MORPCVersion116)
 				_, err = runOneStmt(mock, t, stmt)
 				require.ErrorContains(t, err, fence, stmt)
 			}
-			set(defines.MORPCVersion117, defines.MORPCVersion117)
+			set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion)
 			_, err := runOneStmt(mock, t, stmts[0])
 			require.NoError(t, err)
 			_, err = runOneStmt(mock, t, stmts[1])

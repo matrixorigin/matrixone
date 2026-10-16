@@ -2297,8 +2297,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
-		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", defines.MORPCVersion117)
+	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < plan2.LowPrecisionFloatProtocolVersion) {
+		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", plan2.LowPrecisionFloatProtocolVersion)
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")

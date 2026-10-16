@@ -125,34 +125,36 @@ GPU kernels agree on the encoding.
 ## Compatibility and rollout
 
 A binary without these types (the previous release, or main before them) has no size,
-codec or comparator for type IDs 73-76 (`T_bf16`, `T_float16`, `T_float8`, `T_float4`).
+codec or comparator for `T_bf16`, `T_float16`, `T_float8` and `T_float4`.
 It meets them only inside a cluster that mixes it with a newer binary: during a rolling
 upgrade, or after a rollback.
 
 There is no fallback. No path converts these types to a type an older binary knows, and
 no statement is rerouted, rewritten or run elsewhere to avoid an older service. A
 statement that would hand these types to an older binary is refused; once every service
-runs MORPC protocol version 117 or later, the same statement runs.
+runs `plan.LowPrecisionFloatProtocolVersion` or later, the same statement runs.
 
-- **Version.** `MORPCVersion117`. The deployment state is `MOProtocolVersion`, the lowest
-  version of the live services, together with the HAKeeper persisted-expression authoring
+- **Version.** `plan.LowPrecisionFloatProtocolVersion` (`pkg/sql/plan`), the single
+  reference to the MORPC version; code, tests and this document use only this name. The
+  deployment state is `MOProtocolVersion`, the lowest version of the live services, together with the HAKeeper persisted-expression authoring
   floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
 - **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`
   included) and `ALTER TABLE ... ADD`, `MODIFY` and `CHANGE COLUMN` whose column type is one
-  of these types are refused below 117. While an older service is live no table with these
-  types exists, so no older binary reads one from the catalog, the log or object storage.
+  of these types are refused below that version. While an older service is live no table
+  with these types exists, so no older binary reads one from the catalog, the log or object storage.
 - **Remote execution.** A pipeline that carries one of these types (a literal, a column
   reference, a function argument or result, a CAST source or target, a table definition
-  column, a group key or an aggregate argument or result type) is refused
-  for a destination below 117. The private integer CAST 5..8 sources are one case of this
-  rule.
+  column, a group key or an aggregate argument or result type) is refused for a
+  destination below that version. The private integer CAST 5..8 sources are one case of
+  this rule.
 - **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
   constraint whose expression carries one of these types requires persisted-expression
-  protocol 117.
+  protocol `LowPrecisionFloatProtocolVersion`.
 - **Downgrade.** The upgrade is one-way. Once a table with these types exists, running
-  any service below 117 is unsupported: an older binary does not read the data.
-- **Tests.** Every refusal point has a test below 117 (refused, nothing created or sent)
-  and one at 117 (runs): `TestLowPrecisionFloatCatalogAuthoringProtocolFence` (authoring),
+  any service below that version is unsupported: an older binary does not read the data.
+- **Tests.** Every refusal point has a test below that version (refused, nothing created
+  or sent) and one at that version (runs):
+  `TestLowPrecisionFloatCatalogAuthoringProtocolFence` (authoring),
   `TestLowPrecisionFloatContractRemoteBoundaries` (placement, send, receiver),
   `TestLowPrecisionFloatContractFeatures` (remote and persisted floors) and
   `TestLowPrecisionFloatIntegerArgumentProtocol` (private CAST 5..8).
