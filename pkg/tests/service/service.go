@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -249,6 +251,8 @@ type testCluster struct {
 	logger  *zap.Logger
 	stopper *stopper.Stopper
 	clock   clock.Clock
+	// Registered runtimes remain available until their service owners drain.
+	runtimes map[string]runtime.Runtime
 
 	tn struct {
 		sync.Mutex
@@ -307,6 +311,12 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	}
 	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
 	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
+	constructed := false
+	defer func() {
+		if !constructed {
+			_ = c.Close()
+		}
+	}()
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
@@ -325,6 +335,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 
 	// build cn service configurations
 	c.buildCNConfigs(c.opt.initial.cnServiceNum)
+	constructed = true
 	return c, nil
 }
 
@@ -412,6 +423,10 @@ func (c *testCluster) Close() error {
 		c.fileservices.Close(context.Background())
 	}
 	c.stopper.Stop()
+	for sid, rt := range c.runtimes {
+		runtime.CompareAndDeleteServiceBasedRuntime(sid, rt)
+		delete(c.runtimes, sid)
+	}
 	if err := c.releaseAdmissionLocked(); err != nil {
 		return errors.Join(closeErr, err)
 	}
@@ -1374,6 +1389,14 @@ func (c *testCluster) buildCNConfigs(n int) {
 	c.network.addresses.buildCNAddress(c.t, batch, c.opt.hostAddr)
 	for i := 0; i < batch; i++ {
 		cfg := buildCNConfig(i+offset, c.opt, c.network.addresses)
+		// CN validation publishes service-scoped settings, just as the real
+		// launcher does. Register the runtime before filling configuration and
+		// constructing options; validating a new UUID without it dereferences
+		// a missing runtime before any service is created.
+		c.newRuntime(metadata.ServiceType_CN, cfg.UUID)
+		if err := cfg.Validate(); err != nil {
+			panic(fmt.Sprintf("fatal when building cnservice.Config: %s", err))
+		}
 		c.cn.cfgs = append(c.cn.cfgs, cfg)
 		var opt cnOptions
 		if c.opt.cn.optionFunc != nil {
@@ -1401,17 +1424,19 @@ func (c *testCluster) initTNServices(fileservices *fileServices) error {
 	for i := 0; i < batch; i++ {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]
+		rt := c.newRuntime(metadata.ServiceType_TN, cfg.UUID)
 		fs, err := fileservice.NewFileServices(
 			"",
 			fileservices.getTNLocalFileService(i),
 			fileservices.getS3FileService(),
+			fileservices.getTmpFileService(),
 		)
 		if err != nil {
 			return err
 		}
 		_, err = newTNService(
 			cfg,
-			c.newRuntime(cfg.UUID),
+			rt,
 			fs,
 			func(owner TNService) {
 				c.tn.Lock()
@@ -1444,6 +1469,8 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
+		rt := c.newRuntime(metadata.ServiceType_LOG, cfg.UUID)
+		opt = append(opt, logservice.WithRuntime(rt))
 		ls, err := newLogService(cfg, testutil.NewFS(c.t), opt)
 		require.NoError(c.t, err)
 
@@ -1472,6 +1499,7 @@ func (c *testCluster) initCNServices(
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 			fileservices.getETLFileService(),
+			fileservices.getTmpFileService(),
 		)
 		if err != nil {
 			panic(err)
@@ -1680,8 +1708,15 @@ func (c *testCluster) rangeHAKeeperService(
 	}
 }
 
-func (c *testCluster) newRuntime(sid string) runtime.Runtime {
-	return runtime.NewRuntime(metadata.ServiceType_CN, sid, c.logger, runtime.WithClock(c.clock))
+func (c *testCluster) newRuntime(kind metadata.ServiceType, sid string) runtime.Runtime {
+	rt := runtime.NewRuntime(kind, sid, c.logger, runtime.WithClock(c.clock))
+	if c.runtimes == nil {
+		c.runtimes = make(map[string]runtime.Runtime)
+	}
+	c.runtimes[sid] = rt
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	catalog.SetupDefines(sid)
+	return rt
 }
 
 // FilterFunc returns true if traffic was allowed.
