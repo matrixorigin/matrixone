@@ -80,3 +80,37 @@ before/after-commit injection. They do not claim all release pairs, arbitrary
 network partitions/WAL failures, operator downgrade preflight, scale, cold-cache
 latency or current-head speedup against StarRocks. No Request changes is
 dismissed by the author and the PR is not merged by this follow-up.
+
+
+## Covered bridge consumer and license-only follow-up
+
+Exact a9bff0c9 SCA evidence identifies one invalid Apache notice before analyzer
+execution; expand that comment and verify the changed path with the same
+license-eye policy (one valid, zero invalid). No executable initializer bytes
+or build tags change. The native recovery capture is reused by exact production
+source equality and exact equality from the initializer's build tag onward;
+the original source hashes remain labeled with their capture revision.
+
+The new bridge package otherwise contributes zero-hit UT blocks. Reuse the
+existing native BVT deployment to validate its actual JSON stream contract,
+SQL NULL/empty distinction, DSN failure, Exec/Query errors and session lifetime.
+Two independent bridge processes each handle nine requests; only connection-
+local state changes. The shell owns the temporary binaries, clears stale probe
+reports, verifies publication and collects coverage through the existing owner.
+This adds no cluster, production state or coverage-policy exception. Bridge
+coverage is 28/32 blocks; aggregate coverage remains a separate remote gate.
+Full-entry consumer evidence is retained separately, including repeated native
+checks and independent teardown. No additional kernel/race suite is required
+for Python/shell checks and an unchanged Go initializer body; normal Go/race
+proofs remain valid for their unchanged semantic inputs.
+
+
+Final covered-consumer validation passes the exact immutable entry script twice
+on the same two-CN native instance: each run has 2 x 9 bridge requests and
+70 functional + 5 failure + 9 cross-CN checks. Independent post-run database,
+definition, dependency, run and task counts are zero before repetition. All
+owned services exit. `materialized_view_ci_bridge_results.json` retains both
+runs, exact changed input hashes, license proof and component coverage. The
+production Go service/bridge inputs are unchanged from the 12-case capture;
+only the startup initializer license comment changes. Final-head remote SCA,
+UT, coverage and BVT remain required separately.

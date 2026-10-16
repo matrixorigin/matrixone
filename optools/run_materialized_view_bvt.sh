@@ -11,7 +11,7 @@ mkdir -p "$2" "${repo_root}/coverage"
 report_dir=$(cd "$2" && pwd)
 coverage_dir=$(cd "${repo_root}/coverage" && pwd)
 # A rerun must not accept a previous success if the client cannot write JSON.
-rm -f "${report_dir}/functional.json" "${report_dir}/failure.json" "${report_dir}/multi-cn.json"
+rm -f "${report_dir}/functional.json" "${report_dir}/failure.json" "${report_dir}/multi-cn.json" "${report_dir}/native-probe.json"
 
 cn_dsn() {
     local endpoint port
@@ -31,7 +31,14 @@ cd "${repo_root}"
 # Match mo-service's default -cover mode so covdata can combine the producer.
 CGO_ENABLED=0 go build -mod=readonly -cover -covermode=set \
     -o "${build_dir}/mv-validation" ./test/materialized_view
+CGO_ENABLED=0 go build -mod=readonly -cover -covermode=set \
+    -o "${build_dir}/mv-native-probe" ./test/materialized_view/native_probe
 export GOCOVERDIR="${coverage_dir}"
+# The same JSON bridge drives the destructive native recovery suite. Exercise
+# its public stream/session/error contract on this existing deployment too;
+# its coverage counters join the unchanged UT/BVT coverage aggregation.
+python3 "${repo_root}/test/materialized_view/native_probe/check.py" \
+    "${build_dir}/mv-native-probe" "${primary_dsn}" > "${report_dir}/native-probe.json"
 "${build_dir}/mv-validation" -dsn "${primary_dsn}" -functional \
     -output "${report_dir}/functional.json"
 "${build_dir}/mv-validation" -dsn "${primary_dsn}" -edge-check \
@@ -43,6 +50,11 @@ python3 - "${report_dir}" <<'PY'
 import json
 import pathlib
 import sys
+
+probe = json.loads((pathlib.Path(sys.argv[1]) / "native-probe.json").read_text())
+if probe != {"runs": [{"passed_requests": 9, "process_exit": 0}] * 2}:
+    raise SystemExit("Incomplete materialized-view native SQL bridge checks")
+print("Materialized-view native SQL bridge: 2 x 9 requests passed")
 
 for name in ("functional", "failure", "multi-cn"):
     result = json.loads((pathlib.Path(sys.argv[1]) / (name + ".json")).read_text())

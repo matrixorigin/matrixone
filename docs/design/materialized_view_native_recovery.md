@@ -105,3 +105,18 @@ Final native execution: 12/12 groups passed in 288.732 seconds. Three CN
 processes exited by the expected SIGKILLs; the old binary exited at the expected
 protocol fence; all remaining owned services exited cleanly. Final MV owning
 race suite passed in 1.223 seconds, in addition to 100 exact-root repetitions.
+
+
+## Normal CI consumer of the SQL bridge
+
+The existing `optools/run_materialized_view_bvt.sh` also builds the SQL bridge
+with covermode=set and runs `test/materialized_view/native_probe/check.py`
+against its existing primary CN. Two client lifetimes each verify nine requests:
+malformed input/DSN, ordered multi-row SQL NULL decoding, empty results,
+Exec/Query, persistent connection-local state and continued use after server
+errors. It creates no database objects or service processes. Counters enter the
+existing BVT coverage producer with unchanged thresholds/exclusions. The normal
+entry still runs the 70 functional, five failure and nine two-CN cases.
+The separate `materialized_view_ci_bridge_results.json` records this consumer.
+The earlier recovery ledger retains its capture revision and explicitly
+qualifies the later license-comment-only initializer edit.

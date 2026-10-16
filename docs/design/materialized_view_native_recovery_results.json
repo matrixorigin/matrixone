@@ -1017,5 +1017,23 @@
       "conclusion": "success"
     },
     "new_head_ci": "pending publication"
+  },
+  "capture_implementation_commit": "a9bff0c918e835da7aab474896d0f0476ded09c1",
+  "semantic_reuse_after_capture": {
+    "unchanged_source_paths": [
+      "pkg/mv/service.go",
+      "pkg/bootstrap/versions/v4_0_15/upgrade.go",
+      "test/materialized_view/native_probe/main.go"
+    ],
+    "initializer_license_only": {
+      "path": "cmd/mo-service/materialized_view_faults.go",
+      "code_from_build_tag_identical": true,
+      "current_file_sha256": "8eeaece89993e635229e2b97eb68c2f55a9155f6f6b3bbe7849a0f3929b08ac4"
+    },
+    "additional_test_only_changes": [
+      "optools/run_materialized_view_bvt.sh",
+      "test/materialized_view/native_probe/check.py"
+    ],
+    "explanation": "The 12-case native capture and its complete input ledger describe a9bff0c9. The follow-up corrects only the startup initializer license comment and adds covered JSON bridge checks to the existing CI consumer. The compiled native service and bridge behavior are unchanged; CI entry evidence is recorded separately."
   }
 }

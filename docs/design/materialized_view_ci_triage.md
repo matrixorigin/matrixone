@@ -793,3 +793,52 @@ cleanup, the process driver and documentation, separately validated. Logs and
 full source-input ledgers remain in `/workspace/mv-ci/recovery-*` and the owned
 `/tmp/mv-native-recovery-7` directory. No current-head performance result or
 arbitrary release-pair compatibility is claimed. External re-review remains.
+
+
+### 2026-10-16: license-policy correction and covered SQL bridge consumer
+
+Follow-up head `a9bff0c918e835da7aab474896d0f0476ded09c1`, ALL CI
+`38862376845`, SCA job `116847424049`, failed its Static Code Analysis step
+before the Go analyzers. The complete license-eye scan checked 6,381 files:
+6,195 valid, 185 ignored and one invalid:
+`cmd/mo-service/materialized_view_faults.go`. Its shortened Apache notice did
+not satisfy the configured full header. Add the complete notice; the same
+license-eye tool, configured for that changed path with the same license and
+ignore rules, reports one valid and zero invalid. No license policy changes.
+Both connector workflows and shared build on a9bff0c9 succeeded; other jobs
+were still queued/running. The failed run is not presented as green.
+
+Inspection also found that the new native SQL bridge was exercised by the local
+crash suite but not by the normal CI consumer. A direct coverage invocation
+records 32 unexecuted blocks for that new package, while the prior d50c4c77
+aggregate was 894/1190 (75.13%). This is an execution-path gap, not an observed
+new-head coverage verdict. Add real protocol/session/error checks to the
+existing covered BVT entry rather than changing thresholds or exclusions.
+
+`test/materialized_view/native_probe/check.py` sends nine public requests in
+one bridge lifetime: malformed JSON, invalid DSN, multi-row/NULL decoding,
+Exec, session reuse, empty results, Query/Exec server errors and a subsequent
+successful read. It repeats with a fresh bridge process against the same
+native instance. Only session-local state changes. Both client lifetimes close
+on EOF; the shell removes stale reports, verifies the new report, and merges
+its normal covermode=set counters with the existing producer. The local bridge
+counters cover 28/32 blocks (87.5%); this component result is not an aggregate
+CI percentage. The CI consumer result ledger records full-entry validation.
+
+The 12-case native recovery capture remains tied to a9bff0c9. Service, upgrade
+and bridge Go sources are byte-identical; the startup initializer's bytes from
+its unchanged build tag onward are identical, with only the preceding license
+comment expanded. The capture ledger records that semantic reuse explicitly.
+New consumer checks are separate test-only inputs; the earlier complete input
+fingerprint is not relabeled as byte-identical to this follow-up's test scripts.
+
+
+Final covered-consumer validation passes the exact immutable entry script twice
+on the same two-CN native instance: each run has 2 x 9 bridge requests and
+70 functional + 5 failure + 9 cross-CN checks. Independent post-run database,
+definition, dependency, run and task counts are zero before repetition. All
+owned services exit. `materialized_view_ci_bridge_results.json` retains both
+runs, exact changed input hashes, license proof and component coverage. The
+production Go service/bridge inputs are unchanged from the 12-case capture;
+only the startup initializer license comment changes. Final-head remote SCA,
+UT, coverage and BVT remain required separately.
