@@ -443,6 +443,11 @@ type memThrottler struct {
 	total  atomic.Uint64
 
 	actualTotalMemory atomic.Uint64
+	// memoryDomainObservationValid distinguishes an authoritative no-limit
+	// observation from an owner that has not completed its first limit/host
+	// sample. A newly-created specialized owner must not clear the process-wide
+	// sample merely because its bootstrap read failed.
+	memoryDomainObservationValid atomic.Bool
 
 	name      string
 	limitRate float64
@@ -583,6 +588,7 @@ func (m *memThrottler) refresh(force bool) {
 		}
 		validLimits = total != 0 && (noCgroupLimit || (err == nil && cgroup != 0))
 	}
+	m.memoryDomainObservationValid.Store(validLimits)
 	// A failed observation is not evidence that the limit was removed. Keep
 	// both the component quota and the shared pressure sample until a valid
 	// observation replaces them; in particular, do not publish zero on error.
@@ -711,6 +717,12 @@ func (m *memThrottler) refreshCgroupUsageFromLegacySources() {
 	// cgroup imposes a finite limit below the host total. Otherwise the value
 	// may describe an unlimited host hierarchy and must not replace RSS.
 	if cgroupLimit == 0 || total == 0 || cgroupLimit >= total {
+		if !m.memoryDomainObservationValid.Load() {
+			// The owner has not obtained an authoritative no-limit observation.
+			// In particular, a specialized Merge owner may be bootstrapping while
+			// another owner has already published the process-wide sample.
+			return
+		}
 		destination.Store(nil)
 		return
 	}

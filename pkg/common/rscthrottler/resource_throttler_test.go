@@ -151,6 +151,7 @@ func TestMergeOwnerBootstrapPreservesSharedMemoryDomain(t *testing.T) {
 		limitRate:    0.75,
 	}
 	merge.fillDefaults()
+	merge.options.specializedForMerge = true
 	merge.ForceRefresh()
 
 	require.Equal(t, uint64(100), merge.actualTotalMemory.Load())
@@ -1106,6 +1107,58 @@ func TestRSSReclamationCoordinatorDoesNotReserveCooldownForRecoveredWork(t *test
 	processRSSReclamation.execute(work)
 	require.Equal(t, int32(1), evictions.Load())
 	require.Equal(t, int32(1), frees.Load())
+}
+
+func TestRSSReclamationCoordinatorSkipsWorkRecoveredWhileWaitingForLock(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	defer resetRSSReclamationCoordinatorForTest()
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(1)
+	var evictions atomic.Int32
+	var frees atomic.Int32
+	work := rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor: func(context.Context, int64) {
+			evictions.Add(1)
+		},
+		freeOSMemory: true,
+		freeAction:   "test-free",
+	}
+	oldFreeOSMemory := freeOSMemory
+	freeOSMemory = func() { frees.Add(1) }
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	// Hold the coordinator lock while the work is submitted. Recovery happens
+	// before execute can acquire the lock; cooldown publication and callbacks
+	// must both be skipped for this stale request.
+	processRSSReclamation.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		processRSSReclamation.execute(work)
+		close(done)
+	}()
+	<-started
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale reclamation did not drain")
+	}
+	require.Zero(t, evictions.Load())
+	require.Zero(t, frees.Load())
+	processRSSReclamation.mu.Lock()
+	require.Zero(t, processRSSReclamation.lastCacheEvict)
+	require.Zero(t, processRSSReclamation.lastFreeOSMemory)
+	processRSSReclamation.mu.Unlock()
 }
 
 func TestRSSReclamationCoordinatorKeepsOtherOwnerPendingWork(t *testing.T) {
