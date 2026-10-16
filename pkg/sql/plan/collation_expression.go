@@ -103,8 +103,8 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 		target.Id = int32(types.T_varchar)
 	}
 	if identity == collation.BinaryIdentity {
-		// BLOB 的未知宽度不能变成 VARBINARY 的默认最大宽度。
-		if types.T(target.Id) != types.T_blob {
+		// 保留原生 byte 域及其未知宽度，不能改成 VARBINARY 的无效/默认最大宽度。
+		if types.T(target.Id) != types.T_blob && types.T(target.Id) != types.T_binary {
 			target.Id = int32(types.T_varbinary)
 		}
 		target.PadSpace = false

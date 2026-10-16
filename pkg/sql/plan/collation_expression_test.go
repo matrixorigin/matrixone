@@ -29,13 +29,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBinaryCollatePreservesBlobDomain(t *testing.T) {
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
-		t.Run(oid.String(), func(t *testing.T) {
-			typ := oid.ToType()
-			if oid != types.T_blob {
-				typ.Width = 7
-			}
+func TestBinaryCollatePreservesByteDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oid   types.T
+		width int32
+	}{
+		{"binary", types.T_binary, 7},
+		{"binary unknown width", types.T_binary, -1},
+		{"varbinary", types.T_varbinary, 7},
+		{"blob", types.T_blob, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.New(tc.oid, tc.width, 0)
 			source := &Expr{Typ: makePlan2Type(&typ), Expr: &pb.Expr_Col{Col: &pb.ColRef{}}}
 			before := source.Typ
 			ast := &tree.CollateExpr{Expr: tree.NewUnresolvedName(tree.NewCStr("b", 1)), Collation: "binary"}
@@ -44,16 +50,15 @@ func TestBinaryCollatePreservesBlobDomain(t *testing.T) {
 			binder := baseBinder{sysCtx: context.Background(), impl: impl}
 			bound, err := binder.bindCollateExpr(ast, 0)
 			require.NoError(t, err)
-			expectedOID := types.T_varbinary
-			if oid == types.T_blob {
-				expectedOID = types.T_blob
-			}
-			require.Equal(t, int32(expectedOID), bound.Typ.Id)
+			require.Equal(t, before.Id, bound.Typ.Id)
 			require.Equal(t, before.Width, bound.Typ.Width)
 			require.Equal(t, before, source.Typ)
 			require.Equal(t, "binary", ast.Collation)
 			require.True(t, bound.Typ.CollationCoercibilitySet)
 			require.Zero(t, bound.Typ.CollationCoercibility)
+			if tc.width < 0 {
+				return
+			}
 			for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
 				aggregate, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*Expr{bound})
 				require.NoError(t, err)
