@@ -150,30 +150,34 @@ func callNonBlocking(
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
 
-	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return result, err
-	}
+	for {
+		result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
 
-	if result.Batch == nil {
-		if lockOp.ctr.retryError == nil {
-			err := lockTalbeIfLockCountIsZero(proc, lockOp)
-			if err != nil {
+		if result.Batch == nil {
+			if lockOp.ctr.retryError == nil {
+				if err := lockTalbeIfLockCountIsZero(proc, lockOp); err != nil {
+					return result, err
+				}
+			}
+			return result, lockOp.ctr.retryError
+		}
+		if !result.Batch.IsEmpty() {
+			lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+			if err := performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 				return result, err
 			}
 		}
-		return result, lockOp.ctr.retryError
-	}
-	if result.Batch.IsEmpty() {
-		return result, err
-	}
 
-	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
-	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
-		return result, err
+		if lockOp.ctr.retryError == nil {
+			return result, nil
+		}
+		// Finish acquiring the remaining locks before retrying, but do not
+		// forward batches from the outdated snapshot. An early-stopping parent
+		// such as LIMIT may otherwise never call us again to observe the error.
 	}
-
-	return result, nil
 }
 
 func mergeableLockTargets(left, right lockTarget) bool {
