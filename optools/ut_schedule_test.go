@@ -560,6 +560,11 @@ func TestEmbeddedPlanHeavyOverlapPreservesStagesAndFailures(t *testing.T) {
 		{name: "ordinary-cluster-owner", config: "CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/tests/arrowload", early: true},
 		{name: "new-cluster-owner", config: "CLUSTER_PACKAGE=unclassified/embed"},
 		{name: "heavy-failure", config: "export HEAVY_STATUS=7", early: true, failed: true},
+		{name: "late-heavy-failure", config: "export LATE_HEAVY_STATUS=8", early: true, failed: true},
+		{name: "both-heavy-failures", config: "export HEAVY_STATUS=7 LATE_HEAVY_STATUS=8", early: true, failed: true},
+		{name: "no-fileservice", config: "SCOPE_MODE=no-fs", early: true},
+		{name: "only-fileservice", config: "SCOPE_MODE=fs-only"},
+		{name: "fileservice-owns-cluster", config: "CLUSTER_PACKAGE=github.com/matrixorigin/matrixone/pkg/fileservice"},
 		{name: "plan-failure", config: "PLAN_STATUS=8", early: true, failed: true},
 		{name: "embedded-failure", config: "EMBEDDED_STATUS=9", early: true, failed: true},
 		{name: "engine-failure", config: "ENGINE_STATUS=10", early: true, failed: true},
@@ -582,7 +587,20 @@ func TestEmbeddedPlanHeavyOverlapPreservesStagesAndFailures(t *testing.T) {
 			t.Parallel()
 			mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
-[[ "$*" == *pkg/backup* && "$*" != *toolexec* ]] || exit 90
+[[ "$*" != *toolexec* ]] || exit 90
+selected=""
+for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
+ if [[ " $* " == *" $package "* ]]; then
+  printf 'resource:%s\n' "$package"
+  selected="$selected $package"
+ fi
+done
+[[ -n "$selected" ]] || exit 90
+if [[ "$EXPECT_EARLY" == 1 && "$selected" == *pkg/fileservice* ]]; then
+ [[ "$selected" == ' github.com/matrixorigin/matrixone/pkg/fileservice' && -e "$CASE_DIR/engine-finished" && -z "${GOMAXPROCS+x}" ]] || exit 95
+ mkdir "$CASE_DIR/late-heavy-once" || exit 96
+ exit "$LATE_HEAVY_STATUS"
+fi
 mkdir "$CASE_DIR/heavy-once" || exit 91
 if [[ "$EXPECT_EARLY" == 1 ]]; then
  [[ "$GOMAXPROCS" == 2 && ! -e "$CASE_DIR/engine-once" ]] || exit 92
@@ -618,7 +636,8 @@ PLAN_RACE_PARALLEL=1
 PLAN_RACE_SHARDS=8
 HEAVY_RACE_PARALLEL=3
 unset GOMAXPROCS
-export HEAVY_STATUS=0
+export HEAVY_STATUS=0 LATE_HEAVY_STATUS=0
+SCOPE_MODE=all
 PLAN_STATUS=0
 EMBEDDED_STATUS=0
 ENGINE_STATUS=0
@@ -629,9 +648,20 @@ function go() {
  if [[ "$1" == env ]]; then printf '%s' "${PERSISTENT_GOFLAGS:-}"; return 0; fi
  shift 2
  if [[ "$1" == ./... ]]; then
-  printf '%s\n' "$CLUSTER_PACKAGE" example/light github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,backup,fileservice,sql/plan/function,vm/engine/tae/db/test}
+  { printf '%s\n' "$CLUSTER_PACKAGE" example/light github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues}
+  for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
+   if [[ "$SCOPE_MODE" == no-fs && "$package" == */fileservice ]]; then continue; fi
+   if [[ "$SCOPE_MODE" == fs-only && "$package" != */fileservice ]]; then continue; fi
+   echo "$package"
+  done; } | sort -u
  else
-  for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
+  for package in "$@"; do
+   if [[ "$SCOPE_MODE" == no-fs && "$package" == ./pkg/fileservice ]]; then continue; fi
+   if [[ "$SCOPE_MODE" == fs-only ]]; then
+    case "$package" in ./pkg/backup|./pkg/sql/plan/function|./pkg/vm/engine/tae/db/test) continue ;; esac
+   fi
+   echo "github.com/matrixorigin/matrixone/${package#./}"
+  done
  fi
 }
 function start_embedded_prebuild() { :; }
@@ -681,12 +711,13 @@ function run_engine_race_shards() {
   [[ ! -e "$CASE_DIR/heavy-started" && ! -e "$CASE_DIR/plan-started" ]] || return 103
  fi
  printf 'engine\n' > "$ENGINE_RACE_REPORT"
+ touch "$CASE_DIR/engine-finished"
  return "$ENGINE_STATUS"
 }
 run_tests
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 104
 [[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID$PLAN_RACE_JOB_PID$ENGINE_RACE_JOB_PID" ]] || exit 105
-for stage in light hnsw serial embedded heavy plan; do
+for stage in light hnsw serial embedded plan; do
  expected=0
  if should_run_ut_stage "$stage"; then expected=1; fi
  actual=$(grep -cx "$stage" "$UT_REPORT" || true)
@@ -695,6 +726,16 @@ done
 if should_run_ut_stage heavy; then
  [[ $(grep -cx engine "$UT_REPORT") == 1 ]] || exit 107
 fi
+for package in github.com/matrixorigin/matrixone/pkg/{backup,fileservice,sql/plan/function,vm/engine/tae/db/test}; do
+ expected=0
+ if should_run_ut_stage heavy && ! printf '%s\n' "$CLUSTER_PACKAGE" | grep -Fxq "$package"; then
+  expected=1
+  if [[ "$SCOPE_MODE" == no-fs && "$package" == */fileservice ]]; then expected=0; fi
+  if [[ "$SCOPE_MODE" == fs-only && "$package" != */fileservice ]]; then expected=0; fi
+ fi
+ actual=$(grep -Fxc "resource:$package" "$UT_REPORT" || true)
+ [[ "$actual" == "$expected" ]] || { printf '%s count=%s expected=%s\n' "$package" "$actual" "$expected"; exit 108; }
+done
 `
 			script = strings.Replace(script, "@CONFIG@", tc.config, 1)
 			early, failed := "0", "0"

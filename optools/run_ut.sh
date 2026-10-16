@@ -2813,6 +2813,8 @@ function run_tests(){
         local light_started=0
         local overlap_light=0
         local early_heavy_plan=0
+        local early_resource_heavy_scope=""
+        local late_resource_heavy_scope=""
         local overlap_go_flags=""
         local light_stage_parallel=${UT_LIGHT_PARALLEL}
         local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
@@ -2922,6 +2924,8 @@ function run_tests(){
             "${hnsw_package}" \
             ${serial_test_scope} \
             ${cluster_test_scope})
+
+        late_resource_heavy_scope=${resource_heavy_test_scope}
 
         light_test_scope=$(remove_packages_from_scope \
             "${test_scope}" \
@@ -3068,12 +3072,30 @@ function run_tests(){
             done
         fi
         if (( early_heavy_plan == 1 )); then
+            # Multipart tests own latency-sensitive HTTP/buffer-pool work.
+            # Preserve their original CPU budget and keep the whole package
+            # after engine; never relax its deadlines to admit more overlap.
+            early_resource_heavy_scope=$(remove_packages_from_scope "${resource_heavy_test_scope}" \
+                github.com/matrixorigin/matrixone/pkg/fileservice)
+            if [[ -z "${early_resource_heavy_scope}" ]]; then
+                early_heavy_plan=0
+            else
+                late_resource_heavy_scope=$(remove_packages_from_scope \
+                    "${resource_heavy_test_scope}" ${early_resource_heavy_scope})
+                if ! validate_complete_partition "resource-heavy overlap" "${resource_heavy_test_scope}" \
+                    "${early_resource_heavy_scope}" "${late_resource_heavy_scope}"; then
+                    UT_TEST_STATUS=1
+                    return 0
+                fi
+            fi
+        fi
+        if (( early_heavy_plan == 1 )); then
             logger "INF" "Overlap serial plan/heavy companions with embedded tests; two Go cores per companion; preserve plan test parallelism"
             GOMAXPROCS=2 start_plan_race "${plan_package}" "-test.parallel=${UT_PARALLEL}" || handle_ut_termination "$?"
             start_background_race heavy "resource-heavy race-test packages" \
                 env GOMAXPROCS=2 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
                 go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-                -p 1 -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope || handle_ut_termination "$?"
+                -p 1 -timeout "${UT_TIMEOUT}m" -race $early_resource_heavy_scope || handle_ut_termination "$?"
         fi
 
         # Cluster admission serializes service lifecycles, not whole test
@@ -3140,9 +3162,12 @@ function run_tests(){
         # Reserve exactly its configured process count from the existing heavy
         # budget, so plan+resource work never exceeds the prior three-slot cap.
         # If the budget cannot admit both waves, keep the phases sequential.
-        if (( early_heavy_plan == 0 )) && should_run_ut_stage heavy; then
-            resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
-            if (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
+        if should_run_ut_stage heavy; then
+            resource_heavy_parallel=1
+            if (( early_heavy_plan == 0 )); then
+                resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
+            fi
+            if (( early_heavy_plan == 0 && UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
                 [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] &&
                 (( PLAN_RACE_PARALLEL <= 2 && HEAVY_RACE_PARALLEL > PLAN_RACE_PARALLEL )); then
                 resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - PLAN_RACE_PARALLEL ))
@@ -3150,12 +3175,12 @@ function run_tests(){
                 start_plan_race "${plan_package}"
             fi
 
-            logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
-            start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
-            finish_ut_command
-            resource_heavy_status=$?
-            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
-            report_cgroup_memory_usage "Resource-heavy UT"
+            if [[ -n "${late_resource_heavy_scope}" ]]; then
+                logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
+                run_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $late_resource_heavy_scope || resource_heavy_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
+                report_cgroup_memory_usage "Resource-heavy UT"
+            fi
         fi
 
         if (( early_heavy_plan == 0 )) && should_run_ut_stage plan; then
