@@ -35,7 +35,7 @@ func seedRewriteRuleCacheProofForTest(ses *Session) {
 }
 
 func TestRewriteRuleCacheFreshness(t *testing.T) {
-	for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "unknown proof", "proof error", "pre-read stamp", "account change", "role change", "secondary roles"} {
+	for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			ses := newSes(&privilege{}, gomock.NewController(t))
@@ -49,6 +49,7 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 			defer stub.Reset()
 			var proof any = 1
 			var proofErr error
+			var expectedErr error
 			versionOf := func(context.Context, *Session) (any, error) { return proof, proofErr }
 			capture := func() *rewritePolicySnapshot {
 				policy, err := captureRewritePolicyWithVersion(ctx, ses, versionOf)
@@ -78,6 +79,15 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 				bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
 			case "proof error":
 				proofErr = errors.New("proof unavailable")
+				bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
+			case "proof and read error":
+				proofErr = errors.New("proof unavailable")
+				expectedErr = errors.New("rule read unavailable")
+				bh.sql2err[query] = expectedErr
+			case "proof canceled":
+				proofErr, expectedErr = context.Canceled, context.Canceled
+			case "proof deadline":
+				proofErr, expectedErr = context.DeadlineExceeded, context.DeadlineExceeded
 			case "pre-read stamp":
 				proof = 2
 				bh.beforeExec = func(sql string) {
@@ -86,18 +96,22 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					}
 				}
 			}
-			if proofErr != nil {
+			if expectedErr != nil {
 				ses.ruleCacheVersionProvider = versionOf
+				before := len(bh.executedSQLs)
 				_, err := ses.GetPrepareStmt(ctx, "old")
-				require.ErrorIs(t, err, proofErr)
+				require.ErrorIs(t, err, expectedErr)
 				require.True(t, old.rewritePolicyInvalidated.Load())
+				if expectedErr == proofErr {
+					require.Len(t, bh.executedSQLs, before, "cancellation must not start a fallback read")
+				}
 				// A failed refresh must leave session locks usable, including cleanup.
 				_, err = ses.getPrepareStmtAllowInvalidated(ctx, "old")
 				require.NoError(t, err)
 				return
 			}
 			refreshed := capture()
-			changed := scenario == "changed rules" || scenario == "unknown proof"
+			changed := scenario == "changed rules" || scenario == "unknown proof" || scenario == "proof error"
 			require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
 			if changed {
 				require.NotEmpty(t, refreshed.roleRules)
@@ -107,6 +121,9 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 			}
 			if scenario == "pre-read stamp" {
 				require.Equal(t, 2, ses.ruleCacheVersion)
+			}
+			if scenario == "proof error" {
+				require.Nil(t, ses.ruleCacheVersion, "a failed proof must not stamp the new rules")
 			}
 			capture()
 			loads := 0
@@ -119,7 +136,7 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 			if scenario == "stable" {
 				expected = 1
 			}
-			if scenario == "unknown proof" || scenario == "pre-read stamp" {
+			if scenario == "unknown proof" || scenario == "pre-read stamp" || scenario == "proof error" {
 				expected = 3
 			}
 			require.Equal(t, expected, loads)

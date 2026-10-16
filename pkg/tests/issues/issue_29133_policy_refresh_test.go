@@ -23,6 +23,8 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -154,6 +156,35 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 		var isolation string
 		require.NoError(t, reader.QueryRowContext(ctx, "select @@session.transaction_isolation").Scan(&isolation))
 		require.Equal(t, "REPEATABLE-READ", isolation)
+		// A failed proof may fall back to a fresh rule read, but failure of the
+		// mandatory rule table itself must reject every protocol, even warm ones.
+		t.Run("rule_catalog_fault", func(t *testing.T) {
+			func() {
+				if fault.Enable() {
+					defer fault.Disable()
+				}
+				remove, err := objectio.InjectLogging(objectio.FJ_CNSubscribeTableFail, "mo_catalog", "mo_role_rule", 0, true)
+				require.NoError(t, err)
+				defer remove()
+				for _, request := range []func() (*sql.Rows, error){
+					func() (*sql.Rows, error) { return reader.QueryContext(ctx, query) },
+					func() (*sql.Rows, error) { return sqlReader.QueryContext(ctx, "execute saved") },
+					func() (*sql.Rows, error) { return binary.QueryContext(ctx) },
+				} {
+					func() {
+						rows, err := request()
+						if rows != nil {
+							defer rows.Close()
+							require.NoError(t, rows.Err())
+						}
+						require.ErrorContains(t, err, "injected subscribe table err")
+					}()
+				}
+			}()
+			check(reader, []int{1, 2})
+			needReprepare(func() (*sql.Rows, error) { return binary.QueryContext(ctx) })
+			needReprepare(func() (*sql.Rows, error) { return sqlReader.QueryContext(ctx, "execute saved") })
+		})
 		mustExec(t, ctx, reader, "rollback")
 	})
 }

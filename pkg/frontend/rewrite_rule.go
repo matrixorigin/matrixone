@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -226,7 +227,17 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 
 		version, err := versionOf(ctx, ses)
 		if err != nil {
-			return fail(err)
+			if ctx.Err() != nil {
+				return fail(ctx.Err())
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return fail(err)
+			}
+			// The proof covers more catalog tables than role rules consume.
+			// If it is unavailable, require an independent rule read below and
+			// never stamp the result with a reusable version. Read failures still
+			// fail closed, while grant-independent controls remain available.
+			version = nil
 		}
 		if loaded && identity == cachedIdentity && (ses.GetTenantInfo() == nil || (version != nil && version == cachedVersion)) {
 			if identity != rewriteRuleSessionIdentity(ses) {
