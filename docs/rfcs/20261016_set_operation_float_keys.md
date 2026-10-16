@@ -1,10 +1,10 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 7
+- Revision: 8
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Rebase baseline: official main `7c61f67e5dc46b0b8e591fe957219308b078bfa4`
+- Rebase baseline: official main `47b9690d7caec56b589fdefaf0684177412cffb2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 
 # Signed-zero set membership and scalar reaggregation
@@ -22,7 +22,8 @@ revision 5 adds the local capacity protocol, receipt and composed lifecycle test
 revision 6 extends accounted resource, input-distribution and composed fault evidence;
 revision 7 defines the intended deployment qualification/rollout contract and
 executes its sparse and concurrent boundary cases with enforced benchmark budgets.
-These revisions do not assert repository approval or advance implementation approval.
+revision 8 reconciles upstream function allocation and refreshes evidence after
+the official-main rebase. These revisions do not assert repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
 wire field, worker, queue, persisted occurrence identity or recovery protocol.
@@ -44,7 +45,7 @@ FLOAT and DOUBLE set operations compare their physical membership keys while
 returning the original visible values. Positive and negative zero remain distinct;
 NULL, NaN normalization, ALL multiplicities, and the shared GROUP BY/DISTINCT
 contracts retain their existing owners. UNION ALL needs no membership key.
-The internal `set_operation_float_key` registry identity is 599, with overloads
+The internal `set_operation_float_key` registry identity is 600, with overloads
 0 (FLOAT) and 1 (DOUBLE). No user-visible column is added.
 
 There are three planning routes; their admission proofs must remain separate:
@@ -549,6 +550,51 @@ unqualified. Existing revision-6 allocator-attribution, separate serial EXPLAIN,
 internal overlap and distributed-capacity limitations continue to apply.
 
 
+### Revision 8 rebase and registry reconciliation
+
+Rebase onto official main `47b9690d7caec56b589fdefaf0684177412cffb2`
+preserves its SQL file-access authorization, catalog/collation admission, shared
+fixture ownership and WINDOW terminal-budget normalization. Main has assigned
+function ID 599 to `CHECK_ASYNC_DATALINK_SOURCE`; this PR therefore appends
+`SET_OPERATION_FLOAT_KEY = 600` and moves the registry sentinel to 601. Encoded
+feature round-trip tests recognize both 600 overloads and explicitly reject
+upstream 599 as a set-key capability. Both builtin registrations remain intact.
+
+Official `MORPCLatestVersion` is still 117. Set keys retain floor 118 throughout
+placement, send, receive-before-decode, executor/Prepare and persisted admission;
+predecessor 117 rejects them, while collation 117 and division diagnostics 116
+retain their independent floors. This changes the unmerged function allocation,
+not those protocol contracts. Earlier receipts accurately record historical
+function 599 and source hashes and are retained unchanged.
+
+The [revision 8 receipt](validation/20261017_scalar_set_capacity_r8.json) refreshes
+the same S1 15-profile/100-sample matrix after the rebase. Source fingerprints,
+settings, samples and physical/internal measurement boundaries are retained.
+Revision 7's intended deployment preconditions, budget targets, phased rollout
+and pending independent acceptance remain unchanged. New measurements do not
+qualify a wider deployment or claim that runtime admission enforces S1.
+
+Fresh validation on this rebased source passes:
+
+- Complete protobuf-plan, function, planner, compile and colexec packages:
+  0.799 s / 8.494 s / 9.013 s / 11.380 s / 1.377 s, including the encoded 600
+  and upstream 599 control and all existing protocol-boundary tests.
+- Public signed-zero/correlation/prepare suite with race/short/matrixone_test:
+  117 named PASS events, package 13.201 s; service/admission/port leases close.
+- Eight composed lifecycle modes under the same race/tags mode: package 2.494 s,
+  retaining first/final reservations, live metadata, removed-file/closed-handle,
+  Reset and same-budget recovery oracles after WINDOW error normalization.
+- Fifteen capacity profiles / 100 public samples: package 10.101 s. Sparse
+  boundary C=2 warm maximum is 9.254 ms; forced-spill boundary C=2 is 137.702 ms.
+  Across the matrix, first-invocation maximum completion is 156.012 ms, warm
+  maximum is 151.647 ms, internal generation peak is 8,505,176 bytes and process
+  lifetime RSS high-water is 435,421,184 bytes. All applicable fixed S1 budgets
+  pass; the same unavailable/serial/allocator/overlap limitations apply.
+- Vet for the seven affected packages and incremental lint pass (0 issues).
+
+These are refreshed source-bound receipts, not retrospective changes to the
+historical revision-7 run. Independent S1 acceptance remains pending.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -567,7 +613,7 @@ GROUP BY equality and avoids a new set executor/wire schema.
 ## Compatibility, rollout and rollback
 
 Official main at this revision ends at MORPC 117. This capability uses MORPC
-**118**. The feature walker recognizes encoded function identity 599 without
+**118**. The feature walker recognizes encoded function identity 600 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar
 composition adds no separate function identity or wire field. Official main
@@ -592,7 +638,7 @@ A new binary configured at immediate predecessor floor 117 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
 under a floor below 118. Lowering a new binary's floor does not rewrite existing
-catalog expressions or teach an old binary identity 599.
+catalog expressions or teach an old binary identity 600.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
 persisted expressions and remove or rewrite them to an old-supported definition;
@@ -623,10 +669,11 @@ acceptance or a capacity benchmark.
 | --- | --- | --- | --- |
 | Signed-zero membership, empty/real NULL, outer identity and scalar cardinality | Public `TestSetOperationSignedZero` at `fae17ae98d93f2b3e5e251dbc5649d643513af03`; preceding repair receipts report 117 named pass events (6.36s root, 8.438s package) | Pass includes grouped MAX, LIMIT 2, OFFSET, COUNT, repeated members, opposite-zero/finite-member 1242, and correlation partitions. One-CN correctness, not capacity. | Independent reconciliation/implementation review |
 | Boundary routing, physical/correlation keys, pagination and SINGLE, volatile/prepared controls | Complete planner and compile package tests from that same repair; `-count=1` through repository CGo wrapper, 35.715s and 14.010s | Passed; gofmt/vet and incremental lint also passed (0 lint issues). Revision 3 ran no product tests; this is a historical receipt. | Independent implementation review |
-| Encoded 599 overloads, hidden key traversal, prepare regeneration and 115/116 rejection | Retained compatibility tests described in the PR at the source baseline | Registry/protobuf, compiled grouping stages, old/missing/new/changed destinations, balanced releases, receive-before-decode, executor/persisted floors and integer/float/integer controls. Does not prove a live mixed-version upgrade or old-binary backup restore. | Execution/compatibility acceptance |
+| Historical encoded 599 overloads, hidden key traversal, prepare regeneration and 115/116 rejection | Retained compatibility tests described in the PR at the source baseline | Registry/protobuf, compiled grouping stages, old/missing/new/changed destinations, balanced releases, receive-before-decode, executor/persisted floors and integer/float/integer controls. Does not prove a live mixed-version upgrade or old-binary backup restore. | Execution/compatibility acceptance |
 | Historical CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
 | Selective typed-key filter work | Earlier unchanged-path receipt: 4,096 rows, one scan row per arm, two aggregation input rows, reported memory 262,270 bytes | A selective set-operation observation only; does not measure occurrence-based scalar fallback latency, concurrency or resident peak. | Separate from fallback acceptance |
 | Rebased capability allocation | Set-key placement/send/receive/Prepare/persisted tests at 116/117, plus division-only and combined-feature controls | Focused compile/colexec/planner boundary checks pass (3.073s/2.088s/1.517s); full planner, compile, colexec, function and protobuf-plan packages also pass. Fresh receipts are recorded in the implementation PR; historical 115/116 receipts above retain their original provenance. | Independent implementation review |
+| Rebased function 600 overloads, upstream 599 negative control and predecessor 117 rejection | Revision 8 on official main `47b9690d7caec56b589fdefaf0684177412cffb2`; complete protobuf-plan/function/planner/compile/colexec package suites passed | Fresh registry/encoded-feature and existing placement/send/receive/Prepare/executor/persisted tests; independent collation 117/division 116 controls retained. Not a live mixed-version cluster. | Execution/compatibility acceptance |
 | Global merge and reaggregation capacity | Revision 6 benchmark and linked receipt above | Twelve actual fallback profiles and separate terminal internal roots; local targets met, including high-U/skew, measured account peaks, merge and spill/reload counters. Full allocator attribution and remote qualification are not claimed. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
 | Composed partial failure/cancel/reset/spill recovery | Revision 6 composed compile test plus named owner fault tests above | Typed 4 KiB rejection, WINDOW input / pre-reload cancellation, synchronous corrupt reload, first/final attempt file/handle/ledger cleanup and TP Reset/same-budget recovery. Mid-single-batch cancellation is not injected. | Execution reviewers: remaining composed boundaries |
 | Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
