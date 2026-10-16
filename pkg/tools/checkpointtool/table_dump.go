@@ -5374,6 +5374,11 @@ func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 
 func sqlTypeFromMOType(typ types.Type) string {
 	switch typ.Oid {
+	case types.T_text, types.T_blob:
+		// Preserve the SQL family width when reconstructing checkpoint DDL.
+		// DescString only returns TEXT/BLOB and loses the original subtype.
+		name, _ := types.FormatSQLColumnType(typ)
+		return name
 	case types.T_time:
 		return scaledSQLType("TIME", typ.Scale)
 	case types.T_datetime:

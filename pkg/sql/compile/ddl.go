@@ -2539,15 +2539,20 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
+			ctxWithSession, sequenceState := attachInternalSequenceState(ctxWithSession, c.proc)
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
 			defer func() {
 				c.proc.Ctx = oldCtx
 			}()
-			return c.runSqlWithResultAndOptions(
+			result, err := c.runSqlWithResultAndOptions(
 				createAsSelectSql,
 				NoAccountId,
 				statementOption,
 			)
+			if err == nil && sequenceState.output != nil {
+				sequenceState.output.apply(c.proc)
+			}
+			return result, err
 		}()
 		if err != nil {
 			return err

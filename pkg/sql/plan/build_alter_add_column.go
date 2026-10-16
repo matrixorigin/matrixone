@@ -163,17 +163,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			if err != nil {
 				return nil, err
 			}
-			uniqueIndex := &tree.UniqueIndex{
-				KeyParts: []*tree.KeyPart{{ColName: specNewColumn.Name}},
-			}
-
-			constrNames := map[string]bool{}
-			// Check not empty constraint name whether is duplicated.
-			for _, idx := range alterPlan.CopyTableDef.Indexes {
-				constrNames[indexNameKey(idx.IndexName)] = true
-			}
-			// set empty constraint names(index and unique index)
-			setEmptyUniqueIndexName(constrNames, uniqueIndex)
+			uniqueIndex := newAlterColumnUniqueIndex(alterPlan.CopyTableDef, specNewColumn)
 
 			indexDef, err := checkAddColumWithUniqueKey(ctx.GetContext(), alterPlan.CopyTableDef, uniqueIndex)
 			if err != nil {

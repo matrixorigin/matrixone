@@ -283,6 +283,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
+	pendingChecks, err := prepareAlterCopyChecks(cctx, copyTableDef, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
 	// The copied definition contains the source allocator's cached offset. It
 	// is not a user request and can be far ahead of the actual rows. The copy
 	// executor reconciles the explicit request, copied maximum, and source
@@ -342,6 +346,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
+			case *tree.CheckIndex:
+				// Names and drops were applied before column mutations. Bind
+				// surviving new expressions against the final schema below.
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
@@ -361,6 +368,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				// Already applied by prepareAlterCopyChecks.
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				found := false
 				for i, index := range copyTableDef.Indexes {
@@ -545,6 +554,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
 	); err != nil {
 		return nil, err
+	}
+	for _, check := range pendingChecks {
+		if err = appendCheckDef(cctx, copyTableDef, check.ConstraintSymbol, check.Expr, -1); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
@@ -1320,9 +1334,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
-	if tableDef.KeyFormat == collation.KeyFormatV1 && hasVersionedIndexMutation(stmt.Options) {
-		return nil, rejectVersionedIndexMutation(ctx.GetContext(), tableDef)
-	}
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
 		return nil, err
 	}
@@ -1379,6 +1390,19 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
+	}
+	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
+	// Preserve the parser-owned AST: prepared statements may plan it again.
+	resolvedStmt := *stmt
+	resolvedStmt.Options = options
+	stmt = &resolvedStmt
+	// Generic CONSTRAINT drops must obey the same physical-key admission
+	// as the constraint-specific operations they resolve to.
+	if tableDef.KeyFormat == collation.KeyFormatV1 && hasVersionedIndexMutation(stmt.Options) {
+		return nil, rejectVersionedIndexMutation(ctx.GetContext(), tableDef)
 	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := ctx.GetAccountId()
@@ -1609,6 +1633,8 @@ Loop:
 			continue
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
+			case *tree.CheckIndex:
+				algorithm = plan.AlterTable_COPY
 			case *tree.PrimaryKeyIndex:
 				algorithm = plan.AlterTable_COPY
 			case *tree.ForeignKey:
@@ -1622,6 +1648,8 @@ Loop:
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropColumn:
 				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:

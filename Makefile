@@ -606,18 +606,19 @@ UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Split issues roots under one shared package deadline.
 # Shorter process lifetimes bound catalog and race-detector retention. The
-# eight-batch pool shares four Go execution cores across two complete clusters.
-# One/four issues batches retain the serial rollback.
+# eight-batch pool gives each process two Go execution cores. Linux runners
+# requesting at least eight tasks use four complete clusters; smaller budgets
+# and unmeasured platforms retain two. One/four batches retain serial rollback.
 UT_ISSUES_BATCHES ?= 8
-UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
-UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),2,1)
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),2,1)
 # Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
 UT_EMBEDDED_BATCHES ?= 4
-# A compiler overlapping two clusters increases the memory peak. The new
+# A compiler overlapping cluster processes increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
 # the prebuild policy for rollback modes; overlapping compilation remains an
-# explicit opt-in for the two-cluster issues pool.
-UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
+# explicit opt-in for the bounded issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
