@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -183,8 +184,8 @@ func TestGCWindowCloseAbandonsPreparedOwnership(t *testing.T) {
 		mp,
 		nil,
 		WithUnpublishedObjectLifecycle(
-			func(context.Context, string, []string) error { return nil },
-			func(context.Context, string) error { return nil },
+			func(context.Context, ioutil.UnpublishedObject) (string, error) { return "", nil },
+			func(context.Context, string, string) error { return nil },
 			func(file string) { abandoned = append(abandoned, file) },
 		),
 	)
@@ -195,6 +196,84 @@ func TestGCWindowCloseAbandonsPreparedOwnership(t *testing.T) {
 
 	require.Equal(t, []string{"prepared-object"}, abandoned)
 	require.Empty(t, window.prepared)
+}
+
+func TestGCWindowRetryKeepsCleanupOwnershipPerMetadataAttempt(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"gc-window-retry", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	window := NewGCWindow(
+		mp,
+		fs,
+		WithWindowDir(ioutil.GetGCDir()),
+		WithUnpublishedObjectLifecycle(
+			cleaner.prepareUnpublishedObjectIntent,
+			cleaner.FinishUnpublishedObject,
+			cleaner.AbandonUnpublishedObject,
+		),
+	)
+	window.tsRange.start = types.BuildTS(1, 0)
+	window.tsRange.end = types.BuildTS(2, 0)
+	metadataFile := ioutil.MakeFullName(
+		window.dir,
+		ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end),
+	)
+	oldData := objectio.MockObjectName().String()
+	newData := objectio.MockObjectName().String()
+	require.NotEqual(t, oldData, newData)
+
+	window.cleanupID = "old-attempt"
+	require.NoError(t, window.prepareObject(ctx, oldData))
+	oldDataMarker := window.prepared[oldData]
+	require.NoError(t, window.prepareObject(ctx, metadataFile))
+	oldMetadataMarker := window.prepared[metadataFile]
+	require.NotEqual(t, oldDataMarker, oldMetadataMarker)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: oldData,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}))
+	window.abandonPrepared()
+
+	window.cleanupID = "new-attempt"
+	require.NoError(t, window.prepareObject(ctx, newData))
+	require.NoError(t, window.prepareObject(ctx, metadataFile))
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: newData,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+	}))
+	require.NoError(t, window.Publish(ctx))
+
+	cleaner.mutation.Lock()
+	cleaner.mutation.metaFiles = map[string]ioutil.TSRangeFile{
+		ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end): ioutil.NewTSRangeFile(
+			ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end),
+			ioutil.GCMetaExt,
+			window.tsRange.start,
+			window.tsRange.end,
+		),
+	}
+	cleaner.mutation.Unlock()
+
+	// The adopted metadata belongs to the retry. The old metadata marker must
+	// be released first; only then may replay delete the old data it references.
+	for i := 0; i < 4; i++ {
+		_ = cleaner.replayUnpublishedObjectCleanup(ctx)
+		_, statErr := fs.StatFile(ctx, oldData)
+		if moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+			break
+		}
+	}
+	_, err = fs.StatFile(ctx, oldData)
+	require.Error(t, err)
+	markers, remaining, err := ioutil.ListUnpublishedObjectCleanup(ctx, fs, 10)
+	require.NoError(t, err)
+	require.False(t, remaining)
+	require.Empty(t, markers)
 }
 
 func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T) {

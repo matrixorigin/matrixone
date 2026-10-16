@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -70,8 +71,8 @@ func WithUnpublishedCleanup(
 // WithUnpublishedObjectLifecycle makes object persistence participate in the
 // same ownership protocol as checkpoint metadata persistence.
 func WithUnpublishedObjectLifecycle(
-	prepare func(context.Context, string, []string) error,
-	finish func(context.Context, string) error,
+	prepare func(context.Context, ioutil.UnpublishedObject) (string, error),
+	finish func(context.Context, string, string) error,
 	abandon func(string),
 ) WindowOption {
 	return func(window *GCWindow) {
@@ -114,11 +115,12 @@ type GCWindow struct {
 	fs  fileservice.FileService
 
 	retainUnpublished     func(context.Context, []string) error
-	prepareUnpublished    func(context.Context, string, []string) error
-	finishUnpublished     func(context.Context, string) error
+	prepareUnpublished    func(context.Context, ioutil.UnpublishedObject) (string, error)
+	finishUnpublished     func(context.Context, string, string) error
 	abandonUnpublished    func(string)
 	rollbackScan          func()
-	prepared              map[string]struct{}
+	prepared              map[string]string
+	cleanupID             string
 	metadataCleanupFailed bool
 
 	files []objectio.ObjectStats
@@ -138,9 +140,9 @@ func (w *GCWindow) Clone() GCWindow {
 	w2.files = make([]objectio.ObjectStats, len(w.files))
 	copy(w2.files, w.files)
 	if w.prepared != nil {
-		w2.prepared = make(map[string]struct{}, len(w.prepared))
-		for file := range w.prepared {
-			w2.prepared[file] = struct{}{}
+		w2.prepared = make(map[string]string, len(w.prepared))
+		for file, marker := range w.prepared {
+			w2.prepared[file] = marker
 		}
 	}
 	return w2
@@ -181,6 +183,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (filesToGC []string, metaFile string, err error) {
+	w.cleanupID = uuid.New().String()
 	defer func() {
 		// A caller publishes the metadata only after WAL/catalog adoption. Any
 		// earlier error must release in-memory admission while retaining the
@@ -275,6 +278,7 @@ func (w *GCWindow) ScanCheckpoints(
 	if len(checkpointEntries) == 0 {
 		return
 	}
+	w.cleanupID = uuid.New().String()
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
 	previousTSRange := w.tsRange
@@ -322,7 +326,7 @@ func (w *GCWindow) ScanCheckpoints(
 				// available for restart recovery until that ownership is resolved.
 				w.metadataCleanupFailed = true
 				err = errors.Join(err, metaCleanupErr)
-				if w.retainUnpublished != nil {
+				if w.retainUnpublished != nil && w.prepareUnpublished == nil {
 					persisted, _ := sinker.GetResult()
 					files := objectStatsNames(persisted)
 					files = append(files, sinker.GetUnpublishedFiles()...)
@@ -339,7 +343,7 @@ func (w *GCWindow) ScanCheckpoints(
 				files, cleanupErr := sinker.DeletePersisted(ctx)
 				if cleanupErr != nil {
 					err = errors.Join(err, cleanupErr)
-					if w.retainUnpublished != nil {
+					if w.retainUnpublished != nil && w.prepareUnpublished == nil {
 						if retainErr := w.retainUnpublished(ctx, files); retainErr != nil {
 							err = errors.Join(err, retainErr)
 						}
@@ -409,18 +413,27 @@ func (w *GCWindow) prepareObject(ctx context.Context, file string) error {
 	if w.prepareUnpublished == nil {
 		return nil
 	}
-	var dependsOn []string
-	if !isGCMetadataFile(file) {
-		metadata := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
-		dependsOn = []string{ioutil.MakeFullName(w.dir, metadata)}
+	object := ioutil.UnpublishedObject{File: file}
+	if isGCMetadataFile(file) {
+		object.CleanupID = w.cleanupID
+	} else if w.cleanupID != "" {
+		metadata := ioutil.UnpublishedObject{
+			File: ioutil.MakeFullName(
+				w.dir,
+				ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end),
+			),
+			CleanupID: w.cleanupID,
+		}
+		object.DependsOn = []string{ioutil.UnpublishedObjectCleanupPath(metadata)}
 	}
-	if err := w.prepareUnpublished(ctx, file, dependsOn); err != nil {
+	marker, err := w.prepareUnpublished(ctx, object)
+	if err != nil {
 		return err
 	}
 	if w.prepared == nil {
-		w.prepared = make(map[string]struct{})
+		w.prepared = make(map[string]string)
 	}
-	w.prepared[file] = struct{}{}
+	w.prepared[file] = marker
 	return nil
 }
 
@@ -433,8 +446,8 @@ func (w *GCWindow) Publish(ctx context.Context) error {
 		return nil
 	}
 	var err error
-	for file := range w.prepared {
-		err = errors.Join(err, w.finishUnpublished(ctx, file))
+	for file, marker := range w.prepared {
+		err = errors.Join(err, w.finishUnpublished(ctx, marker, file))
 	}
 	w.prepared = nil
 	return err
@@ -461,6 +474,9 @@ func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
 ) (string, error) {
+	if w.cleanupID == "" {
+		w.cleanupID = uuid.New().String()
+	}
 	select {
 	case <-ctx.Done():
 		return "", context.Cause(ctx)

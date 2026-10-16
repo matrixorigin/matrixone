@@ -1895,6 +1895,20 @@ func (c *checkpointCleaner) prepareUnpublishedObject(
 	file string,
 	dependsOn []string,
 ) (string, error) {
+	return c.prepareUnpublishedObjectIntent(ctx, ioutil.UnpublishedObject{
+		File:        file,
+		DependsOn:   dependsOn,
+		DBID:        dbID,
+		TableID:     tableID,
+		IsTombstone: isTombstone,
+	})
+}
+
+func (c *checkpointCleaner) prepareUnpublishedObjectIntent(
+	ctx context.Context,
+	object ioutil.UnpublishedObject,
+) (string, error) {
+	file := object.File
 	if file == "" {
 		return "", moerr.NewInternalErrorNoCtx(
 			"cannot prepare an empty unpublished object")
@@ -1930,13 +1944,7 @@ func (c *checkpointCleaner) prepareUnpublishedObject(
 	marker, err := ioutil.RecordUnpublishedObjectCleanup(
 		ctx,
 		markerFS,
-		ioutil.UnpublishedObject{
-			File:        file,
-			DependsOn:   append([]string(nil), dependsOn...),
-			DBID:        dbID,
-			TableID:     tableID,
-			IsTombstone: isTombstone,
-		},
+		object,
 	)
 	if err != nil {
 		// A remote write can return an error after persistence. Stat is the
@@ -2771,14 +2779,11 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		c.fs,
 		WithUnpublishedCleanup(c.retainUnpublishedObjects),
 		WithUnpublishedObjectLifecycle(
-			func(ctx context.Context, file string, dependsOn []string) error {
-				_, err := c.prepareUnpublishedObject(
-					ctx, 0, 0, false, file, dependsOn)
-				return err
+			func(ctx context.Context, object ioutil.UnpublishedObject) (string, error) {
+				return c.prepareUnpublishedObjectIntent(ctx, object)
 			},
-			func(_ context.Context, file string) error {
-				c.AbandonUnpublishedObject(file)
-				return nil
+			func(ctx context.Context, marker, file string) error {
+				return c.FinishUnpublishedObject(ctx, marker, file)
 			},
 			c.AbandonUnpublishedObject,
 		),
