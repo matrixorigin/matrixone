@@ -206,9 +206,17 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 		if err != nil {
 			return err
 		}
+		// CREATE resolves unqualified names in the defining session. Persist
+		// that binding in the refresh SQL so a later worker does not have to
+		// resolve the same spelling against an ambiguous set of databases.
+		source.SchemaName = tree.Identifier(database)
+		source.ExplicitSchema = true
 		version := def.Version
 		d.Sources = append(d.Sources, mvdefinition.Source{Relation: mvdefinition.Relation{Database: database, Name: name, DatabaseID: def.DbId, ID: def.TblId}, Version: &version})
 	}
+	// Re-render after source resolution so complete-refresh workers consume the
+	// same database binding accepted by CREATE, including cross-database joins.
+	d.RefreshSQL = materializedViewRefreshSQL(stmt.AsSource)
 	incrementalSpec := ""
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 		var stateCols []*ColDef

@@ -2320,6 +2320,28 @@ func materializedViewSourceTable(expr tree.TableExpr) *tree.TableName {
 	}
 }
 
+// materializedViewSourceAlias follows the parser's degenerate JoinTableExpr
+// wrapper for a single FROM item. The alias belongs to the AliasedTableExpr
+// inside that wrapper, not necessarily to the top-level FROM node.
+func materializedViewSourceAlias(expr tree.TableExpr) string {
+	switch table := expr.(type) {
+	case *tree.TableName:
+		return string(table.ObjectName)
+	case *tree.AliasedTableExpr:
+		if table.As.Alias != "" {
+			return string(table.As.Alias)
+		}
+		return materializedViewSourceAlias(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewSourceAlias(table.Expr)
+	case *tree.JoinTableExpr:
+		if table.Right == nil && table.Cond == nil {
+			return materializedViewSourceAlias(table.Left)
+		}
+	}
+	return ""
+}
+
 func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool) {
 	switch table := expr.(type) {
 	case *tree.TableName:

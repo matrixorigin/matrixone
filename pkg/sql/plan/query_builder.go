@@ -10481,8 +10481,22 @@ func walkASTExpressions(root tree.NodeFormatter, visit func(tree.Expr) bool) {
 			}
 			visited[pointer] = struct{}{}
 			if value.CanInterface() {
-				if expr, ok := value.Interface().(tree.Expr); ok && !visit(expr) {
-					return
+				if expr, ok := value.Interface().(tree.Expr); ok {
+					if !visit(expr) {
+						return
+					}
+					// SampleExpr keeps its operand list private so the generic
+					// reflection walk cannot see it. Those operands may contain
+					// subqueries or session-dependent expressions and must be
+					// subject to the same MV admission checks as every other AST
+					// expression.
+					if sample, ok := expr.(*tree.SampleExpr); ok {
+						columns, _ := sample.GetColumns()
+						for _, column := range columns {
+							walk(reflect.ValueOf(column))
+						}
+						return
+					}
 				}
 			}
 			walk(value.Elem())

@@ -115,9 +115,9 @@ func buildMaterializedViewIncrementalBranchPlan(
 	if source == nil {
 		return "", nil, ""
 	}
-	sourceAlias := string(source.ObjectName)
-	if aliased, ok := clause.From.Tables[0].(*tree.AliasedTableExpr); ok && aliased.As.Alias != "" {
-		sourceAlias = string(aliased.As.Alias)
+	sourceAlias := materializedViewSourceAlias(clause.From.Tables[0])
+	if sourceAlias == "" {
+		return "", nil, ""
 	}
 
 	collector := &materializedViewIncrementalColumnCollector{}
@@ -175,7 +175,8 @@ func buildMaterializedViewIncrementalBranchPlan(
 		// inputs must be subscribed just like WHERE and aggregate inputs;
 		// otherwise a change to a column referenced only by HAVING can be
 		// omitted from the ISCP batch and leave group visibility stale.
-		if !materializedViewIncrementalHavingSupported(clause.Having.Expr) || !collector.collect(clause.Having.Expr) {
+		havingAliases := materializedViewIncrementalHavingAliases(clause.Exprs)
+		if !materializedViewIncrementalHavingSupported(clause.Having.Expr) || !collector.collectWithAliases(clause.Having.Expr, havingAliases) {
 			return "", nil, ""
 		}
 		// HAVING is maintained by rebuilding only the affected groups at the
@@ -272,6 +273,15 @@ func buildMaterializedViewIncrementalBranchPlan(
 	for _, group := range spec.Groups {
 		if group.OutputColumn == "" {
 			return "", nil, ""
+		}
+		for _, output := range outputCols {
+			if strings.EqualFold(output.Name, group.OutputColumn) && !materializedViewIncrementalGroupTypeSupported(output.Typ) {
+				// The delta transport currently preserves string bytes, while
+				// serial_full uses binary equality. Do not admit a FAST group
+				// whose SQL equality is collation-aware until the transport and
+				// state key use the same collation key.
+				return "", nil, ""
+			}
 		}
 	}
 	if len(spec.Aggregates) == 0 && !selectDistinct {
@@ -620,22 +630,69 @@ func materializedViewIncrementalHavingSupported(expr tree.Expr) bool {
 	}
 }
 
+func materializedViewIncrementalHavingAliases(exprs tree.SelectExprs) map[string]tree.Expr {
+	aliases := make(map[string]tree.Expr)
+	for _, expr := range exprs {
+		if expr.As != nil && !expr.As.Empty() {
+			aliases[expr.As.Compare()] = expr.Expr
+		}
+	}
+	return aliases
+}
+
+func materializedViewIncrementalGroupTypeSupported(typ Type) bool {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return typ.Charset == uint32(types.CharsetLegacy) ||
+			typ.Charset == uint32(types.CharsetBinary) ||
+			typ.Charset == uint32(types.CharsetUTF8MB4Bin)
+	default:
+		return true
+	}
+}
+
 type materializedViewIncrementalColumnCollector struct {
-	set map[string]struct{}
+	set         map[string]struct{}
+	aliases     map[string]tree.Expr
+	aliasActive map[string]bool
+	failed      bool
 }
 
 func (c *materializedViewIncrementalColumnCollector) collect(expr tree.Expr) (ok bool) {
+	if c.failed {
+		return false
+	}
 	if c.set == nil {
 		c.set = make(map[string]struct{})
 	}
-	defer func() { ok = ok && recover() == nil }()
+	defer func() { ok = ok && recover() == nil && !c.failed }()
 	_, ok = expr.Accept(c)
+	return ok
+}
+
+func (c *materializedViewIncrementalColumnCollector) collectWithAliases(expr tree.Expr, aliases map[string]tree.Expr) bool {
+	previousAliases, previousActive := c.aliases, c.aliasActive
+	c.aliases = aliases
+	c.aliasActive = make(map[string]bool)
+	ok := c.collect(expr)
+	c.aliases, c.aliasActive = previousAliases, previousActive
 	return ok
 }
 
 func (c *materializedViewIncrementalColumnCollector) Enter(expr tree.Expr) (tree.Expr, bool) {
 	if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star {
-		c.set[strings.ToLower(name.ColName())] = struct{}{}
+		key := strings.ToLower(name.ColName())
+		if name.NumParts == 1 {
+			if alias, exists := c.aliases[key]; exists && !c.aliasActive[key] {
+				c.aliasActive[key] = true
+				if !c.collect(alias) {
+					c.failed = true
+				}
+				delete(c.aliasActive, key)
+				return expr, true
+			}
+		}
+		c.set[key] = struct{}{}
 	}
 	return expr, false
 }

@@ -1863,6 +1863,7 @@ func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 		{"select k,(select max(v) from src) from src", false},
 		{"select k from src where exists(select 1 from dim)", false},
 		{"select k,count(*) from src group by k having count(*)>(select max(v) from dim)", false},
+		{"select sample((select max(v) from dim),100 percent) from src", false},
 		{"select a.k from src a join dim b on a.k=(select max(k) from dim)", false},
 		{"select row_number() over(partition by (select max(k) from dim)) from src", false},
 		{"select k from src order by (select max(k) from dim)", false},
@@ -1931,7 +1932,9 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 		{name: "avg distinct", query: "select service, avg(distinct bytes) bytes_avg from events group by service", outputs: []string{"service", "bytes_avg"}, eligible: true},
 		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
 		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "having output alias", query: "select service, count(*) c from events group by service having c > 1", outputs: []string{"service", "c"}, eligible: true},
 		{name: "having-only-input", query: "select service, count(*) requests from events group by service having sum(status) > 1", outputs: []string{"service", "requests"}, eligible: true},
+		{name: "qualified single source alias", query: "select e.service, count(*) requests from events as e group by e.service", outputs: []string{"service", "requests"}, eligible: true},
 		{name: "inner join", query: "select events.service, count(*) requests from events join services on events.service = services.name group by events.service", outputs: []string{"service", "requests"}},
 		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
@@ -2001,6 +2004,12 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.Equal(t, "__state", desc.StateTable)
 				require.Contains(t, desc.SourceColumns, "status")
 			}
+			if tc.name == "having output alias" {
+				require.NotContains(t, desc.SourceColumns, "c")
+			}
+			if tc.name == "qualified single source alias" {
+				require.Equal(t, "e", desc.SourceAlias)
+			}
 			if tc.name == "select distinct rows" {
 				require.Empty(t, desc.StateTable)
 				require.Empty(t, desc.Aggregates)
@@ -2041,6 +2050,35 @@ func TestMaterializedViewIncrementalSpecPreservesGroupNullability(t *testing.T) 
 	decoded, err = json.Marshal(desc)
 	require.NoError(t, err)
 	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(base64.StdEncoding.EncodeToString(decoded)))
+}
+
+func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select k, count(*) c from src group by k", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		want    bool
+	}{
+		{name: "binary collation", charset: types.CharsetUTF8MB4Bin, want: true},
+		{name: "unicode case insensitive collation", charset: types.CharsetUTF8MB4UnicodeCI, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := []*ColDef{
+				{Name: "k", Typ: Type{Id: int32(types.T_varchar), Charset: uint32(tc.charset)}},
+				{Name: "c", Typ: Type{Id: int32(types.T_int64)}},
+			}
+			encoded, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+			if tc.want {
+				require.NotEmpty(t, encoded)
+			} else {
+				require.Empty(t, encoded)
+			}
+		})
+	}
 }
 
 func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
