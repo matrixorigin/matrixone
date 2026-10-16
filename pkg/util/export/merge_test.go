@@ -328,10 +328,12 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	for _, tc := range []struct {
 		name     string
+		exists   bool
 		checkErr error
 	}{
-		{name: "already uploaded"},
-		{name: "failed file retained", checkErr: errors.New("controlled lookup failure")},
+		{name: "already uploaded", exists: true},
+		{name: "lookup failure retains file", checkErr: errors.New("controlled lookup failure")},
+		{name: "upload failure retains file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -343,13 +345,26 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 				require.NoError(t, err)
 				filePath, err := initSingleLogsFile(ctx, fs, dummyTable, ts, table.CsvExtension)
 				require.NoError(t, err)
+				readSource := func() string {
+					vector := fileservice.IOVector{FilePath: filePath, Entries: []fileservice.IOEntry{{Size: -1}}}
+					defer vector.Release()
+					require.NoError(t, fs.Read(ctx, &vector))
+					return string(vector.Entries[0].Data)
+				}
+				original := readSource()
+				if !tc.exists && tc.checkErr == nil {
+					// Retain the original unconfigured-writer upload path. Stop
+					// before executing if this package ever configures a real DB.
+					_, err := db_holder.GetSQLWriterDBUser()
+					require.Error(t, err)
+				}
 				checked := 0
 				execute := MergeTaskExecutorFactory("", WithFileService(fs), func(m *Merge) {
 					m.isRecordExisted = func(_ context.Context, row []string, tbl *table.Table, _ db_holder.DBConnProvider) (bool, error) {
 						checked++
 						require.Equal(t, dummyTable, tbl)
 						require.Equal(t, "row1", row[0])
-						return tc.checkErr == nil, tc.checkErr
+						return tc.exists, tc.checkErr
 					}
 				})
 				require.ErrorContains(t, execute(ctx, &task.CronTask{}), "invalid task type")
@@ -373,8 +388,9 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 					}
 					dirs = dirs[1:]
 				}
-				if tc.checkErr != nil {
+				if !tc.exists {
 					require.Equal(t, []string{path.Join("/", filePath)}, files)
+					require.Equal(t, original, readSource(), "failed merge must retain the entire original CSV")
 				} else {
 					require.Empty(t, files, "already uploaded file must be removed")
 				}
