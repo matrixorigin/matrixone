@@ -4862,11 +4862,12 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 
 func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
 		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: diff},
 			}}},
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
 			}}},
 		}}},
