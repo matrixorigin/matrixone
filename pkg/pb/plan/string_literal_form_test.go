@@ -1293,7 +1293,9 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		overload int64
 		want     bool
 	}{
-		{599, 0, true}, {599, 1, true}, {598, 0, false},
+		{600, 0, true}, {600, 1, true},
+		{599, 0, false}, // upstream CHECK_ASYNC_DATALINK_SOURCE
+		{598, 0, false},
 	} {
 		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: tc.id<<32 | tc.overload}}}}
 		owner := &Node{PhysicalEqualityKeyList: []*Expr{expr}}
