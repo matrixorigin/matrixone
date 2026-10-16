@@ -172,7 +172,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.SetOperationFloatKeys {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
