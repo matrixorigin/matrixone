@@ -107,10 +107,10 @@ plain2_chk_1  ¦  `y` < 10
 select tc.table_name, cc.check_clause
 from information_schema.table_constraints tc
 join information_schema.check_constraints cc
-  on tc.constraint_schema = cc.constraint_schema
- and tc.constraint_name = cc.constraint_name
+on tc.constraint_schema = cc.constraint_schema
+and tc.constraint_name = cc.constraint_name
 where tc.constraint_schema = 'check_names_30343'
-  and tc.constraint_type = 'CHECK'
+and tc.constraint_type = 'CHECK'
 order by tc.table_name;
 ➤ table_name[12,5000,0]  ¦  check_clause[12,65535,0]  𝄀
 dst  ¦  `x` > 0  𝄀
