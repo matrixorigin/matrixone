@@ -332,6 +332,48 @@ func (c *client) lookupLockServiceAddress(
 	return address, err
 }
 
+// cachedLockServiceOwners reads the existing raw inventory without refreshing
+// discovery or sending an RPC. WorkState and public SQL admission must not
+// hide a lock owner that still has a live internal listener.
+func (c *client) cachedLockServiceOwners(ctx context.Context, scratch []string) ([]string, error) {
+	owners := scratch[:0]
+	err := clusterservice.GetCNServiceRawWithContext(
+		ctx, c.cluster, clusterservice.NewSelectAll(),
+		func(cn metadata.CNService) bool {
+			owners = append(owners, cn.ServiceID)
+			return true
+		},
+	)
+	return owners, err
+}
+
+// confirmLockServiceOwner is used only when a cold publisher's keeper
+// snapshot lacks the TN-selected owner. Use current raw discovery first,
+// refreshing only on a miss, just as sending the first Lock RPC would do.
+func (c *client) confirmLockServiceOwner(ctx context.Context, serviceID string) (bool, error) {
+	sid := getUUIDFromServiceIdentifier(serviceID)
+	address, err := c.lookupLockServiceAddress(ctx, sid)
+	if err != nil || address != "" {
+		return address != "", err
+	}
+	if err := c.refreshCluster(ctx); err != nil {
+		return false, err
+	}
+	address, err = c.lookupLockServiceAddress(ctx, sid)
+	return address != "", err
+}
+
+func (c *client) refreshCluster(ctx context.Context) error {
+	if refresher, ok := c.cluster.(interface {
+		Refresh(context.Context) error
+	}); ok {
+		return refresher.Refresh(ctx)
+	}
+	// External cluster implementations have no cancellable refresh contract.
+	c.cluster.ForceRefresh(false)
+	return ctx.Err()
+}
+
 // activeTxnOwnerPresent consults the local raw membership view, without an RPC,
 // a discovery refresh, or a connection reset. Absence is only a reason to defer
 // probing: it is not an authoritative negative GetActiveTxn response.
@@ -408,17 +450,8 @@ func (c *client) asyncSend(
 			break
 		}
 		if i == 0 {
-			if refresher, ok := c.cluster.(interface {
-				Refresh(context.Context) error
-			}); ok {
-				if err := refresher.Refresh(ctx); err != nil {
-					return returnError(err)
-				}
-			} else {
-				// External cluster implementations do not expose a cancellable
-				// refresh contract. Request an asynchronous refresh instead of
-				// blocking an RPC past its context.
-				c.cluster.ForceRefresh(false)
+			if err := c.refreshCluster(ctx); err != nil {
+				return returnError(err)
 			}
 		}
 	}

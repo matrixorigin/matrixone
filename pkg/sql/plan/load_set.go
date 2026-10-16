@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -41,16 +39,15 @@ func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext) er
 		if assignment == nil {
 			return unsupported()
 		}
-		expr, ok := assignment.Expr.(*tree.FuncExpr)
-		if !ok || len(expr.Exprs) != 2 {
-			return unsupported()
-		}
-		name, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || !strings.EqualFold(name.ColName(), "nullif") {
+		expr, collated := loadNullIfFunction(assignment.Expr)
+		if expr == nil {
 			return unsupported()
 		}
 		switch source := expr.Exprs[0].(type) {
 		case *tree.UnresolvedName:
+			if collated {
+				return moerr.NewNotSupported(ctx.GetContext(), "COLLATE on column NULLIF in LOAD/external SET requires an expression projection")
+			}
 			if _, ok := expr.Exprs[1].(*tree.NumVal); !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func second param is not NumVal form")
 			}

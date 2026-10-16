@@ -29,10 +29,13 @@ func TestSequentialWriteCacheBoundsRetainedTail(t *testing.T) {
 		name      string
 		writeSize int
 		writes    int
+		window    int64
 	}{
-		{"small-appends", 64 << 10, 9},
-		{"unaligned-records", (64 << 10) + 1, 9},
-		{"oversized-records", (512 << 10) + 1, 2},
+		{"small-appends", 64 << 10, 9, 0},
+		{"unaligned-records", (64 << 10) + 1, 9, 0},
+		{"oversized-records", (512 << 10) + 1, 2, 0},
+		{"admitted-window", (64 << 10) + 1, 81, 4 << 20},
+		{"invalid-window-falls-back", 64 << 10, 9, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			file, err := os.CreateTemp(t.TempDir(), "spill-cache-*")
@@ -44,7 +47,13 @@ func TestSequentialWriteCacheBoundsRetainedTail(t *testing.T) {
 				}
 			})
 
-			cache := SequentialWriteCache{}
+			cache := NewSequentialWriteCache(tc.window)
+			window := retainedWriteCacheBytes
+			if tc.window >= retainedWriteCacheBytes {
+				window = tc.window
+			}
+			batchBytes := window / 2
+			submitBytes := min(batchBytes, 512<<10)
 			payload := make([]byte, tc.writeSize)
 			for i := range payload {
 				payload[i] = byte(i*17 + 43)
@@ -60,20 +69,20 @@ func TestSequentialWriteCacheBoundsRetainedTail(t *testing.T) {
 				require.NoError(t, cache.RecordWrite(file, written))
 				_, err = expected.Write(payload)
 				require.NoError(t, err)
-				if cache.written-previousSubmit < writebackBatchBytes {
+				if cache.written-previousSubmit < submitBytes {
 					require.Equal(t, previousSubmit, cache.submitted)
 				} else {
 					require.Equal(t, cache.written-cache.written%pageSize, cache.submitted)
 				}
-				if cache.written-previousDrop <= retainedWriteCacheBytes {
+				if cache.written-previousDrop <= window {
 					require.Equal(t, previousDrop, cache.dropped)
 				} else {
-					require.GreaterOrEqual(t, cache.dropped-previousDrop, writebackBatchBytes)
+					require.GreaterOrEqual(t, cache.dropped-previousDrop, batchBytes)
 				}
 				require.Zero(t, cache.dropped%pageSize)
 				require.LessOrEqual(t, cache.dropped, cache.submitted)
 				require.LessOrEqual(t, cache.submitted, cache.written)
-				require.LessOrEqual(t, cache.written-cache.dropped, retainedWriteCacheBytes)
+				require.LessOrEqual(t, cache.written-cache.dropped, window)
 
 				// Progress belongs to the spill file, not to one descriptor.
 				require.NoError(t, file.Close())
@@ -84,6 +93,9 @@ func TestSequentialWriteCacheBoundsRetainedTail(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, int64(tc.writeSize*tc.writes), cache.written)
+			cache.SubmitTail(file)
+			require.Equal(t, cache.written, cache.submitted)
+			cache.SubmitTail(file)
 			cache.Finish(file)
 			require.Equal(t, cache.written, cache.dropped)
 			require.Equal(t, cache.written, cache.submitted)

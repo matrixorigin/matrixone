@@ -51,6 +51,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
+		{features.LeastGreatestCollationSemantics, defines.MORPCVersion117,
+			"collation-aware LEAST/GREATEST requires a versioned remote destination",
+			"remote destination does not support collation-aware LEAST/GREATEST (MORPC version %d)"},
 		{features.CalendarIntervalNormalization, defines.MORPCVersion115,
 			"calendar interval normalization requires a versioned remote destination",
 			"remote destination does not support calendar interval normalization (MORPC version %d)"},
@@ -87,7 +90,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion117,
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion118,
 			"partitioned FULLTEXT routing requires a versioned remote destination",
 			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 	}

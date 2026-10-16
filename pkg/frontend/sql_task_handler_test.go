@@ -17,13 +17,14 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -37,47 +38,45 @@ import (
 
 type sqlTaskContextKey struct{}
 
-func TestGetSQLTaskServiceConcurrentPublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
-	defer ses.Close()
-	pu := getPu(ses.GetService())
-	pu.SetTaskService(nil)
-	got, err := getSQLTaskService(context.Background(), ses)
-	require.ErrorContains(t, err, "task service not ready yet")
-	require.Nil(t, got)
+func TestGetSQLTaskServicePublication(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	pu := &config.ParameterUnit{}
+	setPu(service, pu)
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	ctx := context.Background()
 
-	var wg sync.WaitGroup
+	got, err := getSQLTaskService(ctx, ses)
+	require.Nil(t, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.EqualError(t, err, "internal error: task service not ready yet, please try again later.")
+
+	ts := &testTaskService{}
 	start := make(chan struct{})
-	wg.Add(2)
+	published := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		<-start
-		for i := 0; i < 1000; i++ {
-			pu.SetTaskService(ts)
-			pu.SetTaskService(nil)
-		}
+		pu.SetTaskService(ts)
+		close(published)
 	}()
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 1000; i++ {
-			got, err := getSQLTaskService(context.Background(), ses)
-			if err != nil {
-				if got != nil {
-					t.Error("unpublished task service must not be returned with an error")
-				}
-			} else if got != ts {
-				t.Error("reader must observe the published task service")
-			}
-		}
-	}()
+	defer func() { <-published }()
+
+	// The publisher and this frontend read have no ordering until the join.
+	// Either readiness result is valid; both accesses must use the same lock.
 	close(start)
-	wg.Wait()
-	pu.SetTaskService(ts)
-	got, err = getSQLTaskService(context.Background(), ses)
+	got, err = getSQLTaskService(ctx, ses)
+	if got == nil {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	} else {
+		require.NoError(t, err)
+		require.Same(t, ts, got)
+	}
+
+	<-published
+	got, err = getSQLTaskService(ctx, ses)
 	require.NoError(t, err)
-	require.Equal(t, ts, got)
+	require.Same(t, ts, got)
 }
 
 // Observe the public handler's completion/fence ordering using the existing

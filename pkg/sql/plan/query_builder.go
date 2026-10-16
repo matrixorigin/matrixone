@@ -4792,6 +4792,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
+			branchExprs := make([]*Expr, len(nodes))
+			for i, id := range nodes {
+				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+			}
+			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+				return 0, err
+			}
+			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
@@ -4803,7 +4811,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				needsCast := !argsType[idx].Eq(targetArgType)
+				needsCast := !argsType[idx].Eq(targetArgType) ||
+					(targetType.CollationCoercibilitySet && !builder.qry.Nodes[tmpID].ProjectList[columnIdx].Typ.SameCollation(targetType))
 				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
@@ -6845,6 +6854,8 @@ func seedPreparedNumericAggregateExprColumnTargets(
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.CastExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.CollateExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.BitCastExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.Tuple:
@@ -8379,6 +8390,14 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.CollateExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
 	case *tree.BitCastExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -8804,6 +8823,8 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 	case *tree.ParenExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.CastExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.CollateExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.BitCastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
@@ -10866,6 +10887,10 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	commonPlanType := makePlan2Type(&commonType)
+	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
+		return plan.Type{}, err
+	}
+	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain
 	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
 	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
@@ -10890,7 +10915,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 			expr.Typ.NotNullable = false
 			continue
 		}
-		if sourceType.Eq(commonType) {
+		if sourceType.Eq(commonType) && expr.Typ.SameCollation(commonPlanType) {
 			continue
 		}
 
