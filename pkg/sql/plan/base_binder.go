@@ -8159,6 +8159,10 @@ func bindFuncExprImplByPlanExpr(
 				// 先规范为可扩容的 VARCHAR，再统一推导容量和 LOB 家族。
 				if commonType.Oid == types.T_char {
 					commonType.Oid = types.T_varchar
+				} else if commonType.Oid == types.T_binary {
+					// 固定 BINARY cast 会补 NUL，不能作为可变长度值的公共域。
+					// BLOB 保留输入字节（包括原本的 NUL），并复用下方容量推导。
+					commonType = types.New(types.T_blob, commonType.Width, 0)
 				}
 				// COALESCE's mixed string/numeric overload starts with a generic
 				// VARCHAR capacity. Refine known display bounds, but never shrink

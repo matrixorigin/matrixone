@@ -323,6 +323,29 @@ create view wyear_view as select id, lag(d,0,y) over (order by id) as yd,
 show columns from wyear_view;
 select * from wyear_view order by id;
 
+-- UUID 的可变长度文本不能被公共 BINARY 重载补零；原有二进制 NUL 也不能被删除。
+create table wuuid (u uuid, b binary(36), padded binary(40));
+insert into wuuid values ('00000000-0000-0000-0000-000000000001',
+       '00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002');
+select length(cast(u as char)) as original_length, length(cast(lag(u,0) over () as char)) as control_length,
+       length(lag(u,0,b) over ()) as lg_length, length(lead(u,0,b) over ()) as ld_length,
+       cast(cast(lag(u,0,b) over () as char) as uuid) = u as lg_roundtrip,
+       cast(cast(lead(u,0,b) over () as char) as uuid) = u as ld_roundtrip from wuuid;
+select length(lag(u,1,b) over ()) as default_length,
+       hex(lag(u,1,b) over ()) = hex(b) as default_equal,
+       hex(lag(b,0,u) over ()) = hex(b) as binary_source_equal,
+       cast(cast(lead(b,1,u) over () as char) as uuid) = u as reverse_default,
+       length(lag(u,0,padded) over ()) as uuid_with_padded_default,
+       length(lead(u,1,padded) over ()) as padded_length,
+       hex(lead(u,1,padded) over ()) = hex(padded) as padded_equal from wuuid;
+set @wuuid_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wuuid_copy as select lag(u,0,b) over () as lg, lead(u,0,b) over () as ld from wuuid;
+show create table wuuid_copy;
+select length(lg) as lg_length, length(ld) as ld_length,
+       cast(cast(lg as char) as uuid) as lg_uuid, cast(cast(ld as char) as uuid) as ld_uuid from wuuid_copy;
+set session sql_mode = @wuuid_sql_mode;
+
 -- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 show tables like 'wdecimal_rejected';

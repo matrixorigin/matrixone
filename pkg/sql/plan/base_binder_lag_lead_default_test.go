@@ -52,6 +52,10 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"mediumtext json", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, types.T_text, types.MaxLongTextLen, 0},
 				{"json mediumtext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}}, types.T_text, types.MaxLongTextLen, 0},
 
+				{"uuid binary", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uuid)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_binary), Width: 36}}, types.T_blob, types.MaxTinyTextLen, 0},
+				{"binary uuid", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_binary), Width: 36}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uuid)}}, types.T_blob, types.MaxTinyTextLen, 0},
+				{"mediumblob binary", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_binary), Width: 36}}, types.T_blob, types.MaxMediumTextLen, 0},
+				{"binary mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_binary), Width: 36}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, types.T_blob, types.MaxLongTextLen, 0},
 				{"mediumblob char", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char), Width: 1}}, types.T_blob, types.MaxMediumTextLen, 0},
 				{"char mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char), Width: 1}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}}, types.T_blob, types.MaxMediumTextLen, 0},
 				{"mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 16777215, 0},
@@ -256,6 +260,7 @@ func TestLagLeadPersistedDDLRebuild(t *testing.T) {
 			{"text collate utf8mb4_unicode_ci", "true", types.T_text, types.MaxLongTextLen, 0},
 			{"decimal(20,4)", "cast(2024 as year)", types.T_decimal128, 20, 4},
 			{"bigint", "cast('2024-01-02 03:04:05.123456' as timestamp(6))", types.T_varchar, 26, 0},
+			{"uuid", "cast('00000000-0000-0000-0000-000000000001' as binary(36))", types.T_blob, types.MaxTinyTextLen, 0},
 			{"time(6)", "cast('2024-01-02' as date)", types.T_varchar, 24, 0},
 			{"date", "cast('12:34:56.123456' as time(6))", types.T_varchar, 24, 0},
 			{"datetime(6)", "cast('2024-01-02' as date)", types.T_datetime, 6, 6},

@@ -613,6 +613,38 @@ select * from wyear_view order by id;
 ➤ id[4,32,0]  ¦  yd[3,20,4]  ¦  tn[12,26,0]  ¦  td[12,26,0]  𝄀
 1  ¦  12.3456  ¦  1000000000000  ¦  12.3456  𝄀
 2  ¦  null  ¦  -1000000000000  ¦  null
+create table wuuid (u uuid, b binary(36), padded binary(40));
+insert into wuuid values ('00000000-0000-0000-0000-000000000001',
+'00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002');
+select length(cast(u as char)) as original_length, length(cast(lag(u,0) over () as char)) as control_length,
+length(lag(u,0,b) over ()) as lg_length, length(lead(u,0,b) over ()) as ld_length,
+cast(cast(lag(u,0,b) over () as char) as uuid) = u as lg_roundtrip,
+cast(cast(lead(u,0,b) over () as char) as uuid) = u as ld_roundtrip from wuuid;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_roundtrip[-7,1,0]  ¦  ld_roundtrip[-7,1,0]  𝄀
+36  ¦  36  ¦  36  ¦  36  ¦  1  ¦  1
+select length(lag(u,1,b) over ()) as default_length,
+hex(lag(u,1,b) over ()) = hex(b) as default_equal,
+hex(lag(b,0,u) over ()) = hex(b) as binary_source_equal,
+cast(cast(lead(b,1,u) over () as char) as uuid) = u as reverse_default,
+length(lag(u,0,padded) over ()) as uuid_with_padded_default,
+length(lead(u,1,padded) over ()) as padded_length,
+hex(lead(u,1,padded) over ()) = hex(padded) as padded_equal from wuuid;
+➤ default_length[-5,64,0]  ¦  default_equal[-7,1,0]  ¦  binary_source_equal[-7,1,0]  ¦  reverse_default[-7,1,0]  ¦  uuid_with_padded_default[-5,64,0]  ¦  padded_length[-5,64,0]  ¦  padded_equal[-7,1,0]  𝄀
+36  ¦  1  ¦  1  ¦  1  ¦  36  ¦  40  ¦  1
+set @wuuid_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wuuid_copy as select lag(u,0,b) over () as lg, lead(u,0,b) over () as ld from wuuid;
+show create table wuuid_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,88,0]  𝄀
+wuuid_copy  ¦  CREATE TABLE `wuuid_copy` (
+  `lg` tinyblob DEFAULT NULL,
+  `ld` tinyblob DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+cast(cast(lg as char) as uuid) as lg_uuid, cast(cast(ld as char) as uuid) as ld_uuid from wuuid_copy;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_uuid[12,-1,0]  ¦  ld_uuid[12,-1,0]  𝄀
+36  ¦  36  ¦  00000000-0000-0000-0000-000000000001  ¦  00000000-0000-0000-0000-000000000001
+set session sql_mode = @wuuid_sql_mode;
 create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
 Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
 show tables like 'wdecimal_rejected';
