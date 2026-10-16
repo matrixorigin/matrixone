@@ -215,7 +215,7 @@ func TestLowPrecisionFloatContractExecutionStreamCheck(t *testing.T) {
 				receiveCh <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: peer}
 				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
 				err = sender.sendPipelineAfterProtocolCheck(required, data, nil, false, maxMessageSizeToMoRpc, "")
-				var cmds []pipeline.Method
+				cmds := make([]pipeline.Method, 0, len(stream.sent))
 				for _, m := range stream.sent {
 					cmds = append(cmds, m.(*pipeline.Message).GetCmd())
 				}
