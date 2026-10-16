@@ -39,3 +39,15 @@ func (e ObjectMeta) MustTombstoneMeta() ObjectDataMeta {
 func (e ObjectMeta) SubMeta(pos uint16) (ObjectDataMeta, bool) {
 	return objectMetaV3(e[IOEntryHeaderSize:]).SubMeta(pos)
 }
+
+// SubMetaCount includes additive auxiliary sections. Object metadata has already
+// been checked before accessing its optional V2/V3 section directory.
+func (e ObjectMeta) SubMetaCount() uint16 {
+	if len(e) < IOEntryHeaderSize || DecodeIOEntryHeader(e).Version < IOET_ObjectMeta_V2 {
+		return 0
+	}
+	if len(e) < IOEntryHeaderSize+int(metaHeaderLen+schemaCountLen) {
+		return 0
+	}
+	return objectMetaV3(e[IOEntryHeaderSize:]).SubMetaCount()
+}

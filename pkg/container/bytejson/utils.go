@@ -54,6 +54,32 @@ func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	return
 }
 
+// ParseFromByteSliceExact parses JSON without rounding numbers through float64.
+// Integers fitting int64/uint64 retain their usual tags; fractional, exponent,
+// and larger integer literals use the existing exact DECIMAL payload. This is
+// opt-in: ParseFromByteSlice retains its MySQL-compatible numeric behavior.
+// Nesting is bounded to the binary JSON admission limit of 100 containers.
+func ParseFromByteSliceExact(s []byte) (ByteJson, error) {
+	if len(s) == 0 || !json.Valid(s) {
+		return ByteJson{}, moerr.NewInvalidInputNoCtx("invalid JSON text")
+	}
+	n, err := parseNode(s, JSONDocumentMaxNestingDepth)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	defer n.Free()
+	w := byteJsonWriter{exactNumbers: true}
+	if _, _, err = w.writeNode(true, n); err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: w.buf[0], Data: w.buf[1:]}, nil
+}
+
+// ParseFromStringExact is the string form of ParseFromByteSliceExact.
+func ParseFromStringExact(s string) (ByteJson, error) {
+	return ParseFromByteSliceExact(util.UnsafeStringToBytes(s))
+}
+
 func toString(buf, data []byte) ([]byte, error) {
 	return appendString(buf, util.UnsafeBytesToString(data))
 }
@@ -570,23 +596,13 @@ func appendBinaryFloat64(buf []byte, v float64) []byte {
 }
 
 func appendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
-	if strings.Contains(x.String(), "Ee.") {
-		f64, err := x.Float64()
-		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
-		}
-		return TpCodeFloat64, appendBinaryFloat64(buf, f64), nil
-	} else if val, err := x.Int64(); err == nil {
-		return TpCodeInt64, appendBinaryUint64(buf, uint64(val)), nil
-	} else if val, err := strconv.ParseUint(string(x), 10, 64); err == nil {
-		return TpCodeUint64, appendBinaryUint64(buf, val), nil
+	// Share the parser's finite-number checks with programmatic JSON creation.
+	w := byteJsonWriter{}
+	tp, data, err := w.parseNumber(x)
+	if err != nil {
+		return tp, nil, err
 	}
-	val, err := x.Float64()
-	if err == nil {
-		return TpCodeFloat64, appendBinaryFloat64(buf, val), nil
-	}
-	var typeCode TpCode
-	return typeCode, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
+	return tp, append(buf, data...), nil
 }
 
 // AppendBinaryNumber appends a JSON number in MatrixOne's binary JSON wire

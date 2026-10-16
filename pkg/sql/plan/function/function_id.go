@@ -880,12 +880,14 @@ const (
 	FORMAT_PICO_TIME = 597
 
 	TO_CALENDAR_INTERVAL = 598
+	JSON_PARSE_EXACT     = 599
 
-	FUNCTION_END_NUMBER = 599
+	FUNCTION_END_NUMBER = 600
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"json_parse_exact":        JSON_PARSE_EXACT,
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,

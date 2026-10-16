@@ -1,0 +1,120 @@
+{
+  "change": "exact JSON admission review repair, MORPC v113",
+  "design_revision": "b4fcf49c069b9ade11ae39f47e325360628a650f",
+  "design_approval": "https://github.com/matrixorigin/matrixone/pull/30142#pullrequestreview-5512860139",
+  "review": "https://github.com/matrixorigin/matrixone/pull/30071#discussion_r4266627797",
+  "integration_main": "5d971d07a7c5a52a71f2c10390b109cebf5c0825",
+  "source_sha256": {
+    "pkg/defines/const.go": "5a498496c2fb7dbca38cc22016c0383846df1b3e0eea5b799915055ddf76328f",
+    "pkg/pb/plan/exact_json_protocol_test.go": "f40ec9d76a41c9efd956591e90bb7726b51a349b0a05757a3c1dcb82fdb8309c",
+    "pkg/pb/plan/string_literal_form.go": "8c1e0583abc615218fbb5be04f76432e8365c3d74086f2f345db97a2a5184b45",
+    "pkg/sql/compile/exact_json_protocol_test.go": "880fe683aafe2f6738d728c82a525f043c44f9e52da750cce89ef871f8c13971",
+    "pkg/sql/compile/expression_destination_protocol.go": "97b314c2666be969c5d13154a6bd41d14ccb1a58b564420aecd9f1518e3f0daf",
+    "pkg/sql/compile/expression_protocol.go": "182ba7879c4b1a8c18a8a6554fd92dcadf355bc82ad63b9ec4fcfcaa2bead5b4",
+    "pkg/sql/compile/parquet_variant_protocol.go": "cc5c3bb4f838b71db34a468fa2ec171690b3d7e03f7ec754bb465d4763d54201",
+    "pkg/sql/compile/parquet_variant_protocol_test.go": "8c3edadadb5cec023f2e8062aa5380b827aff3227660381f862af66986310d78",
+    "pkg/sql/compile/remoterun.go": "02e1f2cbc340664ed4ad1a87273a7feab1b23d843d90d08b75c72df93053f837",
+    "pkg/sql/plan/exact_json_protocol_test.go": "44af00fa11f8c1238cba14eca18340a354d27c6fbe49d6307820b7d1a61bea45",
+    "pkg/sql/plan/function/exact_json_worker_contract_test.go": "60b4c1c707d9da7f500113d5955ff47af80d3b5ef4b91b89276c36a25f51ae85",
+    "pkg/sql/plan/persisted_ip.go": "4506fb59582d25009e124a8bb021650fffcc37bfa60aaa09d37263cdfeb3bf18",
+    "pkg/tests/sqlintegration/multicn/exact_json_protocol_test.go": "196e483c51da0d62d19c38eed6b2d1ef1bb663cc0956c95ea6288f7679262194"
+  },
+  "native": {
+    "mode": "CPU release; top-level make cgo completed in both worktrees",
+    "current_libmo_sha256": "9a819f2ff9b006934f704db6736e535235ec6ffea47cadadd1c3e323b4e289dc",
+    "old_libmo_sha256": "8357b0c9a6267acb32ec1cfd9550eda69d7f23ac5471e8fe8ff68e7a5bcba938",
+    "old_service_binary_sha256": "8208ad79d2ef2fc76cadd01f4709a90f2a158accdb69a6d26e8c1e8468385110",
+    "old_service_build_flags": "-s -w; absolute native rpaths"
+  },
+  "runs": {
+    "admission-before-fix.log": {
+      "result": "EXPECTED_FAIL",
+      "exit_status": 1,
+      "scope": "four bound expressions incorrectly require protocol 0 at local merge baseline 2c374780f9",
+      "original_local_log": "/workspace/variant-interop/admission-before-fix.log",
+      "sha256": "1fbf5918c43902f94b10e4a805f63d4970eb7cb97bd16e3221b13654a190da07"
+    },
+    "admission-focused.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "focused protocol/owner/Parquet checks",
+      "original_local_log": "/workspace/variant-interop/admission-focused.log",
+      "sha256": "98d7f250669c734ffb1ce0fd5436ec47dec3be5560a310d66f003104c5d580fc"
+    },
+    "admission-packages-delivery.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "complete defines, pb/plan, sql/plan and sql/compile packages; -ldflags=-s -w",
+      "original_local_log": "/workspace/variant-interop/admission-packages-delivery.log",
+      "sha256": "4b5ab996d9f80aa7f9b88104efdbb77787be256de6274d0603c0dda1b6022fed"
+    },
+    "admission-multicn-delivery.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "fresh two-CN SQL; advertised v112 then v113; both binaries current",
+      "original_local_log": "/workspace/variant-interop/admission-multicn-delivery.log",
+      "sha256": "9f4c0d7310f13b0cec93d8640bba6b7c062351ff8553e169218d005d47f7a288"
+    },
+    "admission-new-worker-contract.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "native NewCast with independently encoded existing decimal tag and function ID 598",
+      "original_local_log": "/workspace/variant-interop/admission-new-worker-contract.log",
+      "sha256": "17a6ee21ee23db52124212dc361c80b55d59f69777935ed33c0dcbb60034c90d"
+    },
+    "admission-old-worker-contract-final.log": {
+      "result": "EXPECTED_FAIL",
+      "exit_status": 1,
+      "scope": "identical worker-wire tests at clean pre-feature main 5d971d07; large +/-decimals and function 598 fail, 0.125 passes",
+      "original_local_log": "/workspace/variant-interop/admission-old-worker-contract-final.log",
+      "sha256": "2c2d24c23cda3b63d272174e8827a5f67d3dc02fd6145ab70a7a326404bf4c69"
+    },
+    "admission-golangci.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "earlier four-package incremental static check; delivery check separate",
+      "original_local_log": "/workspace/variant-interop/admission-golangci.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "admission-parser-regeneration.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "merged parser tables match regenerated grammar; banner path normalized",
+      "original_local_log": "/workspace/variant-interop/admission-parser-regeneration.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "admission-real-mixed-binary-v4.log": {
+      "result": "NOT_CERTIFIED",
+      "exit_status": 1,
+      "scope": "discarded cross-process fixture: old CN rejected by already-v113 persisted admission, followed by fixture shutdown/gossip panic; not a passing rolling-upgrade result",
+      "original_local_log": "/workspace/variant-interop/admission-real-mixed-binary-v4.log",
+      "sha256": "a01b3385788905c13d07b6187627fcca22e387b7e3ea2c5d429a0b08b1d08770"
+    },
+    "admission-golangci-final.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "final compiler/function/multicn static check: 0 issues; reused unchanged earlier defines/pb-plan/planner checks",
+      "original_local_log": "/workspace/variant-interop/admission-golangci-final.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "admission-err-check-valid.log": {
+      "result": "PASS",
+      "exit_status": 0,
+      "scope": "make err-check with selected Go 1.27.1 toolchain",
+      "original_local_log": "/workspace/variant-interop/admission-err-check-valid.log",
+      "sha256": "91e3f2c30b346ccb75767ee833eb95db7d9dad7509829c2e58a99107a0ba75c5"
+    }
+  },
+  "excluded_attempts": [
+    "initial nil-element protobuf test fixture (fixed)",
+    "disk-exhausted compilation/link attempts",
+    "old-worker cache warmup selected zero tests",
+    "cross-process callback export / mock-storage / catalog-floor fixture attempts",
+    "err-check under system go executable did not validate Go packages; rerun with selected toolchain"
+  ],
+  "release_gaps": [
+    "real old/new rolling-upgrade topology beginning at compatible admission state",
+    "R1 write-cost measurements and production restore/rewrite certification"
+  ],
+  "service_state": "prior owned single-node test server stopped for workspace capacity; identical binary retained at /tmp/mo-service-review-fixes-retained; original mo-data preserved"
+}

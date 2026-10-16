@@ -828,7 +828,8 @@ var predefinedFunids = map[int]int{
 	FORMAT_BYTES:            596,
 	FORMAT_PICO_TIME:        597,
 	TO_CALENDAR_INTERVAL:    598,
-	FUNCTION_END_NUMBER:     599,
+	JSON_PARSE_EXACT:        599,
+	FUNCTION_END_NUMBER:     600,
 }
 
 func Test_funids(t *testing.T) {

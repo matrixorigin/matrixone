@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -32,6 +33,7 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
+	jsonProjection         objectio.JSONPathProjection
 	maxAllocSize           int
 	buf                    *batch.Batch
 	msgReceiver            *message.MessageReceiver
@@ -57,6 +59,7 @@ type TableScan struct {
 	// letter case: origin
 	Attrs              []string
 	Types              []plan.Type
+	JSONProjection     string
 	TableID            uint64
 	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
 	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)

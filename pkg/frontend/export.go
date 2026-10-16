@@ -984,7 +984,7 @@ func finalizeParquetExport(ep *ExportConfig) error {
 		if ep.mrs == nil {
 			return moerr.NewInternalError(ep.ctx, "mrs is nil for parquet export")
 		}
-		writer, err := NewParquetWriter(ep.ctx, ep.mrs)
+		writer, err := NewParquetWriterWithOptions(ep.ctx, ep.mrs, ParquetWriterOptions{JSONAsVariant: ep.userConfig.ExportFormat == "parquet_variant"})
 		if err != nil {
 			return err
 		}
@@ -1096,7 +1096,7 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		if ec.mrs == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "mrs is nil for parquet export")
 		}
-		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		ec.parquetWriter, err = NewParquetWriterWithOptions(execCtx.reqCtx, ec.mrs, ParquetWriterOptions{JSONAsVariant: ec.userConfig.ExportFormat == "parquet_variant"})
 		if err != nil {
 			return err
 		}
@@ -1126,7 +1126,7 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	for row := 0; row < bat.RowCount(); {
 		if ec.parquetWriter == nil {
 			var err error
-			ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+			ec.parquetWriter, err = NewParquetWriterWithOptions(execCtx.reqCtx, ec.mrs, ParquetWriterOptions{JSONAsVariant: ec.userConfig.ExportFormat == "parquet_variant"})
 			if err != nil {
 				return err
 			}
@@ -1200,6 +1200,9 @@ func (ec *ExportConfig) Close() {
 
 // getExportFormat returns the export format, defaulting to "csv" if not specified
 func (ec *ExportConfig) getExportFormat() string {
+	if ec.userConfig != nil && ec.userConfig.ExportFormat == "parquet_variant" {
+		return "parquet"
+	}
 	if ec.userConfig.ExportFormat == "" {
 		return "csv"
 	}
@@ -1247,7 +1250,7 @@ func validateExportFormat(ctx context.Context, ep *tree.ExportParam) error {
 	}
 
 	// Case 2: FORMAT specified - validate against suffix if suffix is recognized
-	if inferredFormat != "" && ep.ExportFormat != inferredFormat {
+	if inferredFormat != "" && ep.ExportFormat != inferredFormat && !(ep.ExportFormat == "parquet_variant" && inferredFormat == "parquet") {
 		// Get the actual suffix for error message
 		lowerPath := strings.ToLower(ep.FilePath)
 		var suffix string

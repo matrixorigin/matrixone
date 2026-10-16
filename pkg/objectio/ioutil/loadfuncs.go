@@ -46,9 +46,9 @@ func LoadColumnsData(
 	}
 	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
-	if vectors, err = objectio.ReadOneBlock(
+	if vectors, err = objectio.ReadProjectedJSONColumns(
 		ctx,
-		&dataMeta,
+		meta,
 		name,
 		location.ID(),
 		columns,
@@ -118,9 +118,8 @@ func readColumnsData(
 		return ioVectors, false, err
 	}
 	name := location.Name().UnsafeString()
-	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	ioVectors, err = objectio.ReadOneBlock(
-		ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
+	ioVectors, err = objectio.ReadProjectedJSONColumns(
+		ctx, meta, name, location.ID(), readColumns, readTypes, m, fs, policy,
 	)
 	if err != nil {
 		return ioVectors, false, err
