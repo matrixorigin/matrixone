@@ -8356,7 +8356,18 @@ func TestPitrMeta(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
-	assert.True(t, len(pitr.ToTsList()) > 0)
+	// A default PITR object already has one empty cluster slot, so a nonempty
+	// flattened list does not prove that persisted metadata was reconstructed.
+	require.Empty(t, pitr.GetSnapshotsByLevel(logtail.PitrLevelAccount, 0))
+	clusterPitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelCluster, 0)
+	require.Len(t, clusterPitr, 1)
+	require.True(t, clusterPitr[0].IsEmpty(), "deleted cluster row must not protect data")
+	dbPitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelDatabase, database2.GetID())
+	require.Len(t, dbPitr, 1)
+	require.False(t, dbPitr[0].IsEmpty())
+	tablePitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelTable, rel3.ID())
+	require.Len(t, tablePitr, 1)
+	require.False(t, tablePitr[0].IsEmpty())
 	tae.Restart(ctx)
 	db = tae.DB
 	waitForScannedCheckpoint(t, db, minMerged.GetEnd())
@@ -8369,17 +8380,23 @@ func TestPitrMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	appendPitr("db", rel5.ID())
-	testutil.WaitAllCheckpointsFinished(t, db)
+	checkpointTarget = db.TxnMgr.Now()
+	tae.ForceCheckpoint()
+	waitForScannedCheckpoint(t, db, checkpointTarget)
 	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
-	assert.Nil(t, err)
-	testutils.WaitExpect(10000, func() bool {
-		if len(pitr.ToTsList()) <= 0 {
-			pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
-			assert.Nil(t, err)
-		}
-		return len(pitr.ToTsList()) > 0
-	})
-	assert.True(t, len(pitr.ToTsList()) > 0)
+	require.NoError(t, err)
+	// Only mo_catalog.mo_pitr owns retention metadata. The same-name table in
+	// a user database must not resurrect deleted scopes after restart.
+	clusterPitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelCluster, 0)
+	require.Len(t, clusterPitr, 1)
+	require.True(t, clusterPitr[0].IsEmpty())
+	require.Empty(t, pitr.GetSnapshotsByLevel(logtail.PitrLevelAccount, 0))
+	dbPitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelDatabase, database2.GetID())
+	require.Len(t, dbPitr, 1)
+	require.False(t, dbPitr[0].IsEmpty())
+	tablePitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelTable, rel3.ID())
+	require.Len(t, tablePitr, 1)
+	require.False(t, tablePitr[0].IsEmpty())
 }
 
 func TestIscpMeta(t *testing.T) {
