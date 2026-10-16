@@ -103,6 +103,15 @@ create table udf_dest(v int);
 create function values_lookup() returns int language sql as 'select max(id) from `user`';
 create function values_nested_lookup() returns int language sql as 'values_lookup()';
 create function values_constant() returns int language sql as '1+1';
+create function values_upper_lookup() returns int language sql as '(SELECT max(id) FROM `user`)';
+create function values_wrapped_lookup() returns int language sql as 'coalesce((SeLeCt max(id) FrOm `user`),0)';
+insert into udf_dest values(values_upper_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+insert into udf_dest values(values_wrapped_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+select count(*) as udf_expression_partial_rows from udf_dest;
+➤ udf_expression_partial_rows[-5,64,0]  𝄀
+0
 insert into udf_dest values(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup());
 not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
 select count(*) as udf_partial_rows from udf_dest;
@@ -123,6 +132,12 @@ insert into udf_dest values((select values_lookup()));
 select count(*) as bounded_lookup_rows from udf_dest where v=2;
 ➤ bounded_lookup_rows[-5,64,0]  𝄀
 34
+insert into udf_dest values((select values_upper_lookup()));
+select count(*) as bounded_upper_lookup_rows from udf_dest where v=2;
+➤ bounded_upper_lookup_rows[-5,64,0]  𝄀
+35
+drop function values_upper_lookup();
+drop function values_wrapped_lookup();
 drop function values_nested_lookup();
 drop function values_lookup();
 drop function values_constant();

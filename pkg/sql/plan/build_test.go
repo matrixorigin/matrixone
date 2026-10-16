@@ -132,7 +132,11 @@ func TestInsertValuesScalarSubqueries(t *testing.T) {
 }
 
 func TestInsertValuesSQLUdfAdmission(t *testing.T) {
-	for _, expr := range []string{"f_values_lookup()", "f_values_nested_lookup()", "f_increment(f_values_lookup())"} {
+	for _, expr := range []string{
+		"f_values_lookup()", "f_values_nested_lookup()", "f_increment(f_values_lookup())",
+		"f_values_upper_lookup()", "f_values_wrapped_lookup()", "f_values_mixed_lookup()",
+		"f_values_nested_upper_lookup()",
+	} {
 		for _, rows := range []int{1, maxValuesSubqueryBranches, maxValuesSubqueryBranches + 1} {
 			t.Run(fmt.Sprintf("%s/%d", expr, rows), func(t *testing.T) {
 				ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
@@ -153,6 +157,8 @@ func TestInsertValuesSQLUdfAdmission(t *testing.T) {
 	for _, text := range []string{
 		"insert into dept values " + strings.TrimSuffix(strings.Repeat("(f_values_constant(),'udf','x'),", maxValuesSubqueryBranches+1), ","),
 		"insert into dept values((select f_values_lookup()),'explicit','x')",
+		"insert into dept values((select f_values_upper_lookup()),'explicit','x')",
+		"insert into dept values((select f_values_wrapped_lookup()),'explicit','x')",
 		"replace into dept values(f_values_lookup(),'unchanged','x')",
 	} {
 		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
