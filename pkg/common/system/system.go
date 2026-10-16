@@ -246,28 +246,6 @@ func reclaimableCgroupCache(statPath string) (uint64, bool) {
 	return reclaimable - writeback, true
 }
 
-// cgroupStatPath locates memory.stat for a pid on the single-level fallback path,
-// trying cgroup v2 first and then v1's memory controller.
-func cgroupStatPath(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[0] == "0" && parts[1] == "" {
-			return filepath.Join("/sys/fs/cgroup", parts[2], "memory.stat")
-		}
-		if strings.Contains(","+parts[1]+",", ",memory,") {
-			return filepath.Join("/sys/fs/cgroup/memory", parts[2], "memory.stat")
-		}
-	}
-	return ""
-}
-
 // readCgroupUint reads a single-value cgroup file. Zero is a valid usage;
 // missing, empty, malformed and "max" values are unavailable.
 func readCgroupUint(path string) (uint64, bool) {
@@ -364,68 +342,6 @@ func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile, statFile str
 		dir = parent
 	}
 	return minimum, found
-}
-
-// hierarchicalCgroupHeadroom is the headroom twin of
-// hierarchicalCgroupMemoryLimit: same cgroup/mountinfo resolution, but it
-// returns the tightest per-level `limit - usage` instead of the tightest limit.
-// ok is false when no cgroup hierarchy could be resolved for the process.
-func hierarchicalCgroupHeadroom(pid int) (uint64, bool) {
-	cgroupData, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return 0, false
-	}
-	mountData, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
-	if err != nil {
-		return 0, false
-	}
-
-	v2Path := ""
-	v1MemoryPath := ""
-	for _, line := range strings.Split(string(cgroupData), "\n") {
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[0] == "0" && parts[1] == "" {
-			v2Path = parts[2]
-		}
-		for _, controller := range strings.Split(parts[1], ",") {
-			if controller == "memory" {
-				v1MemoryPath = parts[2]
-			}
-		}
-	}
-
-	for _, line := range strings.Split(string(mountData), "\n") {
-		leftRight := strings.SplitN(line, " - ", 2)
-		if len(leftRight) != 2 {
-			continue
-		}
-		left := strings.Fields(leftRight[0])
-		right := strings.Fields(leftRight[1])
-		if len(left) < 5 || len(right) < 3 {
-			continue
-		}
-		mountRoot, mountPoint, fsType := left[3], left[4], right[0]
-		switch fsType {
-		case "cgroup2":
-			if v2Path != "" {
-				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
-					return minHierarchicalHeadroom(dir, mountPoint, "memory.max", "memory.current",
-						"memory.stat")
-				}
-			}
-		case "cgroup":
-			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
-				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
-					return minHierarchicalHeadroom(dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes",
-						"memory.stat")
-				}
-			}
-		}
-	}
-	return 0, false
 }
 
 func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {

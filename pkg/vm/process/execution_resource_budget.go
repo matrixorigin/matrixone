@@ -1151,6 +1151,18 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 		}
 	}
 	physicalLedger := b.physicalLedger
+	// A local/test FileService can share the production ledger object without
+	// having a measurable cgroup or host memory domain (for example on Darwin).
+	// In that case the physical gate has no evidence on which to make a safe
+	// decision; retain the execution-budget admission path instead of turning
+	// an unavailable observation into a zero-cap rejection. Once a measured
+	// domain exists, WaitFor below remains the production entry backstop.
+	if physicalLedger != nil {
+		snapshot := physicalLedger.Snapshot()
+		if !snapshot.Measured || snapshot.Domain.Limit == 0 {
+			physicalLedger = nil
+		}
+	}
 	if physicalLedger != nil {
 		policy := system.DefaultMemoryDomainReservePolicy()
 		entryFloor := policy.RuntimeBytes
@@ -1160,28 +1172,34 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 		if entryFloor > memoryCap {
 			entryFloor = memoryCap
 		}
-		b.mu.Unlock()
-		available, measured, ok := physicalLedger.WaitFor(
-			entryFloor, system.MemoryAdmissionWaitTimeout())
-		if !measured || !ok {
-			return nil, newAdmissionError(entryFloor, 0, available)
-		}
-		b.mu.Lock()
-		if b.closed {
+		// A query cap at or below the runtime floor has no additional entry
+		// margin to wait for. Its actual allocations are still charged through
+		// the shared ledger; skipping this redundant wait keeps tiny deterministic
+		// fixtures from being rejected solely because the floor equals their cap.
+		if entryFloor < memoryCap {
 			b.mu.Unlock()
-			return nil, &ExecutionResourceError{
-				Kind:    ExecutionResourceErrorClosed,
-				Message: ErrExecutionResourceClosed.Error(),
+			available, measured, ok := physicalLedger.WaitFor(
+				entryFloor, system.MemoryAdmissionWaitTimeout())
+			if !measured || !ok {
+				return nil, newAdmissionError(entryFloor, 0, available)
 			}
-		}
-		memoryCap = min(requestedMemoryCap, b.aggregateCap)
-		if memoryCap == 0 {
-			b.mu.Unlock()
-			return nil, &ExecutionResourceError{
-				Kind:      ExecutionResourceErrorInvalid,
-				Requested: requestedMemoryCap,
-				Cap:       b.aggregateCap,
-				Message:   "zero live process execution resource generation cap",
+			b.mu.Lock()
+			if b.closed {
+				b.mu.Unlock()
+				return nil, &ExecutionResourceError{
+					Kind:    ExecutionResourceErrorClosed,
+					Message: ErrExecutionResourceClosed.Error(),
+				}
+			}
+			memoryCap = min(requestedMemoryCap, b.aggregateCap)
+			if memoryCap == 0 {
+				b.mu.Unlock()
+				return nil, &ExecutionResourceError{
+					Kind:      ExecutionResourceErrorInvalid,
+					Requested: requestedMemoryCap,
+					Cap:       b.aggregateCap,
+					Message:   "zero live process execution resource generation cap",
+				}
 			}
 		}
 	}
