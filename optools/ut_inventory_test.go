@@ -323,7 +323,7 @@ if [[ "$OWNER" == current ]]; then
  finish_ut_command || status=$?
  [[ -z "$CURRENT_UT_PID" && "$CURRENT_UT_DRAIN_FAILED" == 0 ]] || exit 90
 else
- start_background_race light "light race-test packages" go test -json -race -p 1 example/light
+ start_background_race light "light race-test packages" env go test -json -race -p 1 example/light
  owner_pid=$BACKGROUND_RACE_JOB_PID
  finish_background_race || status=$?
  [[ -z "$BACKGROUND_RACE_JOB_PID" && "$BACKGROUND_RACE_DRAIN_FAILED" == 0 ]] || exit 91

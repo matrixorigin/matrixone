@@ -107,7 +107,7 @@ if [[ "$MODE" == enabled ]]; then
  for slot in 0 1 2; do [[ -f "$UT_LINK_DIR/slot-$slot" ]] || exit 94; done
  saved_dir=$UT_LINK_DIR
  # Exercise the actual background light dispatch and its normal cleanup path.
- start_background_race light "light race-test packages" go test -json -race -p 6 example/light
+ start_background_race light "light race-test packages" env go test ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -json -race -p 6 example/light
  finish_background_race || exit 99
  cleanup_light_link_gate || exit 100
  [[ ! -e "$saved_dir" && -z "$UT_LINK_DIR" ]] || exit 95

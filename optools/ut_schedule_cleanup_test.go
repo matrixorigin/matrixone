@@ -842,7 +842,7 @@ function run_embedded_prebuild() {
 }
 function prepare_ut_native() {
  case "$COMPANION" in
- light) start_background_race light "light race-test packages" go test -json -race -p 1 example/light; fixture_companion_pid="$BACKGROUND_RACE_JOB_PID" ;;
+ light) start_background_race light "light race-test packages" env go test -json -race -p 1 example/light; fixture_companion_pid="$BACKGROUND_RACE_JOB_PID" ;;
  prebuild) start_embedded_prebuild example/embedded 1; fixture_companion_pid="$CLUSTER_PREBUILD_JOB_PID" ;;
  esac
 }

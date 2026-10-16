@@ -1508,7 +1508,7 @@ exit 99
 			script := `source ./run_ut.sh UT
 function logger() { :; }
 trap handle_ut_termination TERM
-start_background_race light "light race-test packages" go test -json -race -p 2 example/light-package
+start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package
 start_ut_command serial 'exclusive issues package' bash -c '
  printf "serial-start\n"
  touch "$CASE_DIR/serial-started"
@@ -1530,7 +1530,7 @@ if [[ "$LIGHT_STATUS" == 125 ]]; then
  touch "$UT_LINK_DIR/slot-0"
  [[ -z "$CURRENT_UT_PID$BACKGROUND_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
  cleanup_light_link_gate; [[ "$?" == 125 ]] || exit 95
- start_background_race light "light race-test packages" go test -json -race -p 2 example/light-package; [[ "$?" == 125 ]] || exit 96
+ start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package; [[ "$?" == 125 ]] || exit 96
  trap 'status=$?; [[ -s "$retained_report" && -f "$UT_LINK_DIR/slot-0" && "$(cat "$UT_REPORT")" == $'"'"'serial-start\nserial-end'"'"' ]] || status=97; exit "$status"' EXIT
  kill -TERM "$$"
  exit 98
@@ -1570,7 +1570,7 @@ function logger() { :; }
 UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
-start_background_race light "light race-test packages" go test -json -race -p 2 example/light-package
+start_background_race light "light race-test packages" env go test -json -race -p 2 example/light-package
 start_ut_command serial 'exclusive issues package' bash -c '
  trap '\''printf "serial-stopped\n"; exit 143'\'' TERM
  printf "serial-start\n"
