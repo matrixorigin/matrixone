@@ -198,11 +198,12 @@ Approval is design-only; implementation conformity, execution evidence and final
 
 ## Main synchronization amendment (2026-10-16)
 
-Main `9f873692` already uses v114-v117. The nonblocking admission binding moves
+Main `7c61f67e` already uses v114-v117. The nonblocking admission binding moves
 to v118; methods, wire fields, ownership and SQL semantics are unchanged. Tests
 reject v113-v117 before dispatch and admit v118. Pipeline generation preserves
 main's statement-runtime SELECT field. Obsolete fulltext integration fixes and
 helper tests are replaced by main's covered-score ordering/snapshot coverage.
+The AutoID generation-budget test fix is inherited from main.
 The approval above records the original v114 design revision; it does not claim
 independent approval of these maintenance edits. Integration and final-head CI
 are validated separately. No FOR UPDATE SKIP LOCKED support is added.
