@@ -382,6 +382,7 @@ func getFunctionByName(
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}
+	check = legacyFloatStringCheck(ctx, check, args)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)

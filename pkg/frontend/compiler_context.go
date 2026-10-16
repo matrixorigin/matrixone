@@ -628,6 +628,9 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	}); err != nil {
 		return err
 	}
+	if err := plan2.MigrateLegacyFloatStringTableDef(tcc, tableDef); err != nil {
+		return err
+	}
 	return plan2.MigrateLegacyHexTableDef(tcc.GetProcess(), tableDef)
 }
 

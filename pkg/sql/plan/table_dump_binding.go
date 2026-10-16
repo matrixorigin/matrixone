@@ -112,6 +112,10 @@ type tableDumpExpression struct {
 }
 
 func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
+	return persistedTableExpressions(def, false)
+}
+
+func persistedTableExpressions(def *planpb.TableDef, _ bool) []tableDumpExpression {
 	var result []tableDumpExpression
 	for _, col := range def.Cols {
 		if col == nil {
@@ -188,13 +192,30 @@ const (
 // A flag selects one coherent pre-migration binding, never per-node metadata.
 const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
 
+const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 6
+
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
 }
 
+// Float compatibility uses the same complete-era binder as DUMP/LOAD.
+func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
+	mode := tableDumpBindingCurrent
+	if legacy {
+		mode = tableDumpBindingLegacySpecial
+	}
+	if len(legacyFloat) > 0 && legacyFloat[0] {
+		mode |= tableDumpBindingLegacyFloat
+	}
+	return bindTableDumpExpression(ctx, def, item, ast, increment, mode, nil)
+}
+
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ tableDumpBindingPreTemporalNullability
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingLegacyFloat)
+	if mode&tableDumpBindingLegacyFloat != 0 {
+		bindCtx = function.WithLegacyFloatStringBounds(bindCtx)
+	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -600,6 +621,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			want := item.expr
 			if supplied != nil {
 				want = sourceItems[i].expr
+			}
+			if hasLegacyFloatStringCast(want) {
+				for _, era := range append([]tableDumpBindingMode(nil), modes...) {
+					modes = append(modes, era|tableDumpBindingLegacyFloat)
+				}
 			}
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.

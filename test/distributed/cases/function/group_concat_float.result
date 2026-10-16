@@ -82,4 +82,13 @@ id    scalar_text    concat_text    concat_ws_text    quoted_text
 9    0.0000000000000012345678901234568    0.0000000000000012345678901234568    0.0000000000000012345678901234568    '0.0000000000000012345678901234568'
 10    -0.000000000000012345678901234567    -0.000000000000012345678901234567    -0.000000000000012345678901234567    '-0.000000000000012345678901234567'
 11    -1.2345678901234568e-16    -1.2345678901234568e-16    -1.2345678901234568e-16    '-1.2345678901234568e-16'
+create table float_generated (id int primary key, a double, g varchar(100) generated always as (concat(a)) stored, e varchar(100) generated always as (concat(cast(a as char(32)))) stored);
+insert into float_generated (id,a) values (1,cast('-1.2345678901234567e-15' as double));
+select g as generated_text, e as explicit_text from float_generated;
+generated_text    explicit_text
+-0.0000000000000012345678901234568    -0.00000000000000123456789012345
+update float_generated set a = cast('1.2345678901234567e-15' as double) where id = 1;
+select g as generated_text, e as explicit_text from float_generated;
+generated_text    explicit_text
+0.0000000000000012345678901234568    0.000000000000001234567890123456
 drop database group_concat_float_28660;
