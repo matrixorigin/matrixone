@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -295,7 +296,11 @@ func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal2
 	return offset, nil
 }
 
-func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
+func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, callErr error) {
+	defer func() {
+		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "window", callErr)
+	}()
+
 	analyzer := window.OpAnalyzer
 
 	var err error
