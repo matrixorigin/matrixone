@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"slices"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -185,14 +187,46 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 					continue
 				}
 				expected := DeepCopyExpr(old)
-				changed, err := widenVerifiedFloatStringExpr(ctx.GetContext(), expected)
+				rebindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
+				if legacySpecial {
+					rebindCtx = function.WithLegacySpecialConsumers(rebindCtx)
+				}
+				changed, err := widenVerifiedFloatStringExpr(rebindCtx, expected, budget)
 				if err != nil {
 					stmt.Free()
+					if errors.Is(err, errLegacyFloatStringRebind) {
+						return nil, nil
+					}
 					return nil, err
 				}
 				if !changed {
 					stmt.Free()
 					return nil, nil
+				}
+				// Widening can newly require an assignment wrapper when the old
+				// root exactly matched the declared column type. Existing wrappers
+				// keep their declared type and must not be duplicated.
+				if (item.kind == "generated" || item.kind == "default") && isSameColumnType(old.Typ, item.col.Typ) &&
+					!isSameColumnType(expected.Typ, item.col.Typ) {
+					expected, err = makePlan2AssignmentCastExpr(rebindCtx, expected, item.col.Typ)
+					if err != nil {
+						stmt.Free()
+						return nil, err
+					}
+				}
+				if item.kind == "default" {
+					// DEFAULT binding folds constant coercions inside row-dependent
+					// expressions too. Replay that owner after reconciling casts;
+					// already-folded literal roots never enter this migration.
+					if err := chargeFloatStringRebind(expected, budget); err != nil {
+						stmt.Free()
+						return nil, err
+					}
+					expected, err = ConstantFold(batch.EmptyForConstFoldBatch, expected, ctx.GetProcess(), false, true)
+					if err != nil {
+						stmt.Free()
+						return nil, err
+					}
 				}
 				budget.visits += visit.nodes
 				if budget.visits > tableDumpMaxCandidateVisits {
@@ -213,10 +247,62 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	return nil, nil
 }
 
-// Recompute only derived string metadata with the SAME execution overload.
-// Numeric precision, explicit/assignment casts, literals and references remain
-// authoritative. Comparing this result to a fresh candidate closes the delta.
-func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr) (bool, error) {
+// An unsupported local reconstruction rejects the whole candidate, including
+// repairs already made to other siblings. It is not a catalog execution error.
+var errLegacyFloatStringRebind = errors.New("cannot reconstruct legacy float string function")
+
+func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args []*planpb.Expr) (*planpb.Expr, error) {
+	fn := original.GetF()
+	bound, err := BindFuncExprImplByPlanExpr(ctx, fn.Func.ObjName, args)
+	if err != nil {
+		return nil, err
+	}
+	// IFNULL's AST lowering owns this contract in addition to ordinary CASE
+	// overload binding. Historical SQL-origin proof made this marker trusted.
+	if original.PreparedNumeric != nil && original.PreparedNumeric.IfnullCommonValue {
+		if fn.Func.ObjName != "case" || len(args) != 3 || bound.GetF() == nil {
+			return nil, errLegacyFloatStringRebind
+		}
+		applyIfNullCommonValueContract(bound, bound.GetF().Args)
+	}
+	return bound, nil
+}
+
+// chargeFloatStringRebind bounds subtree copies and binder passes, including
+// nested functions whose reconstruction costs O(nodes * depth).
+func chargeFloatStringRebind(expr *planpb.Expr, budget *tableDumpBindingBudget) error {
+	if expr == nil {
+		return nil
+	}
+	budget.visits++
+	if budget.visits > tableDumpMaxCandidateVisits {
+		return moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := chargeFloatStringRebind(arg, budget); err != nil {
+				return err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if err := chargeFloatStringRebind(arg, budget); err != nil {
+				return err
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return chargeFloatStringRebind(lit.Src, budget)
+	}
+	return nil
+}
+
+// Reconcile affected functions through the binder, including sibling implicit
+// casts and argument-sensitive metadata. Exact historical reconstruction proves
+// ownership of peeled casts; the encoded overload and final SQL-bound tree must
+// still match. Declared casts remain boundaries around repaired children.
+func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget *tableDumpBindingBudget) (bool, error) {
 	if expr == nil || expr.GetLit() != nil {
 		return false, nil
 	}
@@ -225,7 +311,7 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr) (bool,
 		changed := false
 		if list := expr.GetList(); list != nil {
 			for _, entry := range list.List {
-				child, err := widenVerifiedFloatStringExpr(ctx, entry)
+				child, err := widenVerifiedFloatStringExpr(ctx, entry, budget)
 				if err != nil {
 					return false, err
 				}
@@ -234,37 +320,66 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr) (bool,
 		}
 		return changed, nil
 	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.CAST || fn.Func.ObjName == "cast_assign" || fn.Func.ObjName == "cast_strict" || fn.Func.ObjName == "cast_ignore" {
+		changed := false
+		for _, arg := range fn.Args {
+			child, err := widenVerifiedFloatStringExpr(ctx, arg, budget)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || child
+		}
+		if isLegacyFloatStringCast(expr) && !fn.SyntaxExplicitCast {
+			expr.Typ.Width = 34
+			fn.Args[1].Typ.Width = 34
+			return true, nil
+		}
+		return changed, nil
+	}
+	if err := chargeFloatStringRebind(expr, budget); err != nil {
+		return false, err
+	}
+	args := DeepCopyExprList(fn.Args)
 	changed := false
-	for _, arg := range fn.Args {
-		child, err := widenVerifiedFloatStringExpr(ctx, arg)
+	for i, arg := range args {
+		cast := arg.GetF()
+		if cast == nil || cast.Func == nil || cast.SyntaxExplicitCast || len(cast.Args) != 2 ||
+			cast.Args[0] == nil || cast.Args[1] == nil || cast.Args[1].GetT() == nil ||
+			arg.Typ.Id != int32(types.T_varchar) || !proto.Equal(&arg.Typ, &cast.Args[1].Typ) {
+			continue
+		}
+		castID, overload := function.DecodeOverloadID(cast.Func.Obj)
+		if castID == function.CAST && overload == 0 {
+			// A direct numeric branch can own the only legacy conversion.
+			changed = changed || isLegacyFloatStringCast(arg)
+			args[i] = cast.Args[0]
+		}
+	}
+	old, err := rebindFloatStringFunction(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
+	if err != nil || !sameTableDumpBoundExpression(expr, old) {
+		return false, errLegacyFloatStringRebind
+	}
+	for _, arg := range args {
+		child, err := widenVerifiedFloatStringExpr(ctx, arg, budget)
 		if err != nil {
 			return false, err
 		}
 		changed = changed || child
 	}
-	if isLegacyFloatStringCast(expr) && !fn.SyntaxExplicitCast {
-		expr.Typ.Width = 34
-		fn.Args[1].Typ.Width = 34
-		return true, nil
+	if !changed {
+		return false, nil
 	}
-	if changed && types.T(expr.Typ.Id).IsMySQLString() {
-		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		// These are declared boundaries, not derived string widths.
-		if id != function.CAST && fn.Func.ObjName != "cast_assign" && fn.Func.ObjName != "cast_strict" && fn.Func.ObjName != "cast_ignore" {
-			ov, err := function.GetFunctionById(ctx, fn.Func.Obj)
-			if err != nil {
-				return false, err
-			}
-			args := make([]types.Type, len(fn.Args))
-			for i, arg := range fn.Args {
-				args[i] = makeTypeByPlan2Expr(arg)
-			}
-			result := ov.GetReturnTypeMethod()(args)
-			refineStringLiteralReturnType(fn.Func.ObjName, fn.Args, &result)
-			expr.Typ.Id = int32(result.Oid)
-			expr.Typ.Width = result.Width
-			expr.Typ.Scale = result.Scale
+	for _, arg := range args {
+		if err := chargeFloatStringRebind(arg, budget); err != nil {
+			return false, err
 		}
 	}
-	return changed, nil
+	current, err := rebindFloatStringFunction(ctx, expr, args)
+	if err != nil || current.GetF() == nil || current.GetF().Func == nil || current.GetF().Func.Obj != fn.Func.Obj {
+		return false, errLegacyFloatStringRebind
+	}
+	expr.Typ = current.Typ
+	expr.Expr = current.Expr
+	return true, nil
 }

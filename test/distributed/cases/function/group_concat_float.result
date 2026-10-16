@@ -82,13 +82,15 @@ id    scalar_text    concat_text    concat_ws_text    quoted_text
 9    0.0000000000000012345678901234568    0.0000000000000012345678901234568    0.0000000000000012345678901234568    '0.0000000000000012345678901234568'
 10    -0.000000000000012345678901234567    -0.000000000000012345678901234567    -0.000000000000012345678901234567    '-0.000000000000012345678901234567'
 11    -1.2345678901234568e-16    -1.2345678901234568e-16    -1.2345678901234568e-16    '-1.2345678901234568e-16'
-create table float_generated (id int primary key, a double, g varchar(100) generated always as (concat(a)) stored, e varchar(100) generated always as (concat(cast(a as char(32)))) stored, r varchar(200) generated always as (right(concat(a),10)) stored, rep varchar(200) generated always as (repeat(concat(a),2)) stored);
-insert into float_generated (id,a) values (1,cast('-1.2345678901234567e-15' as double));
-select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text from float_generated;
-generated_text    explicit_text    right_text    repeat_text
--0.0000000000000012345678901234568    -0.00000000000000123456789012345    8901234568    -0.0000000000000012345678901234568-0.0000000000000012345678901234568
-update float_generated set a = cast('1.2345678901234567e-15' as double) where id = 1;
-select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text from float_generated;
-generated_text    explicit_text    right_text    repeat_text
-0.0000000000000012345678901234568    0.000000000000001234567890123456    8901234568    0.00000000000000123456789012345680.0000000000000012345678901234568
+create table float_generated (id int primary key, a double, g varchar(100) generated always as (concat(a)) stored, e varchar(100) generated always as (concat(cast(a as char(32)))) stored, r varchar(200) generated always as (right(concat(a),10)) stored, rep varchar(200) generated always as (repeat(concat(a),2)) stored, c varchar(200) generated always as (coalesce(concat(a),'')) stored, ci varchar(200) generated always as (if(a<0,concat(a),'fallback')) stored, cs varchar(200) generated always as (case when a<0 then concat(a) else '' end) stored, cn varchar(200) generated always as (ifnull(concat(a),'fallback')) stored, d varchar(200) default (coalesce(concat(a),'')));
+insert into float_generated (id,a) values (1,cast('-1.2345678901234567e-15' as double)), (2,null);
+select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text, c as coalesce_text, ci as if_text, cs as case_text, cn as ifnull_text, concat('[',d,']') as default_text from float_generated order by id;
+generated_text    explicit_text    right_text    repeat_text    coalesce_text    if_text    case_text    ifnull_text    default_text
+-0.0000000000000012345678901234568    -0.00000000000000123456789012345    8901234568    -0.0000000000000012345678901234568-0.0000000000000012345678901234568    -0.0000000000000012345678901234568    -0.0000000000000012345678901234568    -0.0000000000000012345678901234568    -0.0000000000000012345678901234568    [-0.0000000000000012345678901234568]
+NULL    NULL    NULL    NULL        fallback        fallback    []
+update float_generated set a = cast('1.2345678901234567e-15' as double), d = default where id = 1;
+select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text, c as coalesce_text, ci as if_text, cs as case_text, cn as ifnull_text, concat('[',d,']') as default_text from float_generated order by id;
+generated_text    explicit_text    right_text    repeat_text    coalesce_text    if_text    case_text    ifnull_text    default_text
+0.0000000000000012345678901234568    0.000000000000001234567890123456    8901234568    0.00000000000000123456789012345680.0000000000000012345678901234568    0.0000000000000012345678901234568    fallback        0.0000000000000012345678901234568    [0.0000000000000012345678901234568]
+NULL    NULL    NULL    NULL        fallback        fallback    []
 drop database group_concat_float_28660;
