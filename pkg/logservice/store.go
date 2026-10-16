@@ -1335,7 +1335,7 @@ func (l *store) addScheduleCommands(ctx context.Context,
 }
 
 func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}

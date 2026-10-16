@@ -141,6 +141,15 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion120)
+	}
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
+	}
+	if features.JSONMinMaxTypedComparison {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}

@@ -1225,6 +1225,15 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+
+		t.Run("expired_request", func(t *testing.T) {
+			expired, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
+			defer cancel()
+			// Reject the expired request at the authoritative read, before CN
+			// validation. A detached read would instead report a missing CN.
+			err := store.updateCNLabel(expired, pb.CNStoreLabel{UUID: "missing-cn"})
+			require.ErrorIs(t, err, dragonboat.ErrInvalidDeadline)
+		})
 	}
 	runStoreTest(t, fn)
 }

@@ -97,6 +97,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		LastInsertID:                        500,
 		MaxErrorCount:                       128,
 		MaxErrorCountSet:                    true,
 		LCTimeNames:                         "fr_FR",
@@ -157,6 +158,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			LastInsertId:                        500,
 			MaxErrorCount:                       128,
 			MaxErrorCountSet:                    true,
 		})
@@ -169,6 +171,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, uint64(500), info.LastInsertID)
 		require.Equal(t, 128, info.MaxErrorCount)
 		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
@@ -1114,6 +1117,21 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 	require.Panics(t, func() {
 		_ = GetCodecService(rtSvc)
 	})
+}
+
+func TestBuildProcessInfoBaselinePresenceRequiresActualOwner(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LastInsertIDSet = false
+	proc.SetLastInsertID(0)
+	info, err := proc.BuildProcessInfo("select last_insert_id()")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.LastInsertIdSet)
+	require.Zero(t, info.SessionInfo.LastInsertId)
+	proc.Base.LastInsertID = nil
+	info, err = proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.False(t, info.SessionInfo.LastInsertIdSet, "a missing owner cannot be advertised as authoritative0")
 }
 
 func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
