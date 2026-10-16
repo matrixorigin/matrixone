@@ -99,7 +99,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning", "collation"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
 					c.proc.SetStmtProfile(&process.StmtProfile{})
@@ -114,6 +114,18 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						})
 						require.NoError(t, err)
 						op.ProjectList = append(op.ProjectList, division)
+					}
+					if mode == "collation" {
+						typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+						typ.CollationVersion = 1
+						collation, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "least", []*planpb.Expr{
+							{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+							{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+						})
+						require.NoError(t, err)
+						_, overload := function.DecodeOverloadID(collation.GetF().Func.Obj)
+						require.Equal(t, int32(function.LeastGreatestCollationOverload), overload)
+						op.ProjectList = append(op.ProjectList, collation)
 					}
 					if mode == "mixed" {
 						op.ProjectList = append(op.ProjectList, decimalDivisionProtocolExpr(types.T_decimal128))
@@ -151,20 +163,23 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
 					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
 					require.Equal(t, mode == "mixed" || mode == "division_warning", features.ScalarDivision)
-					require.Equal(t, defines.MORPCVersion117, executionRemoteExpressionProtocolVersion(c.proc, features))
-					require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+					require.Equal(t, mode == "collation", features.LeastGreatestCollationSemantics)
+					require.Equal(t, defines.MORPCVersion118, executionRemoteExpressionProtocolVersion(c.proc, features))
+					require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion117, persistedVersion)
+					require.Equal(t, defines.MORPCVersion118, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion117, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion118, defines.MORPCVersion117, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion117 {
+						if version == defines.MORPCVersion118 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
+						} else if version < defines.MORPCVersion117 && mode == "collation" {
+							require.ErrorContains(t, err, "remote destination does not support collation-aware LEAST/GREATEST")
 						} else if version < defines.MORPCVersion116 && mode == "division_warning" {
 							require.ErrorContains(t, err, "remote destination does not support SELECT division diagnostics")
 						} else if version == 0 && mode == "mixed" {
@@ -176,7 +191,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 117)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 118)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
