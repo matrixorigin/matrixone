@@ -718,13 +718,6 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				batchMembership = false
 				break
 			}
-			source := ctr.leftBat.Vecs[column.Pos]
-			// Union's constant path broadcasts uniform grouping only. Retain
-			// scalar copying for constants with logical-row grouping metadata.
-			if source.IsConst() && source.HasGrouping() {
-				batchMembership = false
-				break
-			}
 		}
 	}
 

@@ -797,6 +797,6 @@ func isLoadDataIgnore(stmt *Load) bool {
 	if stmt == nil {
 		return false
 	}
-	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
-	return ok
+	_, ignore := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
+	return ignore
 }

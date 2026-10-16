@@ -163,17 +163,19 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	file         *os.File
-	fdToken      *process.ExecutionSpillFDReservation
-	diskToken    *process.ExecutionSpillDiskReservation
-	cleanupToken *spillcleanup.Reservation
-	fs           fileservice.MutableFileService
-	name         string
-	created      bool
-	rows         int64
-	bytes        uint64
-	bucket       int
-	writeCache   spillio.SequentialWriteCache
+	file           *os.File
+	fdToken        *process.ExecutionSpillFDReservation
+	cacheToken     *process.ExecutionTransientMemoryReservation
+	diskToken      *process.ExecutionSpillDiskReservation
+	cleanupToken   *spillcleanup.Reservation
+	fs             fileservice.MutableFileService
+	name           string
+	created        bool
+	cacheAttempted bool
+	rows           int64
+	bytes          uint64
+	bucket         int
+	writeCache     spillio.SequentialWriteCache
 }
 
 func (b *spillFileBundle) release() {
@@ -237,6 +239,10 @@ func (entry *spillFileEntry) cleanup() error {
 		entry.diskToken.Release()
 		entry.diskToken = nil
 	}
+	// A failed removal may retain page-cache residency as well as the file.
+	// Return the writer grant here so detached retries release it too.
+	entry.cacheToken.Release()
+	entry.cacheToken = nil
 	entry.cleanupToken.Release()
 	entry.cleanupToken = nil
 	return nil
@@ -301,7 +307,30 @@ func (b *spillFileBundle) openFile(
 	entry.file = file
 	entry.fdToken = token
 	entry.created = true
+	if !entry.cacheAttempted {
+		entry.cacheAttempted = true
+		// Optional page cache must not crowd tiny recovery envelopes. Admit
+		// its full capacity before the first write; refusal keeps the old
+		// small window and cannot prevent draining a build to spill.
+		const cacheBytes = uint64(4 << 20)
+		if budget.Cap()/128 >= cacheBytes {
+			entry.cacheToken, _ = budget.ReserveTransientMemory(cacheBytes)
+			if entry.cacheToken != nil {
+				entry.writeCache = spillio.NewSequentialWriteCache(int64(cacheBytes))
+			}
+		}
+	}
 	return file, nil
+}
+
+func closeSpillEntry(entry *spillFileEntry) error {
+	file := entry.file
+	token := entry.fdToken
+	entry.file = nil
+	entry.fdToken = nil
+	err := file.Close()
+	token.Release()
+	return err
 }
 
 func (b *spillFileBundle) closeFile(bucket int) error {
@@ -392,6 +421,35 @@ func (b *spillFileBundle) accountedFiles(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	files := make([]*message.SpillFile, spillNumBuckets)
+	if b.released {
+		return nil, process.ErrExecutionSpillReservationInactive
+	}
+	// Submit all larger-window tails before waiting on any one bucket. Small
+	// files may not have crossed their batch threshold; serial Finish calls
+	// would otherwise turn the larger window into a synchronous I/O burst.
+	// Queued reader payloads never retain writer descriptors.
+	for _, entry := range b.entries {
+		if entry == nil || entry.cacheToken == nil {
+			continue
+		}
+		if entry.file != nil || entry.fdToken != nil {
+			return nil, process.ErrExecutionResourceInvalid
+		}
+		token, err := budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+		file, err := entry.fs.OpenFile(ctx, entry.name)
+		if err != nil {
+			token.Release()
+			return nil, err
+		}
+		entry.file, entry.fdToken = file, token
+		entry.writeCache.SubmitTail(file)
+		if err := closeSpillEntry(entry); err != nil {
+			return nil, err
+		}
+	}
 	for bucket, entry := range b.entries {
 		if entry == nil || entry.fs == nil || entry.name == "" ||
 			entry.file != nil || entry.fdToken != nil || !entry.created ||
@@ -413,6 +471,10 @@ func (b *spillFileBundle) accountedFiles(
 			return nil, err
 		}
 		entry.writeCache.Finish(file)
+		// Return optional writer memory before the recovery reader is admitted.
+		// Queued buckets retain neither FDs nor write-cache memory grants.
+		entry.cacheToken.Release()
+		entry.cacheToken = nil
 		if err := file.Close(); err != nil {
 			fdToken.Release()
 			return nil, err

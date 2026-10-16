@@ -20,6 +20,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -49,6 +50,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = defines.WithoutAlterCopyColumnLimit(ctx)
 	if original == nil || target == nil {
 		return ctx
 	}
@@ -207,6 +209,19 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 	}
 	return context.WithValue(ctx, persistedDDLReplayKey{}, replay)
+}
+
+// WithAlterTableDDLReplay preserves COPY expressions and admits exactly the
+// validated replacement width. Ordinary LIKE expression replay has no allowance.
+func WithAlterTableDDLReplay(ctx context.Context, database string, original, target *planpb.TableDef) (context.Context, error) {
+	if err := validateAlterColumnCount(ctx, original, target); err != nil {
+		return nil, err
+	}
+	ctx = WithPersistedDDLReplay(ctx, original, target)
+	if count := userColumnCount(target.Cols, util.TableIsClusterTable(target.TableType)); count > TableColumnCountLimit {
+		ctx = defines.WithAlterCopyColumnLimit(ctx, database, target.Name, count)
+	}
+	return ctx, nil
 }
 
 func ddlReplayForTable(ctx context.Context, tableName string) *persistedDDLReplay {

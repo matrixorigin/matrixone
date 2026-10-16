@@ -27,6 +27,8 @@ from matrixone import Client
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, String, Integer, Index
 
+from .test_config import online_config
+
 
 class TestIndexVerificationOnline(unittest.TestCase):
     """Online tests for secondary index verification"""
@@ -34,13 +36,7 @@ class TestIndexVerificationOnline(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test database connection"""
-        cls.client = Client(
-            host=os.getenv('MATRIXONE_HOST', '127.0.0.1'),
-            port=int(os.getenv('MATRIXONE_PORT', '6001')),
-            user=os.getenv('MATRIXONE_USER', 'root'),
-            password=os.getenv('MATRIXONE_PASSWORD', '111'),
-            database=os.getenv('MATRIXONE_DATABASE', 'test'),
-        )
+        cls.client = Client(**online_config.get_connection_kwargs())
 
         cls.test_table = "test_index_table"
 

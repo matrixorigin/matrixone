@@ -1,0 +1,33 @@
+DROP DATABASE IF EXISTS issue_28164_collation_gate;
+CREATE DATABASE issue_28164_collation_gate;
+USE issue_28164_collation_gate;
+CREATE TABLE legacy (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_general_ci, token VARCHAR(20) COLLATE utf8mb4_bin) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO legacy VALUES (1, 'Alpha', 'Alpha'), (2, 'alpha', 'alpha');
+SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'alpha' ORDER BY id;
+id
+2
+SELECT 1 COLLATE utf8mb4_general_ci AS legacy_numeric;
+legacy_numeric
+1
+SELECT NULL COLLATE utf8mb4_general_ci AS legacy_null;
+legacy_null
+null
+CREATE TABLE native_column (name VARCHAR(20) COLLATE utf8mb4_0900_bin);
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+CREATE TABLE native_default (id INT) COLLATE utf8mb4_0900_bin;
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+CREATE TABLE folded_legacy_expression (v INT DEFAULT (LENGTH('a' COLLATE utf8mb4_0900_ai_ci)));
+ALTER TABLE legacy DEFAULT COLLATE utf8mb4_0900_bin;
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+ALTER TABLE legacy CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+SELECT COLUMN_NAME, COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='legacy' ORDER BY ORDINAL_POSITION;
+COLUMN_NAME	COLLATION_NAME
+id	null
+name	utf8mb4_general_ci
+token	utf8mb4_bin
+SHOW TABLES;
+Tables_in_issue_28164_collation_gate
+folded_legacy_expression
+legacy
+DROP DATABASE issue_28164_collation_gate;

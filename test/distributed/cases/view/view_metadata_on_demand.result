@@ -1,6 +1,31 @@
 DROP DATABASE IF EXISTS view_metadata_on_demand;
 CREATE DATABASE view_metadata_on_demand;
 USE view_metadata_on_demand;
+CREATE TABLE reflection_t (i INT, s VARCHAR(8), a DECIMAL(24,6));
+CREATE VIEW reflection_v AS SELECT * FROM reflection_t;
+COMMIT;
+DESCRIBE reflection_t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+i  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+s  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+DESCRIBE reflection_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+i  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+s  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SHOW COLUMNS FROM reflection_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+i  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+s  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'reflection_v' ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+i  ¦  int  ¦  YES  𝄀
+s  ¦  varchar(8)  ¦  YES  𝄀
+a  ¦  decimal(24,6)  ¦  YES
+DROP VIEW reflection_v;
+DROP TABLE reflection_t;
 CREATE TABLE src (
 id INT,
 code VARCHAR(5),

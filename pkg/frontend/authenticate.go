@@ -1572,6 +1572,8 @@ const (
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
+	deleteRoleFromMoRoleRuleFormat = `delete from mo_catalog.mo_role_rule where role_id = %d;`
+
 	// grant ownership on database
 	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
 
@@ -2225,6 +2227,7 @@ func getSqlForCheckViewMetaWithSnapshot(
 
 func getSqlForDeleteRole(roleId int64) []string {
 	return []string{
+		fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
@@ -3738,6 +3741,11 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		// Resolve the new active role's mandatory row rules before leaving the
+		// role switch. If the request was captured under an empty role, this
+		// current-policy check invalidates old handles only when the new role has
+		// rules; a failed load is treated as unknown and fails closed.
+		ses.refreshRewritePolicyAndValidatePrepared(ctx)
 		// SET ROLE validated membership in the transaction above, but a session
 		// with privilege caching disabled must not leave a grant decision behind
 		// for a later OFF -> ON transition to reuse after REVOKE.
@@ -4702,6 +4710,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error) {
 	var vr *verifiedRole
 	var sql string
+	var roleDeleted bool
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -4716,8 +4725,14 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
+		if err == nil && roleDeleted {
+			invalidateRoleRuleCaches(ses)
+		}
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -4739,10 +4754,11 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 			}
 		}
 
-		// step2 : delete mo_role
-		// step3 : delete mo_user_grant
-		// step4 : delete mo_role_grant
-		// step5 : delete mo_role_privs
+		// step2 : delete role rewrite rules
+		// step3 : delete mo_role
+		// step4 : delete mo_user_grant
+		// step5 : delete mo_role_grant
+		// step6 : delete mo_role_privs
 		if vr == nil {
 			continue
 		}
@@ -4761,6 +4777,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+		roleDeleted = true
 	}
 
 	return err
@@ -6531,7 +6548,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		dbName, _, _, _ = showMetadataTarget(stmt)
+		canExecInRestricted = true
+	case *tree.ShowCreateView, *tree.ShowCreateDatabase,
 		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -8825,6 +8847,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
 		stats.Add(&delta)
 		return ok, stats, err
+	}
+
+	// Only a normal denial may use object visibility. Errors (including revoked
+	// active-role membership) have already returned above.
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
+		if _, _, _, supported := showMetadataTarget(stmt); supported {
+			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			stats.Add(&delta)
+			return allowed, stats, err
+		}
 	}
 
 	// double check privilege of drop table

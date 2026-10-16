@@ -239,14 +239,14 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 		node := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{child}}
 		load := &tree.Load{Table: &tree.TableName{}, Param: &tree.ExternParam{}}
 		supplied := map[string]int32{"b": 0, "a": 1}
-		_, err = getProjectNode(load, ctx, node, table, supplied)
+		_, err = getProjectNode(load, ctx, node, table, supplied, nil)
 		require.NoError(t, err)
 		if parallel {
 			before := node.ProjectList[2]
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
@@ -1143,6 +1143,36 @@ func TestDefaultBinderWithColumnsUsesSourceTypeAndRejectsInvalidNames(t *testing
 
 	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
 	require.ErrorContains(t, err, "does not exist")
+}
+
+func TestDefaultBinderColumnScopes(t *testing.T) {
+	ctx := context.Background()
+	source := planpb.Type{Id: int32(types.T_int32), Width: 32}
+	target := planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	cols := []*ColDef{nil, {Name: "First", Typ: source}, {Name: "FIRST", Typ: target}}
+	binder := NewDefaultBinderWithColumns(ctx, target, cols)
+	expr, err := binder.BindColRef(tree.NewUnresolvedColName("first"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, source, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
+	require.ErrorContains(t, err, "does not exist")
+	require.Nil(t, cols[0])
+	require.Equal(t, "First", cols[1].Name)
+	require.Equal(t, source, cols[1].Typ)
+
+	for _, empty := range [][]*ColDef{nil, {}} {
+		_, err = NewDefaultBinderWithColumns(ctx, target, empty).BindColRef(
+			tree.NewUnresolvedColName("missing"), 0, true)
+		require.ErrorContains(t, err, "does not exist")
+	}
+
+	// SHOW VARIABLES and SHOW COLLATION use names with a common result type.
+	expr, err = NewDefaultBinder(ctx, nil, nil, target, []string{"name", "value"}).BindColRef(
+		tree.NewUnresolvedColName("VALUE"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, target, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
 }
 
 func TestRemapExpressionDefaultsAndReferencesAfterColumnChanges(t *testing.T) {

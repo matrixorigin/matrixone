@@ -8432,6 +8432,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
+		} else if !w.gsp.EmptyByFlag() {
+			// Constants share one payload, but grouping belongs to logical
+			// rows and must follow the selection, including repeated rows.
+			for i, sel := range sels {
+				if w.gsp.Contains(uint64(sel)) {
+					nulls.Add(&v.gsp, uint64(oldLen+i))
+				}
+			}
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -8657,6 +8665,8 @@ func (v *Vector) unionBatch(
 		v.setLengthAfterExtend(v.length + addCnt)
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
+		} else {
+			appendBatchGrouping(v, w, oldLen, offset, cnt, flags)
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
@@ -10844,23 +10854,26 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		col := MustFixedColNoTypeCheck[bool](v)
 		if v.HasNull() {
 			first := true
-			for i, j := 0, len(col); i < j; i++ {
+			for i := range col {
 				if v.IsNull(uint64(i)) {
 					continue
 				}
+				value := col[i]
 				if first {
-					minVal, maxVal = col[i], col[i]
+					minVal, maxVal = value, value
 					first = false
-				} else {
-					minVal = minVal && col[i]
-					maxVal = maxVal || col[i]
+				} else if value != minVal {
+					minVal, maxVal = false, true
+					break
 				}
 			}
 		} else {
 			minVal, maxVal = col[0], col[0]
-			for i, j := 1, len(col); i < j; i++ {
-				minVal = minVal && col[i]
-				maxVal = maxVal || col[i]
+			for _, value := range col[1:] {
+				if value != minVal {
+					minVal, maxVal = false, true
+					break
+				}
 			}
 		}
 		minv = types.EncodeBool(&minVal)
@@ -10887,7 +10900,12 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		minVal, maxVal := OrderedGetMinAndMax[int64](v)
+		var minVal, maxVal int64
+		if v.class == FLAT && v.length >= 32 && !v.HasNull() {
+			minVal, maxVal = int64MinMaxNoNull(MustFixedColNoTypeCheck[int64](v))
+		} else {
+			minVal, maxVal = OrderedGetMinAndMax[int64](v)
+		}
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
@@ -12218,8 +12236,12 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
-	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-		return err
+	// Legacy domains need no collation admission. Check the domain before
+	// extracting bytes, especially for inline values copied in merge loops.
+	if types.IsUnicodeCollation(vec.typ.Charset) {
+		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+			return err
+		}
 	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)

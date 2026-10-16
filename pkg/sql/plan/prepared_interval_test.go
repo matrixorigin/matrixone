@@ -60,7 +60,11 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					dateFunction := findPlanFunctionExpr(preparedPlan, name)
 					require.NotNil(t, dateFunction, preparedPlan.String())
 					require.Len(t, dateFunction.GetF().GetArgs(), 3, dateFunction.String())
-					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"), preparedPlan.String())
+					normalizerName := "to_interval_microsecond"
+					if tc.unit == "second" {
+						normalizerName = "to_calendar_interval"
+					}
+					require.NotNil(t, findPlanFunctionExpr(preparedPlan, normalizerName), preparedPlan.String())
 
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 						ctx,
@@ -74,7 +78,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					require.Equal(t, int32(types.T_int64), dateFunction.GetF().GetArgs()[1].Typ.Id, dateFunction.String())
 					require.Equal(t, int64(tc.expectedUnit), dateFunction.GetF().GetArgs()[2].GetLit().GetI64Val(), dateFunction.String())
 					if tc.normalized {
-						normalizer := findPlanFunctionExpr(filled, "to_interval_microsecond")
+						normalizer := findPlanFunctionExpr(filled, normalizerName)
 						require.NotNil(t, normalizer, filled.String())
 						if tc.sourceType != 0 {
 							require.Equal(t, int32(tc.sourceType), normalizer.GetF().GetArgs()[0].Typ.Id)
@@ -325,10 +329,10 @@ func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
 				require.Equal(t, value, args[1], "TIME executor retains nullable typed input")
 				continue
 			}
-			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val(), unit)
+			require.Equal(t, int64(types.Day), args[2].GetLit().GetI64Val(), unit)
 			normalizer := args[1].GetF()
 			require.NotNil(t, normalizer, unit)
-			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
+			require.Equal(t, "to_calendar_interval", normalizer.Func.ObjName, unit)
 			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
 		}
 	}

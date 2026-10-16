@@ -420,11 +420,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanNonEqCondExecutor()
 	ctr.joinDiagnosticActivation = nil
 	ctr.joinDiagnosticActivated = false
-	if ctr.resBat != nil {
-		ctr.resBat.Clean(proc.GetMPool())
-		ctr.resBat = nil
-	}
-	ctr.freeRightRowsMatched(proc)
+	ctr.cleanBatch(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
@@ -531,6 +527,8 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
+	ctr.cfs1 = nil
+	ctr.cfs2 = nil
 	ctr.freeRightRowsMatched(proc)
 }
 

@@ -10179,6 +10179,7 @@ func Test_doDropRole(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10203,6 +10204,11 @@ func Test_doDropRole(t *testing.T) {
 
 		err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+		roleLookup, lookupErr := getSqlForRoleIdOfRole(context.TODO(), stmt.Roles[0].UserName)
+		require.NoError(t, lookupErr)
+		require.Equal(t, []string{"begin;", "select 1", roleLookup}, bh.executedSQLs[:3])
+		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[3])
+		require.Nil(t, ses.ruleCache)
 	})
 	convey.Convey("drop role succ (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
@@ -10306,6 +10312,55 @@ func Test_doDropRole(t *testing.T) {
 		err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+}
+
+func TestDropRoleInvalidatesOnlyCommittedChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		present    bool
+		failureSQL string
+	}{
+		{name: "all absent"},
+		{name: "one absent one present", present: true},
+		{name: "delete failure", present: true, failureSQL: fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(10))},
+		{name: "commit failure", present: true, failureSQL: "commit;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ses := newSes(&privilege{}, ctrl)
+			ses.ruleCache = map[string]string{"db.t": "select * from db.t"}
+			stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true}
+			ses.prepareStmts = map[string]*PrepareStmt{"old": stmt}
+			for _, name := range []string{"missing", "role10"} {
+				lookup, err := getSqlForRoleIdOfRole(context.Background(), name)
+				require.NoError(t, err)
+				var rows [][]interface{}
+				if name == "role10" && tc.present {
+					rows = [][]interface{}{{int64(10)}}
+				}
+				bh.sql2result[lookup] = newMrsForRoleIdOfRole(rows)
+			}
+			if tc.failureSQL != "" {
+				bh.sql2err[tc.failureSQL] = fmt.Errorf("injected SQL failure")
+			}
+			err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.DropRole{
+				IfExists: true, Roles: []*tree.Role{{UserName: "missing"}, {UserName: "role10"}},
+			})
+			if tc.failureSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "injected SQL failure")
+			}
+			changed := tc.present && tc.failureSQL == ""
+			require.Equal(t, changed, stmt.rewritePolicyInvalidated.Load())
+			require.Equal(t, changed, ses.ruleCache == nil)
+		})
+	}
 }
 
 func Test_doDropUser(t *testing.T) {
@@ -14548,6 +14603,21 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked role must not reach ownership fallback")
 	})
+
+	for _, stmt := range []tree.Statement{&tree.ShowTables{DBName: "db"}, &tree.ShowColumns{Table: tree.NewUnresolvedObjectName("db", "t")}, &tree.ShowCreateTable{Name: tree.NewUnresolvedObjectName("db", "t")}} {
+		t.Run(fmt.Sprintf("revoked metadata %T", stmt), func(t *testing.T) {
+			ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(nil)
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(t.Context(), ses, stmt)
+			require.False(t, ok)
+			require.Error(t, err)
+			require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked active role cannot enter metadata fallback")
+		})
+	}
 
 	t.Run("privilege grant option", func(t *testing.T) {
 		stmt := &tree.GrantPrivilege{

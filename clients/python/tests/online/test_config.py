@@ -52,6 +52,16 @@ class OnlineTestConfig:
         """Get connection parameters as tuple"""
         return self.host, self.port, self.user, self.password, self.database
 
+    def get_connection_kwargs(self, database: Optional[str] = None) -> dict:
+        """Return fresh connection arguments, optionally selecting a fixture-owned database."""
+        return {
+            'host': self.host,
+            'port': self.port,
+            'user': self.user,
+            'password': self.password,
+            'database': self.database if database is None else database,
+        }
+
     def get_test_database(self) -> str:
         """Get test database name"""
         return self.test_database
