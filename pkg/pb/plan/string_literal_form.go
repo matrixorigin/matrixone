@@ -388,26 +388,29 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
-// LowPrecisionFloatIntegerArguments requires MORPC v116 because older executors reject
+// LowPrecisionFloatIntegerArguments requires MORPC v117 because older executors reject
 // bf16/float16/float8/float4 sources of private CAST 5..8.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatIntegerArguments bool
 	CalendarIntervalNormalization     bool
-	JSONScalarLiteralContracts        bool
-	JSONInputContracts                bool
-	YearBitCast                       bool
-	NumericPrefix                     bool
-	JSONComparisonParam               bool
-	MixedJSONBooleanEquality          bool
-	FormatNumericArguments            bool
-	TypedConversionFunctions          bool
-	IntegerArithmeticDomains          bool
-	RowDependentConvBases             bool
-	ASCIIInt32Result                  bool
-	StringNumericResultContracts      bool
-	BoundedConditionalStringDomains   bool
-	IPFunctionSemantics               bool
+	// ScalarDivision is syntactic only. SELECT warning policy supplies its
+	// execution-only floor; persisted expression contracts remain unchanged.
+	ScalarDivision                  bool
+	JSONScalarLiteralContracts      bool
+	JSONInputContracts              bool
+	YearBitCast                     bool
+	NumericPrefix                   bool
+	JSONComparisonParam             bool
+	MixedJSONBooleanEquality        bool
+	FormatNumericArguments          bool
+	TypedConversionFunctions        bool
+	IntegerArithmeticDomains        bool
+	RowDependentConvBases           bool
+	ASCIIInt32Result                bool
+	StringNumericResultContracts    bool
+	BoundedConditionalStringDomains bool
+	IPFunctionSemantics             bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -459,7 +462,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -921,6 +924,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
+				}
+				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
+				// storage domains are 20..34; BIT uses the uint64 domain.
+				if id >= 13 && id <= 15 && len(fn.Args) == 2 && fn.Args[1] != nil {
+					denominator := fn.Args[1].Typ.Id
+					features.ScalarDivision = features.ScalarDivision || (denominator >= 20 && denominator <= 34) || denominator == 11
 				}
 				// Aliases and DISTINCT share these aggregate IDs. Inspect the
 				// argument domain even for legacy DECIMAL-typed result plans.

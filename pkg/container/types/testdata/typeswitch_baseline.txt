@@ -142,17 +142,13 @@ pkg/sql/plan/build_ddl.go	ctasViewTypeDefaultOrigin	float	1
 pkg/sql/plan/cte_reuse.go	cteAggregateIsTotal	float	1
 pkg/sql/plan/expr_opt.go	numericComparisonWitness	float	1
 pkg/sql/plan/flatten_subquery.go	correlatedPaginationPartitionTypeSupported	float	1
-pkg/sql/plan/function/arithmetic.go	divFn	float	1
-pkg/sql/plan/function/arithmetic.go	divFn	vector	1
 pkg/sql/plan/function/arithmetic.go	divOperatorSupports	float	1
 pkg/sql/plan/function/arithmetic.go	divOperatorSupports	vector	1
-pkg/sql/plan/function/arithmetic.go	integerDivFn	float	1
 pkg/sql/plan/function/arithmetic.go	integerDivOperatorSupports	float	1
 pkg/sql/plan/function/arithmetic.go	minusFn	float	1
 pkg/sql/plan/function/arithmetic.go	minusFn	vector	1
 pkg/sql/plan/function/arithmetic.go	minusOperatorSupports	float	1
 pkg/sql/plan/function/arithmetic.go	minusOperatorSupports	vector	1
-pkg/sql/plan/function/arithmetic.go	modFn	float	1
 pkg/sql/plan/function/arithmetic.go	modOperatorSupports	float	1
 pkg/sql/plan/function/arithmetic.go	multiFn	float	1
 pkg/sql/plan/function/arithmetic.go	multiFn	vector	1

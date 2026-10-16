@@ -272,6 +272,8 @@ DROP TABLE zf;
 SELECT hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(1 AS bf16))), hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(0 AS float8)));
 SELECT date_add('2020-01-01 00:00:00', INTERVAL cast(1.5 AS bf16) SECOND), date_sub('2020-01-01 00:00:00', INTERVAL cast(0.5 AS float4) SECOND);
 SELECT date_add(DATE '2020-01-01', INTERVAL cast(1.5 AS float8) DAY), '2020-01-01 00:00:00' + INTERVAL cast(1.5 AS float16) SECOND;
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1.5 AS bf16) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-02') t ORDER BY a;
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1 AS float4) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-03') t ORDER BY a;
 SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cast(6 AS float4), cast(NULL AS bf16));
 -- arbitrary bits are not a stored low-precision value
 SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);

@@ -931,23 +931,18 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	// Similar, for ulonglong.
 	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
 
-	rounded := math.RoundToEven(val)
-	if rounded <= float64(math.MinInt64) {
-		return bitCountFromUint64(minInt64BitPattern), nil
-	}
-	if rounded < 0 {
-		return bitCountFromUint64(uint64(int64(rounded))), nil
-	}
-	if rounded >= ULLONG_MAX_DOUBLE {
+	if val >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
+	// MySQL truncates FLOAT/DOUBLE inputs toward zero before counting bits.
+	truncated := math.Trunc(val)
 	// Converting a negative float directly to uint64 is undefined in Go (the
 	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
 	// so route negatives through int64 first and reinterpret the bit pattern.
-	if rounded < 0 {
-		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+	if truncated < 0 {
+		return bitCountFromSignedInt64Pattern(int64(truncated)), nil
 	}
-	return bitCountFromUint64(uint64(rounded)), nil
+	return bitCountFromUint64(uint64(truncated)), nil
 }
 
 func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {

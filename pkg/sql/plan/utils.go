@@ -2099,9 +2099,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
-	// Skip constant folding for division/modulo by zero.
-	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if rule.IsDivisionByZeroConstant(fn) {
+	// Preserve diagnostic-bearing division subtrees through their parents;
+	// a later execution may use a different sql_mode or statement policy.
+	if rule.ContainsSqlModeDependentDivision(expr) {
 		return expr, nil
 	}
 

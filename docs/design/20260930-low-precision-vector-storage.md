@@ -587,7 +587,7 @@ and L2 (the square root) are not provided.
 
 The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
 `20260929-low-precision-scalar-floats.md`): there is no fallback, a statement that would hand
-an older binary something it cannot decode is refused below MORPC protocol version 116, and
+an older binary something it cannot decode is refused below MORPC protocol version 117, and
 the upgrade is one-way. Here they cover:
 
 - **Types.** `vecf8` (`T_array_float8`, 230) and `vecf4` (`T_array_float4`, 231): column

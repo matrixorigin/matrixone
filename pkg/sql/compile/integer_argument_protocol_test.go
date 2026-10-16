@@ -266,27 +266,27 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatIntegerArguments)
 			require.True(t, features.Any())
 
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115} {
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion116))
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", defines.MORPCVersion117))
 			}
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion116, required)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+			require.Equal(t, defines.MORPCVersion117, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 			op := projection.NewArgument()
 			defer op.Release()
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115} {
+			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
 				client.version = old
 				_, err = encodeRemoteScope(scope, c.proc)
 				require.ErrorContains(t, err, "remote destination")
 			}
-			client.version = defines.MORPCVersion116
+			client.version = defines.MORPCVersion117
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 		})

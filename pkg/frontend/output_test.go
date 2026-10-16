@@ -279,13 +279,18 @@ func Test_extractRowFromVector2(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			bat := kse.bat
 			row := make([]any, len(bat.Vecs))

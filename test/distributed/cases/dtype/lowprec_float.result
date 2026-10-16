@@ -499,6 +499,14 @@ SELECT date_add('2020-01-01 00:00:00', INTERVAL cast(1.5 AS bf16) SECOND), date_
 SELECT date_add(DATE '2020-01-01', INTERVAL cast(1.5 AS float8) DAY), '2020-01-01 00:00:00' + INTERVAL cast(1.5 AS float16) SECOND;
 ➤ date_add(DATE(2020-01-01), INTERVAL cast(1.5 as float8) day)[91,10,0]  ¦  2020-01-01 00:00:00 + INTERVAL cast(1.5 as float16) second[12,65535,0]  𝄀
 2020-01-02  ¦  2020-01-01 00:00:01.500000
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1.5 AS bf16) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-02') t ORDER BY a;
+➤ a[-5,64,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1 AS float4) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-03') t ORDER BY a;
+➤ a[-5,64,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
 SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cast(6 AS float4), cast(NULL AS bf16));
 ➤ json_row(cast(1.5 as bf16), cast(-2 as float16), cast(448 as float8), cast(6 as float4), cast(null as bf16))[12,65535,0]  𝄀
 [1.5,-2,448,6,null]

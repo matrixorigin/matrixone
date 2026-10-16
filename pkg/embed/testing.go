@@ -521,17 +521,11 @@ const (
 func startBasicCluster(
 	cnCount int,
 	trace func(phase string, duration time.Duration, err error),
-	adjust func(ServiceOperator),
 ) (Cluster, error) {
 	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
-		WithPreStart(func(service ServiceOperator) {
-			adjustBasicClusterService(service)
-			if adjust != nil {
-				adjust(service)
-			}
-		}),
+		WithPreStart(adjustBasicClusterService),
 	)
 	if trace != nil {
 		trace("cluster-start", time.Since(started), err)
@@ -584,9 +578,9 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-// adjustTestingClusterTiming applies local Raft, readiness and lock-bind
-// timing before scenario overrides. Lock expiry keeps its grace period and
-// authoritative validation; healthy CNs refresh well inside that period.
+// adjustTestingClusterTiming applies local Raft, readiness, task discovery and
+// lock-bind timing before scenario overrides. Lock expiry keeps its grace period
+// and authoritative validation; healthy CNs refresh well inside that period.
 func adjustTestingClusterTiming(svc ServiceOperator) {
 	switch svc.ServiceType() {
 	case metadata.ServiceType_LOG:
@@ -611,6 +605,8 @@ func adjustTestingClusterTiming(svc ServiceOperator) {
 		svc.Adjust(func(config *ServiceConfig) {
 			config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
 			config.CN.LockService.KeepBindDuration.Duration = testLockBindHeartbeatInterval
+			// Functional task tests need transitions, not production polling delays.
+			config.CN.TaskRunner.FetchInterval.Duration = time.Second
 		})
 	}
 }
@@ -687,7 +683,7 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount), nil)
+		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
 	}, func(c Cluster) {
 		fn(c)
 	})
@@ -710,7 +706,7 @@ func RunSingleCNBaseClusterTests(
 ) {
 	t.Helper()
 	singleCNClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(1, basicClusterSetupTracer(t, 1), nil)
+		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
 	}, func(c Cluster) {
 		fn(c)
 	})

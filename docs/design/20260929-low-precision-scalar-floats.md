@@ -132,9 +132,9 @@ upgrade, or after a rollback.
 There is no fallback. No path converts these types to a type an older binary knows, and
 no statement is rerouted, rewritten or run elsewhere to avoid an older service. A
 statement that would hand these types to an older binary is refused; once every service
-runs MORPC protocol version 116 or later, the same statement runs.
+runs MORPC protocol version 117 or later, the same statement runs.
 
-- **Version.** `MORPCVersion116`. The deployment state is `MOProtocolVersion`, the lowest
+- **Version.** `MORPCVersion117`. The deployment state is `MOProtocolVersion`, the lowest
   version of the live services, together with the HAKeeper persisted-expression authoring
   floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
 - **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`

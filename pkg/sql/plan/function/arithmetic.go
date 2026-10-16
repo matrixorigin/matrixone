@@ -573,8 +573,9 @@ func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResult
 	}
 }
 
-func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func divFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
+	// typeswitch:partial divOperatorSupports admits only float32/float64 and vecf32/vecf64 operands
 	switch paramType.Oid {
 	case types.T_float32:
 		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
@@ -611,7 +612,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
-func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if integerDivBitResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
 			return integerDivBitSigned(parameters, result, proc, length, selectList)
@@ -627,6 +628,7 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	paramType := parameters[0].GetType()
+	// typeswitch:partial integerDivOperatorSupports admits only float32/float64 among floats
 	switch paramType.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		// Signed integers -> int64 result
@@ -1110,8 +1112,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func modFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
+	// typeswitch:partial modOperatorSupports admits only float32/float64 among floats
 	switch paramType.Oid {
 	case types.T_bit:
 		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
