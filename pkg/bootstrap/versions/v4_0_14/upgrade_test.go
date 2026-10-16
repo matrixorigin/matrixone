@@ -41,14 +41,15 @@ func TestColumnsUpgradeMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, m.UpgradeTenant)
 	require.Equal(t, versions.No, m.UpgradeCluster)
 	require.Equal(t, defines.MORPCVersion109, m.RequiredProtocolVersion)
-	require.Equal(t, uint32(1), m.VersionOffset)
-	require.Len(t, tenantUpgEntries, 1)
+	require.Equal(t, uint32(2), m.VersionOffset)
+	require.Len(t, tenantUpgEntries, 2)
 	require.Equal(t, int64(defines.MORPCVersion109), tenantUpgEntries[0].RequiredProtocolVersion)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, tenantUpgEntries[1].UpgSql)
 }
 
 func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
 	const protocolSQL = "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
-	entry := upgradeInformationSchemaColumns()
+	entry := upgradeInformationSchemaColumnsMediumIntDataType()
 	injected := errors.New("injected columns upgrade failure")
 	for _, tc := range []struct {
 		name       string
