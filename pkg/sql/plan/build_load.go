@@ -199,6 +199,7 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	if err = fs.Read(param.Ctx, &vec); err != nil {
 		return 0, err
 	}
+	defer r.Close()
 
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
