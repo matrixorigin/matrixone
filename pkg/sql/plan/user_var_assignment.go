@@ -30,6 +30,21 @@ type assignmentVisit struct {
 var userVarAssignmentExprType = reflect.TypeOf((*tree.UserVarAssignmentExpr)(nil))
 var userVarExprType = reflect.TypeOf((*tree.VarExpr)(nil))
 var funcExprType = reflect.TypeOf((*tree.FuncExpr)(nil))
+var sampleExprType = reflect.TypeOf((*tree.SampleExpr)(nil))
+
+// sampleExprColumns exposes the expression list kept in SampleExpr's private
+// fields.  The generic reflection walkers intentionally skip unexported AST
+// fields, but SAMPLE's arguments are still expressions and therefore must be
+// included in user-variable scope validation and dependency collection.
+func sampleExprColumns(v reflect.Value) (tree.Exprs, bool) {
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() ||
+		v.Type() != sampleExprType || !v.CanInterface() {
+		return nil, false
+	}
+	sample := v.Interface().(*tree.SampleExpr)
+	columns, _ := sample.GetColumns()
+	return columns, true
+}
 
 func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]struct{}) bool {
 	if !v.IsValid() {
@@ -54,6 +69,9 @@ func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]st
 			return false
 		}
 		seen[visit] = struct{}{}
+		if columns, ok := sampleExprColumns(v); ok {
+			return containsUserVarAssignmentValue(reflect.ValueOf(columns), seen)
+		}
 		return containsUserVarAssignmentValue(v.Elem(), seen)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
@@ -142,6 +160,9 @@ func containsUserVarAssignmentUnderAggregateValue(
 			return false
 		}
 		seen[visit] = struct{}{}
+		if columns, ok := sampleExprColumns(v); ok {
+			return containsUserVarAssignmentUnderAggregateValue(reflect.ValueOf(columns), childAggregate, seen)
+		}
 		return containsUserVarAssignmentUnderAggregateValue(v.Elem(), childAggregate, seen)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
@@ -202,6 +223,10 @@ func collectUserVarAssignmentNames(
 			return
 		}
 		seen[visit] = struct{}{}
+		if columns, ok := sampleExprColumns(v); ok {
+			collectUserVarAssignmentNames(reflect.ValueOf(columns), seen, names)
+			return
+		}
 		collectUserVarAssignmentNames(v.Elem(), seen, names)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
@@ -246,6 +271,10 @@ func collectUserVariableReads(
 			return
 		}
 		seen[visit] = struct{}{}
+		if columns, ok := sampleExprColumns(v); ok {
+			collectUserVariableReads(reflect.ValueOf(columns), seen, names)
+			return
+		}
 		collectUserVariableReads(v.Elem(), seen, names)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
@@ -265,6 +294,19 @@ func collectUserVariableReads(
 func userVarAssignmentNotSupported(ctx context.Context, scope string) error {
 	return moerr.NewNotSupported(ctx,
 		"user-variable assignment is supported only as a top-level SELECT projection; "+scope+" is not supported")
+}
+
+// Time-window expressions are bound outside the ordinary SELECT projection.
+// Reject assignments in every time-window component before any of those
+// components are bound; otherwise Fill/Sliding can reach an executor that has
+// no row-wise user-variable assignment contract.
+func validateUserVarAssignmentTimeWindow(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
+	if astTimeWindow != nil && containsUserVarAssignmentValue(
+		reflect.ValueOf(astTimeWindow), make(map[assignmentVisit]struct{}),
+	) {
+		return userVarAssignmentNotSupported(ctx, "a time-window expression")
+	}
+	return nil
 }
 
 // rejectUserVarAssignmentInDML is the statement-level admission fence for the

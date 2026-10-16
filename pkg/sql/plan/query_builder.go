@@ -6026,6 +6026,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
+		if err = validateUserVarAssignmentTimeWindow(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
 		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
 			return
 		}
