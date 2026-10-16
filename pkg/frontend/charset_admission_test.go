@@ -367,6 +367,41 @@ func TestCharsetAdmissionHandshake(t *testing.T) {
 	}
 }
 
+func TestNegotiatedSessionCharsetInitializesSessionVariables(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		charset   string
+		collation string
+	}{
+		{name: "utf8mb4 general", charset: "utf8mb4", collation: "utf8mb4_general_ci"},
+		{name: "native utf8", charset: "utf8", collation: "utf8_unicode_ci"},
+		{name: "native utf8mb4", charset: "utf8mb4", collation: "utf8mb4_unicode_ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{}
+			proto := &MysqlProtocolImpl{
+				ses:           ses,
+				charset:       tc.charset,
+				collationName: tc.collation,
+			}
+
+			require.NoError(t, proto.applyNegotiatedSessionCharset(t.Context()))
+			for _, name := range []string{
+				"character_set_client",
+				"character_set_connection",
+				"character_set_results",
+			} {
+				got, err := ses.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, tc.charset, got, name)
+			}
+			got, err := ses.GetSessionSysVar("collation_connection")
+			require.NoError(t, err)
+			require.Equal(t, tc.collation, got)
+		})
+	}
+}
+
 func TestCharsetAdmissionChangeUserProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		id       int
