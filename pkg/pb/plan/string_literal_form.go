@@ -389,7 +389,7 @@ const (
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
-// IncompleteTemporalStrings requires MORPC v117 for raw-calendar string
+// IncompleteTemporalStrings requires MORPC v118 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
@@ -1005,7 +1005,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 216 && (overload == 0 || overload == 1 || overload == 4) { // one-arg WEEK: DATE/DATETIME/VARCHAR
 					features.WeekSessionDefault = true
 				}
-				// New string identities cannot execute on pre-v117 workers.
+				// New string identities cannot execute on pre-v118 workers.
 				// Released LAST_DAY and DATE_ADD/SUB string identities also
 				// need the new incomplete-calendar warning contract.
 				if (id == 251 && overload == 2) || // DATE_FORMAT
