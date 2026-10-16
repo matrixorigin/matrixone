@@ -472,4 +472,33 @@ select variance(a) from test06;
 ➤ variance(a)[8,53,31]  𝄀
 6.666666666068204E19
 drop table test06;
+drop table if exists test_year;
+create table test_year(y year);
+insert into test_year values (2020), (2021), (2022);
+select var_pop(y) from test_year;
+➤ var_pop(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_samp(y) from test_year;
+➤ var_samp(y)[8,53,31]  𝄀
+1
+select stddev_pop(y) from test_year;
+➤ stddev_pop(y)[8,53,31]  𝄀
+0.816496580927726
+select stddev_samp(y) from test_year;
+➤ stddev_samp(y)[8,53,31]  𝄀
+1
+select variance(y) from test_year;
+➤ variance(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_pop(distinct y) from test_year;
+➤ var_pop(distinct y)[8,53,31]  𝄀
+0.6666666666666666
+insert into test_year values (NULL);
+select var_pop(y) from test_year;
+➤ var_pop(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_pop(y) from test_year where 1=0;
+➤ var_pop(y)[8,53,31]  𝄀
+null
+drop table test_year;
 drop database test;

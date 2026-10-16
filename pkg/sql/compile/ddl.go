@@ -667,7 +667,13 @@ func isMissingTableByIdForFkCleanup(err error) bool {
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
 
-	dbName := c.db
+	// The planner has already resolved the (possibly schema-qualified) target
+	// database into the plan. Use it instead of the current database so that
+	// `ALTER VIEW other_db.v` does not touch `current_db.v`.
+	dbName := qry.GetDatabase()
+	if dbName == "" {
+		dbName = c.db
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
