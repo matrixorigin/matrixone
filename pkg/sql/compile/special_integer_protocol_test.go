@@ -262,11 +262,18 @@ func TestDateNumericProtocolPlacementSendAndReceive(t *testing.T) {
 	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
 	require.True(t, requiresStringNumericCompatibilityProtocol(c.proc, combinedFeatures))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	for _, tc := range []struct {
 		version int64
 		want    plan2.ExecType
-	}{{defines.MORPCVersion112, plan2.ExecTypeAP_ONECN}, {defines.MORPCVersion113, plan2.ExecTypeAP_MULTICN}} {
+	}{
+		{defines.MORPCVersion112, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion113, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion114, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion115, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion116, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion117, plan2.ExecTypeAP_MULTICN},
+	} {
 		client.customResponse = false
 		client.version = tc.version
 		c.execType = plan2.ExecTypeAP_MULTICN

@@ -89,7 +89,7 @@ func TestStringToFloatCompatibilityModes(t *testing.T) {
 							NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
 						},
 						NewFunctionTestResult(types.T_float64.ToType(), input.isNull, want, nil), NewCast)
-					succeed, info := testCase.Run()
+					succeed, info := testCase.RunAndFree()
 					require.True(t, succeed, info)
 				})
 			}
@@ -207,7 +207,7 @@ func TestStringToFloat32ExplicitCompatibilityRange(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float32.ToType(), false,
 			[]float32{math.MaxFloat32, -math.MaxFloat32, 0, float32(math.Copysign(0, -1))}, nil), NewCast)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 

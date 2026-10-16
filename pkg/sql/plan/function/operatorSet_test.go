@@ -907,21 +907,21 @@ func TestIffFnUsesExplicitProcessCompatibilityMode(t *testing.T) {
 	strictProc := testutil.NewProcess(t)
 	strict := NewFunctionTestCase(strictProc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
-	ok, info := strict.Run()
+	ok, info := strict.RunAndFree()
 	require.True(t, ok, info)
 
 	compatProc := testutil.NewProcess(t)
 	compatProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	compat := NewFunctionTestCase(compatProc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{10, 21, 22}, nil), iffFn)
-	ok, info = compat.Run()
+	ok, info = compat.RunAndFree()
 	require.True(t, ok, info)
 
 	strictProc.GetSessionInfo().MatrixOneNativeMode = true
 	strictProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	strictWithBothFlags := NewFunctionTestCase(strictProc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
-	ok, info = strictWithBothFlags.Run()
+	ok, info = strictWithBothFlags.RunAndFree()
 	require.True(t, ok, info)
 }
 

@@ -496,7 +496,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.InvalidDecimalStatisticalResultContract ||
 		features.LeastGreatestCollationSemantics
 }
 
