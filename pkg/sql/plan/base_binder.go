@@ -4407,7 +4407,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) {
+			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
 				b.suppressDefaultValueBindType = true
 				b.numericParamType = nil

@@ -23,9 +23,12 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -207,6 +210,107 @@ func TestTableDumpLegacySpecialIntegerBindings(t *testing.T) {
 			require.NoError(t, err)
 			_, err = AnalyzeTableDumpBindings(compiler, target, source)
 			require.NoError(t, err)
+		})
+	}
+}
+
+// These complete definitions were produced by BuildPlan at exact pre-PR
+// b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7, with the entire PR Go delta
+// removed through an overlay. They were not authored by compatibility mode.
+func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
+	data, err := os.ReadFile("testdata/timestampadd_second_baseline.json")
+	require.NoError(t, err)
+	require.Equal(t, "f72b807991d70d7a8f5c78425297527c678d0220b0c158e3556b5e2017753568", fmt.Sprintf("%x", sha256.Sum256(data)))
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	proc := newPlanTestProcess(t)
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 4}
+	for name, interval := range map[string]string{"decimal_division": "a/2", "modern_format": "format(a/2,2)"} {
+		t.Run(name, func(t *testing.T) {
+			var source planpb.TableDef
+			require.NoError(t, proto.Unmarshal(fixtures[name], &source))
+			expression := "timestampadd(second," + interval + ",cast('2024-01-01' as datetime(6)))"
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a decimal(10,2),g datetime(6) generated always as ("+expression+") stored,check ("+expression+" is not null))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			target := built.GetDdl().GetCreateTable().GetTableDef()
+			features, err := planpb.RequiredRemoteExpressionFeatures(target)
+			require.NoError(t, err)
+			require.True(t, features.TimestampAddSecondIntervals)
+			legacyFeatures, err := planpb.RequiredRemoteExpressionFeatures(&source)
+			require.NoError(t, err)
+			require.False(t, legacyFeatures.TimestampAddSecondIntervals)
+			snapshot := proto.Clone(&source)
+			for _, tc := range []struct {
+				name           string
+				target, source *planpb.TableDef
+			}{{"dump_old", &source, &source}, {"restore_old", target, &source}, {"current", target, target}} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := AnalyzeTableDumpBindings(compiler, tc.target, tc.source)
+					require.NoError(t, err)
+				})
+			}
+			require.True(t, proto.Equal(snapshot, &source))
+			// Restored trees retain old execution; new DDL keeps fractional seconds.
+			for _, tc := range []struct {
+				name       string
+				definition *planpb.TableDef
+				want       string
+			}{{"legacy_execution", &source, map[string]string{"decimal_division": "2024-01-01 00:00:02.000000", "modern_format": "2024-01-01 00:00:01.000000"}[name]}, {"new_execution", target, "2024-01-01 00:00:01.500000"}} {
+				t.Run(tc.name, func(t *testing.T) {
+					input := batch.NewWithSize(1)
+					defer input.Clean(proc.Mp())
+					input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(300), false, proc.Mp()))
+					input.SetRowCount(1)
+					executor, err := colexec.NewExpressionExecutor(proc, tc.definition.Cols[1].GeneratedCol.Expr)
+					require.NoError(t, err)
+					defer executor.Free()
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[types.Datetime](result, 0).String2(6))
+				})
+			}
+			for _, change := range []string{"unit", "interval", "overload", "check"} {
+				t.Run("reject_"+change, func(t *testing.T) {
+					forged := proto.Clone(&source).(*planpb.TableDef)
+					expr := forged.Cols[1].GeneratedCol.Expr
+					if change == "check" {
+						expr = forged.Checks[0].Check
+					}
+					var find func(*planpb.Expr) *planpb.Function
+					find = func(e *planpb.Expr) *planpb.Function {
+						if f := e.GetF(); f != nil {
+							if f.Func.ObjName == "timestampadd" {
+								return f
+							}
+							for _, a := range f.Args {
+								if found := find(a); found != nil {
+									return found
+								}
+							}
+						}
+						return nil
+					}
+					fn := find(expr)
+					require.NotNil(t, fn)
+					switch change {
+					case "unit":
+						fn.Args[0] = MakePlan2StringConstExprWithType("DAY")
+					case "overload":
+						fn.Func.Obj++
+					default:
+						fn.Args[1] = MakePlan2Int64ConstExprWithType(123)
+					}
+					_, err := AnalyzeTableDumpBindings(compiler, target, forged)
+					require.ErrorContains(t, err, "cannot verify bound")
+				})
+			}
 		})
 	}
 }

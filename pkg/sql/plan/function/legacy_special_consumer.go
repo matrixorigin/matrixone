@@ -21,18 +21,31 @@ import (
 )
 
 type legacySpecialConsumerContextKey struct{}
+type legacyTimestampAddSecondContextKey struct{}
 
 // WithLegacySpecialConsumers is only for validating pre-migration catalog
 // expressions against their SQL origin in table DUMP/LOAD. It must never be
 // used for new DDL or ordinary query binding.
 func WithLegacySpecialConsumers(ctx context.Context) context.Context {
-	return context.WithValue(ctx, legacySpecialConsumerContextKey{}, true)
+	return WithLegacyTimestampAddSecond(context.WithValue(ctx, legacySpecialConsumerContextKey{}, true))
 }
 
 // LegacySpecialConsumers reports whether dump origin validation is using
 // pre-migration execution signatures. It must not affect normal SQL binding.
 func LegacySpecialConsumers(ctx context.Context) bool {
 	value, _ := ctx.Value(legacySpecialConsumerContextKey{}).(bool)
+	return value
+}
+
+// WithLegacyTimestampAddSecond reconstructs pre-fractional TIMESTAMPADD trees
+// only while verifying persisted SQL origins. Other consumer migrations remain
+// current so definitions authored between migrations can still be verified.
+func WithLegacyTimestampAddSecond(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTimestampAddSecondContextKey{}, true)
+}
+
+func LegacyTimestampAddSecond(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyTimestampAddSecondContextKey{}).(bool)
 	return value
 }
 

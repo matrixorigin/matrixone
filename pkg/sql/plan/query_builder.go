@@ -89,7 +89,10 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
-		return function.WithLegacySpecialConsumers(bound)
+		bound = function.WithLegacySpecialConsumers(bound)
+	}
+	if function.LegacyTimestampAddSecond(ctx.GetContext()) {
+		bound = function.WithLegacyTimestampAddSecond(bound)
 	}
 	return bound
 }
