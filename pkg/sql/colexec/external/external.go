@@ -741,7 +741,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 	return getTailSizeNoStrict(param, r)
 }
 
-// getTailSizeNoStrict finds the next physical line terminator. Like the
+// getTailSizeNoStrict finds an unambiguously aligned physical line terminator. Like the
 // non-strict fast split path, it does not recover quote/escape context from
 // before the requested offset. The reader is borrowed; ReadFileOffset owns it.
 func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
@@ -780,6 +780,8 @@ func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
 		}
 		prefix[i] = matched
 	}
+	bordered := prefix[len(terminator)-1] != 0
+	var previousMatchEnd int64
 	for matched := 0; ; {
 		if size%4096 == 0 && param.Ctx != nil {
 			if err := param.Ctx.Err(); err != nil {
@@ -798,7 +800,18 @@ func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
 			matched++
 		}
 		if matched == len(terminator) {
-			return size, nil
+			start := size - int64(len(terminator))
+			// A bordered delimiter (e.g. || or abab) can overlap the one
+			// consumed before the probe started. Accept a match only when
+			// every possible overlapping predecessor is visible and none
+			// exists, so its alignment is independent of the initial phase.
+			if !bordered || (start >= int64(len(terminator)-1) && previousMatchEnd <= start) {
+				return size, nil
+			}
+			previousMatchEnd = size
+			// Keep overlapping matches: skipping one could falsely certify
+			// the next match as having no overlapping predecessor.
+			matched = prefix[matched-1]
 		}
 	}
 }

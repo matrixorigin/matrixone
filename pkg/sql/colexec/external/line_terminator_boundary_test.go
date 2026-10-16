@@ -58,6 +58,12 @@ func TestNonStrictTailTerminators(t *testing.T) {
 		{"no terminator", "||", "abc\ndef", 7, true},
 		{"partial terminator", "||", "abc|", 4, true},
 		{"empty", "||", "", 0, true},
+		{"ambiguous start", "||", "||c,d||next", 7, false},
+		{"overlapping run", "||", "|||||c,d||next", 10, false},
+		{"periodic run", "abab", "abababxababnext", 11, false},
+		{"insufficient lookbehind", "aaa", "xaaaxaaaz", 8, false},
+		{"sufficient lookbehind", "aaa", "xxaaaz", 5, false},
+		{"periodic EOF", "aaa", strings.Repeat("a", 8192), 8192, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
@@ -115,6 +121,8 @@ func TestReadFileOffsetNonStrictLineTerminators(t *testing.T) {
 	}{
 		{"custom embedded LF", "||", "left\nright", 31, true},
 		{"custom no final terminator", "||", "left\nright", 31, false},
+		{"bordered leading field prefix", "||", "left\nright", 31, true},
+		{"unbordered custom", "<END>", "left\nright", 31, true},
 		{"single byte", ";", "left\nright", 31, true},
 		{"CRLF", "\r\n", "plain", 31, true},
 		{"default LF", "\n", "plain", 31, true},
@@ -131,6 +139,9 @@ func TestReadFileOffsetNonStrictLineTerminators(t *testing.T) {
 			var want [][]string
 			for i := 0; i < tc.rows; i++ {
 				id, last := fmt.Sprintf("%03d", i), fmt.Sprintf("v%d", i)
+				if tc.name == "bordered leading field prefix" {
+					id = "|" + id
+				}
 				fmt.Fprintf(&content, "%s,%s,%s", id, tc.payload, last)
 				if i+1 < tc.rows || tc.final {
 					content.WriteString(tc.term)
@@ -169,6 +180,47 @@ func TestReadFileOffsetNonStrictLineTerminators(t *testing.T) {
 				}
 				require.Equal(t, want, got, "every field and record must be preserved")
 				require.Equal(t, parseBoundaryRows(t, param, data[param.FileStartOff:]), got)
+			}
+		})
+	}
+}
+
+// A match may overlap the delimiter that ends the preceding record. Checking
+// only that a range ends in the delimiter cannot detect this corruption.
+func TestReadFileOffsetNonStrictOverlappingBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, term, data string
+		want             [][]string
+	}{
+		{"review counterexample", "||", "a,bbb|||c,d||", [][]string{{"a", "bbb"}, {"|c", "d"}}},
+		{"repeated byte", "aaa", "a,bbbbbb" + "aaa" + "aa,cdd" + "aaa", [][]string{{"a", "bbbbbb"}, {"aa", "cdd"}}},
+		{"periodic delimiter", "abab", "a,bbbbbb" + "abab" + "ab,c" + "abab", [][]string{{"a", "bbbbbb"}, {"ab", "c"}}},
+		{"unterminated final record", "||", "a,bb|||c,d", [][]string{{"a", "bb"}, {"|c", "d"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs := testutil.NewFS(t)
+			t.Cleanup(func() { fs.Close(ctx) })
+			const filePath = "etl:/overlapping-boundaries.csv"
+			data := []byte(tc.data)
+			require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: filePath, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), ReaderForWrite: bytes.NewReader(data)}}}))
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: filePath, Format: tree.CSV, ScanType: tree.INFILE, CompressType: tree.NOCOMPRESS,
+				Tail: &tree.TailParameter{Lines: tree.NewLines("", tc.term)},
+			}, ExParam: tree.ExParam{FileService: fs, Ctx: ctx}}
+			require.Equal(t, tc.want, parseBoundaryRows(t, param, data))
+			for _, readers := range []int{2, 3, 4} {
+				offsets, err := ReadFileOffset(param, readers, int64(len(data)), nil)
+				require.NoError(t, err)
+				var got [][]string
+				for i := 0; i < len(offsets); i += 2 {
+					end := offsets[i+1]
+					if end == -1 {
+						end = int64(len(data))
+					}
+					got = append(got, parseBoundaryRows(t, param, data[offsets[i]:end])...)
+				}
+				require.Equal(t, tc.want, got, "readers=%d offsets=%v", readers, offsets)
 			}
 		})
 	}
