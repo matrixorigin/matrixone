@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -48,7 +49,7 @@ func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) 
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil, mock.mp)
 	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil, mock.mp)
 	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil, mock.mp)
-	bat.Vecs[4] = testutil.MakeScalarNull(nil, types.T_timestamp, 1, mock.mp)
+	bat.Vecs[4] = vector.NewConstNull(types.T_timestamp.ToType(), 1, mock.mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},

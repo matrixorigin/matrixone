@@ -6546,7 +6546,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		dbName, _, _, _ = showMetadataTarget(stmt)
+		canExecInRestricted = true
+	case *tree.ShowCreateView, *tree.ShowCreateDatabase,
 		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -8840,6 +8845,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
 		stats.Add(&delta)
 		return ok, stats, err
+	}
+
+	// Only a normal denial may use object visibility. Errors (including revoked
+	// active-role membership) have already returned above.
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
+		if _, _, _, supported := showMetadataTarget(stmt); supported {
+			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			stats.Add(&delta)
+			return allowed, stats, err
+		}
 	}
 
 	// double check privilege of drop table

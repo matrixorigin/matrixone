@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -3019,4 +3020,20 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
+}
+
+// equalFoldKey produces the same equivalence classes used by strings.EqualFold
+// so callers can detect duplicates without pairwise comparisons.
+func equalFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }

@@ -571,7 +571,7 @@ func TestBindPublicFunctionResultContracts(t *testing.T) {
 	require.Equal(t, int32(types.T_int32), isIPv4.Typ.Id)
 }
 
-func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
+func TestBindBitwiseAggregatePreservesBlobSubstringType(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()
 	sourceExpr := &planpb.Expr{
@@ -591,7 +591,10 @@ func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_blob), substring.Typ.Id)
 
 	for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
-		_, err = BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
-		require.Error(t, err, "%s must keep BLOB SUBSTRING outside binary aggregate support", aggregateName)
+		aggregate, err := BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
+		require.NoError(t, err, aggregateName)
+		expected := substring.Typ
+		expected.NotNullable = true // bit aggregates always materialize a neutral value.
+		require.Equal(t, expected, aggregate.Typ)
 	}
 }
