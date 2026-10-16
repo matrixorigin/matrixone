@@ -26,7 +26,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -80,9 +79,9 @@ func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 			}
 			return text
 		}
-		// seed 仅提供主键与分区目录模板；宽度边界由下面注入的旧表验证。
-		// 不必再保留三个4096列模板表，让后续目录扫描重复处理无关列。
-		execSQL(createSQL("seed", 1, true))
+		// The seed supplies only PK, rowid, and partition metadata. Materialize
+		// the legacy width in the typed copy, not in a second wide SQL table.
+		execSQL(createSQL("seed", 2, true))
 		svc := cn.RawService().(cnservice.Service)
 		legacyCtx := defines.AttachAccountId(ctx, 0)
 		err = svc.GetSQLExecutor().ExecTxn(legacyCtx, func(txn executor.TxnExecutor) error {
@@ -99,15 +98,20 @@ func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 				def := proto.Clone(source.CopyTableDef(legacyCtx)).(*pb.TableDef)
 				def.Name = name
 				def.Createsql = createSQL(name, 4098, partitioned)
-				// Preserve the original rowid while expanding the minimal template
-				// to the complete legacy width, including both boundary columns.
+				// Preserve the original rowid while expanding ordinary columns.
 				last := def.Cols[len(def.Cols)-1]
 				if last.Name != catalog.Row_ID {
 					return fmt.Errorf("seed rowid is not last: %s", last.Name)
 				}
 				def.Cols = def.Cols[: len(def.Cols)-1 : len(def.Cols)-1]
+				template := def.Cols[1]
 				for i := len(def.Cols); i < 4098; i++ {
-					def.Cols = append(def.Cols, &pb.ColDef{Name: fmt.Sprintf("c%d", i), OriginName: fmt.Sprintf("c%d", i), Typ: pb.Type{Id: int32(types.T_int32)}, Default: &pb.Default{NullAbility: true}})
+					col := proto.Clone(template).(*pb.ColDef)
+					col.Name = fmt.Sprintf("c%d", i)
+					col.OriginName = col.Name
+					col.ColId = 0
+					col.Seqnum = uint32(i)
+					def.Cols = append(def.Cols, col)
 				}
 				def.Cols = append(def.Cols, last)
 				for _, d := range def.Defs {

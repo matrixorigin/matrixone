@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -86,7 +87,9 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 	}
 	table.DefaultCharset = identity
 	table.CollationVersion = uint32(types.CollationVersionLegacy)
-	if types.IsUnicodeCollation(uint8(identity)) {
+	// V1 physical unique keys also own this schema marker; changing only
+	// inheritance must not revoke optimizer-pruned native-unique table shells.
+	if types.IsUnicodeCollation(uint8(identity)) || table.KeyFormat == collation.KeyFormatV1 {
 		table.CollationVersion = uint32(types.CollationVersionV1)
 	}
 	return nil

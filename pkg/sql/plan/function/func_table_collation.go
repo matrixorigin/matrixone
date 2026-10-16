@@ -43,10 +43,18 @@ func builtInInternalTableCollation(parameters []*vector.Vector, result vector.Fu
 			// their pre-upgrade metadata presentation without inventing a row.
 			identity = uint32(collation.UTF8MB4GeneralCIIdentity)
 		}
-		if err := collation.RequireLegacy(identity, extra.CollationVersion, extra.KeyFormat); err != nil {
+		// Unmarshal validates the closed physical-format domain. Rendering a
+		// table default is not admission to execute that physical index format.
+		revision := extra.CollationVersion
+		if extra.KeyFormat == collation.KeyFormatV1 && revision == uint32(collation.RevisionV1) && identity <= uint32(collation.UTF8MB4GeneralCIIdentity) {
+			// Native UNIQUE retains a schema-level V1 marker even when the
+			// independent table default belongs to a legacy character domain.
+			revision = uint32(collation.RevisionLegacy)
+		}
+		if err := collation.RequireLegacy(identity, revision, collation.KeyFormatLegacy); err != nil {
 			return err
 		}
-		definition, err := collation.EffectiveDefinition(identity, extra.CollationVersion)
+		definition, err := collation.EffectiveDefinition(identity, revision)
 		if err != nil {
 			return err
 		}

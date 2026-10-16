@@ -119,11 +119,11 @@ func TestPreflightLogicalRestoreDatabases(t *testing.T) {
 	require.Equal(t, []string{"ordinary", "branch_db"}, loaded)
 
 	loaded = nil
-	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion114, load))
+	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion117, load))
 	require.Equal(t, []string{"ordinary", "branch_db", "not_reached"}, loaded)
 
 	injected := moerr.NewInternalError(ctx, "source definition unavailable")
-	err = preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion114, func(string) (logicalRestoreDatabaseDefinition, error) {
+	err = preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion117, func(string) (logicalRestoreDatabaseDefinition, error) {
 		return logicalRestoreDatabaseDefinition{}, injected
 	})
 	require.ErrorIs(t, err, injected, "capability must not bypass source metadata validation")

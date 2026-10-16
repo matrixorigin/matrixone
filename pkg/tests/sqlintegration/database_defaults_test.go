@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +95,31 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			require.Equal(t, "utf8mb4_unicode_ci", collation(t, "prepared_target", "v"))
 			exec(t, first, "insert into prepared_target values ('ß'),('ss')")
 			require.Equal(t, 2, count(t, "select count(*) from prepared_target where v='ss'"))
+			// Main's v114 new-table capability remains available when C03 owns
+			// the inherited domain; existing-table index mutation stays closed.
+			exec(t, first, "create table native_unique_default(v varchar(8) unique)")
+			require.Equal(t, "utf8mb4_unicode_ci", collation(t, "native_unique_default", "v"))
+			exec(t, first, "insert into native_unique_default values ('ß')")
+			_, err := first.ExecContext(ctx, "insert into native_unique_default values ('ss')")
+			var duplicate *mysql.MySQLError
+			require.ErrorAs(t, err, &duplicate)
+			require.Equal(t, uint16(1062), duplicate.Number)
+			require.Equal(t, 1, count(t, "select count(*) from native_unique_default where v='ss'"))
+			_, err = first.ExecContext(ctx, "alter table native_unique_default add index iv(v)")
+			require.Error(t, err)
+			require.Zero(t, count(t, "select count(*) from information_schema.statistics where table_schema='"+schema+"' and table_name='native_unique_default' and index_name='iv'"))
+			require.Equal(t, 1, count(t, "select count(*) from native_unique_default"))
+			var tableDefault string
+			require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='native_unique_default'", schema).Scan(&tableDefault))
+			require.Equal(t, "utf8mb4_unicode_ci", tableDefault)
+			exec(t, first, "alter table native_unique_default default collate utf8mb4_bin")
+			require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='native_unique_default'", schema).Scan(&tableDefault))
+			require.Equal(t, "utf8mb4_bin", tableDefault)
+			require.Equal(t, "utf8mb4_unicode_ci", collation(t, "native_unique_default", "v"))
+			_, err = first.ExecContext(ctx, "insert into native_unique_default values ('SS')")
+			require.ErrorAs(t, err, &duplicate)
+			require.Equal(t, uint16(1062), duplicate.Number)
+			require.Equal(t, 1, count(t, "select count(*) from native_unique_default"), "a pruned count(*) retains native-unique admission after DEFAULT")
 			exec(t, second, "alter database "+schema+" collate utf8mb4_bin")
 		})
 

@@ -27,8 +27,9 @@ func TestTableCollationFunctionFeature(t *testing.T) {
 		display string
 		want    bool
 	}{
-		{"execution_identity", 598, "", true},
-		{"renamed_execution_identity", 598, "format_bytes", true},
+		{"execution_identity", 599, "", true},
+		{"renamed_execution_identity", 599, "format_bytes", true},
+		{"calendar_interval_identity", 598, "internal_table_collation", false},
 		{"format_bytes_control", 596, "internal_table_collation", false},
 		{"format_pico_control", 597, "internal_table_collation", false},
 	} {
@@ -44,7 +45,8 @@ func TestTableCollationFunctionFeature(t *testing.T) {
 				features, err := RequiredRemoteExpressionFeatures(input)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, features.TableCollationFunction)
-				require.Equal(t, tc.want, features.Any(), "the new capability must activate pipeline admission")
+				require.Equal(t, tc.id == 598, features.CalendarIntervalNormalization, "calendar and table-collation identities are independent")
+				require.Equal(t, tc.want || tc.id == 598, features.Any(), "either independent capability must activate pipeline admission")
 			}
 		})
 	}

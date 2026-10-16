@@ -113,7 +113,7 @@ select count(*) from converted force index(iv) where v='ss';
 create table unique_conversion(v varchar(8) unique) collate=utf8mb4_bin;
 insert into unique_conversion values ('ß'),('ss');
 alter table unique_conversion convert to character set utf8mb4 collate utf8mb4_unicode_ci;
-not supported: native Unicode collation column 'v' cannot be in unique index until collation-aware unique-index deduplication is supported
+not supported: native Unicode collation column 'v' cannot be in unique index without the versioned unique-key format
 select count(*),min(v),max(v) from unique_conversion;
 ➤ count(*)[-5,64,0]  ¦  min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
 2  ¦  ss  ¦  ß

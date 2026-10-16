@@ -306,16 +306,16 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), "\n"),
 		InformationSchemaColumnsDDL)
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), InformationSchemaColumnsDDL)
-	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113} {
+	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
 		definitions := InitInformationSchemaSysTablesForProtocol(protocol)
 		require.Contains(t, definitions, InformationSchemaSchemataLegacyDDL)
 		require.Contains(t, definitions, InformationSchemaTablesDDL)
 		require.NotContains(t, strings.Join(definitions, "\n"), "mo_database_defaults")
-		require.NotContains(t, definitions, InformationSchemaTablesV114DDL)
+		require.NotContains(t, definitions, InformationSchemaTablesV117DDL)
 	}
-	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion114)
+	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion117)
 	require.Contains(t, definitions, InformationSchemaSchemataDDL)
-	require.Contains(t, definitions, InformationSchemaTablesV114DDL)
+	require.Contains(t, definitions, InformationSchemaTablesV117DDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -654,5 +654,17 @@ func TestInformationSchemaCollationCharacterSetApplicabilityDDL(t *testing.T) {
 	assert.NoError(t, err)
 	for _, statement := range statements {
 		statement.Free()
+	}
+}
+
+func TestMetadataVisibilityPolicyMatchesPersistedViews(t *testing.T) {
+	require.Equal(t, informationSchemaMetadataVisibilityCTE(), MetadataVisibilityCTE(defines.MORPCVersion41))
+	require.Equal(t, informationSchemaMetadataVisibilityCompatibilityCTE(), MetadataVisibilityCTE(defines.MORPCVersion35))
+	for _, protocol := range []int64{defines.MORPCVersion35, defines.MORPCVersion41} {
+		sql := MetadataVisibilityCTE(protocol) + "SELECT 1 FROM __mo_visible_tables WHERE reldatabase = 'db' AND relname = 't' LIMIT 1"
+		_, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		require.Contains(t, sql, "tbl.account_id = current_account_id()")
+		require.Contains(t, sql, "rp.obj_id = tbl.rel_logical_id")
 	}
 }

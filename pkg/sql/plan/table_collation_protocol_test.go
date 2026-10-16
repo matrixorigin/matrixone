@@ -34,7 +34,7 @@ func TestTableCollationExpressionProtocolIdentity(t *testing.T) {
 		required, err := RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
 		if id == function.INTERNAL_TABLE_COLLATION {
-			require.Equal(t, defines.MORPCVersion114, required)
+			require.Equal(t, defines.MORPCVersion117, required)
 		} else {
 			require.Zero(t, required, "main's existing function identities retain their gates")
 		}
@@ -74,25 +74,28 @@ func TestTableCollationViewProtocol(t *testing.T) {
 		local, read, author int64
 	}{
 		{"all_113", 113, 113, 113},
-		{"old_local", 113, 114, 114},
-		{"old_authoring_floor", 114, 114, 113},
+		{"old_local", 113, 117, 117},
+		{"native_unique_local", 114, 117, 117},
+		{"calendar_interval_local", 115, 117, 117},
+		{"division_warning_local", 116, 117, 117},
+		{"old_authoring_floor", 117, 117, 116},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			set(tc.local, tc.read, tc.author)
 			_, err := build(legacy)
 			require.NoError(t, err)
 			_, err = build(authored)
-			require.ErrorContains(t, err, "protocol version 114")
+			require.ErrorContains(t, err, "protocol version 117")
 		})
 	}
-	set(114, 114, 114)
+	set(117, 117, 117)
 	created, err := build(authored)
 	require.NoError(t, err)
 	payload := created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 	var metadata ViewData
 	require.NoError(t, json.Unmarshal([]byte(payload), &metadata))
 	require.NotNil(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, defines.MORPCVersion114, *metadata.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion117, *metadata.RequiredProtocolVersion)
 	for _, marked := range []bool{true, false} {
 		t.Run(map[bool]string{true: "marked_reader", false: "unmarked_reader"}[marked], func(t *testing.T) {
 			data := metadata
@@ -101,11 +104,11 @@ func TestTableCollationViewProtocol(t *testing.T) {
 			}
 			encoded, err := json.Marshal(data)
 			require.NoError(t, err)
-			for _, floors := range [][2]int64{{113, 114}, {114, 113}, {114, 114}} {
+			for _, floors := range [][2]int64{{113, 117}, {114, 117}, {115, 117}, {116, 117}, {117, 116}, {117, 117}} {
 				set(floors[0], floors[1], 113)
 				_, err := RegenerateViewDefinition(ctx, string(encoded))
-				if floors[0] < 114 || floors[1] < 114 {
-					require.ErrorContains(t, err, "protocol version 114")
+				if floors[0] < 117 || floors[1] < 117 {
+					require.ErrorContains(t, err, "protocol version 117")
 				} else {
 					require.NoError(t, err, "read admission must not depend on the authoring floor")
 				}

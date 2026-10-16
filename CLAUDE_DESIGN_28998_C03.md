@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-15，冻结main `501c85ecdd`）：保留main有符号WEEK/DAYOFYEAR协议 **112**、DECIMAL variance/stddev DOUBLE协议 **113**，C03协议能力顺延 **114**；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配；历史112下SHOW binary展示已由末节的SHOW NULL/information_schema binary合同纠正。
+当前维护编号（2026-10-16，冻结main `76deafc8062f9a7e33a31a4df858ebcdb9477cb5`）：保留main协议112/113，以及native Unicode UNIQUE **114**、calendar interval **115**、scalar division warning **116**和`TO_CALENDAR_INTERVAL=598`。未发布C03顺延 **117**、`INTERNAL_TABLE_COLLATION=599`、`FUNCTION_END_NUMBER=600`；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配或main最新能力；历史112下SHOW binary展示已由SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -286,4 +286,13 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - 普通/预编译视图在113拒绝且不发布目录行，114允许并写入最低版本marker；reader重申114，下限不足时marked/unmarked定义均拒绝。旧普通视图仍可在113创建读取。实际RPC模拟能力边界不冒充真实旧二进制混部资格。
 - 新门禁揭示fresh bootstrap尚未admit时不能创建598消费者。复用既有阶段：prerequisite事务先安装legacy TABLES；catalog admission达到114后，在原derived事务中DROP/CREATE新版TABLES并创建四个trace completion views，再开ingress。完整旧集群仍走skip，不因本轮重写系统视图；普通tenant初始化保持原114模板。
 - 新Exec结果逐次Close，既有事务独占commit/rollback；失败、取消与不确定提交沿原框架处理，无新等待循环/worker/cache。实际SQL证明先成功DROP再被CREATE门禁拒绝时原rel_id不变，114重新初始化成功。新增开销仅每expr常量比较和缺失derived schema初始化的两条DDL，不改COPY/恢复/索引等既有所有权。
-- 任务启动时正常合并官方bb2的只读cache不可变性修复并验证其normal/race。验证期间main前进到461bc8e349，未追逐其无关24文件；当前PR差分与证据基于bb2，前进main合并树无文本冲突。准确资格及历史限制见验证文档。
+- 任务启动时正常合并官方bb2的只读cache不可变性修复并验证其normal/race。验证期间main前进到461bc8e349，未追逐其无关24文件；该轮PR差分与证据基于bb2，前进main合并树无文本冲突。准确资格及历史限制见验证文档。
+
+## 2026-10-16 CI/冲突修复设计（冻结main 76deafc806）
+
+- 保留main114原生Unicode新建普通持久表UNIQUE及canonical key format、115 calendar normalization执行ID598、116 division warning合同；C03及其TABLES消费者统一117/599，升级/恢复/作者/reader/发送接收/worker选择都同步。新增114–116前驱拒绝及598/599身份正交控制，不把旧未发布C03的114误当main114能力。native Unicode PRIMARY、已有表索引mutation和CONVERT边界继续交由上游owner拒绝，不回退main的新建UNIQUE能力；历史正文全局拒绝UNIQUE的说法仅适用于当时main。
+- derived bootstrap需要替换legacy TABLES，而DROP跨越main lineage writer的pessimistic/RC门槛。该内部ExecTxn显式拥有pessimistic RC选项，沿用既有commit/rollback/retry/结果Close；不改变用户/集群默认事务模式，也不绕过lineage锁。原optimistic CDC负控继续以optimistic集群启动并在target create前被拒绝。
+- migration在两个请求之间没有reqCtx。有效默认值读取改为显式接收migration operation context，保留其取消/截止期/值；background reader租户来自session认证TenantInfo，不来自last-query accounting、migration RPC或已结束请求；缺失认证身份先拒绝。活动用户事务仍走原compiler/transaction视图，不创建第二个提交owner。普通无请求getter使用connection context，断连/请求取消在reader创建前终止；非默认变量仍走原session存储。新增无请求/已结束请求/活动请求、认证租户7/last-query99/RPC42、operation/connection context传播、取消/缺失身份前零reader及成功/错误逐次Close控制，并用真实prepared-owner SQL migration回归。
+- Issue28909降级71的无ghost断言改读原始mo_catalog.mo_tables，不依赖最低117的TABLES视图；保留错误码、已有数据/普通SQL、恢复后同名视图创建断言，不放松view能力门槛。
+- main114原生UNIQUE以KeyFormatV1/CollationVersionV1保留schema级证明，不能与独立表默认字符域revision混为一谈。DEFAULT只更新继承身份，已有V1物理索引仍保留schema marker1和原列/索引；optimizer-pruned count(*)不能因此失去准入。TABLES formatter沿SchemaExtra.Unmarshal验证已知identity/revision/format，仅展示默认字符域：已知format1/schema marker1且legacy默认域时，用域revision0解析名称；这不是索引执行准入，不改全局RequireLegacy或TableDef/index owner。未知format2/256、revision、identity、缺失native revision、0/1历史身份及非支持字符域仍拒绝。保留完整source metadata在frontend recoverLegacyTinyText入口、ALTER重写之前的既有RequireLegacyCollations门；不把最终marker当原始损坏数据的修复手段。有效RED证明已知format1展示误拒绝及DEFAULT把marker1清零；typed pruning与真实SQL的TABLES/COLUMNS、DEFAULT后count(*)/重复1062验证修复，已有表index mutation仍拒绝。
+- legacy partition fixture保留main两列seed和普通列模板clone、4098列typed注入及全部边界/回滚断言；保留本分支分阶段180秒/600秒总预算。pipeline冲突从合并proto owner双次生成且字节一致，不手改生成块。完整解压descriptor审查证明pipeline差异仅SourceCodeInfo，字段/类型/编号/reserved/enums/options与main一致；plan仅批准DatabaseDefaults及CreateDatabase#5/AlterDatabase#3/CreateTable#18。当前执行结果及限制另记验证文档。

@@ -1553,7 +1553,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
 			snapshot.Ready = false
-			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion114)
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion117)
 			snapshot.CatalogFencedEpoch = 5
 			s.viewMetadataAdmission.Store(&snapshot)
 			t.Cleanup(func() { _ = s.Close() })
@@ -1597,7 +1597,9 @@ func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
 		minimum uint64
 	}{
 		{"lower floor", 97, false, false, 98}, {"activation pending", 98, true, false, 98}, {"ready", 98, false, true, 98},
-		{"C03 main113", 113, false, false, 114}, {"C03 activation pending", 114, true, false, 114}, {"C03 ready", 114, false, true, 114},
+		{"C03 main113", 113, false, false, 117}, {"C03 native UNIQUE", 114, false, false, 117},
+		{"C03 calendar interval", 115, false, false, 117}, {"C03 division warnings", 116, false, false, 117},
+		{"C03 activation pending", 117, true, false, 117}, {"C03 ready", 117, false, true, 117},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current := *ready

@@ -28,7 +28,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		TableName:               catalog.MODatabaseDefaults,
 		UpgType:                 versions.CREATE_NEW_TABLE,
 		UpgSql:                  catalog.MoDatabaseDefaultsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion114,
+		RequiredProtocolVersion: defines.MORPCVersion117,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MODatabaseDefaults)
 		},
@@ -39,7 +39,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaSchemataDDL,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.SCHEMATA;",
-		RequiredProtocolVersion: defines.MORPCVersion114,
+		RequiredProtocolVersion: defines.MORPCVersion117,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "SCHEMATA")
 			if err == nil && !exists {
@@ -54,7 +54,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
-		RequiredProtocolVersion: defines.MORPCVersion114,
+		RequiredProtocolVersion: defines.MORPCVersion117,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err == nil && !exists {
@@ -67,15 +67,15 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
 		TableName:               "TABLES",
 		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaTablesV114DDL,
+		UpgSql:                  sysview.InformationSchemaTablesV117DDL,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.TABLES;",
-		RequiredProtocolVersion: defines.MORPCVersion114,
+		RequiredProtocolVersion: defines.MORPCVersion117,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "TABLES")
 			if err == nil && !exists {
 				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "tables")
 			}
-			return exists && definition == sysview.InformationSchemaTablesV114DDL, err
+			return exists && definition == sysview.InformationSchemaTablesV117DDL, err
 		},
 	},
 }

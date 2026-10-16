@@ -17,14 +17,16 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAlterTableCharsetContract(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion114)
+	databaseDefaultsProtocol(t, defines.MORPCVersion117)
 	for _, tc := range []struct {
 		name, source, option, failure string
 		algorithm                     plan.AlterTable_AlgorithmType
@@ -119,4 +121,23 @@ func TestAlterCopyCollationInvalidatesDedupProof(t *testing.T) {
 	require.False(t, alterCopyKeyColumnValueUnchanged(old, &changed))
 	changed = *old
 	require.True(t, alterCopyKeyColumnValueUnchanged(old, &changed))
+}
+
+func TestAlterTableDefaultPreservesNativeUniqueSchemaMarker(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion117)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	table := &plan.TableDef{
+		DefaultCharset: uint32(collation.UTF8MB4UnicodeCIIdentity), CollationVersion: uint32(collation.RevisionV1), KeyFormat: collation.KeyFormatV1,
+		Cols:    []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(collation.UTF8MB4UnicodeCIIdentity), CollationVersion: uint32(collation.RevisionV1)}}},
+		Indexes: []*plan.IndexDef{{IndexName: "uv", Unique: true, Parts: []string{"v"}, KeyFormat: collation.KeyFormatV1}},
+	}
+	require.NoError(t, plan.RequireLegacyCollations(table), "the complete native-unique fixture is admitted")
+	require.NoError(t, applyAlterTableCharsetDefault(ctx, table, []tree.AlterTableOption{&tree.TableOptionCollate{Collate: "utf8mb4_bin"}}))
+	require.Equal(t, uint32(collation.UTF8MB4BinIdentity), table.DefaultCharset)
+	require.Equal(t, uint32(collation.RevisionV1), table.CollationVersion, "the physical schema marker is not the legacy default's revision")
+	require.Equal(t, uint32(collation.UTF8MB4UnicodeCIIdentity), table.Cols[0].Typ.Charset, "DEFAULT cannot rewrite the indexed column")
+	require.Equal(t, collation.KeyFormatV1, table.Indexes[0].KeyFormat)
+	pruned := DeepCopyTableDef(table, true)
+	pruned.Cols = nil
+	require.NoError(t, plan.RequireLegacyCollations(pruned), "optimizer pruning retains the native-unique proof through its schema marker")
 }

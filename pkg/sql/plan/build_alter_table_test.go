@@ -131,7 +131,7 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 }
 
 func TestAlterTableCharsetAdmission(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion114)
+	databaseDefaultsProtocol(t, defines.MORPCVersion117)
 	for _, tc := range []struct {
 		option string
 		err    string
@@ -232,7 +232,21 @@ func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
 	)
 	statements, err := mysql.Parse(context.Background(), sql, 1)
 	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
 	require.Len(t, statements, 1)
+
+	// A replacement column reads its default expression, not a source column.
+	// One entry also exercises the first SELECT item independently of map order.
+	alterCtx.alterColMap["target`column"] = selectExpr{sexprType: exprConstValue, sexprStr: "42"}
+	sql, err = buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT 42 FROM `db``name`.`source``table`", sql)
 }
 
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
@@ -958,6 +972,87 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	_, err := buildSingleStmt(newMock(), t,
 		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, DROP FOREIGN KEY fk_x`)
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
+}
+
+func TestAlterTableInplaceForeignKeysUseFinalTableName(t *testing.T) {
+	for _, tc := range []struct {
+		name, options, finalName, parent string
+		mutations                        []string
+	}{
+		{"external rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"external rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a), RENAME TO renamed", "renamed", "fk_parent", []string{"insert"}},
+		{"self rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"insert"}},
+		{"self rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO renamed", "renamed", "t1", []string{"insert"}},
+		{"ordered replacement", "RENAME TO renamed, DROP FOREIGN KEY fk_old, ADD CONSTRAINT fk_old FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"delete", "insert"}},
+		{"ordered add drop", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), DROP FOREIGN KEY fk_new", "renamed", "t1", []string{"insert", "delete"}},
+		{"quoted target", "RENAME TO `renamed``t1`, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed`t1", "t1", []string{"insert"}},
+		{"no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"checks disabled rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"checks disabled no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"no-op rename", "RENAME TO t1, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "t1", "t1", []string{"insert"}},
+		{"trailing no-op rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO t1", "renamed", "t1", []string{"insert"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			if strings.HasPrefix(tc.name, "checks disabled") {
+				originalContext := mock.ctxt
+				mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "foreign_key_checks" {
+						return int64(0), nil
+					}
+					return originalContext.ResolveVariable(name, system, global)
+				}
+			}
+			table := mock.ctxt.tables["t1"]
+			table.Cols[1].Typ = table.Cols[0].Typ
+			table.Fkeys = []*plan.ForeignKeyDef{{Name: "fk_old", Cols: []uint64{table.Cols[1].ColId}, ForeignCols: []uint64{table.Cols[0].ColId}}}
+			parent := DeepCopyTableDef(table, true)
+			parent.Name, parent.TblId = "fk_parent", table.TblId+10000
+			parent.Fkeys = nil
+			mock.ctxt.tables[parent.Name] = parent
+			mock.ctxt.objects[parent.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: parent.Name, Obj: int64(parent.TblId)}
+
+			logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 "+tc.options)
+			require.NoError(t, err)
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			require.Equal(t, "t1", alter.TableDef.Name, "execution must still open the original relation")
+			require.Equal(t, "t1", table.Name)
+			require.Len(t, table.Fkeys, 1, "planning must not mutate catalog state")
+			require.Len(t, alter.DetectSqls, 1)
+			finalIdent := "`tpch`.`" + strings.ReplaceAll(tc.finalName, "`", "``") + "`"
+			require.Contains(t, alter.DetectSqls[0], "from "+finalIdent)
+			if tc.finalName != "t1" {
+				require.NotContains(t, alter.DetectSqls[0], "`tpch`.`t1`")
+			}
+			if tc.parent == "t1" {
+				require.Equal(t, 2, strings.Count(alter.DetectSqls[0], "from "+finalIdent))
+			} else {
+				require.Contains(t, alter.DetectSqls[0], "from `tpch`.`fk_parent`")
+			}
+			parsed, err := mysql.ParseOne(t.Context(), alter.DetectSqls[0], 1)
+			require.NoError(t, err)
+			parsed.Free()
+			for _, action := range alter.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					require.Equal(t, tc.parent, fk.TableName, "declaration binding retains its original parent")
+				}
+			}
+			updates := alter.UpdateFkSqls
+			want := len(tc.mutations)
+			if tc.finalName != "t1" {
+				want += 2
+			}
+			require.Len(t, updates, want)
+			for i, mutation := range tc.mutations {
+				require.True(t, strings.HasPrefix(updates[i], mutation), updates[i])
+			}
+			if tc.finalName != "t1" {
+				require.Contains(t, updates[want-2], "set table_name = ")
+				require.Contains(t, updates[want-1], "set refer_table_name = ")
+			}
+		})
+	}
 }
 
 func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) {
@@ -2332,6 +2427,181 @@ func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 				require.Equal(t, "destination", p.GetDdl().GetAlterTable().Actions[0].GetAlterName().NewName)
 				require.Empty(t, p.GetDdl().GetAlterTable().UpdateFkSqls)
 			}
+		})
+	}
+}
+
+func TestVersionedIndexMutationClassification(t *testing.T) {
+	indexedColumn := func(attributes ...tree.ColumnAttribute) *tree.ColumnTableDef {
+		return &tree.ColumnTableDef{Attributes: attributes}
+	}
+
+	tests := []struct {
+		name    string
+		options []tree.AlterTableOption
+		want    bool
+	}{
+		{name: "no options", options: nil, want: false},
+		{
+			name:    "alter index state",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterIndex{}},
+			want:    true,
+		},
+		{
+			name:    "reindex",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterReIndex{}},
+			want:    true,
+		},
+		{
+			name: "drop index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex},
+			},
+			want: true,
+		},
+		{
+			name: "drop key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropPrimaryKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop indexed column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropColumn},
+			},
+			want: true,
+		},
+		{
+			name: "drop foreign key metadata",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropForeignKey},
+			},
+			want: false,
+		},
+		{
+			name: "add primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.PrimaryKeyIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add secondary index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.Index{}},
+			},
+			want: true,
+		},
+		{
+			name: "add unique index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.UniqueIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add fulltext index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.FullTextIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add plain column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn()},
+			},
+			want: false,
+		},
+		{
+			name: "add primary-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributePrimaryKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUnique())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "legacy add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterAddCol{Column: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "multi-column add contains unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAddColumnClause{
+					NewColumns: []*tree.ColumnTableDef{
+						indexedColumn(),
+						indexedColumn(tree.NewAttributeUnique()),
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "modify column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableModifyColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "change column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableChangeColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "rename column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableRenameColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "alter column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAlterColumnClause{},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, hasVersionedIndexMutation(tt.options))
 		})
 	}
 }

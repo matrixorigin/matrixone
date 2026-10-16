@@ -30,11 +30,24 @@ func databaseDefaultSystemVariable(ses FeSession, name string) (any, bool, error
 	if name != "character_set_database" && name != "collation_database" || !plan2.DatabaseDefaultsEnabled(ses.GetService()) {
 		return nil, false, nil
 	}
+	ctx := context.Background()
+	if compiler := ses.GetTxnCompileCtx(); compiler != nil && compiler.execCtx != nil && compiler.GetContext() != nil {
+		ctx = compiler.GetContext()
+	} else if handler := ses.GetTxnHandler(); handler != nil {
+		if connectionCtx := handler.GetConnCtx(); connectionCtx != nil {
+			ctx = connectionCtx
+		}
+	}
+	return databaseDefaultSystemVariableWithContext(ctx, ses, name)
+}
+
+func databaseDefaultSystemVariableWithContext(ctx context.Context, ses FeSession, name string) (any, bool, error) {
+	if name != "character_set_database" && name != "collation_database" || !plan2.DatabaseDefaultsEnabled(ses.GetService()) {
+		return nil, false, nil
+	}
 	compiler := ses.GetTxnCompileCtx()
 	database := ses.GetDatabaseName()
-	ctx := context.Background()
 	if compiler != nil && compiler.execCtx != nil {
-		ctx = compiler.GetContext()
 		if database != "" && !plan2.DatabaseDefaultsSystemDatabase(database) {
 			var defaults *plan.DatabaseDefaults
 			var err error
@@ -42,13 +55,20 @@ func databaseDefaultSystemVariable(ses FeSession, name string) (any, bool, error
 			if proc != nil && proc.GetTxnOperator() != nil {
 				defaults, err = plan2.GetDatabaseDefaults(compiler, database, nil)
 			} else {
-				var accountID uint32
-				accountID, err = defines.GetAccountId(ctx)
-				if err == nil {
-					bh := ses.GetBackgroundExec(ctx)
-					defer bh.Close()
-					defaults, err = readDatabaseDefaultsForRestore(ctx, bh, database, accountID, 0)
+				// Migration runs between requests. Its operation context owns
+				// cancellation; the session, not the RPC caller, owns the tenant.
+				if err = context.Cause(ctx); err != nil {
+					return nil, true, err
 				}
+				tenant := ses.GetTenantInfo()
+				if tenant == nil {
+					return nil, true, moerr.NewInternalError(ctx, "missing session tenant for database defaults")
+				}
+				accountID := tenant.GetTenantID()
+				ctx = defines.AttachAccountId(ctx, accountID)
+				bh := ses.GetBackgroundExec(ctx)
+				defer bh.Close()
+				defaults, err = readDatabaseDefaultsForRestore(ctx, bh, database, accountID, 0)
 			}
 			if err != nil {
 				return nil, true, err

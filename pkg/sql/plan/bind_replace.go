@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -222,6 +223,22 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] =
 				oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
+			if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique && len(idxDef.Parts) == 1 {
+				partName := indexPrimaryPartName(idxDef)
+				colIdx := tableDef.Name2ColIndex[partName]
+				partExpr := &plan.Expr{Typ: tableDef.Cols[colIdx].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldScanTag, ColPos: colIdx, Name: partName}}}
+				idxExpr, err := builder.makeIndexPartExprFromInputExpr(partExpr, partName, prefixLengths)
+				if err != nil {
+					return nil, err
+				}
+				idxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{idxExpr})
+				if err != nil {
+					return nil, err
+				}
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{fullProjTag, int32(len(projection))}
+				projection = append(projection, idxExpr)
+				continue
+			}
 			if !indexTableStoresSerializedKey(idxDef) {
 				partName := indexPrimaryPartName(idxDef)
 				if prefixLengths[partName] == 0 {
@@ -266,12 +283,20 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 				}
 			}
 			idxExpr := args[0]
-			if len(args) > 1 {
+			if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+				idxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+				if err != nil {
+					return nil, err
+				}
+			} else if len(args) > 1 {
 				funcName := "serial"
 				if !idxDef.Unique {
 					funcName = "serial_full"
 				}
-				idxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+				idxExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+				if err != nil {
+					return nil, err
+				}
 			}
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] =
 				[2]int32{fullProjTag, int32(len(projection))}
@@ -1104,7 +1129,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			return 0, err
 		}
 		partName := indexPrimaryPartName(idxDef)
-		if indexTableStoresSerializedKey(idxDef) || prefixLengths[partName] > 0 {
+		if idxDef.KeyFormat == collation.KeyFormatV1 || indexTableStoresSerializedKey(idxDef) || prefixLengths[partName] > 0 {
 			idxExpr := &plan.Expr{
 				Typ: fullProjList[newIdxPos].Typ,
 				Expr: &plan.Expr_Col{
@@ -1155,7 +1180,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			},
 		}
 		finalProjList = append(finalProjList, idxExpr)
-		if len(idxDef.Parts) == 1 && !indexTableStoresSerializedKey(idxDef) && prefixLengths[partName] == 0 {
+		if len(idxDef.Parts) == 1 && idxDef.KeyFormat != collation.KeyFormatV1 &&
+			!indexTableStoresSerializedKey(idxDef) && prefixLengths[partName] == 0 {
 			oldParentColFinalPos[catalog.ResolveAlias(idxDef.Parts[0])] = oldIdxPos
 		}
 
@@ -1573,7 +1599,20 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		if !indexTableStoresSerializedKey(idxDef) {
+		if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique && len(idxDef.Parts) == 1 {
+			partName := indexPrimaryPartName(idxDef)
+			partPos := colName2Idx[tableDef.Name+"."+partName]
+			idxExpr, err := builder.makeIndexPartExprFromInputExpr(projList2[partPos], partName, prefixLengths)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			idxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{idxExpr})
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+			projList2 = append(projList2, idxExpr)
+		} else if !indexTableStoresSerializedKey(idxDef) {
 			partName := indexPrimaryPartName(idxDef)
 			partPos := colName2Idx[tableDef.Name+"."+partName]
 			if prefixLengths[partName] > 0 {
@@ -1608,11 +1647,22 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 			}
 
-			funcName := "serial"
-			if !idxDef.Unique {
-				funcName = "serial_full"
+			var idxExpr *plan.Expr
+			if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+				idxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+			} else {
+				funcName := "serial"
+				if !idxDef.Unique {
+					funcName = "serial_full"
+				}
+				idxExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+				if err != nil {
+					return 0, nil, nil, err
+				}
 			}
-			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
 			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
 			projList2 = append(projList2, idxExpr)
 		}

@@ -64,6 +64,12 @@ func IsStrictDivisionByZeroMode(mode any) bool {
 	return strict && errorForDivisionByZero
 }
 
+// IsDivisionByZeroMode is the SELECT warning rule, independent of strict mode.
+func IsDivisionByZeroMode(mode any) bool {
+	_, _, enabled := parseStrictSQLMode(mode)
+	return enabled
+}
+
 func IsPadCharToFullLengthMode(mode any) bool {
 	modeStr, ok := mode.(string)
 	if !ok {
@@ -145,4 +151,29 @@ func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {
 		return IsNoZeroDateMode(proc.GetSessionInfo().SqlMode), nil
 	}
 	return proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull, nil
+}
+
+// IsSelectStatement requires positive classification of the outer statement.
+// Remote processes receive this classification in ProcessInfo; legacy payloads
+// stay unclassified, so a DML scan cannot accidentally acquire SELECT warnings.
+func (proc *Process) IsSelectStatement() bool {
+	if proc == nil || proc.GetStmtProfile() == nil {
+		return false
+	}
+	statement, query, _ := proc.GetStmtProfile().GetStatementRuntimeProfile()
+	return strings.EqualFold(strings.TrimSpace(statement), "Select") && strings.EqualFold(strings.TrimSpace(query), "DQL")
+}
+
+// DivisionByZeroWarningsEnabled resolves one execution's SELECT warning policy.
+// A live empty value overrides the remote snapshot. Failure to resolve diagnostic
+// policy does not turn a successful arithmetic result into a new SELECT error.
+func (proc *Process) DivisionByZeroWarningsEnabled() bool {
+	if !proc.IsSelectStatement() {
+		return false
+	}
+	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+		mode, err := resolve("sql_mode", true, false)
+		return err == nil && IsDivisionByZeroMode(mode)
+	}
+	return proc.GetSessionInfo() != nil && IsDivisionByZeroMode(proc.GetSessionInfo().SqlMode)
 }

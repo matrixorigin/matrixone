@@ -254,9 +254,9 @@ create table ft_include (
 );
 insert into ft_include values
 (1, 'needle needle needle', 0, 'a'),
-(2, 'needle', 1, 'b'),
-(3, 'needle', 1, 'c'),
-(4, 'needle', 1, 'd');
+(2, 'needle needle medium', 1, 'b'),
+(3, 'needle alpha', 1, 'c'),
+(4, 'needle alpha beta', 1, 'd');
 set experimental_fulltext2_index = 1;
 create fulltext2 index ft_include_idx on ft_include(body) include(category) with parser gojieba;
 -- @sortkey:0
@@ -265,5 +265,22 @@ select id, payload from ft_include where match(body) against('needle' in natural
 explain select id, payload from ft_include
 where match(body) against('needle' in natural language mode) and category = 1
 limit 2 offset 1;
+
+-- #30164 / #30193 / #30189 integration: the covered search keeps its score
+-- bound even when the explicit score order removes the implicit score sort.
+-- The eligible rows have strictly decreasing scores (2,3,4), so both pages
+-- detect early OFFSET application independently of the diagnostic assertions.
+select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 limit 2;
+select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by match(body) against('needle' in natural language mode) desc limit 2;
+select id from (select id, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2) as page;
+select id from (select id, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2 offset 1) as page;
+-- Require both optimizations: the candidate cap and a single score sort.
+-- @regex("Fulltext Index Scan",true)
+-- @regex("Candidate Limit: 3",true)
+-- @regex("(?s)Sort Key:.*Sort Key:",false)
+explain select id, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2 offset 1;
+-- A residual payload predicate and an alternate order must still see all hits.
+select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 and payload <> 'b' order by match(body) against('needle' in natural language mode) desc limit 2;
+select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by id desc limit 2 offset 1;
 
 drop database fulltext2_candidate_limit;

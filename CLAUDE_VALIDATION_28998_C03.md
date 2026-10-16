@@ -1,6 +1,20 @@
 # #28998：C03 验证与交付记录
 
-## 当前维护资格：新增inline及后续parser冲突（2026-10-15）
+## 当前维护资格：CI修复及main语义协调（2026-10-16）
+
+- **冻结范围**：原head `0f0c038d7898fb1ea93544fe49c958221f757744`，正常合并官方main `76deafc8062f9a7e33a31a4df858ebcdb9477cb5`。C03统一**117/INTERNAL_TABLE_COLLATION599/END600**；保留main原生Unicode新建普通持久表UNIQUE114、calendar115/598、division warning116，迁移4.0.15/min4.0.14/offset4及CreateTable.defaults18不变。验证期间观测main前进到b24d1b3115，仅18个window相关文件，不扩张为已验证该提交；当前证据均绑定76deaf。
+- **CI根因/修复**：run38707446306的内部derived-view发布显式拥有pessimistic RC事务，不改变全局/user optimistic负控；migration在请求之间使用operation context及认证TenantInfo，保留活动用户事务compiler路径和逐次executor Close；降级71无ghost断言直接读account0原始mo_tables，不调用117 TABLES。原coverage aggregation是producer profile不完整，不冒充已算得的覆盖率失败。
+- **主干语义闭环**：有效RED证明默认域展示不该走物理索引执行准入，DEFAULT不该撤销V1 native UNIQUE schema marker。formatter保留完整解码/known-format/身份与revision拒绝；DEFAULT不改原列/物理索引格式。真实SQL验证ß/ss重复1062、TABLES默认域变化而COLUMNS不变、DEFAULT后的pruned count(*)及既有索引mutation拒绝。PRIMARY/已有表索引变更/不支持的CONVERT继续由上游owner拒绝。invalid identity0/revision1不是合法RED，不放松api校验。
+- **生成/来源**：pipeline按owner从合并proto双次生成一致，完整descriptor只有SourceCodeInfo差异，所有字段/编号/类型/reserved/enums/options与main相同；生成代码除descriptor数组外逐字相同。plan仅批准DatabaseDefaults及CreateDatabase5/AlterDatabase3/CreateTable18。保留main两列wide seed、普通列clone、4098 typed边界及原180秒阶段/600秒总预算，不改公共数据规模或COPY预算。
+- **完整普通资格**：Go1.27.1、Darwin/arm64、仓库native/CGo及vet启用。PB两包/sysview/bootstrap/migration/CN/function/plan/compile/frontend/explain/mysql parser/facade/tree共**13组新鲜完整owner、39481 PASS事件**，均完整atomic profiles/非空package PASS/exit0；不是全仓UT。完整SQL integration **48 top/320 PASS/package108.874秒**（wrapper180.171秒）；完整multicn `-count=3` **15 top/45 PASS/package116.245秒**。最后独立刷新durable restart **1/1、8.674秒**、原optimistic CDC **1/1、6.526秒**、Issue28909+29148 **2/9、7.669秒**，均source unchanged/exit0。
+- **race资格**：四个精确测试B=30秒：migration T=.01、publication T=0（低于JSON分辨率）、retry/cancel T=.20、CN barrier T=.02，按clamp(floor(B/T),1,100)分别独立stress **100次**。完整frontend **2463 top/5910 PASS/31.902秒**、bootstrap **64/162/15.797秒**、CN **156/324/11.583秒**，全部exit0。main既有live-path allocation测试受!race build tag排除，RuleCache复杂mock skip两模式相同，未新增skip；不声称全仓race/旧二进制滚动升级/GPU资格。
+- **覆盖/静态**：严格非生成可执行AST token差分 **731/893=81.86%**；辅助changed-block **877/992=88.41%**。仅13组完整成功owner profiles，SQL mode-only/失败/中断/不完整profile不参与，缺采集/无映射仍计未覆盖。**13适用包vet/lint exit0、0 issues**；119个变动Go文件符合Go1.27.1 gofmt。相对固定main whitespace通过；合并含main既有golden空格，保持与main相同，不重新格式化oracle。
+- **批准的单点oracle同步**：首轮27 public为2998/2996 success/1 failed/1既有ignore，唯一失败是main114已有CONVERT拒绝文案由“until collation-aware unique-index deduplication is supported”改为“without the versioned unique-key format”。对应上游helper与main逐字一致，拒绝行为/错误码不变。用户明确批准后，仅精确同步既有result第116行；**不改生产迎合旧文案、不改SQL/数据/错误码/负控/skip/预算、不调用genrs**。原失败及完整证据保留。
+- **最终27 public同实例双轮**：真实native-linked kernel，原 `run.sh -g -n` 正常比较，每轮 **2998 total/2997 success/0 failed/1既有ignore/0 abnormal**，Java50秒/53秒，driver **156.36秒PASS/exit0**。54源及54mirror逐SHA一致；与原失败代际比较只有批准的一个错误文案cell变化。errors文件0bytes；两轮fixture及DB/account/snapshot闭包均0，admission释放，owned kernel PID37331退出。保留**2793条service ERROR**，panic/fatal/data-race签名0，不声称零ERROR。
+- **失败/资源边界**：首轮migration旧peer消息、native114正控、开发中的不合法metadata正例、旧bootstrap flags断言及中断/资源失败均保留而不计PASS。explain构建首轮缺sonic缓存archive，未启动测试；私有回收修正为真实cwd归一化与活动Go driver/loader整缓存保护，再完整成功。只回收明确Go cache Root中受pins/mtime/SHA/open-handles保护的inactive Go archive及已证明闲置的orphan Go临时archive，保留源码/WIP/模块/数据库/native/test executable/验证证据/worktree和无关进程。16GiB为保留目标，外部并行构建曾令余量下降；持续安全回收恢复后再准入，末轮BVT开始前>23GiB，不用逻辑字节冒充物理空间。
+- **交付/限制**：资格终态、生产/测试Go/proto/module冻结输入及index逐SHA核验通过；用户批准的oracle变化不使这些Go资格失效。只交付既有DESIGN/VALIDATION两份CLAUDE文档；私有TODO/driver/profile/log/cache/review不提交。正常两父merge commit/普通push原PR，不申请复审、不评论、不关闭issue、不持续监控远端CI。历史macOS完整optools失败仍保留，**不声称新head Linux CI或外部复审通过**。
+
+## 历史维护资格：新增inline及后续parser冲突（2026-10-15）
 
 - **范围**：原head170a5d1aa83d，正常合并main `501c85ecdd6eee0195172743c6d8aaf125cb252d`；交付前远端main核验仍相同。新增review5527576615两个inline基于旧f5a7，分别是生成表达式精度及main113错误准入，均已由170a实现修复，本轮核对实现/负控不重复改产品。当前main仍仅占用113，C03保持114、4.0.15、defaults18、函数598/END599。
 - **冲突/交互**：唯一冲突是生成mysql_sql.go，合并grammar通过owner make -B两次生成、SHA一致，无手改。保留main的POINT→ST_POINT alias、表达式CHAR CHARACTER SET/二进制不填充/空charset拒绝、CREATE INDEX后缀USING及选项合并、UT批次范围；完整非生成增量和C03交互hunk已审查。没有本轮新增生产状态、goroutine、锁或持久化格式。
@@ -277,7 +291,7 @@ P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch
 - **证据界限**：首RED边编译边修改造成vet未定义符号、最初prototype GREEN、早于有界修正的plan profile、ON UPDATE非法语法候选均单列保留，不算最终资格。当前生产源码在最终plan/SQL/race/public验证期间未变；后补typed测试与多CN字面量修正由各自新鲜资格覆盖。完整review正文及全部main交互hunk完成自审，无未解决本地阻塞；新head远端Linux CI及外部复审仍须独立终态。
 - **资源/交付**：只回收确认可再生且不在活动importcfg/response/build-root/open-handle中的Go archive，保留manifest/SHA/mtime；标准旧cache耗尽后仅转本任务私有Go cache（标准最小age3600秒，私有600秒），流式hash避免大archive瞬时内存放大。16GiB为保留目标，新重型步骤>17.5GiB准入；外部并行构建曾令即时余量低于目标，持续自动回收恢复，不用逻辑字节冒充物理回收。源码/WIP/模块/数据库/原生/证据/worktree及无关进程均保留。原ready PR正常merge/普通push，私有TODO/driver/log/cache/profile/review不提交。
 
-## 最新维护资格：函数598表达式门禁及启动闭包（2026-10-15）
+## 历史维护资格：函数598表达式门禁及启动闭包（2026-10-15）
 
 - **输入/范围**：从f53bbf18cad9正常合并任务启动时最新main **bb2b725d0af4601d02ebf9cc68b1816a2b300022**。新inline4280094988的113发布漏洞由planner与真实SQL overlay分别RED复现；执行ID598→共享feature→author/load/placement/send/receive统一114，保留596/597与legacy view控制。无生成代码、wire字段、执行ID或迁移版本变化。验证期间main前进到461bc8e349，未合入其无关24文件；当前证据/PR merge-base仍为bb2，已核验与前进main无文本合并冲突，不称验证了461的新代码。
 - **启动闭包**：首GREEN真实启动因author floor0而失败，保留原始红记录。prerequisite先用legacy TABLES，admission114后在既有derived事务原子替换TABLES并创建四个trace completion views；旧完整cluster skip不变。新增schema选择、DDL顺序及两个错误停止、113/pending114/ready114门槛；实际SQL同时证明先成功DROP后的CREATE拒绝会回滚原rel_id，之后114重试成功。直接/prepared发布和reader113拒绝均覆盖，恢复协议、deallocate与清库使用独立cleanup context。
