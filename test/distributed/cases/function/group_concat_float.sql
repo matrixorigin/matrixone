@@ -39,4 +39,13 @@ insert into float_values values (7,1.23456789,1.23456789);
 select cast(f as char) as float_text, cast(d as char) as double_text, group_concat(f) as float_aggregate from float_values where id = 7 group by f,d;
 select cast(null as char) is null as null_cast, concat(cast(null as double)) is null as null_concat, cast(cast('123.450' as decimal(6,3)) as char) as decimal_control;
 
+-- Implicit string casts must retain every digit of long fixed DOUBLE text.
+select concat(cast('-1.2345678901234567e-15' as double)) as literal_concat;
+insert into float_values (id,d) values
+    (8,cast('-1.2345678901234567e-15' as double)),
+    (9,cast('1.2345678901234567e-15' as double)),
+    (10,cast('-1.2345678901234567e-14' as double)),
+    (11,cast('-1.2345678901234567e-16' as double));
+select id, cast(d as char) as scalar_text, concat(d) as concat_text, concat_ws('',d) as concat_ws_text, quote(d) as quoted_text from float_values where id >= 8 order by id;
+
 drop database group_concat_float_28660;
