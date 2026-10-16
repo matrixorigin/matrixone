@@ -115,6 +115,12 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy explicit collation remains in the definition",
+			persisted: `{"Stmt":"create view old as select 'A' collate utf8mb4_bin = 'a' as eq"}`,
+			want:      "collate utf8mb4_bin",
+			ok:        true,
+		},
+		{
 			name:      "legacy saved parser options are honored",
 			persisted: `{"Stmt":"CREATE VIEW v AS SELECT 1","sql_mode":"PIPES_AS_CONCAT","lower_case_table_names":1}`,
 			want:      "select 1",

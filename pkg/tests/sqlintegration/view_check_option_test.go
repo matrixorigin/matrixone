@@ -66,6 +66,20 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					require.Equal(t, tc.want, option, tc.persisted)
 					require.Equal(t, "select 1", definition)
 				}
+				// Replaying a legacy definition must preserve explicit COLLATE.
+				// Binary and case-insensitive comparisons distinguish lost syntax.
+				for _, tc := range []struct {
+					collation string
+					want      int
+				}{{"utf8mb4_bin", 0}, {"utf8mb4_unicode_ci", 1}} {
+					persisted := fmt.Sprintf(`{"Stmt":"create view old as select 'A' collate %s = 'a' as eq"}`, tc.collation)
+					var definition string
+					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition(?)", persisted).Scan(&definition))
+					require.Contains(t, definition, "collate "+tc.collation)
+					var equal int
+					require.NoError(t, db.QueryRowContext(ctx, definition).Scan(&equal))
+					require.Equal(t, tc.want, equal, definition)
+				}
 				execSQLRequire(t, ctx, db, "drop database "+schema)
 			})
 			if t.Failed() {
