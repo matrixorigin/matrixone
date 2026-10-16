@@ -4512,3 +4512,67 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		assert.Error(t, s.AlterTableCopy(c))
 	})
 }
+
+func TestUpdateNewTableColID(t *testing.T) {
+	readErr := errors.New("read replacement schema")
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "catalog IDs"},
+		{name: "catalog read failure", err: readErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(t))
+			relation.EXPECT().TableDefs(proc.Ctx).Return([]engine.TableDef{
+				&engine.CommentDef{Comment: "not a column"},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "Mixed", ID: 101}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "plain", ID: 0}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "case", ID: 103}},
+			}, test.err).Times(1)
+			columns := map[uint64]*plan2.ColDef{
+				1: {Name: "mixed", OriginName: "Mixed", ColId: 1},
+				2: {Name: "plain", ColId: 2},
+				3: {Name: "Case", ColId: 3},
+				4: {Name: "absent", ColId: 4},
+			}
+			err := updateNewTableColId(&Compile{proc: proc}, relation, columns)
+			if test.err != nil {
+				require.ErrorIs(t, err, test.err)
+				require.Equal(t, uint64(1), columns[1].ColId)
+				require.Equal(t, uint64(2), columns[2].ColId)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(101), columns[1].ColId, "match the persisted original spelling")
+				require.Zero(t, columns[2].ColId, "zero is a valid replacement ID")
+			}
+			require.Equal(t, uint64(3), columns[3].ColId, "name matching remains case sensitive")
+			require.Equal(t, uint64(4), columns[4].ColId, "unmatched columns remain unchanged")
+		})
+	}
+}
+
+func BenchmarkUpdateNewTableColID(b *testing.B) {
+	for _, width := range []int{2, 32, 4096} {
+		b.Run(fmt.Sprint(width), func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(b))
+			defs := make([]engine.TableDef, width)
+			columns := make(map[uint64]*plan2.ColDef, width)
+			for i := range width {
+				name := fmt.Sprintf("c%d", i)
+				defs[i] = &engine.AttributeDef{Attr: engine.Attribute{Name: name, ID: uint64(i + 1)}}
+				columns[uint64(i)] = &plan2.ColDef{Name: name}
+			}
+			relation.EXPECT().TableDefs(proc.Ctx).Return(defs, nil).AnyTimes()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := updateNewTableColId(&Compile{proc: proc}, relation, columns); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
