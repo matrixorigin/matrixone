@@ -94,23 +94,23 @@ func TestJSONMinMaxSimulatedVersionRemoteTopology(t *testing.T) {
 			[]string{cn.ServiceID(), peer.ServiceID()},
 			func(err error) { fixtureInvalidationErr = err },
 			func() {
-				// Simulated v117 is below this candidate typed MIN/MAX floor. The
+				// Simulated v118 is below this candidate typed MIN/MAX floor. The
 				// coordinator must reject remote JSON partials and fall back to
 				// one-CN execution, while retaining the correct SQL result.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.NotContains(t, physical.Text, peerAddr,
-					"a simulated v117 worker must not receive a JSON MIN/MAX partial")
+					"a simulated v118 worker must not receive a JSON MIN/MAX partial")
 				var minValue, maxValue string
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&minValue, &maxValue))
 				require.Equal(t, "1", minValue)
 				require.Equal(t, "256", maxValue)
 
-				// Version 118 is the capable remote worker. The same production SQL
+				// Version 119 is the capable remote worker. The same production SQL
 				// query must place the JSON aggregate on the peer and preserve
 				// the typed ordering counterexample 1 < 256.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 				physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.Contains(t, physical.Text, peerAddr,

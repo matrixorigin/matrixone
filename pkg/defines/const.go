@@ -152,10 +152,11 @@ const (
 	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
 	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
-	MORPCVersion117    int64 = 117 // selected JSON ELT and canonical opaque visible-text contracts
-	MORPCVersion118    int64 = 118 // typed JSON MIN/MAX aggregate comparison
-	MORPCVersion119    int64 = 119 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
-	MORPCLatestVersion       = MORPCVersion119
+	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
+	MORPCVersion118    int64 = 118 // selected JSON ELT and canonical opaque visible-text contracts
+	MORPCVersion119    int64 = 119 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion120    int64 = 120 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	MORPCLatestVersion       = MORPCVersion120
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

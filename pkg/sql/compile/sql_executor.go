@@ -718,16 +718,21 @@ func (exec *txnExecutor) Exec(
 		)
 	}
 
-	if insert, ok := c.stmt.(*tree.Insert); ok && len(insert.OnDuplicateUpdate) > 0 &&
-		!(len(insert.OnDuplicateUpdate) == 1 && insert.OnDuplicateUpdate[0] == nil) {
-		result.LastInsertID, _ = proc.GetODKUProtocolIDForSource(insert.IsValuesSource())
-	} else {
-		result.LastInsertID = proc.GetStatementLastInsertID()
-	}
+	result.LastInsertID = c.statementLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func (c *Compile) statementLastInsertID() uint64 {
+	// Run may rebuild the plan on retry. Select the final attempt's owner,
+	// rather than inferring tracking from the original ODKU syntax.
+	if insert, ok := c.stmt.(*tree.Insert); ok && c.GetPlan().GetQuery().HasODKUResultTracking() {
+		id, _ := c.proc.GetODKUProtocolIDForSource(insert.IsValuesSource())
+		return id
+	}
+	return c.proc.GetStatementLastInsertID()
 }
 
 func cloneInternalExecutorResultBatch(

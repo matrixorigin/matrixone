@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -114,6 +115,67 @@ func TestInsertOnDupCarriesAutoIncrementResultProvenance(t *testing.T) {
 		require.NotNil(t, node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol)
 	}
 	require.True(t, found, "expected an ODKU dedup join")
+}
+
+func TestInsertOnDupResultColumnCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, autoColumn string
+		multiple         bool
+	}{
+		{name: "multiple visible allocators", autoColumn: "id", multiple: true},
+		{name: "visible internal spelling", autoColumn: catalog.FakePrimaryKeyColName},
+	} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(tc.name+map[bool]string{false: "/generated", true: "/explicit"}[explicit], func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+				require.NotNil(t, table)
+				cols := []*planpb.ColDef{table.Cols[0], {
+					Name: tc.autoColumn, OriginName: tc.autoColumn, ColId: 3,
+					Typ:     planpb.Type{Id: int32(types.T_int64), AutoIncr: true},
+					Default: &planpb.Default{NullAbility: true},
+				}}
+				if tc.multiple {
+					cols = append(cols, &planpb.ColDef{
+						Name: "second_id", OriginName: "second_id", ColId: 4,
+						Typ:     planpb.Type{Id: int32(types.T_int64), AutoIncr: true},
+						Default: &planpb.Default{NullAbility: true},
+					})
+				}
+				table.Cols = append(cols, table.Cols[1:]...)
+				table.Name2ColIndex = make(map[string]int32, len(table.Cols))
+				for i, col := range table.Cols {
+					table.Name2ColIndex[col.Name] = int32(i)
+				}
+				columns, values := "a, b", "1, 'x'"
+				if explicit {
+					columns, values = columns+", "+tc.autoColumn, values+", 10"
+					if tc.multiple {
+						columns, values = columns+", second_id", values+", 20"
+					}
+				}
+				p, err := runOneStmt(mock, t, "insert into constraint_test.t1 ("+columns+") values ("+values+") on duplicate key update b = values(b)")
+				require.NoError(t, err)
+				require.True(t, p.GetQuery().HasODKUResultTracking())
+				var pre *planpb.PreInsertCtx
+				for _, node := range p.GetQuery().Nodes {
+					if node.GetPreInsertCtx().GetTrackOdkuResult() {
+						pre = node.PreInsertCtx
+					}
+				}
+				require.NotNil(t, pre)
+				require.Equal(t, int32(1), pre.OdkuAutoIncrementColumn)
+				require.Equal(t, tc.autoColumn, pre.TableDef.Cols[1].Name)
+				dedup := odkuDedupCtx(t, p)
+				require.NotNil(t, dedup.OdkuTargetAutoIncrementCol)
+				require.Equal(t, dedup.OldColList[1], *dedup.OdkuTargetAutoIncrementCol,
+					"the target ID must reference the selected table column after remapping")
+				require.NotNil(t, dedup.OdkuGeneratedAutoIncrementCol)
+				require.NotNil(t, dedup.OdkuGeneratedCol)
+				require.NotNil(t, dedup.OdkuOrdinalCol)
+			})
+		}
+	}
 }
 
 func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {

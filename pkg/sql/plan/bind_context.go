@@ -794,6 +794,8 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 
 	case *tree.CastExpr:
 		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
+	case *tree.CollateExpr:
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.IsNullExpr:
 		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)

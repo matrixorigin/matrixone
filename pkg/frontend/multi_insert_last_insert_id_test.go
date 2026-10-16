@@ -78,7 +78,34 @@ func newODKUInsertStatusHarness(t *testing.T) (
 ) {
 	ses, proc, writer, resper, execCtx := newLastInsertIDHarness(t, 0)
 	execCtx.stmt = &tree.Insert{Rows: &tree.Select{Select: &tree.ValuesClause{}}, OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
+	p := autoIncrPreInsertPlan(1)
+	p.GetQuery().Nodes[0].PreInsertCtx.TrackOdkuResult = true
+	execCtx.cw = &TxnComputationWrapper{plan: p}
 	return ses, proc, writer, resper, execCtx
+}
+
+func TestODKUStatusLegacyNoKeyPublishesStatementID(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "generated"}[generated], func(t *testing.T) {
+			ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+			execCtx.cw = &TxnComputationWrapper{plan: autoIncrPreInsertPlan(1)}
+			ses.SetLastInsertID(700)
+			proc.SetLastInsertID(700)
+			want, session := uint64(0), uint64(700)
+			if generated {
+				proc.SetStatementLastInsertIDIfEarlier(1)
+				want, session = 1, 1
+			}
+			require.NoError(t, resper.respStatus(ses, execCtx))
+			require.Len(t, writer.responses, 1)
+			require.Equal(t, want, writer.responses[0].lastInsertId)
+			require.Equal(t, session, ses.GetLastInsertID())
+			// The next statement is seeded from this durable session value.
+			proc.SetLastInsertID(ses.GetLastInsertID())
+			proc.SetStatementLastInsertID(0)
+			require.Equal(t, session, proc.GetLastInsertID())
+		})
+	}
 }
 
 func TestODKUStatusKeepsSessionValueForUpdateFallback(t *testing.T) {

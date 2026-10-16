@@ -133,6 +133,65 @@ select * from t_odku_auto order by id;
 4  ¦  3  ¦  third
 drop table if exists t_odku_auto;
 drop table if exists ai_duplicate_test;
+drop table if exists t_odku_no_key_id;
+drop table if exists t_odku_compat_marker;
+create table t_odku_compat_marker (id int auto_increment primary key) auto_increment = 700;
+insert into t_odku_compat_marker values ();
+create table t_odku_no_key_id (id bigint auto_increment, v int);
+insert into t_odku_no_key_id(v) values(1) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+1
+prepare odku_no_key_id from 'insert into t_odku_no_key_id(v) values(?) on duplicate key update v = ?';
+set @odku_v = 2;
+execute odku_no_key_id using @odku_v, @odku_v;
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+2
+deallocate prepare odku_no_key_id;
+set @odku_v = null;
+insert into t_odku_no_key_id(id, v) values(50, 3) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+2
+select id, v from t_odku_no_key_id order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+50  ¦  3
+drop table t_odku_no_key_id;
+drop table t_odku_compat_marker;
+drop table if exists t_odku_multi_auto;
+create table t_odku_compat_marker (id int auto_increment primary key) auto_increment = 700;
+insert into t_odku_compat_marker values ();
+create table t_odku_multi_auto (pk int primary key, a int auto_increment, b int auto_increment, v int);
+insert into t_odku_multi_auto values(1, 10, 20, 1) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+700
+insert into t_odku_multi_auto(pk, v) values(2, 2) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+11
+insert into t_odku_multi_auto values(1, 10, 20, 3) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+11
+insert into t_odku_multi_auto values(1, 10, 20, 3) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+11
+insert into t_odku_multi_auto(pk, a, v) values(3, 50, 4) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]
+11
+select pk, a, b, v from t_odku_multi_auto order by pk;
+➤ pk[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  20  ¦  3  𝄀
+2  ¦  11  ¦  21  ¦  2  𝄀
+3  ¦  50  ¦  22  ¦  4
+drop table t_odku_multi_auto;
+drop table t_odku_compat_marker;
 
 drop table if exists t_odku_return_id;
 create table t_odku_return_id (

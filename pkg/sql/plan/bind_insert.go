@@ -3587,12 +3587,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				autoIncrementCol := int32(-1)
 				autoIncrementInputCol := int32(-1)
 				for i, col := range tableDef.Cols {
-					if col == nil || col.Hidden || col.Name == catalog.FakePrimaryKeyColName || !col.Typ.AutoIncr {
+					if col == nil || col.Hidden || !col.Typ.AutoIncr {
 						continue
-					}
-					if autoIncrementCol >= 0 {
-						return 0, moerr.NewInvalidInput(builder.GetContext(),
-							"ODKU result tracking requires one auto-increment column")
 					}
 					autoIncrementCol = int32(i)
 					var ok bool
@@ -3601,6 +3597,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						return 0, moerr.NewInternalError(builder.GetContext(),
 							"ODKU auto-increment column is missing from input projection")
 					}
+					break // Same first-visible-column policy as PRE_INSERT provenance.
 				}
 				if autoIncrementCol >= 0 && autoIncrementInputCol >= 0 && autoIncrementGeneratedColumn >= 0 {
 					ordinalCol := autoIncrementGeneratedColumn + 1
@@ -5290,11 +5287,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	for i, col := range tableDef.Cols {
 		if col != nil && col.Typ.AutoIncr {
 			hasAutoCol = true
-			if builder.isODKU && !col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				if odkuAutoIncrementColumn >= 0 {
-					return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(),
-						"ODKU result tracking requires one auto-increment column")
-				}
+			if builder.isODKU && !col.Hidden && odkuAutoIncrementColumn < 0 {
+				// Multiple visible AUTO_INCREMENT columns remain valid DML. Use
+				// the first in table order for both generated and fallback IDs;
+				// later columns still allocate normally but do not own this result.
 				odkuAutoIncrementColumn = int32(i)
 			}
 		}
@@ -5522,14 +5518,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	// A table without a user-visible AUTO_INCREMENT column may still carry
 	// MatrixOne's hidden fake primary key. That key is an allocation detail and
 	// must not become LAST_INSERT_ID or an ODKU OK-packet value.
-	hasODKUAutoCol := false
-	for _, col := range tableDef.Cols {
-		if col != nil && !col.Hidden && col.Name != catalog.FakePrimaryKeyColName && col.Typ.AutoIncr {
-			hasODKUAutoCol = true
-			break
-		}
-	}
-	trackODKUResult := builder.isODKU && hasODKUAutoCol
+	trackODKUResult := builder.isODKU && odkuAutoIncrementColumn >= 0
 	if trackODKUResult {
 		// ODKU uses the same pre-allocation generated marker as INSERT IGNORE,
 		// but keeps a distinct statement-local ordinal beside it.  The marker is

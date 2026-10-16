@@ -100,7 +100,7 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 				"ODKU auto-increment source column is outside table definition")
 		}
 		col := preInsert.TableDef.Cols[colIdx]
-		if col == nil || col.Hidden || col.Name == catalog.FakePrimaryKeyColName || !col.Typ.AutoIncr {
+		if col == nil || col.Hidden || !col.Typ.AutoIncr {
 			return moerr.NewInvalidInput(proc.Ctx,
 				"ODKU auto-increment source column is not a user auto-increment column")
 		}

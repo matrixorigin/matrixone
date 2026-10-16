@@ -419,7 +419,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		case *tree.Insert:
 			isODKU := len(st.OnDuplicateUpdate) > 0 &&
 				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
-			if isODKU {
+			if isODKU && execCtx.cw != nil && execCtx.cw.Plan().GetQuery().HasODKUResultTracking() {
 				lastInsertID, generated := execCtx.proc.GetODKUProtocolIDForSource(st.IsValuesSource())
 				res.lastInsertId = lastInsertID
 				if generated {

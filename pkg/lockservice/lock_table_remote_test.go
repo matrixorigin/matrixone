@@ -1897,6 +1897,7 @@ func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
 	)
 	remote.allocatorStateProvider = func() allocatorState { return allocatorState{} }
 	remote.allocatorBindChangedHandler = func(
+		context.Context,
 		string,
 		pb.LockTable,
 		pb.LockTable,
@@ -2438,6 +2439,7 @@ func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 				return allocatorState{id: "current-allocator", version: 2}
 			}
 			remote.allocatorBindChangedHandler = func(
+				context.Context,
 				string,
 				pb.LockTable,
 				pb.LockTable,

@@ -208,6 +208,18 @@ func TestODKUAutoIncrementProvenanceSelectsUserColumnWithHiddenPrimaryKey(t *tes
 
 	pre.ODKUAutoIncrementColumn = 1
 	require.ErrorContains(t, pre.Prepare(proc), "not a user auto-increment column")
+
+	// A visible user column with the same spelling is valid ownership.
+	table.Cols[1].Hidden = false
+	require.NoError(t, pre.Prepare(proc))
+	require.NoError(t, pre.captureAutoIncrementGeneratedRows(input))
+	require.Equal(t, []bool{false}, pre.ctr.autoIncrementGenerated,
+		"generation of the other allocator must not mark the selected explicit column")
+
+	pre.ODKUAutoIncrementColumn = 2
+	require.ErrorContains(t, pre.Prepare(proc), "outside table definition")
+	pre.ODKUAutoIncrementColumn = -1
+	require.ErrorContains(t, pre.Prepare(proc), "invalid ODKU auto-increment source column")
 }
 
 func TestODKUProvenanceCarriesInputOrdinalsAcrossBufferReuse(t *testing.T) {

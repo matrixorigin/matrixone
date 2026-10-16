@@ -1,6 +1,20 @@
 # Distributed ODKU Result Protocol
 
-Status: approved by independent design review v1; see `20261016-odku-distributed-result-protocol-review-v1.md`
+Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md).
+The current ODKU/session-baseline floor is **MORPC120**, after upstream allocated
+117 to LEAST/GREATEST. The addendum also defines the multi-AUTO_INCREMENT result
+column and the no-key/visible-name compatibility corrections.
+
+The r1 specification below is retained as historical design text. Its normative
+references to MORPC119 describe the original inspected/reviewed revision, not
+the current allocation. Use the r2 addendum for the changed boundaries. The
+original reviewed content remains addressable by its immutable blob and head
+below. The v1 approval record is unchanged and applies only to that reviewed r1
+content; **r2 independent review is pending**, with no new approval asserted.
+
+## Retained r1 specification
+
+Status: r1 approved by independent design review v1; see `20261016-odku-distributed-result-protocol-review-v1.md`
 
 - Design revision: r1, 2026-10-16.
 - Owner: VioletQwQ-0.

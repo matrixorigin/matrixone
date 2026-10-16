@@ -1412,6 +1412,11 @@ var supportedStringBuiltIns = []FuncNew{
 					return greatestYearNumericFn
 				},
 			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return greatestCollatedFn },
+			},
 		},
 	},
 
@@ -3180,6 +3185,11 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return leastYearNumericFn
 				},
+			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return leastCollatedFn },
 			},
 		},
 	},

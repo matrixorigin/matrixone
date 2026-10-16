@@ -8969,7 +8969,7 @@ func supportsRemoteODKUResultTracking(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion119
+	return ok && protocolVersion >= defines.MORPCVersion120
 }
 
 func supportsRemoteAutoIncrementSessionOptions(service string) bool {

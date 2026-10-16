@@ -433,6 +433,9 @@ type RemoteExpressionFeatures struct {
 	DateNumericResultContracts              bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
+	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
+	// Released overload 0 retains its historical byte-order contract.
+	LeastGreatestCollationSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -464,7 +467,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.LeastGreatestCollationSemantics
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -930,6 +934,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
+				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
+					features.LeastGreatestCollationSemantics = true
+				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
 				}
@@ -1725,10 +1732,10 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	}
 }
 
-// RequiresMORPCVersion117JSONStringConsumerOverload detects the distinct JSON-aware
+// RequiresMORPCVersion118JSONStringConsumerOverload detects the distinct JSON-aware
 // ELT identity and the independent opaque producer/rendering contract.
 // CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
-func RequiresMORPCVersion117JSONStringConsumerOverload(owner any) (bool, error) {
+func RequiresMORPCVersion118JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
 }
