@@ -5173,16 +5173,11 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 			preIndex := pre
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Strict {
-				if 2*preIndex+2*count < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				} else if 2*preIndex < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-				} else {
-					continue
-				}
-			} else {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+			// A boundary probe can reach EOF in either strict mode, leaving
+			// fewer ranges than workers (for example, a single long record).
+			if 2*preIndex < len(fileOffset[j]) {
+				end := min(2*preIndex+2*count, len(fileOffset[j]))
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:end]...)
 			}
 		}
 		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(stageNodes), stageNodes[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
@@ -9464,6 +9459,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			return nil, err
 		}
 
+		// Writers own the logical input; the flush consumes their metadata.
+		multiUpdateArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {

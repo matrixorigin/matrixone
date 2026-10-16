@@ -1358,11 +1358,22 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
 	require.NoError(t, err)
 	param.Strict = false
-	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	ss, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+	// This fixture is shorter than the nominal split, so the fast probe
+	// reaches EOF. The compiler must pass on only the remaining whole range.
+	require.NotEmpty(t, ss)
+	ext := ss[0].RootOp.(*external.External)
+	require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[0].Offset)
 	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+	fileSize = []int64{int64(colexec.WriteS3Threshold) * 8}
+	ss, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	require.Equal(t, []int64{0, -1}, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
+	require.Empty(t, ss[1].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
 
 	// Compressed files should not be split for parallel read.
 	gzPath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
