@@ -2461,7 +2461,15 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 		//int<4>              column length
 		pos = mp.io.WriteUint32(data, pos, column.Length())
 		//int<1>              type
-		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
+		wireType := column.ColumnType()
+		if wireType == defines.MYSQL_TYPE_DECIMAL {
+			// MySQL clients expect the modern NEWDECIMAL identifier for decimal
+			// results. The legacy DECIMAL identifier stays on the internal
+			// column (row encoders, export and materialization dispatch on it);
+			// translation happens only at this wire boundary.
+			wireType = defines.MYSQL_TYPE_NEWDECIMAL
+		}
+		pos = mp.io.WriteUint8(data, pos, uint8(wireType))
 	}
 
 	//int<2>              flags
