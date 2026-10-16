@@ -518,12 +518,16 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 			}
 			leftRows = leftRows[:ll]
 
-			FastApplyDeletesByRowOffsets(&leftRows, nil, offsets)
-
-			for j := range leftRows {
-				_, ok := mm[leftRows[j]]
-				require.False(t, ok, fmt.Sprintf("\nhit: %v\noffsets: %v\nleftRows: %v;", leftRows[j], offsets, leftRows))
+			// Compute the complete survivor set before the in-place operation.
+			// Checking only returned rows would also accept dropping every row.
+			expected := make([]int64, 0, len(leftRows))
+			for _, row := range leftRows {
+				if _, deleted := mm[row]; !deleted {
+					expected = append(expected, row)
+				}
 			}
+			FastApplyDeletesByRowOffsets(&leftRows, nil, offsets)
+			require.Equal(t, expected, leftRows)
 		}
 	}
 

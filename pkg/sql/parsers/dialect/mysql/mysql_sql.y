@@ -4769,10 +4769,14 @@ alter_table_drop:
 |   CONSTRAINT ident
         {
             $$ = &tree.AlterOptionDrop{
-                Typ:  tree.AlterTableDropForeignKey,
+                Typ:  tree.AlterTableDropConstraint,
                 Name: tree.Identifier($2.Compare()),
             }
         }
+|   CHECK ident
+    {
+        $$ = tree.NewAlterOptionDrop(tree.AlterTableDropCheck, tree.Identifier($2.Compare()));
+    }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
