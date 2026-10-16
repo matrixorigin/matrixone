@@ -30,7 +30,7 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 			Func: &ObjectRef{Obj: int64(id)<<32 | int64(overload), ObjName: "renamed"}, Args: args,
 		}}}
 	}
-	parser := fn(598, 0, 62, col(61))
+	parser := fn(599, 0, 62, col(61))
 	for _, test := range []struct {
 		name        string
 		expr        *Expr
@@ -50,6 +50,7 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 		{"FLOAT decimal", fn(21, 0, 33, col(31)), false, false},
 		{"string decimal", fn(21, 0, 33, col(61)), false, false},
 		{"JSON decimal256 unchanged", fn(21, 0, 34, col(62)), false, false},
+		{"calendar interval identity", fn(598, 0, 61, col(61)), false, false},
 		{"unrelated function", fn(1, 0, 33, col(62)), false, false},
 		{"no source", fn(21, 0, 33), false, false},
 	} {
@@ -61,6 +62,7 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 			for _, expr := range []*Expr{test.expr, decoded} {
 				features, err := RequiredRemoteExpressionFeatures(expr)
 				require.NoError(t, err)
+				require.Equal(t, test.name == "calendar interval identity", features.CalendarIntervalNormalization)
 				require.Equal(t, test.parse, features.ExactJSONParsing)
 				require.Equal(t, test.cast, features.ExactJSONDecimalCast)
 				if test.parse || test.cast {

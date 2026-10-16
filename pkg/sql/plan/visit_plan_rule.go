@@ -3135,7 +3135,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var rewrittenArg *plan.Expr
 			numericTemporalArg := false
 			switch functionName {
-			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+			case "to_interval_microsecond", "to_calendar_interval", "time", "from_unixtime", "sec_to_time":
 				numericTemporalArg = i == 0
 			case "date_add", "date_sub":
 				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&

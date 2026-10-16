@@ -298,7 +298,7 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
-	exactJSONParseFunctionID         int32 = 598
+	exactJSONParseFunctionID         int32 = 599
 	planInt32TypeID                  int32 = 22
 	// These stable function IDs are mirrored from pkg/sql/plan/function to
 	// avoid a dependency cycle. The generic CAST operator is not an assignment
@@ -387,15 +387,20 @@ const (
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 // DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
-// ExactJSONParsing and ExactJSONDecimalCast require v114: older registries lack
+// ExactJSONParsing and ExactJSONDecimalCast require v117: older registries lack
 // the parser, and older JSON-to-DECIMAL64/128 casts round through DOUBLE.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
+// CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
 	ExactJSONParsing     bool
 	ExactJSONDecimalCast bool
 	// The compiler adds this input contract from query/pipeline scan metadata.
-	ParquetVariantRead              bool
+	ParquetVariantRead            bool
+	CalendarIntervalNormalization bool
+	// ScalarDivision is syntactic only. SELECT warning policy supplies its
+	// execution-only floor; persisted expression contracts remain unchanged.
+	ScalarDivision                  bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -434,7 +439,7 @@ type RemoteExpressionFeatures struct {
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead ||
-		features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+		features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -462,7 +467,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -930,6 +935,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					(current.Typ.Id == 32 || current.Typ.Id == 33) && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID {
 					features.ExactJSONDecimalCast = true
+				}
+				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
+					features.CalendarIntervalNormalization = true
+				}
+				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
+				// storage domains are 20..34; BIT uses the uint64 domain.
+				if id >= 13 && id <= 15 && len(fn.Args) == 2 && fn.Args[1] != nil {
+					denominator := fn.Args[1].Typ.Id
+					features.ScalarDivision = features.ScalarDivision || (denominator >= 20 && denominator <= 34) || denominator == 11
 				}
 				// Aliases and DISTINCT share these aggregate IDs. Inspect the
 				// argument domain even for legacy DECIMAL-typed result plans.

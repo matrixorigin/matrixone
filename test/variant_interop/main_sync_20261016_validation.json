@@ -1,0 +1,178 @@
+{
+  "task": "PR #30071 conflict repair and compatibility validation, 2026-10-16",
+  "previous_published_head": "10774649f06e6d477142bdc0f085b4c72e6b0077",
+  "verified_main": "76deafc8062f9a7e33a31a4df858ebcdb9477cb5",
+  "validated_code_tree": "af0be8899309574b2d7cb963ef7dcc0999611100",
+  "delivery_note": "Delivery adds only this validation record to the validated code tree. CI for the new delivery is tracked separately; previous-head green CI is historical.",
+  "mode": {
+    "platform": "linux/amd64",
+    "go": "1.27.1",
+    "native": "CPU, repository mo-cgo-test provenance guard; native CGo and thirdparty source unchanged",
+    "flags": "-p=1 -count=1 -ldflags=-s -w; bounded per-package timeouts",
+    "temporary_directory": "/workspace/variant-interop/conflict-go-tmp"
+  },
+  "change_map": [
+    {
+      "risk": "R3",
+      "closure": "Function and wire identities",
+      "invariant": "Preserve main IDs/floors: statistical113, Unicode114, calendar115/function598, division diagnostics116; append exact JSON/Parquet117 and JSON_PARSE_EXACT599. No old worker may execute either changed JSON contract."
+    },
+    {
+      "risk": "R3",
+      "closure": "Placement -> actual send -> receive -> durable authoring/read",
+      "invariant": "Independently detect all features; maximum contract wins. Preserve failed/missing probes, stale destination, cancellation and rollout-floor rechecks. Diagnostics-only division policy does not become a persisted expression floor."
+    },
+    {
+      "risk": "R3",
+      "closure": "Generated protobuf and consumers",
+      "invariant": "Retain Aggregate.result_type6, TableScan.json_projection3 and ProcessInfo.statement_runtime_select17. Regenerate pinned bindings; validate live consumer and descriptor package."
+    },
+    {
+      "risk": "R0/R2",
+      "closure": "Automatic source/parser merges",
+      "invariant": "Retain both main and feature changes. Parser regeneration matches except output banner; bytejson/parser owning-package results are reused only for unchanged relevant semantic inputs."
+    },
+    {
+      "risk": "R0",
+      "closure": "Documentation and evidence",
+      "invariant": "Update active implementation contracts and reproducible commands; preserve the immutable approved b4fcf49c design and historical source-bound records."
+    }
+  ],
+  "design_gate": "Routine conflict/namespace maintenance under approved design #30142 at b4fcf49c; no new feature design or release gate waiver.",
+  "focused": {
+    "result": "PASS",
+    "log": "merge5-focused-retry.log",
+    "coverage": "Bound parser599 vs calendar598; reject111..116/allow117; durable owners/views before folding; Parquet boundary116/117; send/receive; unknown/stale/failed probes; cancellation/floor transitions; exact JSON combined with statistics/calendar/SELECT division diagnostics; upstream calendar-only115 and division-only116 controls."
+  },
+  "full_packages": {
+    "result": "PASS",
+    "log": "merge5-packages.log",
+    "seconds": {
+      "pkg/defines": 0.005,
+      "pkg/pb/plan": 0.032,
+      "pkg/pb/pipeline": 0.047,
+      "pkg/sql/plan/function": 8.198,
+      "pkg/sql/plan": 18.684,
+      "pkg/sql/compile": 9.622
+    }
+  },
+  "reused_packages": {
+    "result": "PASS",
+    "tree": "42b3fb999f06d7a8c5d5a850250b0c9b75cd7ef8",
+    "main": "c46b893f6160902e74b3581fc968666cb9d07003",
+    "seconds": {
+      "pkg/container/bytejson": 0.387,
+      "pkg/sql/parsers/dialect/mysql": 0.151
+    },
+    "reason": "Source, grammar and relevant parser/JSON semantics unchanged by final main synchronization. The terminal transcript contains all package PASS lines; its long intermediate multicn output is truncated and is not a complete log."
+  },
+  "process_codec": {
+    "result": "PASS",
+    "test": "TestSelectStatementProfileCodecRoundTrip",
+    "package_seconds": 0.044,
+    "log": "merge5-process-codec.log"
+  },
+  "multicn": {
+    "result": "PASS",
+    "test": "TestExactJSONProtocolSQLFallbackAndUpgrade",
+    "package_seconds": 4.931,
+    "log": "merge5-multicn.log",
+    "claim": "Two current CN binaries, actual SQL/capability RPC, exact values and physical worker address absent at advertised116, present at117. Not an old/new binary upgrade certificate."
+  },
+  "static": {
+    "result": "PASS",
+    "selection": "defines, bytejson, pb/plan, pb/pipeline, MySQL parser, function, plan, compile, multicn",
+    "go_vet_exit": 0,
+    "golangci_lint": "v2.14.0, 0 issues, new-from-rev verified main76deafc8",
+    "gofmt": "all hand-merged and generated Go files formatted",
+    "license_eye": "18 hand-merged Go files valid, 0 invalid, generated files excluded",
+    "whitespace": "git diff --cached --check verified main76deafc8 passed"
+  },
+  "generators": {
+    "protoc": "3.21.1",
+    "gogo": "1.3.2",
+    "pipeline_sha256": "60e5553003acf52912cbafe384f6ab41bc8e9748db41fa30089c1d7ddb61f0c1",
+    "pipeline_reproduction": "Regeneration byte-identical after verifying import sets and grouping imports as unchanged main; gofmt. No manual descriptor-byte merge.",
+    "mysql_parser_sha256": "e2dedcecdf806c7f8b11085f12f3b7657a538c438c18efe4a266e66c6037340a",
+    "mysql_reproduction": "Phase4 goyacc generation matches except banner; grammar/generated input unchanged in phase5."
+  },
+  "excluded": [
+    "merge4-focused.log: cancelled143 to recover build disk",
+    "merge4-focused-final.log: ENOSPC, not code success",
+    "merge4 static: interrupted/stale during fresh upstream merge; final nine-package static rerun passed",
+    "merge5-focused.log: ENOSPC, excluded; merge5-focused-retry.log is the terminal passing replacement"
+  ],
+  "reuse_limits": "Prior same-object storage/ownership/codec/race/fuzz/engine records stay source-bound. No new state/ownership algorithm introduced by namespace repair; no fresh race, restart or cross-engine qualification claimed.",
+  "remaining_release_gates": [
+    "Actual old/new binaries from compatible persisted admission state",
+    "R1 default-on write-cost budgets",
+    "Production restore/rewrite and rollout qualification"
+  ],
+  "self_review": "PASS for this conflict repair, zero unresolved source/delivery blockers; release gates remain explicit.",
+  "local_log_hashes": {
+    "merge5-focused-retry.log": {
+      "sha256": "b70452c7d52c058772c49913b61fc532b13b07ff6a7a68a11ec7584606fefd87",
+      "bytes": 10752,
+      "retention": "local execution workspace"
+    },
+    "merge5-packages.log": {
+      "sha256": "40e282532c0fae6fbd6bc70fa6df74e93956d57bf7ba04d70aa37c0375ecb87d",
+      "bytes": 368,
+      "retention": "local execution workspace"
+    },
+    "merge5-process-codec.log": {
+      "sha256": "0b6e405d29fc82a0064a240c91273acf9b573d8d6057285ae69b9f46d6b69ebc",
+      "bytes": 439,
+      "retention": "local execution workspace"
+    },
+    "merge5-multicn.log": {
+      "sha256": "43e5394dba09077cbba3551bd21dfad1e7c3039f4c58c2a27b14134168a1f320",
+      "bytes": 354855,
+      "retention": "local execution workspace"
+    },
+    "merge5-vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "retention": "local execution workspace"
+    },
+    "merge5-lint.log": {
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "bytes": 10,
+      "retention": "local execution workspace"
+    },
+    "merge5-license.log": {
+      "sha256": "90974f0b7fb29cd39dc5acdefc67437531bdeaa8efd278d48acc6d1f228833fe",
+      "bytes": 179,
+      "retention": "local execution workspace"
+    },
+    "merge4-packages-transcript.txt": {
+      "sha256": "b2aa46b150f7ea2ef871874e5c44419b44d08c0321d71e4974d405ad0cac65d9",
+      "bytes": 8562,
+      "retention": "local execution workspace"
+    }
+  },
+  "source_sha256": {
+    "pkg/container/bytejson/bytejson.go": "ad4d834c168b34e8cd7592a3e9949f4d65500272cd37f425cac5606ce9f2c878",
+    "pkg/container/bytejson/path.go": "55a9abf51f86205225d7b039056e78a9e1c288b71d051bb2d152f163be461faa",
+    "pkg/defines/const.go": "ec1fb243a9ed5c94375276c9d028286d04a62e5a5e7fc9499211283f0ce77716",
+    "pkg/pb/plan/exact_json_protocol_test.go": "8708f9f142bd717aa63a845b159960dd669798b46509565ddba9503be63bf538",
+    "pkg/pb/plan/string_literal_form.go": "119e160b62c7ada9885d804b975710cf8924a2d20d0ad43d5503cf0edaaf7e80",
+    "pkg/sql/compile/exact_json_protocol_test.go": "fd9f28fbd059048f0d700a21d2a77e35bfb2e7e97651b24b4bd3b5508240862e",
+    "pkg/sql/compile/expression_destination_protocol.go": "23abc1491354a259e3b701a3d2583e6d1f56dc6f88244e2103c4d0ed4fd922f4",
+    "pkg/sql/compile/expression_protocol.go": "30401e63010c00f62b68cffad5169cff1c2a102aded5043f8d445d676b43507d",
+    "pkg/sql/compile/parquet_variant_protocol_test.go": "6afa59c09ffd65c4059167d27ed2a0c31804b185360706894b27e459f007ee72",
+    "pkg/sql/compile/remoterun.go": "82e78a84ffca0f23849af01fd3aafc9ea215e16df99916a96ef8dd401ea8c4d9",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "e2dedcecdf806c7f8b11085f12f3b7657a538c438c18efe4a266e66c6037340a",
+    "pkg/sql/plan/exact_json_protocol_test.go": "88e40cbddd3e890375e351bb5ed67bb8e95e0aacc25a4591e31805f6eaa3db5e",
+    "pkg/sql/plan/function/exact_json_worker_contract_test.go": "236b4ea7252443e203c58f60b79a317a426c5a9ce74525c6aadb87d3acb27322",
+    "pkg/sql/plan/function/function_id.go": "18e4a29d405fe7f798c458e3b46f7c3911716b204f06957ca64413f6de1e5205",
+    "pkg/sql/plan/function/function_id_test.go": "4ae8010755536e27ca3a78428367f8f32308d713fb2e09740220044d0165da04",
+    "pkg/sql/plan/function/list_builtIn.go": "1e51eaf0a4a05664116646499044144b14c94b33cb69ce1ca876edd517fb28b2",
+    "pkg/sql/plan/persisted_ip.go": "50b374fa067bc960a369e093290fa36a395d19c49e5f20e8282f7d4a9f6ba93a",
+    "pkg/sql/plan/query_builder.go": "a4ef8dc647bdac92f9f02f88f7ac31d2c885875e36a6ff51c964789eb3185e69",
+    "pkg/tests/sqlintegration/multicn/exact_json_protocol_test.go": "aeb539e2545378ab2c1275b1c059bbcc426257904cbed6bf81509328eb65f5c1",
+    "pkg/pb/pipeline/pipeline.pb.go": "60e5553003acf52912cbafe384f6ab41bc8e9748db41fa30089c1d7ddb61f0c1",
+    "proto/pipeline.proto": "a992c9a47666255f4d89933fc1c5a8b6dd8f226e7399e5ffbea6eeea6f88df27",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "78852884c89be5df8d57e357acb87128d651b26ae381d220cd8a9f441b155558"
+  }
+}

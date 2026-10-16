@@ -61,11 +61,12 @@ For exact-JSON remote admission, use the repository's native test wrapper:
 ```
 
 The last test owns a fresh two-CN cluster and four rows. It checks results and
-actual worker addresses with v113 advertised, then with v114 restored. Both CNs
+actual worker addresses with v116 advertised, then with v117 restored. Both CNs
 run the current binary. To reproduce the independent old executor witness,
 copy only `pkg/sql/plan/function/exact_json_worker_contract_test.go` into a clean
 worktree at pre-feature main `5d971d07a7c5a52a71f2c10390b109cebf5c0825`, build
 its native libraries through `make cgo`, and run the same worker-wire selection.
-The large positive/negative decimals and function 598 must fail there;
+The large positive/negative decimals and the current function identity 599 must fail there;
+archived witnesses used function 598 before main allocated it to calendar intervals.
 `0.125` must pass. This deliberate baseline failure is not a current-head pass.
 Real old/new rolling-upgrade and R1 release-cost/restore gates remain separate.

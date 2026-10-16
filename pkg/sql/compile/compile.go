@@ -563,6 +563,7 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
+	c.lastInsertIDBaseline = 0
 	c.disableLock = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil

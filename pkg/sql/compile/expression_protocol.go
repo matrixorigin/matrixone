@@ -53,7 +53,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
-	required := remoteExpressionProtocolVersion(features)
+	required := executionRemoteExpressionProtocolVersion(c.proc, features)
 	if required == 0 {
 		return nil
 	}
@@ -66,10 +66,20 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	return err
 }
 
+// Diagnostics depend on the outer statement and current session mode, unlike
+// expression result contracts. Keep this floor out of persisted-plan admission.
+func executionRemoteExpressionProtocolVersion(proc *process.Process, features plan.RemoteExpressionFeatures) int64 {
+	required := remoteExpressionProtocolVersion(features)
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() {
+		required = max(required, defines.MORPCVersion116)
+	}
+	return required
+}
+
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead {
-		required = max(required, defines.MORPCVersion114)
+		required = max(required, defines.MORPCVersion117)
 	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
@@ -109,6 +119,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.DecimalStatisticalResultContracts {
 		required = max(required, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		required = max(required, defines.MORPCVersion115)
 	}
 	return required
 }

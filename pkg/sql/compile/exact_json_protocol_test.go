@@ -29,11 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 // Pin the semantic capability independently of the current latest version.
-const exactJSONTestProtocol int64 = 114
+const exactJSONTestProtocol int64 = 117
 
 func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 	t.Helper()
@@ -54,7 +55,9 @@ func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 	}
 	return map[string]*planpb.Expr{"parse": parse, "nested scan filter": nested,
 		"stored JSON decimal64": cast(types.T_decimal64), "stored JSON decimal128": cast(types.T_decimal128),
-		"decimal variance of stored JSON": bind("var_pop", cast(types.T_decimal128))}
+		"division of stored JSON":           bind("div", cast(types.T_decimal128), plan2.MakePlan2Int64ConstExprWithType(1)),
+		"decimal variance of stored JSON":   bind("var_pop", cast(types.T_decimal128)),
+		"calendar interval over exact JSON": bind("to_calendar_interval", nested, plan2.MakePlan2Int64ConstExprWithType(int64(types.Day)))}
 }
 
 func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
@@ -62,6 +65,12 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			if name == "division of stored JSON" {
+				c.proc.SetStmtProfile(&process.StmtProfile{})
+				c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+				c.proc.GetSessionInfo().SqlMode = "TRADITIONAL"
+				require.True(t, c.proc.DivisionByZeroWarningsEnabled())
+			}
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol)
 			qry := &planpb.Query{Nodes: []*planpb.Node{{FilterList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(qry)
@@ -70,6 +79,15 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 				require.True(t, features.ExactJSONDecimalCast)
 				require.True(t, features.DecimalStatisticalResultContracts)
 			}
+			if name == "calendar interval over exact JSON" {
+				require.True(t, features.ExactJSONParsing)
+				require.True(t, features.CalendarIntervalNormalization)
+			}
+			if name == "division of stored JSON" {
+				require.True(t, features.ExactJSONDecimalCast)
+				require.True(t, features.ScalarDivision)
+			}
+			require.Equal(t, exactJSONTestProtocol, executionRemoteExpressionProtocolVersion(c.proc, features))
 			require.Equal(t, exactJSONTestProtocol, remoteExpressionProtocolVersion(features))
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(qry)
 			require.NoError(t, err)
@@ -86,7 +104,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
-			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113} {
+			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
 				place(old)
 				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 				require.Len(t, c.cnList, 1)
@@ -103,7 +121,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol-1)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 114")
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 117")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 			// Replace the worker after successful placement: no observation is cached.

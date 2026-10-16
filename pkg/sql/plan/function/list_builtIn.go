@@ -106,6 +106,12 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+func physicalCollationKeyReturnType(_ []types.Type) types.Type {
+	typ := types.T_varbinary.ToType()
+	typ.Charset = types.CharsetBinary
+	return typ
+}
+
 // Decimal epochs must reach the exact decimal overload. The generic numeric
 // cast costs tie decimal-to-float with decimal widening and pick the first
 // overload, losing both decimal digits and declared fractional precision.
@@ -3990,7 +3996,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_char},
-				retType:    serializedTupleReturnType,
+				retType:    physicalCollationKeyReturnType,
 				newOp: func() executeLogicOfOverload {
 					return BuiltInPhysicalCollationKey
 				},
@@ -13863,6 +13869,8 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	{functionId: TO_CALENDAR_INTERVAL, class: plan.Function_STRICT,
+		layout: STANDARD_FUNCTION, checkFn: fixedTypeMatch, Overloads: calendarIntervalOverloads()},
 	{
 		functionId: TO_INTERVAL_MICROSECOND,
 		class:      plan.Function_STRICT,

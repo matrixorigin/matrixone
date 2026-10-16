@@ -103,7 +103,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	requiredVersion := int64(0)
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast {
-		requiredVersion = defines.MORPCVersion114
+		requiredVersion = defines.MORPCVersion117
 	}
 	if features.IPFunctionSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
@@ -149,6 +149,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
+	}
+	if features.CalendarIntervalNormalization {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
 	return requiredVersion, nil
 }
