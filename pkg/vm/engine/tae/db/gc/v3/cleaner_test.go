@@ -16,181 +16,154 @@ package gc
 
 import (
 	"context"
-	"sync"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/rand"
 )
 
-func TestDiskCleaner_ReplayToWrite(t *testing.T) {
-	var (
-		replayCnt  int
-		executeCnt int
-		tryGC      int
-	)
-
-	cleaner := NewMockCleaner(
-		WithTryGCFunc(func(context.Context) (err error) {
-			tryGC++
-			return nil
-		}),
-		WithReplayFunc(func(context.Context) (err error) {
-			replayCnt++
-			return nil
-		}),
-		WithProcessFunc(func(context.Context) (err error) {
-			time.Sleep(time.Millisecond * 2)
-			executeCnt++
-			return nil
-		}),
-	)
-
-	diskCleaner := NewDiskCleaner(&cleaner, false)
-	require.True(t, diskCleaner.IsReplayMode())
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 0)
-	require.Equal(t, executeCnt, 0)
-
-	diskCleaner.Start()
-	err := diskCleaner.FlushQueue(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 1)
-	require.Equal(t, executeCnt, 0)
-
-	err = diskCleaner.GC(context.Background())
-	require.Error(t, err)
-
-	err = diskCleaner.SwitchToWriteMode(context.Background())
-	require.NoError(t, err)
-	require.True(t, diskCleaner.IsWriteMode())
-
-	err = diskCleaner.GC(context.Background())
-	require.NoError(t, err)
-	err = diskCleaner.FlushQueue(context.Background())
-
-	require.NoError(t, err)
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 1)
-	require.Equal(t, executeCnt, 1)
+// Only the real queue's replay, processing and shutdown boundaries are faked.
+// An unexpected call through Cleaner fails instead of silently succeeding.
+type cleanerProbe struct {
+	Cleaner
+	replayed, processed, stopped int
+	replayErr                    error
+	processFn                    func(context.Context) error
 }
 
-// write to replay mode
-func TestDiskCleaner_WriteToReplay(t *testing.T) {
-	var (
-		replayCnt  int
-		executeCnt int
-		tryGC      int
-	)
-	cleaner := NewMockCleaner(
-		WithTryGCFunc(func(context.Context) (err error) {
-			tryGC++
-			return nil
-		}),
-		WithReplayFunc(func(context.Context) (err error) {
-			replayCnt++
-			return nil
-		}),
-		WithProcessFunc(func(context.Context) (err error) {
-			time.Sleep(time.Millisecond * 2)
-			executeCnt++
-			return nil
-		}),
-	)
+func (c *cleanerProbe) Replay(context.Context) error {
+	c.replayed++
+	return c.replayErr
+}
 
-	diskCleaner := NewDiskCleaner(&cleaner, true)
-	require.True(t, diskCleaner.IsWriteMode())
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 0)
-	require.Equal(t, executeCnt, 0)
-
-	diskCleaner.Start()
-	err := diskCleaner.FlushQueue(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 1)
-	require.Equal(t, executeCnt, 0)
-
-	err = diskCleaner.GC(context.Background())
-	require.NoError(t, err)
-	err = diskCleaner.FlushQueue(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, tryGC, 0)
-	require.Equal(t, replayCnt, 1)
-	require.Equal(t, executeCnt, 1)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	WithProcessFunc(func(ctx context.Context) (err error) {
-		defer func() {
-			executeCnt++
-		}()
-		if rand.Intn(10) > 5 {
-			wg.Wait()
-		} else {
-			select {
-			case <-ctx.Done():
-				err = context.Cause(ctx)
-				t.Logf("%d: %v", executeCnt, err)
-				return
-			default:
-			}
-			time.Sleep(2 * time.Millisecond)
-		}
-		return nil
-	})(&cleaner)
-
-	for i := 0; i < 10; i++ {
-		err = diskCleaner.GC(context.Background())
-		require.NoError(t, err)
+func (c *cleanerProbe) Process(ctx context.Context, _ func(*checkpoint.CheckpointEntry) bool) error {
+	c.processed++
+	if c.processFn != nil {
+		return c.processFn(ctx)
 	}
-	go func() {
-		time.Sleep(time.Millisecond * 4)
-		wg.Done()
-	}()
-
-	err = diskCleaner.SwitchToReplayMode(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, executeCnt, 11)
-	require.True(t, diskCleaner.IsReplayMode())
-
-	WithProcessFunc(func(context.Context) (err error) {
-		executeCnt++
-		return nil
-	})(&cleaner)
-
-	err = diskCleaner.GC(context.Background())
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnControl))
+	return nil
 }
 
-func TestForMockCoverage(t *testing.T) {
-	var cleaner MockCleaner
-	ctx := context.Background()
-	require.NoError(t, cleaner.Replay(ctx))
-	require.NoError(t, cleaner.Process(ctx, nil))
-	require.NoError(t, cleaner.TryGC(ctx))
-	cleaner.AddChecker(nil, "")
-	require.Nil(t, cleaner.GetChecker(""))
-	require.Nil(t, cleaner.RemoveChecker(""))
-	require.Nil(t, cleaner.GetScanWaterMark())
-	require.Nil(t, cleaner.GetCheckpointGCWaterMark())
-	require.Nil(t, cleaner.GetScannedWindow())
-	require.Nil(t, cleaner.GetMinMerged())
-	require.Nil(t, cleaner.DoCheck(ctx))
-	v1, v2 := cleaner.GetPITRs()
-	require.Nil(t, v1)
-	require.Nil(t, v2)
-	cleaner.GCEnabled()
-	require.Nil(t, cleaner.GetMPool())
-	v3, v4 := cleaner.GetSnapshots()
-	require.Nil(t, v3)
-	require.Nil(t, v4)
-	require.Equal(t, "", cleaner.GetTablePK(0))
+func (c *cleanerProbe) Stop() { c.stopped++ }
 
-	require.NoError(t, cleaner.Close())
+func TestDiskCleaner_ReplayToWrite(t *testing.T) {
+	cleaner := &cleanerProbe{}
+	diskCleaner := NewDiskCleaner(cleaner, false)
+	require.True(t, diskCleaner.IsReplayMode())
+	require.Zero(t, cleaner.replayed)
+	require.Zero(t, cleaner.processed)
+
+	diskCleaner.Start()
+	t.Cleanup(func() {
+		diskCleaner.CancelRunning(CauseStopGC)
+		diskCleaner.Stop()
+		require.Equal(t, 1, cleaner.stopped)
+	})
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 1, cleaner.replayed)
+	require.Zero(t, cleaner.processed)
+	require.Error(t, diskCleaner.GC(t.Context()))
+
+	require.NoError(t, diskCleaner.SwitchToWriteMode(t.Context()))
+	require.True(t, diskCleaner.IsWriteMode())
+	require.NoError(t, diskCleaner.GC(t.Context()))
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 1, cleaner.replayed)
+	require.Equal(t, 1, cleaner.processed)
+}
+
+func TestDiskCleaner_WriteToReplay(t *testing.T) {
+	cleaner := &cleanerProbe{}
+	diskCleaner := NewDiskCleaner(cleaner, true)
+	require.True(t, diskCleaner.IsWriteMode())
+	require.Zero(t, cleaner.replayed)
+	require.Zero(t, cleaner.processed)
+
+	diskCleaner.Start()
+	t.Cleanup(func() {
+		diskCleaner.CancelRunning(CauseStopGC)
+		diskCleaner.Stop()
+		require.Equal(t, 1, cleaner.stopped)
+	})
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 1, cleaner.replayed)
+	require.Zero(t, cleaner.processed)
+	require.NoError(t, diskCleaner.GC(t.Context()))
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 1, cleaner.processed)
+
+	const queued = 10
+	entered := make(chan struct{})
+	causes := make(chan error, queued)
+	cleaner.processFn = func(ctx context.Context) error {
+		if cleaner.processed == 2 {
+			close(entered)
+		}
+		<-ctx.Done()
+		causes <- context.Cause(ctx)
+		return context.Cause(ctx)
+	}
+	for range queued {
+		require.NoError(t, diskCleaner.GC(t.Context()))
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued GC did not enter processing")
+	}
+	// The first job is in flight and the remaining jobs are queued. Switching
+	// must cancel that generation and join every accepted job before returning.
+	require.NoError(t, diskCleaner.SwitchToReplayMode(t.Context()))
+	require.True(t, diskCleaner.IsReplayMode())
+	require.Equal(t, queued+1, cleaner.processed)
+	for range queued {
+		require.ErrorIs(t, <-causes, CauseSwitchWrite2Replay)
+	}
+	err := diskCleaner.GC(t.Context())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnControl))
+
+	// FlushQueue installs a fresh running context; cancellation must not leak
+	// into the next write generation.
+	var resumedErr error
+	cleaner.processFn = func(ctx context.Context) error {
+		resumedErr = ctx.Err()
+		return resumedErr
+	}
+	require.NoError(t, diskCleaner.SwitchToWriteMode(t.Context()))
+	require.NoError(t, diskCleaner.GC(t.Context()))
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.NoError(t, resumedErr)
+	require.Equal(t, queued+2, cleaner.processed)
+}
+
+func TestDiskCleaner_ReplayFailureRecovery(t *testing.T) {
+	replayErr := errors.New("replay failed")
+	cleaner := &cleanerProbe{replayErr: replayErr}
+	diskCleaner := NewDiskCleaner(cleaner, true)
+	diskCleaner.Start()
+	t.Cleanup(func() {
+		diskCleaner.CancelRunning(CauseStopGC)
+		diskCleaner.Stop()
+		require.Equal(t, 1, cleaner.stopped)
+	})
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.NotNil(t, diskCleaner.replayError.Load())
+	require.ErrorIs(t, *diskCleaner.replayError.Load(), replayErr)
+
+	require.NoError(t, diskCleaner.GC(t.Context()))
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 2, cleaner.replayed)
+	require.Zero(t, cleaner.processed, "failed replay must prevent GC processing")
+	require.ErrorIs(t, *diskCleaner.replayError.Load(), replayErr)
+
+	cleaner.replayErr = nil
+	require.NoError(t, diskCleaner.GC(t.Context()))
+	require.NoError(t, diskCleaner.FlushQueue(t.Context()))
+	require.Equal(t, 3, cleaner.replayed)
+	require.Equal(t, 1, cleaner.processed)
+	require.Nil(t, diskCleaner.replayError.Load())
+	require.True(t, diskCleaner.IsWriteMode())
 }
