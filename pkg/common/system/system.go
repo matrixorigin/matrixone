@@ -270,9 +270,43 @@ func readCgroupUint(path string) (uint64, bool) {
 // report a bare LONG_MAX are covered too, since it is larger than this.
 const cgroupV1Unlimited = uint64(0x7FFFFFFFFFFFF000)
 
-// readCgroupLimit reads a cgroup LIMIT file. ok is false when the file is
-// missing or empty, when it holds v2's "max", and when it holds v1's numeric
-// unlimited sentinel -- all three mean "this level imposes no bound".
+type cgroupLimitState uint8
+
+const (
+	cgroupLimitUnavailable cgroupLimitState = iota
+	cgroupLimitUnlimited
+	cgroupLimitFinite
+)
+
+// readCgroupLimitState distinguishes an authoritative unlimited value from a
+// failed observation. Callers walking a hierarchy must not silently skip a
+// missing or malformed governing limit: doing so can replace a tight parent
+// constraint with a looser child constraint.
+func readCgroupLimitState(path string) (uint64, cgroupLimitState) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, cgroupLimitUnavailable
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return 0, cgroupLimitUnavailable
+	}
+	if value == "max" {
+		return 0, cgroupLimitUnlimited
+	}
+	v, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, cgroupLimitUnavailable
+	}
+	if v >= cgroupV1Unlimited {
+		return 0, cgroupLimitUnlimited
+	}
+	return v, cgroupLimitFinite
+}
+
+// readCgroupLimit reads a cgroup LIMIT file. ok is false for both observation
+// failure and authoritative unlimited values; hierarchy walkers that need to
+// distinguish those cases use readCgroupLimitState instead.
 //
 // The sentinel matters because it parses as a perfectly good integer: treating
 // it as a real limit makes an unlimited v1 hierarchy report ~9.2 EB of headroom
@@ -280,11 +314,8 @@ const cgroupV1Unlimited = uint64(0x7FFFFFFFFFFFF000)
 // figure loses its memory bound entirely rather than falling back to the host
 // reading.
 func readCgroupLimit(path string) (uint64, bool) {
-	v, ok := readCgroupUint(path)
-	if !ok || v >= cgroupV1Unlimited {
-		return 0, false
-	}
-	return v, true
+	v, state := readCgroupLimitState(path)
+	return v, state == cgroupLimitFinite
 }
 
 // minHierarchicalHeadroom returns the tightest `limit - usage` across every

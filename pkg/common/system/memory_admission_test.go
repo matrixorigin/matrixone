@@ -15,6 +15,7 @@
 package system
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,23 +33,58 @@ func TestMemoryDomainReservePolicyUsesObservedNonGoHighWater(t *testing.T) {
 	require.Equal(t, uint64(45), policy.Reserve(second))
 }
 
-func TestMemoryAdmissionBudgetDoesNotDoubleChargeMeasuredAllocations(t *testing.T) {
+func TestMemoryAdmissionBudgetChargesPendingReservationsCumulatively(t *testing.T) {
 	budget := NewMemoryAdmissionBudget(MemoryDomainReservePolicy{
-		MinimumBytes:            10,
+		MinimumBytes:            0,
 		ObservedNonGoMultiplier: 1,
 	})
-	snapshot := MemoryDomainSnapshot{Used: 60, Limit: 100, NonGo: 20, Measured: true}
-	budget.mu.Lock()
-	budget.reserved = 30
-	require.Equal(t, uint64(20), budget.availableLocked(snapshot))
-	budget.mu.Unlock()
+	snapshot := MemoryDomainSnapshot{Used: 90, Limit: 100, Measured: true}
 
-	// The physical sample already includes the outstanding 30-byte claim. The
-	// shared ledger therefore keeps 20 bytes, rather than subtracting the claim
-	// a second time and incorrectly reporting only 10 bytes.
-	view := budget.snapshotLocked(snapshot, 20)
-	require.Equal(t, uint64(20), view.Available)
-	require.Equal(t, uint64(30), view.Reserved)
+	available, ok := budget.tryReserve(snapshot, 4)
+	require.True(t, ok)
+	require.Equal(t, uint64(6), available)
+	refreshed := budget.Observe(MemoryDomainSnapshot{Used: 94, Limit: 100, Measured: true})
+	require.Equal(t, uint64(2), refreshed.Available,
+		"a refresh must retain the pending claim against the new sample")
+	available, ok = budget.tryReserve(snapshot, 4)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), available)
+	available, ok = budget.tryReserve(snapshot, 4)
+	require.False(t, ok)
+	require.Equal(t, uint64(2), available)
+	require.Equal(t, uint64(8), budget.Reserved())
+
+	// A release returns the pending claim to the same sampled budget.
+	budget.Release(4)
+	available, ok = budget.tryReserve(snapshot, 4)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), available)
+}
+
+func TestMemoryAdmissionBudgetConcurrentReservationsShareHeadroom(t *testing.T) {
+	budget := NewMemoryAdmissionBudget(MemoryDomainReservePolicy{
+		ObservedNonGoMultiplier: 1,
+	})
+	snapshot := MemoryDomainSnapshot{Used: 90, Limit: 100, Measured: true}
+	const workers = 16
+	var wg sync.WaitGroup
+	var successful int
+	var mu sync.Mutex
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			_, ok := budget.tryReserve(snapshot, 4)
+			if ok {
+				mu.Lock()
+				successful++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, 2, successful)
+	require.Equal(t, uint64(8), budget.Reserved())
 }
 
 func TestMemoryAdmissionBudgetUsesDomainSoftLimit(t *testing.T) {

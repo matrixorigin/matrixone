@@ -484,8 +484,12 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		found            bool
 	)
 	for _, level := range levels {
-		limit, ok := readCgroupLimit(filepath.Join(level.dir, level.limitFile))
-		if !ok || limit == 0 {
+		limit, state := readCgroupLimitState(filepath.Join(level.dir, level.limitFile))
+		if state == cgroupLimitUnavailable {
+			return MemoryDomainSnapshot{}, false,
+				fmt.Errorf("read memory limit for %s", level.dir)
+		}
+		if state == cgroupLimitUnlimited || limit == 0 {
 			continue
 		}
 		usage, ok := readCgroupUint(filepath.Join(level.dir, level.usageFile))

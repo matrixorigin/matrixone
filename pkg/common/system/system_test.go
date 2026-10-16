@@ -701,3 +701,48 @@ func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, measured)
 }
+
+func TestReadCgroupMemoryDomainRetainsBindingLimitOnReadFailure(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "100")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "200")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	for _, value := range []string{"", "not-a-number"} {
+		if value == "" {
+			require.NoError(t, os.Remove(filepath.Join(parent, "memory.max")))
+		} else {
+			write(parent, "memory.max", value)
+		}
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		write(parent, "memory.max", "100")
+	}
+
+	// "max" is an authoritative unlimited value, not a read failure; the
+	// finite child remains measurable once the parent no longer binds.
+	write(parent, "memory.max", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+}

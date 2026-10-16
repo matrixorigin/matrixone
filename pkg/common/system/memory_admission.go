@@ -24,9 +24,11 @@ import (
 // execution admission and write-path throttlers. The sampled Used value is the
 // already charged domain footprint; reserved is the forward-looking amount
 // promised by admission calls but not necessarily visible in the sample yet.
-// Using max(Used, reserved) avoids charging an allocation twice after it has
-// become visible in memory.current, while still protecting a reservation that
-// races the next sample.
+// Reservations remain charged until Release because the current allocation
+// interfaces do not provide an atomic handoff from a reservation to observed
+// residency. A refresh can therefore conservatively charge a reservation twice
+// after it becomes visible in memory.current, but it must never allow several
+// pending reservations to spend the same sampled headroom.
 type MemoryAdmissionBudget struct {
 	mu sync.Mutex
 
@@ -86,6 +88,17 @@ func (b *MemoryAdmissionBudget) TryReserve(size uint64) (available uint64, ok bo
 	}
 	snapshot, _ := CurrentMemoryDomain()
 	if !snapshot.Measured || snapshot.Limit == 0 {
+		return 0, false
+	}
+	return b.tryReserve(snapshot, size)
+}
+
+// tryReserve applies one caller-provided immutable sample to the shared
+// reservation ledger. Keeping this small seam internal makes the cumulative
+// reservation invariant deterministic to test without changing the production
+// sampling path.
+func (b *MemoryAdmissionBudget) tryReserve(snapshot MemoryDomainSnapshot, size uint64) (available uint64, ok bool) {
+	if b == nil || !snapshot.Measured || snapshot.Limit == 0 {
 		return 0, false
 	}
 
@@ -220,8 +233,13 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 	reserveSnapshot.NonGo = b.nonGoHighWater
 	reserve := b.policy.Reserve(reserveSnapshot)
 	used := snapshot.Used
-	if b.reserved > used {
-		used = b.reserved
+	if b.reserved > ^uint64(0)-used {
+		used = ^uint64(0)
+	} else {
+		// There is no allocation-complete handoff in this API. Keep every
+		// outstanding claim charged, even if a later sample already includes
+		// some of the materialized bytes.
+		used += b.reserved
 	}
 	if reserve >= limit || used >= limit-reserve {
 		return 0
