@@ -697,6 +697,55 @@ func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database
 	return nil
 }
 
+// validateRenamedCheckConstraintNames rejects a table rename whose CHECK
+// names would collide once generated <table>_chk_<n> names move with the
+// table. An intra-table duplicate (a rewritten generated name landing on an
+// explicit name of the same table) or a name already owned by a sibling
+// breaks per-schema uniqueness and mis-attributes information_schema
+// metadata, so the rename is refused with ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// before any alter request applies. oldName is passed as the sibling scan's
+// self reference because the catalog still stores the pre-rename name here.
+func validateRenamedCheckConstraintNames(ctx context.Context, dbSource engine.Database, oldName, newName string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	renamed := plan2.RenameGeneratedCheckConstraintNames(checks, oldName, newName)
+	seen := make(map[string]struct{}, len(renamed))
+	for _, check := range renamed {
+		if check == nil {
+			continue
+		}
+		lower := strings.ToLower(check.GetName())
+		if _, dup := seen[lower]; dup {
+			return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
+		}
+		seen[lower] = struct{}{}
+	}
+	return checkConstraintNamesAvailable(ctx, dbSource, oldName, renamed)
+}
+
+// composeCheckNamesAcrossAlterActions folds table-generated CHECK name moves
+// into the check definitions carried by a rename-column request. A combined
+// `ALTER TABLE t RENAME TO u, RENAME COLUMN a TO b` must present the final
+// names in one set: the rename-column request overwrites the catalog checks,
+// so carrying the pre-rename names would leave the renamed table owning
+// <t>_chk_<n> and block recreating `t`.
+func composeCheckNamesAcrossAlterActions(qry *plan.AlterTable, checks []*plan.CheckDef) []*plan.CheckDef {
+	if len(checks) == 0 {
+		return checks
+	}
+	composed := checks
+	for _, action := range qry.GetActions() {
+		if action == nil {
+			continue
+		}
+		if act, ok := action.Action.(*plan.AlterTable_Action_AlterName); ok {
+			composed = plan2.RenameGeneratedCheckConstraintNames(composed, act.AlterName.OldName, act.AlterName.NewName)
+		}
+	}
+	return composed
+}
+
 func isMissingTableByNameForDropDatabase(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
 }
@@ -1603,6 +1652,18 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 				oldName = tblName
 				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			} else {
+				// Generated CHECK names follow the table; validate the
+				// resulting set before the rename commits. Temporary tables
+				// mirror CREATE TABLE's exemption, and their generated names
+				// are tied to a session-scoped physical name.
+				var catalogChecks []*plan.CheckDef
+				if extra != nil {
+					catalogChecks = extra.GetChecks()
+				}
+				if err := validateRenamedCheckConstraintNames(c.proc.Ctx, dbSource, oldName, newName, catalogChecks); err != nil {
+					return err
+				}
 			}
 
 			reqs = append(reqs, api.NewRenameTableReq(
@@ -1612,15 +1673,21 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
-			if err := c.requireCheckRenameProtocol(qry.GetCopyTableDef().GetChecks()); err != nil {
+			checks := qry.GetCopyTableDef().GetChecks()
+			if err := c.requireCheckRenameProtocol(checks); err != nil {
 				return err
 			}
+			// When the same ALTER also renames the table, this request must
+			// already carry the final CHECK names; it overwrites the catalog
+			// checks below, so the separate rename-table rewrite must not be
+			// lost.
+			checks = composeCheckNamesAcrossAlterActions(qry, checks)
 			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
 				act.AlterRenameColumn.NewName, // origin name
 				uint32(act.AlterRenameColumn.SequenceNum),
-				qry.GetCopyTableDef().GetChecks(),
+				checks,
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
