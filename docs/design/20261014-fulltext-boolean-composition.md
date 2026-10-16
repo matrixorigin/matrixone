@@ -3,7 +3,7 @@
 ## Revision and gate
 
 - Owning issue: https://github.com/matrixorigin/matrixone/issues/30166 (read in full, including its recipe and regression expectations; no comments as of 2026-10-14).
-- Design revision: v1, 2026-10-14. Status: DRAFT, independent review required.
+- Design revision: v1, 2026-10-14. Status: approved by independent review v1 on 2026-10-16; see `20261016-fulltext-boolean-composition-review-v1.md`.
 - Implementation: local work only; no implementation PR exists or is authorized for publication.
 - Verified base/head/merge-base before this document: `5a0570ea70083c9365719009a5ed8d7618f9ed91`; isolated worktree `/workspace/shared/matrixone-30166` was clean.
 - G-FEATURE-DESIGN applies: new SQL capability and material hot-path cardinality/resource change, independent of diff size. This document is the design-only phase. No production code may precede recorded independent PASS on its exact content revision.
@@ -140,4 +140,4 @@ Decided: preserving rewrite is composition-triggered only; absent indexed releva
 
 Implementation proof obligations, not deferred semantic decisions: confirm complete unlimited FULLTEXT2 search and one-doc-per-score contract for admitted search modes; prove current scan pagination provenance or refuse affected shape; preserve consumer tags and prepared snapshots. If any is false, do not invent a fallback: notify owner and revise/re-review. No unresolved semantic design decision is intentionally delegated to code.
 
-Independent review decision: PENDING. Production implementation remains blocked until exact-revision PASS.
+Independent review decision: PASS. Versioned record `20261016-fulltext-boolean-composition-review-v1.md` binds this exact revision (`dde7e9ef357815198133ef8abe666cb5b021d94c`), content SHA256 `df7d8bafc2772d79fe18934226c1c3608e51573348ba97494d6e9bc1e32a1925`, and source head `ca9bf53793e598f58edf8fb045d23ce61c49cfd1`.
