@@ -218,6 +218,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			var files []resultFileInfo
 			//prepare session
 			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
 			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
 			defer ses.Close()
 
