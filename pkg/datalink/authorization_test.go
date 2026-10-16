@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -351,6 +352,82 @@ func TestDatalinkAsyncSourceProviderAdmission(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestDatalinkValidationMatchesMaterialization(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.BuildPipelineContext(context.Background())
+	credentials := func(secret, endpoint string) map[string]string {
+		return map[string]string{
+			stage.PARAMKEY_AWS_KEY_ID: "caller", stage.PARAMKEY_AWS_SECRET_KEY: secret,
+			stage.PARAMKEY_AWS_REGION: "region", stage.PARAMKEY_ENDPOINT: endpoint,
+			stage.PARAMKEY_PROVIDER: stage.S3_PROVIDER_AMAZON,
+		}
+	}
+	for _, s := range []struct {
+		name, target, status string
+		credentials          map[string]string
+	}{
+		{"remote", "s3://bucket/base", "enabled", credentials("owned", "https://example.invalid")},
+		{"quoted", "s3://bucket/base", "enabled", credentials("a,b\"c", "https://example.invalid")},
+		{"crlf", "s3://bucket/base", "enabled", credentials("a\r\nb", "https://example.invalid")},
+		{"disk", "s3://bucket/base", "enabled", credentials("owned", "disk")},
+		{"local", "file:///owned", "enabled", nil},
+		{"named", "file:///SHARED:/owned", "enabled", nil},
+		{"alias", "stage://remote/prefix", "enabled", nil},
+		{"disabled", "stage://remote/prefix", "disabled", nil},
+		{"cycle", "stage://cycle/prefix", "enabled", nil},
+		{"missing", "s3://bucket/base", "enabled", nil},
+	} {
+		u, err := url.Parse(s.target)
+		require.NoError(t, err)
+		proc.GetStageCache().Set(s.name, stage.StageDef{Name: s.name, Url: u, Status: s.status, Credentials: s.credentials})
+	}
+	for _, tc := range []struct {
+		uri           string
+		legacy, async bool
+	}{
+		{"stage://remote/doc", true, true},
+		{"stage://remote/doc?size=0", true, true},
+		{"stage://quoted/doc", true, true},
+		{"stage://crlf/doc", true, true},
+		{"stage://alias/doc?OFFSET=1&SIZE=2", true, true},
+		{"hdfs://host:9000/doc", true, true},
+		{"file:///owned", true, false},
+		{"file://SHARED:/owned", true, false},
+		{"stage://local/doc", true, false},
+		{"stage://named/doc", true, false},
+		{"stage://disk/doc", true, false},
+		// Legacy CAST intentionally does not interpret the file-service path.
+		{"file:///invalid%20space", true, false},
+		{"stage://remote/a%3Ab", true, false},
+		{"stage://remote/a%3Ab?offset=-1&size=bad", false, false},
+		{"stage://remote/doc?offset=bad&size=invalid", false, false},
+		{"stage://remote/doc?offset=-1", false, false},
+		{"stage://disabled/doc", false, false},
+		{"stage://cycle/doc", false, false},
+		{"stage://missing/doc", false, false},
+		{"s3://bucket/doc", false, false},
+		{"/owned", false, false},
+		{"file:///%zz", false, false},
+	} {
+		t.Run(tc.uri, func(t *testing.T) {
+			_, _, legacyErr := ParseDatalink(tc.uri, proc)
+			gotLegacyErr := ValidateDatalink(tc.uri, proc)
+			require.Equal(t, tc.legacy, gotLegacyErr == nil)
+			require.Equal(t, reflect.TypeOf(legacyErr), reflect.TypeOf(gotLegacyErr))
+			if legacyErr != nil {
+				require.EqualError(t, gotLegacyErr, legacyErr.Error())
+			}
+			_, asyncErr := NewAsyncDatalink(tc.uri, proc)
+			gotAsyncErr := ValidateAsyncDatalinkSource(tc.uri, proc)
+			require.Equal(t, tc.async, gotAsyncErr == nil)
+			require.Equal(t, reflect.TypeOf(asyncErr), reflect.TypeOf(gotAsyncErr))
+			if asyncErr != nil {
+				require.EqualError(t, gotAsyncErr, asyncErr.Error())
 			}
 		})
 	}

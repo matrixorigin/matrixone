@@ -78,6 +78,47 @@ func EncodeServiceCSV(fields []string) (string, error) {
 	return buf.String(), nil
 }
 
+// EncodeServicePath formats decoded service fields and a file expression using
+// the existing CSV path representation. No fields means a raw file expression.
+func EncodeServicePath(fields []string, file string) (string, error) {
+	if len(fields) == 0 {
+		return file, nil
+	}
+	service, err := EncodeServiceCSV(fields)
+	if err != nil {
+		return "", err
+	}
+	return JoinPath(service, file), nil
+}
+
+// ParsePathFromServiceFields interprets decoded fields without serializing and
+// reparsing them when the CSV round trip would preserve their values.
+// Returned arguments do not alias the caller's field scratch.
+func ParsePathFromServiceFields(fields []string, file string) (Path, error) {
+	fallback := len(fields) == 0 || strings.Contains(file, ServiceNameSeparator) || len(fields) == 1 && fields[0] == ""
+	for _, field := range fields {
+		if strings.ContainsAny(field, "\r\n") {
+			fallback = true
+			break
+		}
+	}
+	if fallback {
+		// Preserve named/local paths, the last-colon grammar, CSV newline
+		// normalization and the single empty record's existing behavior.
+		path, err := EncodeServicePath(fields, file)
+		if err != nil {
+			return Path{}, err
+		}
+		return ParsePath(path)
+	}
+	// Match ParsePath's ownership: the returned arguments do not retain the
+	// caller's scratch. Only this direct branch needs an argument allocation;
+	// the compatibility parser already allocates its own arguments.
+	arguments := make([]string, len(fields)-1)
+	copy(arguments, fields[1:])
+	return validatePath(Path{Service: fields[0], ServiceArguments: arguments, File: file})
+}
+
 // ParseETLService parses the provider without certifying the file expression.
 // LOAD admission uses it before the existing glob expansion; concrete I/O uses ParsePath.
 func ParseETLService(s string) (path Path, err error) {
@@ -103,7 +144,10 @@ func ParsePath(s string) (path Path, err error) {
 	if err != nil {
 		return
 	}
+	return validatePath(path)
+}
 
+func validatePath(path Path) (Path, error) {
 	// validate
 	for _, r := range path.File {
 		// most common patterns first
@@ -120,13 +164,12 @@ func ParsePath(s string) (path Path, err error) {
 		if r > unicode.MaxASCII && unicode.IsPrint(r) {
 			continue
 		}
-		err = moerr.NewInvalidPathNoCtx(path.File)
-		return
+		return path, moerr.NewInvalidPathNoCtx(path.File)
 	}
 
 	path.File = strings.TrimLeft(path.File, "/") // trim leading /
 
-	return
+	return path, nil
 }
 
 func canonicalFilePaths(paths []string) ([]string, error) {

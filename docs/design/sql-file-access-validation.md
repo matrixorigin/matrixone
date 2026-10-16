@@ -1,5 +1,52 @@
 # SQL file access validation record
 
+## Validation-only parsing optimization
+
+Rebased onto main `6b081a1fcfe`; the five design-target source files and native
+build/module inputs are unchanged across that rebase. The shared URL/stage and
+range resolver now supports error-only CAST and final-value admission without
+CSV path materialization. Existing complete-object/string APIs remain adapters
+over the same owners. Provider classification and final-row selection remain
+unchanged. No cache, pool, ambient authority or execution path is added.
+
+Focused normal and race tests pass for Datalink, stage, path/CSV interpretation,
+CAST and final-row eligibility. Differential cases use the standard CSV writer
+and the original path parser, including returned partial paths/errors, quoted
+fields, Unicode/invalid UTF-8, CR/LF, colons, empty/dot paths and raw named
+services. Datalink controls cover range error precedence, nested/disabled/cyclic
+stages, policy refusal and the deliberately weaker legacy CAST contract.
+
+A single-process component comparison freezes the pre-optimization
+`6d0e16ba23a` helpers, including Stage materialization; three alternating
+old/new pairs of 150 ms per case retain every sample. Canonical one/16-stage
+admission reduces 1088 to 688 B/op and 16 to 13 allocations; paired component
+time medians improve 21.24%/22.21%. CAST improves 30.70%, 1008 to 608 B/op,
+16 to 12 allocations. Complete-object and public-string controls retain their
+allocation counts with paired times +0.16%/-0.19%. CR/LF compatibility fallback
+retains 9912 B/op and 33 allocations, with paired time +4.08%; this is a small
+measured fallback cost, not a zero-cost claim. An initial fallback result added
+112 B/one allocation and failed the preset gate; explicit argument ownership
+removed that escape, and its failed evidence remains retained.
+
+One real SQL fixture compares frozen old and new **complete validation**, never
+checker omission, in one binary and cluster. After 32 warmup rounds, a forced
+flush/read/GC starts with 19 data objects, 18 tombstone objects and zero memory
+row records. Four fixed ABBA/BAAB blocks use four clients and 4096 rows; all 16
+cells assert 8192 actual validation calls. Exact stored rows, the durable CDC
+commit barrier and search results pass. Paired block medians are allocated
+bytes -4.67%, allocation count -4.03%, process CPU -0.57% and elapsed time
+**+6.16%**; elapsed blocks range -16.39% to +25.05%. Normal GC is counted, and
+the user's other applications keep running. These short intervals do not fully
+isolate external load or establish population P99 or a SQL speedup.
+
+**Overall PR/main performance acceptance remains unresolved.** The earlier
+large stalls also occurred before flush on the same unmodified candidate
+binary, so an exclusive flush-path cause is not established. No slow-event
+trace has identified their root cause. Local component gains do not supersede
+those historical failed gates. Raw plans, controls, failed/fixed samples and
+terminal evidence are retained in `revision-20261016/systematic-opt/` and
+`source-cause/` under the issue30185 ledger. No heavy cohort was repeated.
+
 ## Further allocation cleanup: scope and limits
 
 On parent `3465deb8298` / main `c2b990cd712`, the private Datalink resolver

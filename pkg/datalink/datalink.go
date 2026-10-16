@@ -96,6 +96,10 @@ func (d Datalink) validateAsyncSource() error {
 	if err != nil {
 		return err
 	}
+	return validateAsyncPath(path)
+}
+
+func validateAsyncPath(path fileservice.Path) error {
 	local, err := fileservice.SQLFilePathRequiresAdmin(path)
 	if err != nil {
 		return err
@@ -159,36 +163,80 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	return moURL, []int64{offset, size}, nil
 }
 
-func parseDatalinkURL(u *url.URL, proc *process.Process) (string, int64, int64, error) {
-	var err error
+// ValidateDatalink applies the legacy CAST checks without materializing output
+// that the caller discards. It does not add file-path or access-policy checks.
+func ValidateDatalink(aurl string, proc *process.Process) error {
+	u, err := url.Parse(aurl)
+	if err != nil {
+		return err
+	}
+	var scratch [7]string
+	if _, _, err = resolveDatalinkURL(u, proc, scratch[:0]); err != nil {
+		return err
+	}
+	_, _, err = parseDatalinkRange(u)
+	return err
+}
 
-	var moUrl string
-	// 1. get moUrl from the path
+// ValidateAsyncDatalinkSource checks a final stored value using the same
+// resolver and policy as NewAsyncDatalink, without constructing an I/O object.
+func ValidateAsyncDatalinkSource(aurl string, proc *process.Process) error {
+	u, err := url.Parse(aurl)
+	if err != nil {
+		return err
+	}
+	var scratch [7]string
+	fields, file, err := resolveDatalinkURL(u, proc, scratch[:0])
+	if err != nil {
+		return err
+	}
+	if _, _, err = parseDatalinkRange(u); err != nil {
+		return err
+	}
+	path, err := fileservice.ParsePathFromServiceFields(fields, file)
+	if err != nil {
+		return err
+	}
+	return validateAsyncPath(path)
+}
+
+func parseDatalinkURL(u *url.URL, proc *process.Process) (string, int64, int64, error) {
+	var scratch [7]string
+	fields, file, err := resolveDatalinkURL(u, proc, scratch[:0])
+	if err != nil {
+		return "", 0, 0, err
+	}
+	moURL, err := fileservice.EncodeServicePath(fields, file)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	offset, size, err := parseDatalinkRange(u)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return moURL, offset, size, nil
+}
+
+func resolveDatalinkURL(u *url.URL, proc *process.Process, fields []string) ([]string, string, error) {
 	switch u.Scheme {
 	case stage.FILE_PROTOCOL:
-		moUrl = strings.Join([]string{u.Host, u.Path}, "")
+		return fields, strings.Join([]string{u.Host, u.Path}, ""), nil
 	case stage.HDFS_PROTOCOL:
-		opts := []string{"hdfs", "endpoint=" + u.Host}
-
-		serviceCSV, err := fileservice.EncodeServiceCSV(opts)
-		if err != nil {
-			return "", 0, 0, err
-		}
-		moUrl = fileservice.JoinPath(serviceCSV, u.Path)
+		return append(fields, "hdfs", "endpoint="+u.Host), u.Path, nil
 	case stage.STAGE_PROTOCOL:
-		var source stage.StageDef
-		source, err = stageutil.UrlToStageDefFromURL(u, proc)
+		source, err := stageutil.UrlToStageDefFromURL(u, proc)
 		if err != nil {
-			return "", 0, 0, err
+			return nil, "", err
 		}
-		moUrl, _, err = source.ToPath()
-		if err != nil {
-			return "", 0, 0, err
-		}
+		fields, file, _, err := source.AppendPathParts(fields)
+		return fields, file, err
 	default:
-		return "", 0, 0, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
+		return nil, "", moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
 	}
+}
 
+func parseDatalinkRange(u *url.URL) (int64, int64, error) {
+	var err error
 	// Keep the public range slice at the public boundary. Most row values have
 	// no query and need neither a range allocation nor an empty query map.
 	offset, size := int64(0), int64(-1)
@@ -199,24 +247,24 @@ func parseDatalinkURL(u *url.URL, proc *process.Process) (string, int64, int64, 
 		}
 		if _, ok := urlParams["offset"]; ok {
 			if offset, err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
-				return "", 0, 0, err
+				return 0, 0, err
 			}
 		}
 		if _, ok := urlParams["size"]; ok {
 			if size, err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
-				return "", 0, 0, err
+				return 0, 0, err
 			}
 		}
 	}
 	if offset < 0 {
-		return "", 0, 0, moerr.NewInternalErrorNoCtx("offset cannot be negative")
+		return 0, 0, moerr.NewInternalErrorNoCtx("offset cannot be negative")
 	}
 
 	if size < -1 {
-		return "", 0, 0, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+		return 0, 0, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
 	}
 
-	return moUrl, offset, size, nil
+	return offset, size, nil
 }
 
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {

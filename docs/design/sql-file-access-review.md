@@ -172,3 +172,29 @@ focused normal/race/static receipts and matched component benchmarks. No new
 source finding or further validation request. The instrumented parent-source
 SQL observations remain diagnosis, not current-patch timing acceptance. Raw
 review/provenance and evidence: `revision-20261016/admission-opt/` in the ledger.
+
+
+### Shared validation-only resolver optimization
+
+**SOURCE ACCEPT; overall performance/submission NOT READY.** The required
+actual gpt-6.1-sol / xhigh design uses session
+`01a14284-3523-71e1-a83b-bda47043296f`, turn
+`01a14485-bc30-7402-864b-48351f270a8a`. Final overall review uses session
+`01a144ae-46a3-7a00-8219-a280e468085f`, turn `01a144ae-472d-7293-bc18-d5980c9cfddb`.
+Reviewed base `6b081a1fcfe`, head `db2db3ddfcb` plus the complete source/test/document
+diff SHA256 `88c72f0b6b0e51f16d4866fb1b6a67a5534b35450dfeca0f96078028bbde664f`.
+The final artifact SHA256 is
+`21000500ff8ced903d057700784c9419ba8e5c679e7c1e79322a30b98236450e`.
+
+No verified source finding remains. The review reconciles the shared parser and
+policy ownership, compatibility/error ordering, owned argument slices, final-row
+eligibility, normal/race/static receipts and frozen old/new performance controls.
+All 15 prior patches rebase equivalently; five design-target files and native
+inputs remain unchanged across the rebase. The final recorded tests include the
+corrected fixture's normal/race/lint checks. The component gates pass, but the
+one SQL comparison's elapsed median is +6.16% despite lower allocations. The
+sole remaining delivery blocker is the retained whole-PR/main timing gate;
+only an explicit revision-scoped user exception can permit submission with it
+unresolved. No additional heavy cohort, CI pass, solved stall cause or zero
+performance regression is claimed. Actual provenance, review and evidence are
+retained under `revision-20261016/systematic-opt/` in the issue30185 ledger.

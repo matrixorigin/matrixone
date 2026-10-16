@@ -78,6 +78,9 @@ func TestParseDatalink(t *testing.T) {
 			if !reflect.DeepEqual(got2, tt.wantUrlParams) {
 				t.Errorf("ParseDatalink() = %v, want %v", got2, tt.wantUrlParams)
 			}
+			if err := ValidateDatalink(tt.data, nil); err != nil {
+				t.Errorf("validation failed: %v", err)
+			}
 			dl, err := parseDatalink(tt.data, nil)
 			if err != nil || dl.MoPath != tt.wantMoUrl || dl.Offset != tt.wantUrlParams[0] || dl.Size != tt.wantUrlParams[1] {
 				t.Errorf("parsed Datalink = %+v, err=%v; want path=%s range=%v", dl, err, tt.wantMoUrl, tt.wantUrlParams)
@@ -139,6 +142,10 @@ func TestParseDatalinkFailed(t *testing.T) {
 			}
 			if err == nil {
 				t.Errorf("ParseDatalink() should error out. %s", tt.data)
+			}
+			validationErr := ValidateDatalink(tt.data, nil)
+			if validationErr == nil || err == nil || validationErr.Error() != err.Error() || reflect.TypeOf(validationErr) != reflect.TypeOf(err) {
+				t.Errorf("validation error=%v, want %v", validationErr, err)
 			}
 		})
 	}

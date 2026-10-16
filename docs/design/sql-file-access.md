@@ -130,6 +130,17 @@ There is no new catalog privilege, persisted policy, worker or wire field. Unrel
 or stage resolution. Synchronous ordinary fulltext retains its foreground caller
 identity and local-file admission behavior.
 
+Validation-only callers share URL/stage resolution and range checks with the
+materializing Datalink APIs. Stage owns decoded service-field construction;
+fileservice owns both path interpretation and the existing provider policy.
+CAST retains its legacy checks, while final-row admission additionally validates
+the concrete file path and async resource policy. Neither needs to serialize a
+service path merely to discard it. Complete acquisition objects and public path
+strings retain their existing representation. Local/named expressions, colons
+in file components and CSV newline normalization use the original parser.
+Parsed argument slices own their storage; no caller scratch or validation result
+is retained across operations. This adds no validation cache or new I/O path.
+
 Administrators can index local document contents by explicitly materializing them
 into a TEXT column with foreground load_text, then using the normal committed TEXT
 CDC lifecycle. The database stores actual document text, rather than asking a later

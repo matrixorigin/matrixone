@@ -14132,8 +14132,7 @@ func CheckAsyncDatalinkSource(ivecs []*vector.Vector, result vector.FunctionResu
 		if !selectList.Contains(i) && !inactive && active {
 			value, null := values.GetStrValue(i)
 			if !null {
-				_, err := datalink.NewAsyncDatalink(string(value), proc)
-				if err != nil {
+				if err := datalink.ValidateAsyncDatalinkSource(string(value), proc); err != nil {
 					return err
 				}
 			}

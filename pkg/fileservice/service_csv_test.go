@@ -17,6 +17,7 @@ package fileservice
 import (
 	"encoding/csv"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -64,8 +65,59 @@ func FuzzEncodeServiceCSV(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {
-		checkServiceCSV(t, strings.Split(input, "\x00"))
+		fields := strings.Split(input, "\x00")
+		checkServiceCSV(t, fields)
+		checkServicePath(t, fields, "/file")
+		checkServicePath(t, fields, "file:part")
 	})
+}
+
+func checkServicePath(t *testing.T, fields []string, file string) {
+	t.Helper()
+	wire := file
+	if len(fields) > 0 {
+		service, err := standardServiceCSV(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = JoinPath(service, file)
+	}
+	encoded, err := EncodeServicePath(fields, file)
+	if err != nil || encoded != wire {
+		t.Fatalf("encoded %q (%v), want %q", encoded, err, wire)
+	}
+	want, wantErr := ParsePath(wire)
+	got, gotErr := ParsePathFromServiceFields(fields, file)
+	if !reflect.DeepEqual(got, want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) || reflect.TypeOf(gotErr) != reflect.TypeOf(wantErr) {
+		t.Fatalf("fields=%q file=%q: got %+v (%v), want %+v (%v)", fields, file, got, gotErr, want, wantErr)
+	}
+}
+
+func TestServicePathFields(t *testing.T) {
+	values := []string{"", "key=caller", "secret=a,b", `secret=a"b`, " leading", "\u2003leading", "a\rb", "a\nb", "a\r\nb", "\xff", "世界"}
+	fields := make([][]string, 0, 8+len(values))
+	fields = append(fields, [][]string{nil, {}, {""}, {"", "arg=value"}, {"SHARED"}, {`\.`}, {"\xff"}, {"hdfs", "endpoint=host:9000"}}...)
+	for _, value := range values {
+		fields = append(fields, []string{"s3-opts", value, ""})
+	}
+	for i, record := range fields {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			for _, file := range []string{"", ".", "///", "/a/b", "SHARED:/a", "a:b", "invalid space", "a\nb", "a\x00b", "世界", "\xff"} {
+				checkServicePath(t, record, file)
+			}
+		})
+	}
+	// Callers reuse their field scratch after interpretation, as they can with
+	// the materialized parser. A retained Path must keep its own arguments.
+	record := []string{"hdfs", "endpoint=host:9000"}
+	path, err := ParsePathFromServiceFields(record, "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record[1] = "endpoint=other:9000"
+	if path.ServiceArguments[0] != "endpoint=host:9000" {
+		t.Fatal("parsed path retained caller scratch")
+	}
 }
 
 func BenchmarkEncodeServiceCSV(b *testing.B) {
