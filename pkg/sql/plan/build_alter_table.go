@@ -683,6 +683,16 @@ func addAlterCopyForeignKeys(
 		}
 	}
 
+	// #30254: MySQL installs a FOREIGN KEY declared under
+	// foreign_key_checks=0 without validating pre-existing rows; orphans
+	// survive until later DML fails. Skip the existing-row detect SQLs in
+	// that mode; constraint definitions, catalog updates and parent
+	// existence checks below are unaffected.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(cctx)
+	if err != nil {
+		return err
+	}
+
 	for _, foreignKey := range foreignKeys {
 		if err := adjustConstraintName(ctx, foreignKey); err != nil {
 			return err
@@ -733,6 +743,12 @@ func addAlterCopyForeignKeys(
 			},
 		})
 		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if !fkChecksEnabled {
+			// Checks-disabled declarations skip existing-row validation
+			// entirely; the constraint is installed as declared.
+			continue
+		}
 
 		if fkData.IsSelfRefer {
 			detectSQLs, err := genSqlsForCheckFKSelfRefer(
