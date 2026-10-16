@@ -1,6 +1,6 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 6
+- Revision: 7
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
@@ -19,7 +19,9 @@ exemption does not cover this expansion. Revision 3 supplied the missing design;
 revision 4 retains that architecture and mechanically advances set-key admission
 after official main allocated version 116;
 revision 5 adds the local capacity protocol, receipt and composed lifecycle tests;
-revision 6 extends accounted resource, input-distribution and composed fault evidence.
+revision 6 extends accounted resource, input-distribution and composed fault evidence;
+revision 7 defines the intended deployment qualification/rollout contract and
+executes its sparse and concurrent boundary cases with enforced benchmark budgets.
 These revisions do not assert repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
@@ -439,6 +441,113 @@ combined-expression controls verify 117 versus 118. Capacity and lifecycle
 receipts above were refreshed after the container/spill dependency changes;
 revision 5's 116/117 records remain historical. Full planner, compile, colexec
 and protobuf-plan package checks and updated static checks pass on this source.
+
+### Revision 7 intended deployment and rollout contract
+
+This revision selects the first alternative in
+[review 5549738840](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5549738840):
+define an intended deployment envelope and validate its boundary, sparse and
+concurrent workloads against explicit budgets. It does **not** select a new
+runtime admission mechanism. A default-off planner switch would reject the
+previously supported correlated scalar queries restored by this PR; silently
+returning to the old decorrelation route could instead change membership.
+
+The initial intended qualification profile is **S1**, a dedicated single-CN CPU
+instance on Apple M4 / 16 GiB, Darwin arm64 / Go 1.27.1 with the recorded native
+libraries and MORPC 118 implementation. Its workload is the benchmark's actual
+nonidentity-correlated scalar UNION template and its duplicate/NULL/error
+controls. Each query carries at most 64
+outer occurrences, 256 total retained candidates across both arms and a
+256-byte outer VARCHAR payload (plus the benchmark's integer identity and
+execution metadata). At most two such clients execute concurrently; `max_dop=1`
+is required for every client and the internal executor. These are intended
+workload/deployment **preconditions**, not optimizer cardinality estimates or
+newly enforced server limits. They do not qualify arbitrary SQL with the same
+row counts, other hardware/OS, other user workloads sharing the host, AP
+parallelism or distributed CN placement. In particular, Darwin results are not
+Linux production evidence.
+
+S1 uses fixed acceptance criteria established before this execution:
+
+| Quantity | Acceptance criterion | Observation boundary |
+| --- | --- | --- |
+| First invocation completion | <= 10 s per client | Ordinary SQL, after fixture/data loading; not OS/storage cold |
+| Measured warm completion or expected 1242 error | <= 5 s per client in every measured round | One excluded warm-up, then three measured rounds; first invocation separate |
+| Process lifetime resident high-water | <= 4 GiB | Whole process including fixture/prior profiles, not a query RSS peak |
+| Accounted allocation generation peak | <= 256 MiB per internal query | Fresh terminal resource root, also on expected 1242 errors |
+| Sum of internal generation peaks | <= C * 256 MiB (512 MiB at C=2) | Conservative sum bound; internal execution overlap is not measured |
+| Largest reported operator memory | <= 256 MiB | Separate successful serial physical EXPLAIN execution |
+| Sum of reported operator spill bytes | <= 64 MiB per analyzed query | Separate serial physical EXPLAIN; not simultaneous two-client disk occupancy |
+
+The benchmark now asserts these criteria, requires nonempty physical memory
+and spill counters, and preserves its public SQL result/cardinality and
+concurrent-interval overlap oracles. No timing threshold is added to ordinary
+UT/BVT. Physical runtime payload remains unavailable on cardinality errors;
+accounted roots cover those failures, but no missing metric is replaced with
+zero or an implied whole-query bound.
+
+Revision 7 extends the existing orthogonal profiles with sparse-boundary C=1
+and C=2 at O=64/I=256/payload=256, and forced-spill C=2 at that same boundary.
+The sparse input has one matching outer occurrence and 63 unmatched occurrences:
+only the final inner ID matches, with one candidate from each identical arm.
+Thus the input model has M=2, Z=63 and one distinct matched membership, while a
+general range join can inspect O*I=16,384 pairs. The public oracle checks all 64
+outer IDs/payloads, one negative-zero result and 63 NULL results. This comparison
+bound is derived from the fixture, not claimed as a measured comparison counter.
+The exact plan/physical counters, all public samples and terminal roots are in
+the [revision 7 receipt](validation/20261017_scalar_set_capacity_r7.json).
+
+The fresh run passes all 15 profiles and 100 public samples (package 8.445 s).
+Boundary results, with one excluded warm-up and three measured rounds each:
+
+| Boundary workload | O / total I / payload / C | Maximum warm completion ms | Maximum internal generation peak bytes | Sum of internal peaks bound bytes | Separate serial spill bytes |
+| --- | --- | --- | --- | --- | --- |
+| sparse-boundary | 64/256/256/1 | 1.566 | 1,481,312 | 1,481,312 | 0 |
+| sparse-boundary-concurrent | 64/256/256/2 | 3.216 | 1,481,312 | 2,962,624 | 0 |
+| forced-spill-boundary-concurrent | 64/256/256/2 | 147.595 | 4,820,544 | 9,641,088 | 170,796 |
+
+Both sparse physical plans independently report 65 LEFT JOIN output rows and
+64 final rows, alongside the public result oracle. The concurrent forced-spill
+profile's separate serial analysis records 251 created/reloaded buckets, 313
+write calls, 375 reload records and 384 reload rows. These do not measure total
+simultaneous two-client spill. Across the full matrix, first-invocation maximum
+completion is 112.065 ms, maximum warm completion is 147.595 ms, largest internal
+generation peak is 8,505,176 bytes and process lifetime RSS high-water is
+434,323,456 bytes. All applicable recorded quantities meet S1's fixed targets;
+unavailable error-profile physical metrics remain outside that statement.
+
+Rollout is a separate, traceable decision for the exact revision:
+
+1. **Qualification delivery (current):** publish this design, executable matrix
+   and receipt. Independent planner/execution acceptance of S1 remains pending;
+   do not describe the change as generally production-ready on the basis of CI.
+   The planner still automatically selects the route outside S1; documentation
+   does not enforce an admission limit and this revision does not claim otherwise.
+2. **First controlled deployment, only after independent acceptance:** use a
+   dedicated S1 instance and the bounded workload family above. The deployment
+   owner must establish input/payload bounds and a two-client admission limit
+   before submission, pin `max_dop=1`, and retain physical plan/resource/error
+   observations. A shared instance accepting arbitrary client SQL is outside S1.
+   Stop the workload on any exceeded budget, incomplete cleanup or unexpected
+   cardinality/result; cancellation and same-instance recovery use the existing
+   owners demonstrated by the composed lifecycle receipt.
+3. **Expansion:** larger inputs, wider rows, higher concurrency, Linux/other
+   hardware, additional CNs or DOP require a versioned profile, the same warm-up/
+   three-round and unhappy-path protocol on that actual deployment, and separate
+   acceptance before widening support. An unchanged CI result is not evidence
+   for those dimensions.
+4. **Rollback:** stop admitting this workload and cancel/drain its sessions;
+   withdraw the candidate deployment if its resource/cleanup targets fail.
+   Follow the existing MORPC predecessor/persisted-plan rollback contract. No
+   dynamic session flag, cache invalidation mechanism or implicit optimizer
+   fallback is introduced by this document.
+
+This completes the objective S1 qualification work requested by the review;
+independent acceptance of that exact contract is an external review state, not
+an author-issued approval. General production capacity and wider rollout remain
+unqualified. Existing revision-6 allocator-attribution, separate serial EXPLAIN,
+internal overlap and distributed-capacity limitations continue to apply.
+
 
 ## Alternatives
 
