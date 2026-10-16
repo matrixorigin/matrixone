@@ -504,6 +504,52 @@ func TestMySQLSpecialBitwiseAggregateIdentity(t *testing.T) {
 	}
 }
 
+func TestBitCountMySQLSpecialIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		suffix string
+	}{
+		{"direct", "select ", " from enum_order_t"},
+		{"derived", "select ", " from (select e, s from enum_order_t) d"},
+		{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+		{"grouped", "select ", " from enum_order_t group by e, s"},
+		{"having", "select e, s from enum_order_t group by e, s having ", " > 0"},
+		{"prepared", "prepare bit_count_stmt from 'select ", " from enum_order_t where id = ?'"},
+	} {
+		for _, operand := range []string{"e", "s"} {
+			t.Run(tc.name+"/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+"bit_count("+operand+")"+tc.suffix)
+				require.NoError(t, err)
+				if p.GetDcl().GetPrepare() != nil {
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				fn := findPlanFunctionExpr(p, "bit_count")
+				require.NotNil(t, fn)
+				require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+				arg := fn.GetF().Args[0]
+				want := types.T_uint16
+				if operand == "s" {
+					want = types.T_uint64
+				}
+				require.Equal(t, int32(want), arg.Typ.Id)
+				require.False(t, isEnumOrSetPlanType(&arg.Typ), "BIT_COUNT must consume an ordinary integer domain")
+			})
+		}
+	}
+	for _, operand := range []string{"v", "cast(e as char)", "cast(s as char)", "concat(e, '')", "concat(s, '')"} {
+		t.Run("string/"+operand, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count("+operand+") from enum_order_t")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_varchar), fn.GetF().Args[0].Typ.Id)
+		})
+	}
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count(s) from set_empty_member_t group by s")
+	require.ErrorContains(t, err, "without retained storage identity")
+}
+
 func TestStatisticalAggregateNumericDomains(t *testing.T) {
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
 		for _, tc := range []struct {

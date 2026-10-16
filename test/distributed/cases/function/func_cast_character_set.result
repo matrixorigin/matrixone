@@ -1,0 +1,66 @@
+select cast('abc' as char character set utf8mb4);
+➤ cast(abc as char character set utf8mb4)[12,3,0]  𝄀
+abc
+select cast('abcdef' as char(3) character set utf8mb4);
+➤ cast(abcdef as char(3) character set utf8mb4)[1,3,0]  𝄀
+abc
+select convert('你好😀a', char(2) character set utf8mb4);
+➤ cast(你好😀a as char(2) character set utf8mb4)[1,2,0]  𝄀
+你好
+select convert('😀a', char(1) character set utf8mb3);
+➤ cast(😀a as char(1) character set utf8mb3)[1,1,0]  𝄀
+😀
+select charset(cast('x' as char(2) character set utf8)), collation(cast('x' as char(2) character set utf8));
+➤ charset(cast(x as char(2) character set utf8))[12,65535,0]  ¦  collation(cast(x as char(2) character set utf8))[12,65535,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci
+select hex(cast('a' as char(3) character set binary)), length(cast('a' as char(3) character set binary)), char_length(cast('a' as char(3) character set binary)), charset(cast('a' as char(3) character set binary)), collation(cast('a' as char(3) character set binary));
+➤ hex(cast(a as char(3) character set binary))[12,6,0]  ¦  length(cast(a as char(3) character set binary))[-5,64,0]  ¦  char_length(cast(a as char(3) character set binary))[-5,64,0]  ¦  charset(cast(a as char(3) character set binary))[12,65535,0]  ¦  collation(cast(a as char(3) character set binary))[12,65535,0]  𝄀
+61  ¦  1  ¦  1  ¦  binary  ¦  binary
+select hex(cast('abcdef' as char(3) character set binary)), length(cast('abcdef' as char(3) character set binary));
+➤ hex(cast(abcdef as char(3) character set binary))[12,6,0]  ¦  length(cast(abcdef as char(3) character set binary))[-5,64,0]  𝄀
+616263  ¦  3
+select hex(cast('你好' as char(2) character set binary)), length(cast('你好' as char(2) character set binary));
+➤ hex(cast(你好 as char(2) character set binary))[12,4,0]  ¦  length(cast(你好 as char(2) character set binary))[-5,64,0]  𝄀
+E4BD  ¦  2
+select hex(convert('abcdef', char(3) character set binary)), length(convert('abcdef', char(3) character set binary));
+➤ hex(cast(abcdef as char(3) character set binary))[12,6,0]  ¦  length(cast(abcdef as char(3) character set binary))[-5,64,0]  𝄀
+616263  ¦  3
+select cast(null as char(2) character set utf8mb4) is null, convert(null, char(2) character set binary) is null;
+➤ cast(null as char(2) character set utf8mb4) is null[-7,1,0]  ¦  cast(null as char(2) character set binary) is null[-7,1,0]  𝄀
+1  ¦  1
+select hex(cast('abc' as char(0) character set binary)), length(cast('abc' as char(0) character set binary)), hex(cast('abc' as char(0) character set utf8mb4)), char_length(cast('abc' as char(0) character set utf8mb4));
+➤ hex(cast(abc as char(0) character set binary))[12,536870911,0]  ¦  length(cast(abc as char(0) character set binary))[-5,64,0]  ¦  hex(cast(abc as char(0) character set utf8mb4))[12,536870911,0]  ¦  char_length(cast(abc as char(0) character set utf8mb4))[-5,64,0]  𝄀
+  ¦  0  ¦    ¦  0
+select hex(cast('a' as char character set binary)), length(cast('a' as char character set binary)), charset(cast('a' as char character set binary)), collation(cast('a' as char character set binary));
+➤ hex(cast(a as char character set binary))[12,8,0]  ¦  length(cast(a as char character set binary))[-5,64,0]  ¦  charset(cast(a as char character set binary))[12,65535,0]  ¦  collation(cast(a as char character set binary))[12,65535,0]  𝄀
+61  ¦  1  ¦  binary  ¦  binary
+select hex(cast(12345 as char(3) character set binary)), length(cast(12345 as char(3) character set binary));
+➤ hex(cast(12345 as char(3) character set binary))[12,6,0]  ¦  length(cast(12345 as char(3) character set binary))[-5,64,0]  𝄀
+313233  ¦  3
+select cast(12345 as char(3) character set utf8mb4);
+➤ cast(12345 as char(3) character set utf8mb4)[1,3,0]  𝄀
+123
+select hex(cast(cast(12.34 as decimal(5,2)) as char(3) character set binary)), length(cast(cast(12.34 as decimal(5,2)) as char(3) character set binary));
+➤ hex(cast(cast(12.34 as decimal(5, 2)) as char(3) character set binary))[12,6,0]  ¦  length(cast(cast(12.34 as decimal(5, 2)) as char(3) character set binary))[-5,64,0]  𝄀
+31322E  ¦  3
+select cast(date '2020-01-02' as char(4) character set utf8mb4);
+➤ cast(date(2020-01-02) as char(4) character set utf8mb4)[1,4,0]  𝄀
+2020
+prepare char_cs_stmt from 'select hex(cast(? as char(3) character set binary)), length(cast(? as char(3) character set binary))';
+set @char_cs_long='abcdef';
+execute char_cs_stmt using @char_cs_long, @char_cs_long;
+➤ hex(cast(? as char(3) character set binary))[12,6,0]  ¦  length(cast(? as char(3) character set binary))[-5,64,0]  𝄀
+616263  ¦  3
+set @char_cs_short='a';
+execute char_cs_stmt using @char_cs_short, @char_cs_short;
+➤ hex(cast(? as char(3) character set binary))[12,6,0]  ¦  length(cast(? as char(3) character set binary))[-5,64,0]  𝄀
+61  ¦  1
+set @char_cs_null=null;
+execute char_cs_stmt using @char_cs_null, @char_cs_null;
+➤ hex(cast(? as char(3) character set binary))[12,6,0]  ¦  length(cast(? as char(3) character set binary))[-5,64,0]  𝄀
+null  ¦  null
+deallocate prepare char_cs_stmt;
+select cast('abc' as char(2) character set '');
+invalid input: unsupported character set '' for CHAR cast
+select convert('abc', char(2) character set '');
+invalid input: unsupported character set '' for CHAR cast

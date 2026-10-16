@@ -6449,6 +6449,29 @@ func TestUnhex(t *testing.T) {
 	}
 }
 
+// Issue #30230: MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) when
+// UNHEX receives malformed hexadecimal input, while still returning NULL.
+func TestUnhexWarningForInvalidHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zz", "4d"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false,
+			[]string{"", "M"}, []bool{true, false}),
+		Unhex,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, uint16(moerr.ER_WRONG_VALUE_FOR_TYPE), warnings.warnings[0].code)
+	require.Equal(t, "Incorrect string value: 'zz' for function unhex", warnings.warnings[0].msg)
+}
+
 // ToBase64
 func initToBase64TestCase() []tcTemp {
 	line76 := strings.Repeat("YWFh", 19)
@@ -8898,6 +8921,36 @@ func TestMicrosecond(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30239: MySQL reports the nonnegative fractional part (0-999999)
+// even for negative TIME values; Time.MicroSec keeps the raw int64 sign
+// and must not leak it into the MICROSECOND result.
+func TestMicrosecondNegativeTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// -00:00:01.123456 stored as raw microseconds
+	timeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.Time(-1123456)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		TimeToMicrosecond,
+	)
+	succeed, info := timeCase.RunAndFree()
+	require.True(t, succeed, info)
+
+	stringCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01.123456"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		StringToMicrosecond,
+	)
+	succeed, info = stringCase.RunAndFree()
+	require.True(t, succeed, info)
 }
 
 // TestStringToMicrosecond tests StringToMicrosecond function with string inputs

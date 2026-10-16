@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 
@@ -1184,4 +1185,146 @@ func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendPreInsertPlanPreservesUpdateRowIDForV1Unique(t *testing.T) {
+	builder := NewQueryBuilder(
+		plan.Query_SELECT,
+		NewMockCompilerContext(false, newPlanTestProcess(t)),
+		false,
+		true,
+	)
+	bindCtx := NewBindContext(builder, nil)
+
+	intType := plan.Type{Id: int32(types.T_int32)}
+	unicodeType := plan.Type{
+		Id:               int32(types.T_varchar),
+		Width:            64,
+		Charset:          uint32(types.CharsetUTF8MB4UnicodeCI),
+		CollationVersion: uint32(types.CollationVersionV1),
+	}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+
+	sourceID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{
+				Typ: intType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 0, Name: "id"},
+				},
+			},
+			{
+				Typ: unicodeType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 1, Name: "s"},
+				},
+			},
+			{
+				Typ: rowIDType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 2, Name: catalog.Row_ID},
+				},
+			},
+		},
+	}, bindCtx)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "s", Typ: unicodeType},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*plan.IndexDef{{
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexName:      "uk_s",
+			IndexTableName: "t___idx_uk_s",
+			Parts:          []string{"s"},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}},
+	}
+	uniqueTableDef := &plan.TableDef{
+		Name: "t___idx_uk_s",
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName},
+	}
+
+	sourceStep, err := appendPreInsertPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		sourceID,
+		0,
+		true,
+		false,
+		uniqueTableDef,
+		true,
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, sourceStep, int32(0))
+
+	var preInsert *plan.Node
+	var keyProject *plan.Node
+	for i := range builder.qry.Nodes {
+		node := builder.qry.Nodes[i]
+		if node.NodeType == plan.Node_PRE_INSERT_UK {
+			preInsert = node
+			keyProject = builder.qry.Nodes[node.Children[0]]
+			break
+		}
+	}
+	require.NotNil(t, preInsert)
+	require.NotNil(t, keyProject)
+
+	// The V1 key is materialized after the base projection but before the
+	// hidden UPDATE rowid. PRE_INSERT_UK continues to use the last input column
+	// as the update rowid, preserving the original operator ABI.
+	require.Equal(t, plan.Node_PROJECT, keyProject.NodeType)
+	require.Len(t, keyProject.ProjectList, 4)
+	require.Equal(t, int32(types.T_int32), keyProject.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(0), keyProject.ProjectList[0].GetCol().ColPos)
+	require.Equal(t, int32(1), keyProject.ProjectList[1].GetCol().ColPos)
+	require.Equal(t, int32(types.T_varbinary), keyProject.ProjectList[2].Typ.Id)
+	require.Equal(t, "physical_collation_key", keyProject.ProjectList[2].GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_Rowid), keyProject.ProjectList[3].Typ.Id)
+	require.Equal(t, int32(2), keyProject.ProjectList[3].GetCol().ColPos)
+
+	require.Equal(t, []int32{2}, preInsert.PreInsertUkCtx.Columns)
+	require.Len(t, preInsert.ProjectList, 3)
+	require.Equal(t, int32(types.T_varbinary), preInsert.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(types.T_int32), preInsert.ProjectList[1].Typ.Id)
+	require.Equal(t, int32(types.T_Rowid), preInsert.ProjectList[2].Typ.Id)
+	require.Equal(t, catalog.Row_ID, preInsert.ProjectList[2].GetCol().Name)
+
+	// INSERT streams do not carry a trailing rowid.  The V1 key must therefore
+	// be appended after the existing projection instead of being inserted before
+	// its last column.
+	_, err = appendPreInsertPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		sourceID,
+		0,
+		false,
+		false,
+		uniqueTableDef,
+		true,
+	)
+	require.NoError(t, err)
+
+	var insertPreInsert *plan.Node
+	for i := len(builder.qry.Nodes) - 1; i >= 0; i-- {
+		if builder.qry.Nodes[i].NodeType == plan.Node_PRE_INSERT_UK {
+			insertPreInsert = builder.qry.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, insertPreInsert)
+	insertKeyProject := builder.qry.Nodes[insertPreInsert.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, insertKeyProject.NodeType)
+	require.Len(t, insertKeyProject.ProjectList, 4)
+	require.Equal(t, int32(types.T_Rowid), insertKeyProject.ProjectList[2].Typ.Id)
+	require.Equal(t, int32(2), insertKeyProject.ProjectList[2].GetCol().ColPos)
+	require.Equal(t, int32(types.T_varbinary), insertKeyProject.ProjectList[3].Typ.Id)
+	require.Equal(t, "physical_collation_key", insertKeyProject.ProjectList[3].GetF().Func.ObjName)
 }
