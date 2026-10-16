@@ -15,12 +15,14 @@
 package spillcleanup
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,6 +93,8 @@ func TestReservationBoundsAndRestoresAdmission(t *testing.T) {
 	r, err := Reserve()
 	require.Nil(t, r)
 	require.ErrorIs(t, err, ErrCapacity)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.ErrorIs(t, moerr.ConvertGoError(context.Background(), err), ErrCapacity)
 	require.EqualValues(t, Capacity, Used())
 	new(Reservation).Release() // a zero-value token cannot return another owner's slot
 	require.EqualValues(t, Capacity, Used())
