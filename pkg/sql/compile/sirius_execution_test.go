@@ -23,11 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type siriusExecutionStub struct {
@@ -47,27 +44,7 @@ func (s *siriusExecutionStub) CleanupAfterRun(ctx context.Context, err error) er
 	return s.cleanup(ctx, err == nil)
 }
 
-func TestSiriusFlightBackendPreservesPreparationOwnership(t *testing.T) {
-	require.Nil(t, NewSiriusFlightBackend(nil))
-	backend := NewSiriusFlightBackend(&sidecarflight.Runtime{})
-	require.Zero(t, backend.Capabilities(), "Flight cannot advertise embedded exact-decimal support")
-	// Invalid preparation fails before any connection is required. Its release
-	// callback still runs exactly once. Malformed requests remain terminal even
-	// after successful cleanup, just as in the concrete Flight API.
-	releases := 0
-	execution, err := backend.Prepare(context.Background(), SiriusPrepareRequest{
-		Release: func(context.Context) error { releases++; return nil },
-	})
-	require.ErrorContains(t, err, "query identity and Substrait plan are required")
-	require.Nil(t, execution, "a failed Prepare must not return a typed-nil execution")
-	require.Equal(t, 1, releases)
-	require.False(t, backend.CanFallbackBeforeVisibility(err))
-	require.False(t, backend.CanFallbackBeforeVisibility(errors.New("execution failure")))
-	require.False(t, backend.CanFallbackBeforeVisibility(nil))
-	require.True(t, backend.CanFallbackBeforeVisibility(status.Error(codes.Unavailable, "unavailable")))
-}
-
-func TestSiriusBackendExecutionUsesCompilerCleanup(t *testing.T) {
+func TestSiriusEngineExecutionUsesCompilerCleanup(t *testing.T) {
 	for _, name := range []string{"success", "consumer error", "canceled request", "cleanup error", "consumer panic"} {
 		t.Run(name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
