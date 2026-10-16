@@ -252,7 +252,7 @@ func buildInsertPlans(
 	updatePkCol := true
 	addAffectedRows := true
 	isFkRecursionCall := false
-	ifNeedCheckPkDup := !builder.qry.LoadTag
+	ifNeedCheckPkDup := !builder.qry.LoadTag || builder.checkLoadPrimaryKey
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 	var skipIndexesCoyp map[string]bool

@@ -513,6 +513,9 @@ type QueryBuilder struct {
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
+	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
+	checkLoadPrimaryKey bool
+
 	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
 
 	// spill memory for aggregate function
