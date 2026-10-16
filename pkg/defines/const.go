@@ -148,7 +148,11 @@ const (
 	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
-	MORPCLatestVersion       = MORPCVersion112
+	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
+	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
+	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
+	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
+	MORPCLatestVersion       = MORPCVersion116
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

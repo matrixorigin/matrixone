@@ -4273,6 +4273,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// filter/message generations, execute those regions exactly once with the
 		// existing FORCE path rather than replaying either side.
 		builder.forceMultipleAdaptiveVectorRegions(rootID)
+		// Keep the current root visible to vector rules that prove ancestor consumers.
+		builder.qry.Steps[i] = rootID
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -6113,7 +6115,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				if rewrittenSelect, hasWindow := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+				if rewrittenSelect, hasWindow, rewriteErr := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+					if rewriteErr != nil {
+						return 0, rewriteErr
+					}
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
@@ -6130,12 +6135,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							// Keep branch-local duplicate elimination after
 							// grouping NULL normalization to reduce rows before
@@ -6152,7 +6157,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  selectClause.Having,
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -7554,8 +7559,35 @@ func rewriteRollupWindowSelect(
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
 ) (*tree.Select, bool) {
-	return rewriteRollupWindowSelectWithHeadingProvenance(
+	rewritten, hasWindow, _ := rewriteRollupWindowSelectWithHeadingProvenance(
 		nil, selectClause, astOrderBy, astLimit, astRankOption)
+	return rewritten, hasWindow
+}
+
+// ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
+// to every branch so aggregate binding stays identical for shared input plans.
+// Keep fresh wrappers because a CTE declaration can be bound more than once.
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
+		return nil
+	}
+	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
+	if having != nil {
+		result.Expr = having.Expr
+	}
+	if guardEmptyInput {
+		count := &tree.FuncExpr{
+			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
+			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
+		}
+		positive := tree.NewComparisonExpr(tree.GREAT_THAN, count, tree.NewNumVal(int64(0), "0", false, tree.P_int64))
+		if result.Expr == nil {
+			result.Expr = positive
+		} else {
+			result.Expr = tree.NewAndExpr(tree.NewParentExpr(result.Expr), positive)
+		}
+	}
+	return result
 }
 
 func rewriteRollupWindowSelectWithHeadingProvenance(
@@ -7564,9 +7596,9 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
-) (*tree.Select, bool) {
+) (*tree.Select, bool, error) {
 	if selectClause == nil {
-		return nil, false
+		return nil, false, nil
 	}
 
 	hasWindow := false
@@ -7580,49 +7612,57 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		hasWindow = hasWindow || rollupWindowExprContainsWindow(selectClause.Having.Expr)
 	}
 	if !hasWindow {
-		return nil, false
+		return nil, false, nil
 	}
 	if selectClause.GroupBy == nil || selectClause.GroupBy.Apart ||
 		len(selectClause.GroupBy.GroupByExprsList) <= 1 ||
 		selectClause.Distinct ||
 		(selectClause.Having != nil && rollupWindowExprContainsWindow(selectClause.Having.Expr)) {
-		return nil, true
+		return nil, true, nil
 	}
 
 	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
 	rewriteState.addGroupingSourceNames(selectClause.GroupBy.GroupByExprsList)
 	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
-	var rewrittenHaving *tree.Where
+	groupingAliases := rollupWindowGroupingAliases(selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchAliases := groupingAliases
 	if selectClause.Having != nil {
 		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
 		// source columns (including ambiguity) before SELECT aliases. Hidden
 		// projections retain the original non-window aliases for the fallback.
-		rewriteState.addHavingAliasExprs(selectClause.Exprs)
-		nextHaving := *selectClause.Having
-		nextHaving.RollupHaving = true
-		rewrittenHaving = &nextHaving
+		branchAliases = selectClause.Exprs
 	}
+	rewriteState.addBranchAliasExprs(branchAliases)
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
 	if len(rewriteState.innerExprs)+len(rewriteState.orderExprs) == 0 {
 		_, ok = rewriteState.ensureInnerExpr(tree.NewNumVal(int64(1), "1", false, tree.P_int64))
 		if !ok {
-			return nil, true
+			return nil, true, nil
 		}
 	}
 
-	groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+	groupingSets := selectClause.GroupBy.GroupByExprsList
+	if len(groupingAliases) > 0 {
+		var err error
+		groupingSets, err = rewriteState.remapGroupingOrdinals(selectClause.Exprs, groupingSets)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
 		originalOutputExprs[i] = selectClause.Exprs[i].Expr
 	}
-	for i, list := range selectClause.GroupBy.GroupByExprsList {
+	for i, list := range groupingSets {
 		innerExprs := make(tree.SelectExprs, 0, len(rewriteState.innerExprs)+len(rewriteState.orderExprs))
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
@@ -7632,7 +7672,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			Where:   selectClause.Where,
 			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
-				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
+				GroupByExprsList:             groupingSets,
 				GroupingSet:                  list,
 				Apart:                        true,
 				GroupingSetOrderHiddenCount:  len(rewriteState.orderExprs),
@@ -7642,7 +7682,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: rewrittenHaving,
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}
@@ -7690,7 +7730,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			}
 		}
 	}
-	return rewritten, true
+	return rewritten, true, nil
 }
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
@@ -7767,7 +7807,71 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 	}
 }
 
-func (state *rollupWindowRewriteState) addHavingAliasExprs(selectExprs tree.SelectExprs) {
+// Collect candidates before FROM binding; the branch binder still owns source
+// precedence and ambiguity. Function names and subquery scopes are excluded.
+func rollupWindowGroupingAliases(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) tree.SelectExprs {
+	names := make(map[string]struct{})
+	for _, list := range groupingSets {
+		for _, group := range list {
+			walkGroupingSetOrderByExpr(group, func(expr tree.Expr) bool {
+				if _, subquery := expr.(*tree.Subquery); subquery {
+					return false
+				}
+				if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
+					names[name.ColName()] = struct{}{}
+				}
+				return true
+			})
+		}
+	}
+	var aliases tree.SelectExprs
+	for _, expr := range selectExprs {
+		if expr.As == nil || expr.As.Empty() || rollupWindowExprContainsWindow(expr.Expr) {
+			continue
+		}
+		if _, referenced := names[expr.As.Compare()]; referenced {
+			aliases = append(aliases, expr)
+		}
+	}
+	return aliases
+}
+
+// Alias copies must not make an original ordinal select a different internal
+// projection. Resolve it against the original output, then keep its identity
+// through the existing materialized projection (including numeric literals).
+func (state *rollupWindowRewriteState) remapGroupingOrdinals(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) ([]tree.Exprs, error) {
+	positions := make(map[string]int64, len(state.innerExprs))
+	for i, expr := range state.innerExprs {
+		positions[expr.As.Compare()] = int64(i + 1)
+	}
+	remapped := make([]tree.Exprs, len(groupingSets))
+	for i, list := range groupingSets {
+		remapped[i] = append(tree.Exprs(nil), list...)
+		for j, group := range list {
+			ordinal, ok := unwrapParenExpr(group).(*tree.NumVal)
+			if !ok || ordinal.Kind() != tree.Int {
+				continue
+			}
+			pos, _ := ordinal.Int64()
+			if pos < 1 || pos > int64(len(selectExprs)) {
+				return nil, moerr.NewSyntaxErrorNoCtxf("GROUP BY position %v is not in select list", pos)
+			}
+			original := selectExprs[pos-1].Expr
+			if rollupWindowExprContainsWindow(original) {
+				return nil, moerr.NewInvalidInputNoCtx("GROUP BY clause cannot contain window functions")
+			}
+			alias, found := state.lookupExprAlias(original)
+			mapped, exists := positions[alias]
+			if !found || !exists {
+				return nil, moerr.NewInternalErrorNoCtx("GROUP BY projection not found in ROLLUP window input")
+			}
+			remapped[i][j] = tree.NewNumVal(mapped, strconv.FormatInt(mapped, 10), false, tree.P_int64)
+		}
+	}
+	return remapped, nil
+}
+
+func (state *rollupWindowRewriteState) addBranchAliasExprs(selectExprs tree.SelectExprs) {
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As == nil || selectExpr.As.Empty() || rollupWindowExprContainsWindow(selectExpr.Expr) {
 			continue
@@ -9087,25 +9191,30 @@ func (builder *QueryBuilder) bindGroupBy(
 	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
 		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
 	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
+	bindGroup := func(group tree.Expr) error {
+		if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
+			col := name.ColName()
+			_, sourceColumn := ctx.bindingByCol[col]
+			alias, aliasExists := ctx.aliasMap[col]
+			if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
+				_, bindErr := groupBinder.BindProjectionExpr(alias.idx)
+				return bindErr
+			}
+		}
+		// ROLLUP prefixes and repeated CTE references share grouping AST nodes.
+		// Resolve registration and active-set marking without changing that template.
+		qualified, bindErr := ctx.qualifyColumnNames(cloneTreeExpr(group), AliasAfterColumn)
+		if bindErr != nil {
+			return bindErr
+		}
+		_, bindErr = groupBinder.BindExpr(qualified, 0, true)
+		return bindErr
+	}
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
 			for _, group := range list {
-				if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
-					col := name.ColName()
-					_, sourceColumn := ctx.bindingByCol[col]
-					alias, aliasExists := ctx.aliasMap[col]
-					if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
-						if _, err = groupBinder.BindProjectionExpr(alias.idx); err != nil {
-							return
-						}
-						continue
-					}
-				}
-				if group, err = ctx.qualifyColumnNames(group, AliasAfterColumn); err != nil {
-					return
-				}
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
@@ -9115,7 +9224,7 @@ func (builder *QueryBuilder) bindGroupBy(
 		if clause.Apart {
 			ctx.isGroupingSet = true
 			for _, group := range clause.GroupingSet {
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
