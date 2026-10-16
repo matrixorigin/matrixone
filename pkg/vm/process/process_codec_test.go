@@ -299,14 +299,16 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	info, err := proc.BuildProcessInfo("select 3")
-	require.NoError(t, err)
+	var info pipeline.ProcessInfo
+	require.NoError(t, info.Unmarshal(data))
+	require.Equal(t, proc.Base.SessionInfo.Account, info.SessionInfo.Account)
 
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	require.Equal(t, info.Id, decodedProc.QueryId())
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
+	require.Equal(t, info.SessionInfo.Account, decodedProc.Base.SessionInfo.Account)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)

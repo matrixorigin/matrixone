@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 )
@@ -58,8 +57,6 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 		}
 		if conf.forETL {
 			s3path := fileservice.JoinPath(s3opts, etlFSDir(conf.filepath))
-			//TODO:remove debug
-			logutil.Debugf("==>s3path: %s", s3path)
 			res, readPath, err = fileservice.GetForETL(ctx, nil, s3path)
 			if err != nil {
 				return nil, "", err

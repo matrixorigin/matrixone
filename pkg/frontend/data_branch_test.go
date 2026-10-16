@@ -1183,6 +1183,8 @@ func newValidateSession(t testing.TB) *Session {
 	t.Helper()
 
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = sysAccountName
+	proc.Base.SessionInfo.Role = moAdminRoleName
 	service := "validate-output-dir"
 
 	InitServerLevelVars(service)

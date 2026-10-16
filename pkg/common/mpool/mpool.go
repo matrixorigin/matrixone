@@ -951,6 +951,9 @@ func GlobalCap() int64 {
 
 var CapLimit = math.MaxInt32 // 2GB - 1
 
+// MaxAllocationSize returns the maximum payload accepted by one allocation.
+func MaxAllocationSize() int64 { return maxAllocationSize() }
+
 func maxAllocationSize() int64 {
 	return int64(CapLimit) - kMemHdrSz
 }

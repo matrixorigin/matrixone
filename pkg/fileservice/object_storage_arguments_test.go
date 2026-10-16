@@ -211,7 +211,7 @@ func TestSetFromStringParallelMode(t *testing.T) {
 	args = ObjectStorageArguments{
 		ParallelMode: ParallelAuto,
 	}
-	assert.NoError(t, args.SetFromString([]string{"parallel-mode=unknown"}))
+	assert.Error(t, args.SetFromString([]string{"parallel-mode=unknown"}))
 	assert.Equal(t, ParallelAuto, args.ParallelMode)
 }
 
@@ -241,7 +241,7 @@ func TestObjectStorageArgumentsShouldLoadDefaultCredentials(t *testing.T) {
 		NoDefaultCredentials: true,
 		RoleARN:              "arn",
 	}
-	assert.True(t, args.shouldLoadDefaultCredentials())
+	assert.False(t, args.shouldLoadDefaultCredentials())
 }
 
 func TestObjectStorageArgumentsString(t *testing.T) {

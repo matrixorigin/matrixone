@@ -15,12 +15,17 @@
 package hnsw
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -79,6 +84,7 @@ func mockMoIndexes() []*plan.IndexDef {
 }
 
 type MockTxnExecutor struct {
+	exec func(string, executor.StatementOption) (executor.Result, error)
 }
 
 func (e *MockTxnExecutor) Use(db string) {
@@ -90,6 +96,9 @@ func (e *MockTxnExecutor) LockTable(table string) error {
 // NOTE: If you specify `AccoundId` in `StatementOption`, sql will be executed under that tenant.
 // If not specified, it will be executed under the system tenant by default.
 func (e *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	if e.exec != nil {
+		return e.exec(sql, options)
+	}
 	if sql == "fake" {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("MockTxnExecutor error")
 	}
@@ -112,23 +121,34 @@ func mock_runTxn(sqlproc *sqlexec.SqlProcess, fn func(exec executor.TxnExecutor)
 	return err
 }
 
-func TestSyncRunSqls(t *testing.T) {
-	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
-	sqlproc := sqlexec.NewSqlProcess(proc)
-
-	runTxn = mock_runTxn
-
-	sync := &HnswSync[float32]{}
-	defer sync.Destroy()
-
-	sqls := []string{"fake"}
-	err := sync.runSqls(sqlproc, sqls)
-	require.NotNil(t, err)
-
-	sqls = []string{"sql"}
-	err = sync.runSqls(sqlproc, sqls)
-	require.Nil(t, err)
+func TestSyncSaveTransactionFailure(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sp := sqlexec.NewSqlProcess(proc)
+	path := filepath.Join(t.TempDir(), "model")
+	require.NoError(t, os.WriteFile(path, []byte("owned model"), 0600))
+	idx := &HnswModel[float32]{Id: "idx' or 'data", Path: path}
+	idx.Dirty.Store(true)
+	cfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store", MetadataTable: "meta_save_failure"}
+	syncer := &HnswSync[float32]{indexes: []*HnswModel[float32]{idx}, tblcfg: cfg}
+	old := runTxn
+	t.Cleanup(func() { runTxn = old })
+	fail := errors.New("transaction failed")
+	runTxn = func(*sqlexec.SqlProcess, func(executor.TxnExecutor) error) error { return fail }
+	require.ErrorIs(t, syncer.Save(sp), fail)
+	require.True(t, idx.Dirty.Load(), "failed persistence remains retryable")
+	metadataWritten := false
+	runTxn = func(_ *sqlexec.SqlProcess, fn func(executor.TxnExecutor) error) error {
+		return fn(&MockTxnExecutor{exec: func(sql string, _ executor.StatementOption) (executor.Result, error) {
+			if strings.HasPrefix(sql, "INSERT INTO `db`.`meta_save_failure`") {
+				metadataWritten = true
+				require.Contains(t, sql, sqlquote.String(idx.Id))
+				require.Contains(t, sql, sqlquote.String(idx.Checksum))
+			}
+			return executor.Result{}, nil
+		}})
+	}
+	require.NoError(t, syncer.Save(sp))
+	require.True(t, metadataWritten)
 }
 
 func TestSyncEmptyCatalogError(t *testing.T) {

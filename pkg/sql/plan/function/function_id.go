@@ -818,11 +818,14 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 568
+	CHECK_ASYNC_DATALINK_SOURCE = 599
+
+	FUNCTION_END_NUMBER = 600
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,

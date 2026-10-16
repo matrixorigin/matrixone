@@ -202,19 +202,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */)
-	if err != nil {
-		return err
-	}
-	defer cleanup() // remove the spill file once its INSERTs have run — bounds temp disk too
-	for _, s := range sqls {
-		res, e := fulltext2_runSql(sqlproc, s)
-		if e != nil {
-			return e
-		}
-		res.Close()
-	}
-	return nil
+	return seg.Persist(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */)
 }
 
 // rowInclude reads row nthRow's INCLUDE column values (the trailing argVecs after the text
@@ -243,6 +231,23 @@ func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
 	return out
 }
 
+// fulltext2SourceColumnBytes keeps source admission before every parser, and
+// shares the resolved Datalink between classification and actual acquisition.
+func fulltext2SourceColumnBytes(vec *vector.Vector, proc *process.Process, row int) ([]byte, bool, error) {
+	if vec.GetType().Oid == types.T_datalink {
+		dl, err := datalink.NewAsyncDatalink(vec.GetStringAt(row), proc)
+		if err != nil {
+			return nil, false, err
+		}
+		text, err := dl.GetPlainText(proc)
+		return text, false, err
+	}
+	if vec.GetType().Oid == types.T_json {
+		return vec.GetRawBytesAt(row), true, nil
+	}
+	return []byte(vec.GetStringAt(row)), false, nil
+}
+
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
 // json columns to their flattened values; a NULL column yields no tokens (matches
@@ -263,17 +268,17 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
 		for i := 2; i < textEnd; i++ {
-			binary := argVecs[i].GetType().Oid == types.T_json
-			var raw []byte
-			if binary {
-				raw = argVecs[i].GetRawBytesAt(nthRow)
-			} else {
-				raw = []byte(argVecs[i].GetStringAt(nthRow))
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
+
+			raw, binary, err := fulltext2SourceColumnBytes(argVecs[i], proc, nthRow)
+			if err != nil {
+				return nil, err
 			}
 			// json: ngram over space-joined values; json_value: each value is one whole
 			// atomic token, so keep them '\n'-separated for jsonValueTokenize below.
 			var ft []byte
-			var err error
 			if jsonValue {
 				ft, err = fulltext2.FlattenJSONLines(raw, binary)
 			} else {
@@ -294,11 +299,7 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 			}
 			data := argVecs[i].GetStringAt(nthRow)
 			if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
-				dl, err := datalink.NewDatalink(data, proc)
-				if err != nil {
-					return nil, err
-				}
-				b, err := dl.GetPlainText(proc)
+				b, _, err := fulltext2SourceColumnBytes(argVecs[i], proc, nthRow)
 				if err != nil {
 					return nil, err
 				}

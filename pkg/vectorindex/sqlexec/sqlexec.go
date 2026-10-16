@@ -102,6 +102,15 @@ func NewSqlProcessWithContext(ctx *SqlContext) *SqlProcess {
 	return &SqlProcess{SqlCtx: ctx}
 }
 
+func (s *SqlProcess) StatementOption() executor.StatementOption {
+	option := executor.StatementOption{}.WithDisableLog()
+	if s.Proc != nil && s.Proc.Base != nil {
+		info := s.Proc.GetSessionInfo()
+		option = option.WithSessionIdentity(info.Account, info.Role)
+	}
+	return option
+}
+
 func (s *SqlProcess) GetContext() context.Context {
 	if s.Proc != nil {
 		return s.Proc.Ctx
@@ -185,7 +194,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -207,7 +216,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.Exec(sqlctx.Ctx, sql, opts)
 
 	}
@@ -280,7 +289,7 @@ func RunStreamingSql(
 			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -304,7 +313,7 @@ func RunStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.Exec(ctx, sql, opts)
 
 	}
@@ -341,7 +350,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithCNLabels(proc.GetSessionInfo().CNLabels).
 			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
-			WithFrontend(proc.Base.IsFrontend)
+			WithFrontend(proc.Base.IsFrontend).
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -362,6 +372,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
+			WithStatementOption(sqlproc.StatementOption()).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
 		return exec.ExecTxn(sqlctx.Ctx, execFunc, opts)
 	}

@@ -388,7 +388,7 @@ func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
 }
 
 func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	filePath := fileservice.JoinPath(fs.Name(), "wide.csv")
@@ -419,7 +419,7 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 			FileService: fs,
 			Ctx:         ctx,
 		},
-	}, tableDef, 0, context.Background())
+	}, tableDef, 0, ctx)
 
 	require.Equal(t, float64(4), stats.Rowsize)
 	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
@@ -456,7 +456,7 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 			FileService: fs,
 			Ctx:         ctx,
 		},
-	}, tableDef, 0, context.Background())
+	}, tableDef, 0, ctx)
 	require.Equal(t, float64(5), stats.Rowsize)
 
 	ignoredPath := fileservice.JoinPath(fs.Name(), "ignored.csv")
@@ -482,7 +482,7 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 			FileService: fs,
 			Ctx:         ctx,
 		},
-	}, tableDef, 0, context.Background())
+	}, tableDef, 0, ctx)
 	require.Equal(t, float64(4), stats.Rowsize)
 
 	schemaRowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8
@@ -497,7 +497,7 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 			FileService: fs,
 			Ctx:         ctx,
 		},
-	}, tableDef, 0, context.Background())
+	}, tableDef, 0, ctx)
 	require.Equal(t, schemaRowSize, stats.Rowsize)
 
 	stats = makeLoadExternalStats(&tree.ExternParam{
@@ -515,7 +515,7 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 			FileService: fs,
 			Ctx:         ctx,
 		},
-	}, tableDef, 0, context.Background())
+	}, tableDef, 0, ctx)
 	require.Equal(t, schemaRowSize, stats.Rowsize)
 }
 
@@ -558,7 +558,7 @@ func TestMakeLoadExternalStatsUsesBoundedFirstLineSample(t *testing.T) {
 }
 
 func TestReadExternalFirstLineSizeUsesBoundedRange(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	filePath := fileservice.JoinPath(fs.Name(), "with-newline.csv")
@@ -588,7 +588,7 @@ func TestReadExternalFirstLineSizeUsesBoundedRange(t *testing.T) {
 }
 
 func TestReadExternalFirstLineSizeUsesSmallFileWithoutTrailingNewline(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	filePath := fileservice.JoinPath(fs.Name(), "small.csv")
@@ -620,6 +620,8 @@ func TestReadExternalFirstLineSizeUsesSmallFileWithoutTrailingNewline(t *testing
 func TestGetExternalStatsUsesKnownFileSizeForSmallFile(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	filePath := "etl:/small.csv"
 	data := "abcd"
 	require.NoError(t, proc.GetFileService().Write(ctx, fileservice.IOVector{

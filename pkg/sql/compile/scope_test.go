@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1044,7 +1045,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-	ctx := context.TODO()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: "test.csv",
@@ -1626,7 +1627,7 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 			Format:   tree.PARQUET,
 		},
 		ExParam: tree.ExParam{
-			Ctx: context.Background(),
+			Ctx: fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"),
 		},
 	}
 
@@ -1658,6 +1659,9 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
+	testCompile.ncpu = 3 // Logical capacity for three independent row-group scopes.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -1722,6 +1726,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
+	testCompile.ncpu = 3 // Leave capacity beyond two files so footer planning is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -1790,6 +1797,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing
 
 func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
+	testCompile.ncpu = 3 // Leave capacity beyond two files so footer validation is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -1845,6 +1855,8 @@ func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *
 
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -2962,4 +2974,18 @@ func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
 	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
 	attachShuffleDispatchSource(unmatched, remoteSource, false)
 	require.Empty(t, unmatched[0].PreScopes)
+}
+func TestRetainedExternalSourceRechecksRole(t *testing.T) {
+	c := NewMockCompile(t)
+	c.proc.Base.SessionInfo.Account = "sys"
+	c.proc.Base.SessionInfo.Role = "moadmin"
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE, Filepath: "/owned/source.csv", Tail: &tree.TailParameter{}}}
+	encoded, err := json.Marshal(param)
+	require.NoError(t, err)
+	scan := &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}
+	_, err = c.getExternParam(c.proc, scan, string(encoded))
+	require.NoError(t, err)
+	c.proc.Base.SessionInfo.Role = "public"
+	_, err = c.getExternParam(c.proc, scan, string(encoded))
+	require.ErrorContains(t, err, "only the sys account moadmin role")
 }

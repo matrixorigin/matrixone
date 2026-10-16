@@ -126,8 +126,8 @@ func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
 	return bat
 }
 
-// buildTestModel builds an IvfpqModel, calls Build, and saves via ToSql.
-// Index is nil after ToSql (GPU memory freed). Path/Checksum/FileSize are set.
+// buildTestModel builds an IvfpqModel, calls Build, and saves via PreparePersistence.
+// Index is nil after PreparePersistence (GPU memory freed). Path/Checksum/FileSize are set.
 func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, float32] {
 	t.Helper()
 
@@ -153,10 +153,9 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 	err = m.Build()
 	require.NoError(t, err)
 
-	tblcfg := testTblcfg()
-	sqls, err := m.ToSql(tblcfg)
+	err = m.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, m.FileSize)
 	require.NotEmpty(t, m.Path)
 	require.NotEmpty(t, m.Checksum)
 	require.Greater(t, m.FileSize, int64(0))
@@ -227,9 +226,9 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.Equal(t, int64(testNVectors), built.Len)
 
 	// ---- Save to file ----
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, built.FileSize)
 
 	tarPath := built.Path
 	checksum := built.Checksum
@@ -384,10 +383,10 @@ func TestModelNil(t *testing.T) {
 	_, _, err = idx2.SearchQuantize(nil, 1, 0)
 	require.NotNil(t, err)
 
-	// ToSql on a never-built model returns empty.
-	sqls, err := idx.ToSql(tblcfg)
+	// PreparePersistence on a never-built model returns empty.
+	err = idx.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, idx.FileSize)
 
 	// ToDeleteSql always works.
 	deleteSqls, err := idx.ToDeleteSql(tblcfg)
@@ -409,14 +408,13 @@ func TestModelNil(t *testing.T) {
 
 func TestModelEmptyBuild(t *testing.T) {
 	idxcfg := testIdxcfg()
-	tblcfg := testTblcfg()
 
 	built, err := NewIvfpqModelForBuild[float32, float32]("test-empty", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
-	// Not dirty → ToSql returns empty slice.
+	// Not dirty → PreparePersistence returns empty slice.
 	built.Dirty = false
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, built.FileSize)
 }

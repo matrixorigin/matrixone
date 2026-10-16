@@ -226,6 +226,8 @@ func TestOpenLocalTableDump(t *testing.T) {
 func TestOpenStageTableDump(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	root := t.TempDir()
 	ses.proc.GetStageCache().Set("fixture", stage.StageDef{
@@ -509,6 +511,8 @@ func TestSubmitTableDumpObjectsRejectsInvalidMetadata(t *testing.T) {
 func TestHandleLoadTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -587,6 +591,8 @@ func TestHandleLoadTable(t *testing.T) {
 func TestHandleDumpTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
