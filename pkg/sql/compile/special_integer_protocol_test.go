@@ -152,21 +152,22 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	op.ProjectList = append(op.ProjectList, jsonValue)
 	qry.Nodes[0].ProjectList = op.ProjectList
 	p.InstructionList[0].ProjectList = op.ProjectList
-	// The landed signed WEEK/DAYOFYEAR v112 prefix also lacks JSON_VALUE overload 2.
-	client.version = defines.MORPCVersion112
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	// JSON_VALUE overload 2 requires v117 in both remote and persisted gates;
+	// the immediately preceding landed protocol still lacks that contract.
+	client.version = defines.MORPCVersion116
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 113")
+	require.ErrorContains(t, err, "version 117")
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 113")
-	client.version = defines.MORPCVersion113
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+	require.ErrorContains(t, err, "version 117")
+	client.version = defines.MORPCVersion117
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
