@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - '.github/ci/**'
+      - 'Makefile'
+      - 'go.mod'
       - '.github/workflows/entrypoint.yaml'
       - '.github/workflows/python-sdk.yml'
       - '.github/workflows/ci-scope-check.yml'

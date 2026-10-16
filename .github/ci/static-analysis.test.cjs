@@ -99,6 +99,7 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const dir = temporary(t), repo = path.join(dir, 'repo'), bin = path.join(dir, 'bin');
   fs.mkdirSync(repo); fs.mkdirSync(bin);
   const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'pkg/h/ignored.go\n');
   fs.writeFileSync(path.join(repo, 'go.mod'), 'module example.org/project\n\ngo 1.23.0\n');
   for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
     const p = path.join(repo, 'pkg', name); fs.mkdirSync(p, { recursive: true });
@@ -145,6 +146,13 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   assert.equal(first.commands.length, 2);
   for (const command of first.commands) assert.ok(command.endsWith('./pkg/a ./pkg/b ./pkg/c'), command);
   assert.ok(first.commands[1].includes('--concurrency 1'));
+  const ignored = path.join(repo, 'pkg/h/ignored.go');
+  fs.writeFileSync(ignored, 'package h\nvar GeneratedInput = 1\n');
+  const generated = run();
+  fs.unlinkSync(ignored);
+  assert.equal(generated.result.status, 0, generated.result.stderr);
+  assert.ok(generated.commands.every(command => command.endsWith('./...')),
+    'Go consumes ignored inputs too; Git status alone cannot exempt their packages');
   const full = run({ SCA_FULL: '1' });
   assert.equal(full.result.status, 0, full.result.stderr);
   assert.ok(full.commands.every(command => command.endsWith('./...')));

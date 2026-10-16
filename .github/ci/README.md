@@ -10,7 +10,9 @@ PR CI compares immutable event base/head trees, after checking the checkout and
 working tree. A shallow checkout may fetch the exact base object once, bounded
 by 30 seconds. Missing history, fetch failure, unsupported events, dirty source,
 or uncertain paths retain full analysis. Renames are additions plus deletions.
-No mutable branch tip, persisted plan, or changed-line diagnostic filter is used.
+Go-reported source files must also be tracked regular files: Git ignores do not
+prevent Go from compiling a file. Generated source and source symlinks retain full
+analysis. No mutable branch tip, persisted plan, or changed-line filter is used.
 
 Go supplies the complete production/test package graph under the same CGo and
 read-only module environment used by the analyzers. A production Go edit selects

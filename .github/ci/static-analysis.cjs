@@ -19,7 +19,8 @@ const { category, immutableChanges } = require('./change-scope.cjs');
 
 // Emit one bounded record per main-module package/variant. Go owns import and
 // build-tag resolution, including test-only importers; no source import parser.
-const inventoryFields = 'ImportPath,Dir,Module,Imports,TestImports,XTestImports';
+const inventoryFields = 'Name,ImportPath,Dir,Module,Imports,TestImports,XTestImports,' +
+  'GoFiles,CgoFiles,TestGoFiles,XTestGoFiles';
 
 // go list emits adjacent JSON objects rather than an array. Frame the objects;
 // JSON.parse remains the decoder (including escaped strings and nested values).
@@ -42,9 +43,16 @@ function inventory(text) {
       if (--depth < 0) throw new Error('Invalid Go inventory');
       if (depth === 0) {
         const p = JSON.parse(text.slice(start, i + 1));
-        if (p.Module?.Main) records.push({ id: p.ImportPath, dir: p.Dir,
-          imports: p.Imports || [],
-          testImports: p.TestImports || [], xTestImports: p.XTestImports || [] });
+        if (p.Module?.Main) {
+          // The only non-source main-module GoFiles are Go's generated test
+          // entrypoints in its build cache. Regular package files are relative.
+          const generatedMain = p.Name === 'main' && p.ImportPath.endsWith('.test') &&
+            p.GoFiles?.length && p.GoFiles.every(file => path.isAbsolute(file));
+          records.push({ id: p.ImportPath, dir: p.Dir, imports: p.Imports || [],
+            testImports: p.TestImports || [], xTestImports: p.XTestImports || [],
+            sources: [...(generatedMain ? [] : p.GoFiles || []), ...(p.CgoFiles || []),
+              ...(p.TestGoFiles || []), ...(p.XTestGoFiles || [])] });
+        }
       }
     } else if (depth === 0 && !/\s/.test(c)) throw new Error('Invalid Go inventory');
   }
@@ -128,7 +136,28 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
     env: { ...env, GOWORK: 'off' }, stdio: ['ignore', 'pipe', 'inherit'],
   });
   const records = inventory(text);
-  const files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env });
+  let files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env });
+  if (files) {
+    // Git status omits ignored files, but Go still compiles an ignored .go
+    // file inside a package. Require every real source input to be committed
+    // and regular; generated/untracked inputs and source symlinks keep full SCA.
+    try {
+      const entries = run('git', ['ls-files', '--stage', '-z'], {
+        cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const tracked = new Set(entries.split('\0').flatMap(entry => {
+        const match = /^100(?:644|755) [0-9a-f]+ 0\t([\s\S]+)$/.exec(entry);
+        return match ? [match[1]] : [];
+      }));
+      if (records.some(p => p.sources.some(source =>
+        !tracked.has(path.relative(cwd, path.resolve(p.dir, source)).split(path.sep).join('/'))))) {
+        files = null;
+      }
+    } catch {
+      files = null;
+    }
+  }
   const selected = selectPackages(files, records, cwd);
   console.error(`SCA selection: ${selected[0] === './...' ? 'full graph' : `${selected.length} packages`}`);
   return selected;
