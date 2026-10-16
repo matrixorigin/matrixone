@@ -50,13 +50,6 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
-	if queryHasMixedJSONNumericAsof(qry) {
-		// This pass runs after the first scheduling pass and before scopes
-		// are compiled. Replace both execution type and the worker list.
-		c.execType = plan2.ExecTypeAP_ONECN
-		c.cnList, err = c.scheduleQueryWorkers()
-		return err
-	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
@@ -95,7 +88,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion122)
 	}
 	if features.PythonRoutineContract {
-		required = max(required, defines.MORPCVersion116)
+		required = max(required, defines.MORPCVersion118)
 	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
@@ -150,9 +143,6 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.ViewMetadataFunctions {
 		required = max(required, defines.MORPCVersion126)
-	}
-	if features.JSONNumericComparisons {
-		required = max(required, defines.MORPCVersion128)
 	}
 	if features.IncompleteTemporalStrings {
 		required = max(required, defines.MORPCVersion130)

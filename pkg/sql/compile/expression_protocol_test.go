@@ -32,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -547,27 +548,47 @@ func TestRemoteExpressionDestinationUnknownEvidence(t *testing.T) {
 
 func TestPythonRoutineProtocolChecksActualRemoteDestination(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
+	c.proc.SetStmtProfile(&process.StmtProfile{})
+	c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	c.proc.SetResolveVariableFunc(nil)
+	require.True(t, c.proc.DivisionByZeroWarningsEnabled())
 	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: &planpb.RoutineCall{}}}}
 	calendar := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_CALENDAR_INTERVAL, 0)}}}}
-	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr, calendar}}}}
+	division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
+		{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		plan2.MakePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	stringType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	stringType.CollationVersion = 1
+	least, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "least", []*planpb.Expr{
+		{Typ: stringType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		{Typ: stringType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+	})
+	require.NoError(t, err)
+	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr, calendar, division, least}}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.True(t, features.PythonRoutineContract)
 	require.True(t, features.CalendarIntervalNormalization)
-	require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
+	require.True(t, features.ScalarDivision)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion118, executionRemoteExpressionProtocolVersion(c.proc, features))
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion115, defines.MORPCVersion116} {
+	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118} {
 		client.version = version
 		err := validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion116 {
+		if version < defines.MORPCVersion118 {
 			require.ErrorContains(t, err, "remote destination does not support Python")
 		} else {
 			require.NoError(t, err)
 		}
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	require.Equal(t, client.calls, client.releases)
 }
@@ -607,14 +628,14 @@ func TestPythonRoutineProtocolInsideIndexSearchScan(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(&received)
 			require.NoError(t, err)
 			require.True(t, features.PythonRoutineContract)
-			require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			client.version = defines.MORPCVersion115
+			client.version = defines.MORPCVersion117
 			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, &received, features), "remote destination does not support Python")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &received), "Python routine execution requires")
-			client.version = defines.MORPCVersion116
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+			client.version = defines.MORPCVersion118
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
 			require.Equal(t, client.calls, client.releases)
