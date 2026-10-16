@@ -267,6 +267,55 @@ func TestAssignmentIgnoreEmptyTimeIsZeroWithWarning(t *testing.T) {
 	require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}}, stripWarningMessages(session.warnings))
 }
 
+func runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
+	t *testing.T,
+	values []string,
+) (*vector.Vector, *numericWarningSession, error) {
+	t.Helper()
+	session := &numericWarningSession{}
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	proc.Session = session
+	target := types.T_time.ToTypeWithScale(6)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+			NewFunctionTestInput(target, []types.Time{}, nil),
+		},
+		NewFunctionTestResult(target, false, nil, nil),
+		NewAssignIgnoreCast,
+	)
+	t.Cleanup(testCase.Free)
+	require.NoError(t, testCase.parameters[0].SetIsBinRowsWithMP([]bool{true, false}, proc.Mp()))
+	result, err := testCase.DebugRun()
+	if err != nil {
+		return nil, session, err
+	}
+	return result, session, nil
+}
+
+func TestAssignmentIgnoreTimeUsesPerRowNumericBinaryMarkers(t *testing.T) {
+	t.Run("empty HEX row is NULL but ordinary empty text is zero with warning", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(t, []string{"", ""})
+		require.NoError(t, err)
+		require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+		require.True(t, result.GetNulls().Contains(0), "empty HEX literal converts to NULL")
+		require.False(t, result.GetNulls().Contains(1), "ordinary empty text converts to zero TIME")
+		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}}, stripWarningMessages(session.warnings))
+	})
+
+	t.Run("marked malformed row does not use IGNORE prefix recovery", func(t *testing.T) {
+		_, session, err := runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
+			t, []string{"12:34:56tail", "tail"})
+		require.Error(t, err, "a marked row retains the HEX/BIT temporal parse behavior")
+		require.Empty(t, session.warnings, "marked malformed text is not adjusted by IGNORE")
+	})
+}
+
 func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

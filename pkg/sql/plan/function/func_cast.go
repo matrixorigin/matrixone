@@ -9153,7 +9153,6 @@ func strToTime(
 	proc *process.Process, from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
-	isBinary := from.GetSourceVector().GetIsBin()
 	var i uint64
 	var l = uint64(length)
 	var dft types.Time
@@ -9169,6 +9168,7 @@ func strToTime(
 			}
 			continue
 		}
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
