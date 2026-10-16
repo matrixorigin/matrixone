@@ -181,6 +181,85 @@ func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
 	require.Same(t, source, consumed[1].GetF().Args[0])
 }
 
+func TestStringDeclarationBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		binary    bool
+	}{
+		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", false},
+		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", false},
+		{"limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation limit 1) d", true},
+		{"sorted limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation order by n_name limit 1) d", true},
+		{"distinct projection", "select reverse(x) from (select distinct coalesce(n_name,_binary '') x from nation) d", true},
+		{"window projection", "select reverse(x) from (select coalesce(n_name,_binary '') x,row_number() over () rn from nation) d", true},
+		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", false},
+		{"scalar distinct", "select reverse((select distinct coalesce(n_name,_binary '') from nation limit 1))", true},
+		{"scalar window", "select reverse((select first_value(coalesce(n_name,_binary '')) over () from nation limit 1))", true},
+		{"scalar set", "select reverse((select coalesce(n_name,_binary '') x from nation union all select _binary '' order by x desc limit 1))", true},
+		{"scalar materialized source", "select reverse((select x from (select coalesce(n_name,_binary '') x from nation limit 1) d))", true},
+
+		{"direct COALESCE", "select reverse(coalesce(n_name,_binary '')) from nation", false},
+		{"nested COALESCE", "select reverse(coalesce(coalesce(n_name,_binary ''),'')) from nation", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.NoError(t, err)
+			reverse := findPlanFunctionExpr(bound, "reverse")
+			require.NotNil(t, reverse)
+			require.Equal(t, tc.binary, types.StaticStringDomain(makeTypeByPlan2Expr(reverse.GetF().Args[0])) == types.StringDomainBinary)
+		})
+	}
+}
+
+func TestStringCommonValueDeclarationBoundary(t *testing.T) {
+	for _, value := range []string{
+		"if(n_nationkey=1,_binary 'a',n_name)",
+		"case when n_nationkey=1 then _binary 'a' else n_name end",
+		"ifnull(n_name,_binary '')",
+	} {
+		t.Run(value, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select reverse(coalesce("+value+",'')) from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.NoError(t, err)
+			coalesce := findPlanFunctionExpr(bound, "coalesce")
+			require.NotNil(t, coalesce)
+			arg := coalesce.GetF().Args[0]
+			for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
+				arg = source
+			}
+			require.True(t, isCastOverload(arg, 1), "consume the conditional's declaration before COALESCE selects its payload: %s", arg.String())
+			require.False(t, arg.GetF().GetSyntaxExplicitCast())
+			require.Equal(t, int32(types.T_blob), arg.Typ.Id)
+		})
+	}
+}
+
+func TestStringDeclarationBoundaryAliasCycle(t *testing.T) {
+	target := types.T_text.ToType()
+	first := GetColExpr(makePlan2Type(&target), 10, 0)
+	second := GetColExpr(makePlan2Type(&target), 20, 0)
+	builder := &QueryBuilder{
+		qry: &planpb.Query{Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_PROJECT, ProjectList: []*Expr{second}},
+			{NodeType: planpb.Node_PROJECT, ProjectList: []*Expr{first}},
+		}},
+		tag2NodeID: map[int32]int32{10: 0, 20: 1},
+	}
+	binder := &baseBinder{sysCtx: context.Background(), builder: builder}
+	visiting := make(map[[2]int32]bool)
+	require.False(t, binder.stringSourceHasDeclarationBoundary(first, nil, visiting), "an alias cycle does not prove materialization")
+	require.Empty(t, visiting, "path ownership ends on every return")
+	builder.qry.Nodes[1].Limit = makePlan2Int64ConstExprWithType(1)
+	require.True(t, binder.stringSourceHasDeclarationBoundary(first, nil, visiting), "a real boundary still owns its declaration")
+	require.Empty(t, visiting)
+}
+
 func TestPreparedFieldSetConversionSource(t *testing.T) {
 	for _, tc := range []struct {
 		name             string

@@ -220,7 +220,10 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		// Retained/provisional declarations were resolved above. A concrete
 		// binary CASE without such history already owns its bound declaration;
 		// inferring bare markers again would manufacture an inferred origin.
-		if !r.unresolvedParameters && r.parameterTypes == nil && result.kind == fieldStringBinary {
+		// Lowered IFNULL instead merges its operands' declarations, including
+		// restored contextual BLOBs, just like the other common-value consumers.
+		if !r.unresolvedParameters && r.parameterTypes == nil && result.kind == fieldStringBinary &&
+			!expr.GetPreparedNumeric().GetIfnullCommonValue() {
 			return result
 		}
 		for i := 1; i < len(fn.Args); i += 2 {

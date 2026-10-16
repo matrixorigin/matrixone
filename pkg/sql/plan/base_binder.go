@@ -6376,14 +6376,24 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 	var resolver *preparedFieldStringResolver
 	result, copied := args, false
 	for i, arg := range args {
-		if fieldStringStaticDomain(arg).kind != fieldStringText {
+		kind := fieldStringStaticDomain(arg).kind
+		if kind != fieldStringText && kind != fieldStringBinary {
 			continue
 		}
-		// Consume materialized declarations before a value selector can hide
-		// them. Direct values retain TEXT row overrides for character slicing
-		// and reversal; case folding instead uses the declared collation.
-		materialized := arg.GetCol() != nil || arg.GetSub() != nil || preparedFieldPrivateCastSource(arg, 3) != nil
-		if !materialized && (i != pos || !declaredCollation &&
+		// Common-value selection consumes an existing function declaration,
+		// unlike another transparent COALESCE source. IF/CASE (including
+		// lowered IFNULL) must not become a direct COALESCE row override.
+		source := preparedCommonValueSource(arg)
+		declaredResult := isPreparedCommonValueFunction(name) && source.GetF() != nil && source.GetF().GetFunc().GetObjName() != "coalesce"
+		// A binary-shaped conditional can still carry a TEXT row override.
+		// Consume that declaration too, but do not recast already-owned bytes.
+		if kind == fieldStringBinary && (!declaredResult || possibleStringDomainsForExpr(arg) == possibleStringDomainBinary) {
+			continue
+		}
+		// A reference is not itself materialization: mergeable projections and
+		// scalar subqueries still expose the selected value's row domain.
+		materialized := b.stringSourceHasDeclarationBoundary(arg, nil, nil)
+		if !materialized && !declaredResult && (i != pos || !declaredCollation &&
 			possibleStringDomainsForExpr(arg) == possibleStringDomainText|possibleStringDomainBinary) {
 			continue
 		}
@@ -6407,6 +6417,95 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		result[i] = converted
 	}
 	return result, nil
+}
+
+// Inspect the binding-time owner, not the ColRef/SubqueryRef representation.
+// Unary nodes in one query block expose LIMIT and relational boundaries; a
+// scalar query's own row selection is not derived-table materialization.
+func (b *baseBinder) stringSourceHasDeclarationBoundary(expr *Expr, scalarScope *BindContext, visiting map[[2]int32]bool) bool {
+	if source := preparedFieldPrivateCastSource(expr, 3); source != nil {
+		return true
+	}
+	if source := preparedFieldPrivateCastSource(expr, 0); source != nil {
+		return b.stringSourceHasDeclarationBoundary(source, scalarScope, visiting)
+	}
+	if b.builder == nil || b.builder.qry == nil {
+		return false
+	}
+	var nodeID, pos int32
+	if col := expr.GetCol(); col != nil {
+		var ok bool
+		nodeID, ok = b.builder.tag2NodeID[col.RelPos]
+		if !ok {
+			return false
+		}
+		pos = col.ColPos
+	} else if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+		nodeID = sub.NodeId
+	} else {
+		return false
+	}
+	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || pos < 0 {
+		return false
+	}
+	node := b.builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	// CTE rebinding can temporarily expose back-references between projection
+	// aliases. Bound this traversal by output identity, not Expr pointer identity.
+	key := [2]int32{nodeID, pos}
+	if visiting[key] {
+		return false
+	}
+	if visiting == nil {
+		visiting = make(map[[2]int32]bool)
+	}
+	visiting[key] = true
+	defer delete(visiting, key)
+	var scope *BindContext
+	if int(nodeID) < len(b.builder.ctxByNode) {
+		scope = b.builder.ctxByNode[nodeID]
+	}
+	// DISTINCT, windows and set reconciliation own their declarations even
+	// inside a scalar query; only its row-selection boundary is transparent.
+	if isPreparedSetOperationNode(node.NodeType) || scope != nil && (scope.isDistinct || len(scope.windows) > 0) {
+		return true
+	}
+	if expr.GetSub() != nil {
+		if len(node.ProjectList) == 0 {
+			return false
+		}
+		return b.stringSourceHasDeclarationBoundary(node.ProjectList[0], scope, visiting)
+	}
+	if scalarScope == nil || scope != scalarScope {
+		if scope != nil && (len(scope.groups) > 0 || len(scope.aggregates) > 0) {
+			return true
+		}
+		for current := node; current != nil; {
+			if current.Limit != nil || current.Offset != nil || current.RankOption != nil || isPreparedSetOperationNode(current.NodeType) {
+				return true
+			}
+			switch current.NodeType {
+			case plan.Node_AGG, plan.Node_WINDOW, plan.Node_DISTINCT, plan.Node_MATERIAL, plan.Node_VALUE_SCAN:
+				return true
+			case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_PARTITION:
+				if len(current.Children) != 1 {
+					break
+				}
+				child := current.Children[0]
+				if child >= 0 && int(child) < len(b.builder.ctxByNode) && b.builder.ctxByNode[child] == scope {
+					current = b.builder.qry.Nodes[child]
+					continue
+				}
+			}
+			break
+		}
+	}
+	if int(pos) < len(node.ProjectList) && node.ProjectList[pos] != expr {
+		return b.stringSourceHasDeclarationBoundary(node.ProjectList[pos], scalarScope, visiting)
+	}
+	return false
 }
 
 // The single source mapping also distinguishes declaration-collation operations

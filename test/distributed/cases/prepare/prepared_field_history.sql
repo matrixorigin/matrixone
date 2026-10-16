@@ -579,3 +579,19 @@ DEALLOCATE PREPARE p_field_history;
 SET lc_time_names = @field_old_locale;
 SET enable_vector_prefilter_by_default = @field_old_prefilter;
 SET enable_vector_auto_mode_by_default = @field_old_auto_mode;
+
+-- IFNULL lowering consumes common declarations without owning another CASE fact.
+PREPARE p_field_history FROM 'SELECT
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS text_peer,
+FIELD(IFNULL(NULL,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''A'',''a'') AS null_first,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,NULL),''A'',''a'') AS null_peer,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS binary_peer,
+FIELD(CONCAT_WS('''',IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,'''')),''A'',''a'') AS nested_consumer,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE _binary '''' END,''''),''A'',''a'') AS binary_case';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+DEALLOCATE PREPARE p_field_history;
