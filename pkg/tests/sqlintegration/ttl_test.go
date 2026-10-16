@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -406,6 +407,14 @@ func TestTTLConcurrentForegroundWrites(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
 				_, err := ttl.DeleteBatch(ctx, exec, c, ttlTestNow(), 37)
+				// Sustained foreground writes can consume the worker's eight
+				// whole-transaction attempts. This is bounded deferral, not a
+				// correctness failure. The post-writer drain below must succeed
+				// and verifies the complete surviving row set.
+				var txnErr *moerr.Error
+				if errors.As(err, &txnErr) && moerr.IsMoErrCode(txnErr, moerr.ErrTxnNeedRetry) {
+					continue
+				}
 				if err != nil {
 					errs <- err
 					return

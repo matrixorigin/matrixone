@@ -1,0 +1,1 @@
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	0.502s
