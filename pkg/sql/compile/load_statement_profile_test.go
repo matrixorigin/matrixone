@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -65,7 +66,7 @@ func TestLoadTimeReaderPlacement(t *testing.T) {
 			ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD), TbColToDataCol: map[string]int32{"v": 0}},
 		}
 		param := csvLoadFanoutParam("")
-		param.Ctx = c.proc.Ctx
+		param.Ctx = fileservice.WithSQLFileAccess(c.proc.Ctx, "sys", "moadmin")
 		param.ScanType, param.Format, param.Parallel = tree.S3, format, true
 		return c, n, param
 	}

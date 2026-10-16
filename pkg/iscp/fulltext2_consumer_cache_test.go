@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -48,6 +49,7 @@ import (
 // results that the callback needs and records the real tail INSERT statement.
 type fulltext2FlushSQLExecutor struct {
 	mp         *mpool.MPool
+	txn        executor.TxnExecutor
 	nextChunk  int64
 	insertOnce sync.Once
 	insertSeen chan string
@@ -70,8 +72,8 @@ func (e *fulltext2FlushSQLExecutor) Exec(_ context.Context, sql string, _ execut
 	return executor.Result{}, nil
 }
 
-func (e *fulltext2FlushSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
-	return nil
+func (e *fulltext2FlushSQLExecutor) ExecTxn(_ context.Context, fn func(executor.TxnExecutor) error, _ executor.Options) error {
+	return fn(e.txn)
 }
 
 // cacheFlushProbe is a complete VectorIndexSearchIf implementation so the test
@@ -179,6 +181,19 @@ func TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	})
 
 	ctrl := gomock.NewController(t)
+	tx := executortest.NewMockTxnExecutor(ctrl)
+	exec.txn = tx
+	tx.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opt executor.StatementOption) (executor.Result, error) {
+		if opt.HasParams() {
+			v, err := opt.Params(exec.mp)
+			require.NoError(t, err)
+			defer v.Free(exec.mp)
+			require.Positive(t, v.Length())
+			require.NotEmpty(t, v.GetRawBytesAt(1))
+		}
+		return exec.Exec(runCtx, sql, executor.Options{}.WithStatementOption(opt))
+	}).AnyTimes()
+
 	// This cleanup must be registered after runtime teardown and gomock's
 	// controller cleanup so it runs first. Assertion failures and timeouts can
 	// otherwise finish the executor/mocks while RunFulltext2 is still in its txn.

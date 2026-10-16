@@ -75,6 +75,7 @@ func (u *pluginState) end(tf *TableFunction, proc *process.Process) error {
 }
 
 func (u *pluginState) reset(tf *TableFunction, proc *process.Process) {
+	u.closePlugin()
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -92,8 +93,16 @@ func (u *pluginState) call(tf *TableFunction, proc *process.Process) (vm.CallRes
 }
 
 func (u *pluginState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	u.closePlugin()
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
+	}
+}
+
+func (u *pluginState) closePlugin() {
+	if u.plugin != nil {
+		_ = u.plugin.Close()
+		u.plugin = nil
 	}
 }
 

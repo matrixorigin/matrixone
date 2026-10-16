@@ -919,6 +919,8 @@ func externalArrowParam(fs fileservice.FileService, path string, size int64, con
 func newArrowLoadTestProc(t *testing.T) *process.Process {
 	t.Helper()
 	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	frontend := &config.FrontendParameters{}
 	frontend.SetDefaultValues()
 	proc.Ctx = context.WithValue(proc.Ctx, config.ParameterUnitKey,

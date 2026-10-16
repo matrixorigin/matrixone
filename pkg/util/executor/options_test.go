@@ -15,6 +15,7 @@
 package executor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -72,15 +73,18 @@ func TestOptionsTxnMode(t *testing.T) {
 
 func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := StatementOption{}.
-		WithParamsAndNulls([]string{"7", "", "value"}, []bool{false, true, false}).
+	vec, err := StatementOption{}.
+		WithParamsAndNulls([]string{"7", "", "value", ""}, []bool{false, true, false, false}).
 		Params(mp)
+	require.NoError(t, err)
 	defer vec.Free(mp)
 
-	require.Equal(t, 3, vec.Length())
+	require.Equal(t, 4, vec.Length())
 	require.Equal(t, []byte("7"), vec.GetRawBytesAt(0))
 	require.True(t, vec.IsNull(1))
 	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
+	require.False(t, vec.IsNull(3))
+	require.Empty(t, vec.GetRawBytesAt(3))
 }
 
 // WithOptimizerHints carries a per-statement optimizer_hints string (same format as the global
@@ -99,4 +103,58 @@ func TestStatementOptionOptimizerHints(t *testing.T) {
 
 	// Overwriting replaces rather than appends.
 	require.Equal(t, "x=1", set.WithOptimizerHints("x=1").OptimizerHints())
+}
+
+func TestStatementOptionSessionIdentity(t *testing.T) {
+	var base StatementOption
+	account, role := base.SessionIdentity()
+	require.Empty(t, account)
+	require.Empty(t, role)
+
+	set := base.WithSessionIdentity("sys", "moadmin")
+	account, role = set.SessionIdentity()
+	require.Equal(t, "sys", account)
+	require.Equal(t, "moadmin", role)
+	account, role = base.SessionIdentity()
+	require.Empty(t, account)
+	require.Empty(t, role)
+}
+
+func TestStatementOptionParamsRejectsInvalidBitmap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := StatementOption{}.WithParamsAndNulls([]string{"a", "b"}, []bool{false}).Params(mp)
+	require.Error(t, err)
+	require.Nil(t, vec)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestStatementOptionParamsAllocationFailure(t *testing.T) {
+	// MPool caps govern off-heap admission; parameter vectors use on-heap
+	// allocations. Exercise their allocator size limit without exhausting RAM.
+	previous := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = previous })
+	mp := mpool.MustNewZero()
+	vec, err := StatementOption{}.WithParams([]string{strings.Repeat("a", 32), strings.Repeat("x", 2<<20)}).Params(mp)
+	if vec != nil {
+		defer vec.Free(mp)
+	}
+	require.Error(t, err)
+	require.Nil(t, vec)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB(), "partial parameter allocations must be freed")
+}
+
+func TestStatementOptionParamsVectorAllocationFailure(t *testing.T) {
+	previous := mpool.CapLimit
+	mpool.CapLimit = 64
+	t.Cleanup(func() { mpool.CapLimit = previous })
+	mp := mpool.MustNewZero()
+	v, err := StatementOption{}.WithParams([]string{"first", "second", "third"}).Params(mp)
+	if v != nil {
+		defer v.Free(mp)
+	}
+	require.Error(t, err)
+	require.Nil(t, v)
+	require.Zero(t, mp.OnHeapCurrNB())
 }
