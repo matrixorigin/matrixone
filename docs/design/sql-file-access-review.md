@@ -160,3 +160,15 @@ quoted/long fallback costs and historical failed SQL timing gates remain
 visible. This scoped source acceptance does not claim end-to-end performance
 closure or waive those gates. Raw final review and receipts are retained under
 `revision-20261016/codec-light/` in the issue30185 ledger.
+
+
+Range/query allocation cleanup: **SOURCE ACCEPT; overall performance/push still
+NOT READY**. Actual gpt-6.1-sol / xhigh in the same recorded session; design turn
+`01a14411-63c9-7a10-af7b-a1cb0737aa16`, final review turn
+`01a14418-3f2e-7561-9942-842f523f0408`. Final artifact SHA256:
+`bdb4a8e736ccabfd6da58e1c92cd2e890d43851b17eaf917d4e8d54834f17e25`. Review covers the
+private scalar API/public slice contract, unchanged query errors and policies,
+focused normal/race/static receipts and matched component benchmarks. No new
+source finding or further validation request. The instrumented parent-source
+SQL observations remain diagnosis, not current-patch timing acceptance. Raw
+review/provenance and evidence: `revision-20261016/admission-opt/` in the ledger.

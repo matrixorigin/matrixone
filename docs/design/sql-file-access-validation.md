@@ -1,5 +1,40 @@
 # SQL file access validation record
 
+## Further allocation cleanup: scope and limits
+
+On parent `3465deb8298` / main `c2b990cd712`, the private Datalink resolver
+returns offset/size scalars; only the unchanged public ParseDatalink API creates
+its range slice. Empty queries skip the empty query-map allocation. Nonempty
+query decoding, case folding, duplicate-key behavior, parse/error order and
+range checks retain the existing implementation. No new cache or provider path.
+
+Owning Datalink normal tests, focused parse/authorization race tests, vet, molint
+and incremental lint pass. Existing tables additionally check bare `?`, uppercase
+and repeated keys, unknown/malformed query pairs, empty/overflow/range failures
+and the public empty-URL/nil-slice error contract. A matched three-by-200ms
+actual-NewAsync benchmark uses only a test overlay for the original Datalink
+source: both 1/16-stage cases reduce 1144 to 1080 B/op and 18 to 16 allocations;
+median component times are 892.9 to 867.3 ns and 899.3 to 880.6 ns. These short
+observations establish allocation removal, not end-to-end SQL acceptance.
+
+The parent source's diagnostic run applies 32 alternating source updates over
+4096 rows with four clients and verifies exact rows/CDC/search. CPU/trace
+instrumentation is enabled, so this is not an acceptance benchmark. Candidate
+source time is 4.340s versus main 3.925s; process CPU samples total 10.95s versus
+10.71s. The new checker accounts for about 190ms / 1.74% of candidate process CPU;
+that denominator includes background work and does not bound foreground latency
+or indirect GC effects. Cumulative commit wait is about 8.48s versus 7.59s, and
+Raft proposal wait 7.38s versus 6.61s. These overlap across goroutines and must not
+be added or treated as elapsed time; they do not establish why waits differ.
+
+**Overall SQL performance acceptance remains unresolved.** The two earlier
+same-binary focused cohorts retain all paired results: source UPDATE median
+-50.55% in the first, +24.01% in the repeat (+36.23%, +24.01%, -79.53%). Noisy or
+favorable samples are not removed. The scalar cleanup is a bounded local
+improvement, not proof that those SQL latency differences are fixed. Raw design,
+profiles, source overlays and normal/race/static receipts are under
+`revision-20261016/admission-opt/` in the issue30185 ledger.
+
 ## Current CSV producer optimization and validation scope
 
 Rebased without conflicts onto main `c2b990cd712`. Fileservice now owns one

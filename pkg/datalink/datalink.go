@@ -71,7 +71,7 @@ func parseDatalink(aurl string, proc *process.Process) (Datalink, error) {
 		return Datalink{}, err
 	}
 
-	moUrl, offsetSize, err := parseDatalinkURL(u, proc)
+	moUrl, offset, size, err := parseDatalinkURL(u, proc)
 	if err != nil {
 		return Datalink{}, err
 	}
@@ -81,8 +81,8 @@ func parseDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	}
 	return Datalink{
 		Url:    u,
-		Offset: int64(offsetSize[0]),
-		Size:   int64(offsetSize[1]),
+		Offset: offset,
+		Size:   size,
 		MoPath: moUrl,
 		path:   path,
 	}, nil
@@ -152,10 +152,14 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	if err != nil {
 		return "", nil, err
 	}
-	return parseDatalinkURL(u, proc)
+	moURL, offset, size, err := parseDatalinkURL(u, proc)
+	if err != nil {
+		return "", nil, err
+	}
+	return moURL, []int64{offset, size}, nil
 }
 
-func parseDatalinkURL(u *url.URL, proc *process.Process) (string, []int64, error) {
+func parseDatalinkURL(u *url.URL, proc *process.Process) (string, int64, int64, error) {
 	var err error
 
 	var moUrl string
@@ -168,49 +172,51 @@ func parseDatalinkURL(u *url.URL, proc *process.Process) (string, []int64, error
 
 		serviceCSV, err := fileservice.EncodeServiceCSV(opts)
 		if err != nil {
-			return "", nil, err
+			return "", 0, 0, err
 		}
 		moUrl = fileservice.JoinPath(serviceCSV, u.Path)
 	case stage.STAGE_PROTOCOL:
 		var source stage.StageDef
 		source, err = stageutil.UrlToStageDefFromURL(u, proc)
 		if err != nil {
-			return "", nil, err
+			return "", 0, 0, err
 		}
 		moUrl, _, err = source.ToPath()
 		if err != nil {
-			return "", nil, err
+			return "", 0, 0, err
 		}
 	default:
-		return "", nil, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
+		return "", 0, 0, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
 	}
 
-	// 2. get size and offset from the query
-	urlParams := make(map[string]string)
-	for k, v := range u.Query() {
-		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
-	}
-	offsetSize := []int64{0, -1}
-	if _, ok := urlParams["offset"]; ok {
-		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
-			return "", nil, err
+	// Keep the public range slice at the public boundary. Most row values have
+	// no query and need neither a range allocation nor an empty query map.
+	offset, size := int64(0), int64(-1)
+	if u.RawQuery != "" {
+		urlParams := make(map[string]string)
+		for k, v := range u.Query() {
+			urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
+		}
+		if _, ok := urlParams["offset"]; ok {
+			if offset, err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
+				return "", 0, 0, err
+			}
+		}
+		if _, ok := urlParams["size"]; ok {
+			if size, err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
+				return "", 0, 0, err
+			}
 		}
 	}
-	if _, ok := urlParams["size"]; ok {
-		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
-			return "", nil, err
-		}
+	if offset < 0 {
+		return "", 0, 0, moerr.NewInternalErrorNoCtx("offset cannot be negative")
 	}
 
-	if offsetSize[0] < 0 {
-		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
+	if size < -1 {
+		return "", 0, 0, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
 	}
 
-	if offsetSize[1] < -1 {
-		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
-	}
-
-	return moUrl, offsetSize, nil
+	return moUrl, offset, size, nil
 }
 
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
