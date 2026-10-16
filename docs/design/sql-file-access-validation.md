@@ -2,8 +2,10 @@
 
 ## Validation-only parsing optimization
 
-Rebased onto main `6b081a1fcfe`; the five design-target source files and native
-build/module inputs are unchanged across that rebase. The shared URL/stage and
+Initial validation uses main `6b081a1fcfe`; the final requested rebase uses
+`85d03e833eb`. All eight optimization source/test files remain byte-identical.
+Native CGo/third-party sources and module inputs are unchanged; the Makefile
+change affects only the UT scheduler, not native build targets or flags. The shared URL/stage and
 range resolver now supports error-only CAST and final-value admission without
 CSV path materialization. Existing complete-object/string APIs remain adapters
 over the same owners. Provider classification and final-row selection remain
@@ -38,6 +40,19 @@ bytes -4.67%, allocation count -4.03%, process CPU -0.57% and elapsed time
 **+6.16%**; elapsed blocks range -16.39% to +25.05%. Normal GC is counted, and
 the user's other applications keep running. These short intervals do not fully
 isolate external load or establish population P99 or a SQL speedup.
+
+The final base changes internal SQL context and backend dedup execution, so
+one protocol-identical SQL comparison is repeated specifically for those
+invalidated dependencies, not to replace unfavorable samples. It again passes
+all 16 actual-call proofs and final row/CDC/search checks. Its paired medians
+are allocated bytes -2.35%, allocation count -2.06%, process CPU -5.14% and
+elapsed -2.13%; elapsed blocks are +6.71%, -8.28%, -0.42%, -3.84%. The earlier
++6.16% result remains qualified to base `6b081a1fcfe`; the cohorts are not pooled.
+These remain short shared-host observations, not a population P99 guarantee.
+The cached-stage component evidence is reused because its source, data, native
+settings and timed call graph do not use the changed backend/executor paths.
+Final-base focused normal/race and configured static results are recorded
+separately under `systematic-opt/rebase-85d/`.
 
 **Overall PR/main performance acceptance remains unresolved.** The earlier
 large stalls also occurred before flush on the same unmodified candidate

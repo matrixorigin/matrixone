@@ -198,3 +198,16 @@ only an explicit revision-scoped user exception can permit submission with it
 unresolved. No additional heavy cohort, CI pass, solved stall cause or zero
 performance regression is claimed. Actual provenance, review and evidence are
 retained under `revision-20261016/systematic-opt/` in the issue30185 ledger.
+
+Final-base reconciliation: **SOURCE ACCEPT remains valid; delivery still NOT
+READY under the retained whole-PR/main timing gate.** Reviewed head
+`e9deae13b16` on base `85d03e833eb` with actual gpt-6.1-sol / xhigh,
+same final-review session, turn `01a144c3-4233-78e3-bac5-e426e79c9f15`. Artifact SHA256:
+`9208db49b3f1776c0a7a7b9726dce1abc7fbcc661ea7f95449b126d51957fe63`. All eight optimization Go files are unchanged and all sixteen patches
+remain equivalent. The new executor/backend composition preserves identity and
+final-row admission. Final-base affected normal/race and all 23 CPU-package
+static checks pass. The separate final-base SQL cohort reports median elapsed
+−2.13%, CPU −5.14%, bytes −2.35% and mallocs −2.06%; the earlier cohort and
+historical unresolved performance gate remain visible. No additional heavy
+validation or zero-regression claim is requested or made. Evidence and actual
+model provenance: `systematic-opt/rebase-85d/` in the same ledger.
