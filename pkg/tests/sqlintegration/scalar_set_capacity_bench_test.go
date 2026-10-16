@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -79,6 +80,8 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "outer", Outer: 64, InnerPerArm: 8, Concurrency: 1},
 		{Name: "candidates", Outer: 8, InnerPerArm: 128, Concurrency: 1},
 		{Name: "sparse", Outer: 8, InnerPerArm: 8, Concurrency: 1, Sparse: true},
+		{Name: "sparse-boundary", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Sparse: true},
+		{Name: "sparse-boundary-concurrent", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2, Sparse: true},
 		{Name: "distinct-cardinality-error", Outer: 8, InnerPerArm: 8, Concurrency: 1, Distinct: true},
 		{Name: "width", Outer: 8, InnerPerArm: 8, Width: 256, Concurrency: 1},
 		{Name: "concurrency", Outer: 8, InnerPerArm: 8, Concurrency: 2},
@@ -87,6 +90,7 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "balanced-two-values", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Distinct: true, ValueKinds: 2},
 		{Name: "skewed-two-values", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Distinct: true, ValueKinds: 2, Skew: true},
 		{Name: "forced-spill", Outer: 64, InnerPerArm: 128, Concurrency: 1, ForceSpill: true},
+		{Name: "forced-spill-boundary-concurrent", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2, ForceSpill: true},
 	}
 	var results []scalarCapacityResult
 	embed.RunSingleCNBaseClusterTests(b, func(cluster embed.Cluster) {
@@ -209,6 +213,13 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 		wg.Wait()
 		for i := range samples {
 			require.NoError(b, errs[i], "profile=%s phase=%s worker=%d", p.Name, phase, i)
+			// These fixed qualification budgets are benchmark acceptance criteria,
+			// never wall-clock assertions in the ordinary correctness suite.
+			if phase == "first-invocation" {
+				require.LessOrEqual(b, samples[i].CompletionNS, int64(10*time.Second), p.Name)
+			} else if phase == "measured" {
+				require.LessOrEqual(b, samples[i].CompletionNS, int64(5*time.Second), p.Name)
+			}
 		}
 		if len(samples) == 2 {
 			require.True(b, samples[0].Started.Before(samples[1].Finished) && samples[1].Started.Before(samples[0].Finished), "concurrent query intervals must overlap")
@@ -244,6 +255,7 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 		if p.ForceSpill {
 			require.GreaterOrEqual(b, strings.Count(lower, "spillrows="), 2, "both aggregation stages must spill")
 		}
+
 	}
 
 	if !p.Distinct {
@@ -263,6 +275,34 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 			require.Contains(b, result.Physical, "GroupSpillReloadRecords:")
 			require.Contains(b, result.Physical, "GroupSpillBucketsCreated:")
 		}
+		// Read exact integer counters from the existing physical text format.
+		// EXPLAIN is a separate serial query, not a concurrent spill measurement.
+		var spillBytes uint64
+		memoryCounters, spillCounters := 0, 0
+		for _, line := range strings.Split(result.Physical, "\n") {
+			if !strings.Contains(line, "CallNum:") {
+				continue
+			}
+			for _, field := range strings.Fields(line) {
+				for _, name := range []string{"MemSize", "SpillSize"} {
+					if !strings.HasPrefix(field, name+":") {
+						continue
+					}
+					value, parseErr := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(field, name+":"), "bytes"), 10, 64)
+					require.NoError(b, parseErr, field)
+					if name == "MemSize" {
+						memoryCounters++
+						require.LessOrEqual(b, value, uint64(256<<20), p.Name)
+					} else {
+						spillCounters++
+						spillBytes += value
+					}
+				}
+			}
+		}
+		require.Positive(b, memoryCounters, "physical memory counters must be present")
+		require.Positive(b, spillCounters, "physical spill counters must be present")
+		require.LessOrEqual(b, spillBytes, uint64(64<<20), p.Name)
 	}
 	// This separate internal-executor run captures terminal generation accounting,
 	// including cardinality failures that cannot return an EXPLAIN payload.
@@ -291,6 +331,7 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 	}
 	close(startInternal)
 	internalWG.Wait()
+	var accountPeakSum uint64
 	for worker, summary := range result.Internal {
 		if p.Distinct {
 			var moError *moerr.Error
@@ -305,10 +346,13 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 		require.Positive(b, summary.Allocation.MaxGenerationPeak)
 		require.Zero(b, summary.Allocation.LiveBytesAtTerminal)
 		require.LessOrEqual(b, summary.Allocation.MaxGenerationPeak, uint64(256<<20))
+		accountPeakSum += summary.Allocation.SumGenerationPeak
 		require.Zero(b, summary.MissingMemoryDomainCount)
 		require.Equal(b, "complete", summary.Quality.String())
 		b.Logf("internal-account profile=%s worker=%d generationPeak=%d missingDomains=%d quality=%s", p.Name, worker, summary.Allocation.MaxGenerationPeak, summary.MissingMemoryDomainCount, summary.Quality)
 	}
+	// A conservative sum bound; internal execution overlap is not measured.
+	require.LessOrEqual(b, accountPeakSum, uint64(p.Concurrency)*(256<<20), p.Name)
 
 	var usage syscall.Rusage
 	require.NoError(b, syscall.Getrusage(syscall.RUSAGE_SELF, &usage))
@@ -316,6 +360,7 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 	if runtime.GOOS != "darwin" {
 		result.ProcessLifetimeRSSHighWaterBytes *= 1024
 	}
+	require.LessOrEqual(b, result.ProcessLifetimeRSSHighWaterBytes, int64(4<<30), p.Name)
 	b.Logf("profile=%s O=%d I=%d width=%d C=%d lifetimeRSS=%d", p.Name, p.Outer, p.InnerPerArm*2, p.Width, p.Concurrency, result.ProcessLifetimeRSSHighWaterBytes)
 	return result
 }
