@@ -1871,14 +1871,6 @@ func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *test
 	}
 }
 
-func groupedDistinctHardAccountInput(
-	proc *process.Process,
-	argument int32,
-) *batch.Batch {
-	return groupedDistinctHardAccountInputRange(
-		proc, 0, aggexec.AggBatchSize, argument)
-}
-
 func groupedDistinctHardAccountInputRange(
 	proc *process.Process,
 	start int,
@@ -1908,21 +1900,20 @@ func buildGroupedDistinctPartial(
 	t.Helper()
 	input := groupedDistinctHardAccountInputRange(
 		proc, start, groups, argument)
+	defer input.Clean(proc.Mp())
 	partial := newGroupOp(
 		proc,
 		[]*plan.Expr{colExpr(0, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
 	)
+	defer partial.Free(proc, false, nil)
 	partial.NeedEval = false
 	partial.AppendChild(colexec.NewMockOperator().WithBatchs(
 		[]*batch.Batch{input}))
 	require.NoError(t, partial.Prepare(proc))
 	outputs := collectBatches(t, partial, proc)
 	require.Len(t, outputs, 1)
-	cloned := cloneBatch(t, proc, outputs[0])
-	partial.Free(proc, false, nil)
-	input.Clean(proc.Mp())
-	return cloned
+	return cloneBatch(t, proc, outputs[0])
 }
 
 func assertGroupedDistinctHardAccountResult(
@@ -1934,6 +1925,7 @@ func assertGroupedDistinctHardAccountResult(
 ) {
 	t.Helper()
 	rows := 0
+	seen := make([]bool, wantRows)
 	for {
 		result, err := vm.Exec(op, proc)
 		require.NoError(t, err)
@@ -1941,9 +1933,18 @@ func assertGroupedDistinctHardAccountResult(
 			break
 		}
 		rows += result.Batch.RowCount()
-		for _, count := range vector.MustFixedColNoTypeCheck[int64](
-			result.Batch.Vecs[1]) {
-			require.Equal(t, wantCount, count)
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		require.Len(t, keys, result.Batch.RowCount())
+		require.Len(t, counts, len(keys))
+		for row, key := range keys {
+			if key < 0 || int(key) >= wantRows || seen[key] {
+				t.Fatalf("invalid or repeated group %d", key)
+			}
+			if counts[row] != wantCount {
+				t.Fatalf("group %d: count %d, want %d", key, counts[row], wantCount)
+			}
+			seen[key] = true
 		}
 	}
 	require.Equal(t, wantRows, rows)
@@ -1951,8 +1952,8 @@ func assertGroupedDistinctHardAccountResult(
 
 func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	first := groupedDistinctHardAccountInput(proc, 1)
-	second := groupedDistinctHardAccountInput(proc, 2)
+	first := groupedDistinctHardAccountInputRange(proc, 0, aggexec.AggBatchSize, 1)
+	second := groupedDistinctHardAccountInputRange(proc, 0, aggexec.AggBatchSize, 2)
 	g := newGroupOp(
 		proc,
 		[]*plan.Expr{colExpr(0, types.T_int32)},
@@ -2028,12 +2029,14 @@ func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *test
 func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const chunks = 3
+	// Cross two complete aggregate chunks and retain a partial final chunk.
+	const groups = 2*aggexec.AggBatchSize + 1
 	inputs := make([]*batch.Batch, 0, chunks)
 	for chunk := range chunks {
 		inputs = append(inputs, groupedDistinctHardAccountInputRange(
 			proc,
 			chunk*aggexec.AggBatchSize,
-			aggexec.AggBatchSize,
+			min(aggexec.AggBatchSize, groups-chunk*aggexec.AggBatchSize),
 			1,
 		))
 	}
@@ -2048,7 +2051,7 @@ func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testin
 	require.NoError(t, g.Prepare(proc))
 
 	assertGroupedDistinctHardAccountResult(
-		t, proc, g, chunks*aggexec.AggBatchSize, 1)
+		t, proc, g, groups, 1)
 	require.Positive(t,
 		g.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"])
 
@@ -2068,13 +2071,14 @@ func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testin
 func TestMergeGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const chunks = 3
+	const groups = 2*aggexec.AggBatchSize + 1
 	partials := make([]*batch.Batch, 0, chunks)
 	for chunk := range chunks {
 		partials = append(partials, buildGroupedDistinctPartial(
 			t,
 			proc,
 			chunk*aggexec.AggBatchSize,
-			aggexec.AggBatchSize,
+			min(aggexec.AggBatchSize, groups-chunk*aggexec.AggBatchSize),
 			1,
 		))
 	}
@@ -2086,7 +2090,7 @@ func TestMergeGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *t
 	require.NoError(t, merge.Prepare(proc))
 
 	assertGroupedDistinctHardAccountResult(
-		t, proc, merge, chunks*aggexec.AggBatchSize, 1)
+		t, proc, merge, groups, 1)
 	require.Positive(t,
 		merge.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"])
 

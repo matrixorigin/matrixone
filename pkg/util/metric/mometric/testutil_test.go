@@ -31,6 +31,10 @@ var configMu *sync.Mutex = new(sync.Mutex)
 func withModifiedConfig(f func()) {
 	configMu.Lock()
 	defer configMu.Unlock()
+	// InitMetric replaces this process-wide callback, even when no option is
+	// supplied. Later cron tests must not inherit another fixture's callback.
+	previousFrontendServerStarted := frontendServerStarted
+	defer func() { frontendServerStarted = previousFrontendServerStarted }()
 	f()
 }
 
