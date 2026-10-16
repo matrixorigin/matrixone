@@ -2261,14 +2261,16 @@ func TestDataBranchCSVFinalizationCleanup(t *testing.T) {
 				bat := buildPickStreamingBatch(t, ses.proc.Mp(), []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, [][]any{{int64(1), "one"}})
 				exec := &pickStreamingExecutor{result: executor.Result{Batches: []*batch.Batch{bat}, Mp: ses.proc.Mp()}}
 				previousRuntime := moruntime.ServiceRuntime(ses.GetService())
-				require.NotNil(t, previousRuntime)
-				bh := newPickStreamingBackExecForTest(t, ses, exec)
+				if previousRuntime == nil {
+					previousRuntime = moruntime.DefaultRuntime()
+				}
 				t.Cleanup(func() {
 					moruntime.SetupServiceBasedRuntime(ses.GetService(), previousRuntime)
 					if exec.sql == "" {
 						bat.Clean(ses.proc.Mp()) // ownership never passed to the writer
 					}
 				})
+				bh := newPickStreamingBackExecForTest(t, ses, exec)
 				pool, err := ants.NewPool(3) // writer, producer and converter
 				require.NoError(t, err)
 				defer pool.Release()
