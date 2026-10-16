@@ -244,7 +244,10 @@ func TestCRC32PrepareMigrationRejectsBeforeReplay(t *testing.T) {
 			require.Equal(t, int64(7), ses.GetLastAffectedRows())
 			require.Equal(t, uint64(11), ses.GetLastInsertID())
 			require.Equal(t, uint64(13), ses.GetLastFoundRows())
-			require.Equal(t, []*PrepareStmt{existing}, ses.GetPrepareStmts())
+			require.Len(t, ses.prepareStmts, 1)
+			retained, err := ses.GetPrepareStmt(context.Background(), existing.Name)
+			require.NoError(t, err)
+			require.Same(t, existing, retained)
 			variable, err := ses.GetUserDefinedVar("keep")
 			require.NoError(t, err)
 			require.Equal(t, int64(42), variable.Value)
@@ -255,8 +258,14 @@ func TestCRC32PrepareMigrationRejectsBeforeReplay(t *testing.T) {
 }
 
 func TestCRC32PrepareMigrationKeepsEvaluatedNumericVariable(t *testing.T) {
-	ses, _, _, _ := newPreparedExecuteEnvForSQL(t, 155, "select crc32('abc'),42")
+	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 155, "select crc32('abc'),42")
 	t.Cleanup(ses.Close)
+	// Re-prepare through the real handler so the owner policy is captured
+	// before planning, as required by the migration snapshot API.
+	stmt := tree.NewPrepareString(tree.Identifier(prepared.Name), prepared.Sql)
+	defer stmt.Free()
+	_, err := handlePrepareString(ses, execCtx, stmt)
+	require.NoError(t, err)
 	const assignmentSQL = `set @digest=crc32(cast('{"t1":"a"}' as json))`
 	require.NoError(t, ses.setUserDefinedVarWithType(
 		"digest", uint64(4012824821), assignmentSQL, false, plan.Type{Id: int32(types.T_uint64)}))
