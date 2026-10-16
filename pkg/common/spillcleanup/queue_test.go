@@ -79,7 +79,7 @@ func TestQueueIsolatesBlockedCallback(t *testing.T) {
 }
 
 func TestReservationBoundsAndRestoresAdmission(t *testing.T) {
-	var owners []*Reservation
+	owners := make([]*Reservation, 0, Capacity)
 	t.Cleanup(func() {
 		for _, r := range owners {
 			r.Release()
