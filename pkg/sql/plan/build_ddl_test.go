@@ -5555,10 +5555,10 @@ func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
 				stmts = append(stmts, "CREATE TABLE lowprec_fence AS SELECT CAST(n_nationkey AS "+typ+") v FROM nation")
 			}
 			for _, stmt := range stmts {
-				set(defines.MORPCVersion116, defines.MORPCVersion116)
+				set(LowPrecisionFloatProtocolVersion-1, LowPrecisionFloatProtocolVersion-1)
 				_, err := runOneStmt(mock, t, stmt)
 				require.ErrorContains(t, err, fence, stmt)
-				set(LowPrecisionFloatProtocolVersion, defines.MORPCVersion116)
+				set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion-1)
 				_, err = runOneStmt(mock, t, stmt)
 				require.ErrorContains(t, err, fence, stmt)
 			}
@@ -5570,7 +5570,7 @@ func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
 		})
 	}
 
-	set(defines.MORPCVersion116, defines.MORPCVersion116)
+	set(LowPrecisionFloatProtocolVersion-1, LowPrecisionFloatProtocolVersion-1)
 	_, err := runOneStmt(mock, t, "CREATE TABLE lowprec_fence (v float, w vecf32(4), x vecbf16(4))")
 	require.NoError(t, err)
 }
