@@ -630,3 +630,15 @@ func TestInformationSchemaCollationCharacterSetApplicabilityDDL(t *testing.T) {
 		statement.Free()
 	}
 }
+
+func TestMetadataVisibilityPolicyMatchesPersistedViews(t *testing.T) {
+	require.Equal(t, informationSchemaMetadataVisibilityCTE(), MetadataVisibilityCTE(defines.MORPCVersion41))
+	require.Equal(t, informationSchemaMetadataVisibilityCompatibilityCTE(), MetadataVisibilityCTE(defines.MORPCVersion35))
+	for _, protocol := range []int64{defines.MORPCVersion35, defines.MORPCVersion41} {
+		sql := MetadataVisibilityCTE(protocol) + "SELECT 1 FROM __mo_visible_tables WHERE reldatabase = 'db' AND relname = 't' LIMIT 1"
+		_, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		require.Contains(t, sql, "tbl.account_id = current_account_id()")
+		require.Contains(t, sql, "rp.obj_id = tbl.rel_logical_id")
+	}
+}
