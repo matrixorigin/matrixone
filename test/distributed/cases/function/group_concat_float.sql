@@ -49,10 +49,10 @@ insert into float_values (id,d) values
 select id, cast(d as char) as scalar_text, concat(d) as concat_text, concat_ws('',d) as concat_ws_text, quote(d) as quoted_text from float_values where id >= 8 order by id;
 
 -- Stored expressions preserve implicit precision and explicit CHAR limits.
-create table float_generated (id int primary key, a double, g varchar(100) generated always as (concat(a)) stored, e varchar(100) generated always as (concat(cast(a as char(32)))) stored);
+create table float_generated (id int primary key, a double, g varchar(100) generated always as (concat(a)) stored, e varchar(100) generated always as (concat(cast(a as char(32)))) stored, r varchar(200) generated always as (right(concat(a),10)) stored, rep varchar(200) generated always as (repeat(concat(a),2)) stored);
 insert into float_generated (id,a) values (1,cast('-1.2345678901234567e-15' as double));
-select g as generated_text, e as explicit_text from float_generated;
+select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text from float_generated;
 update float_generated set a = cast('1.2345678901234567e-15' as double) where id = 1;
-select g as generated_text, e as explicit_text from float_generated;
+select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text from float_generated;
 
 drop database group_concat_float_28660;
