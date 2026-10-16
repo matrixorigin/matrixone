@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 // `mysql` database system tables
@@ -152,6 +153,15 @@ var (
 			PRIMARY KEY (FROM_HOST,FROM_USER,TO_HOST,TO_USER)
 		)`
 )
+
+// MetadataVisibilityCTE returns the canonical local-object visibility policy for
+// executable metadata queries, matching the persisted views during upgrades.
+func MetadataVisibilityCTE(protocolVersion int64) string {
+	if protocolVersion < defines.MORPCVersion41 {
+		return informationSchemaMetadataVisibilityCompatibilityCTE()
+	}
+	return informationSchemaMetadataVisibilityCTE()
+}
 
 // informationSchemaMetadataVisibilityCTE limits user-object metadata to the
 // objects visible to the session's active role and its full inherited-role
@@ -1088,4 +1098,54 @@ func informationSchemaCharacterSetsDataSQL() string {
 		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8mb4"), characterSetMaxBytes("utf8mb4")),
 	}
 	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
+}
+
+// SubscriptionMetadataVisibilitySQL mirrors the canonical
+// information_schema table visibility rules using only subscriber-local
+// objects. Subscription tables are virtual in the subscriber catalog, so the
+// supported grant surface is database/global scope; exact table grants cannot
+// be resolved there. Subscriber role IDs are never evaluated in the publisher
+// account.
+// subscriptionNames is a comma-separated list of already escaped SQL literals.
+func SubscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion int64) string {
+	activeRolesSQL := "SELECT role_id FROM mo_current_roles() role_closure"
+	if protocolVersion < defines.MORPCVersion41 {
+		// Match the persisted information_schema compatibility view during a
+		// rolling deployment. The full local table-function closure is available
+		// only after every CN supports protocol v41.
+		activeRolesSQL = "SELECT current_role_id() UNION " +
+			"SELECT rg.granted_id FROM mo_catalog.mo_role_grant rg " +
+			"WHERE rg.grantee_id = current_role_id()"
+	}
+	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
+    %s
+), __subscription_databases AS (
+    SELECT dat_id, datname, owner
+    FROM mo_catalog.mo_database
+    WHERE account_id = current_account_id() AND datname IN (%s)
+), __subscription_broad_visibility AS (
+    SELECT db.dat_id, db.datname
+    FROM __subscription_databases db
+    WHERE db.owner IN (SELECT role_id FROM __subscription_active_roles)
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type IN ('table','view') AND (
+                (rp.privilege_level = '*.*' AND rp.obj_id = 0)
+                OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = db.dat_id)
+            )
+       )
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type = 'database'
+              AND rp.privilege_name IN ('show tables','database all','database ownership')
+              AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
+                   OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
+       )
+)
+SELECT datname, 1 AS all_tables, 0 AS table_id
+FROM __subscription_broad_visibility`, activeRolesSQL, subscriptionNames)
 }

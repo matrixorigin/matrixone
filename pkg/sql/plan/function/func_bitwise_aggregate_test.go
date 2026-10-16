@@ -31,7 +31,7 @@ import (
 func TestBitwiseAggregateBinaryOperandWidth(t *testing.T) {
 	ctx := context.Background()
 	for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
-		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 			for _, width := range []int32{510, 511} {
 				resolved, err := GetFunctionByName(ctx, functionName,
 					[]types.Type{types.New(oid, width, 0)})
@@ -40,7 +40,7 @@ func TestBitwiseAggregateBinaryOperandWidth(t *testing.T) {
 				require.Equal(t, width, resolved.GetReturnType().Width)
 			}
 
-			for _, width := range []int32{512, 600} {
+			for _, width := range []int32{512, 600, 65535} {
 				_, err := GetFunctionByName(ctx, functionName,
 					[]types.Type{types.New(oid, width, 0)})
 				require.Error(t, err, "%s(%s(%d)) must be rejected", functionName, oid, width)
@@ -633,4 +633,15 @@ func assertBitwiseAggregateCast(
 	}
 	success, info := testCase.Run()
 	require.True(t, success, info)
+}
+
+func TestBitwiseAggregatePreservesBlobType(t *testing.T) {
+	for _, width := range []int32{0, 511} {
+		operand := types.NewWithCharset(types.T_blob, width, 0, types.CharsetBinary)
+		for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+			resolved, err := GetFunctionByName(context.Background(), name, []types.Type{operand})
+			require.NoError(t, err, name)
+			require.Equal(t, operand, resolved.GetReturnType())
+		}
+	}
 }
