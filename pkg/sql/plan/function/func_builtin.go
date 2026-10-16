@@ -4844,31 +4844,22 @@ func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWra
 	}, selectList)
 }
 
-// Issue #30214: MySQL emits warning 3020 (ER_INVALID_ARGUMENT_FOR_LOGARITHM,
-// "Invalid argument for logarithm") per evaluated invalid row for the LN/LOG
-// family, while still returning NULL. Values are unchanged here; only the
-// missing diagnostics are added.
-func appendLogarithmWarning(proc *process.Process) {
-	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
-		appender.AppendWarningDiagnostic(moerr.ER_INVALID_ARGUMENT_FOR_LOGARITHM,
-			"Invalid argument for logarithm")
-	}
-}
-
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		if v <= 0 {
-			appendLogarithmWarning(proc)
-		}
+	// The LN/LOG kernel returns NULL for invalid arguments (executed for both
+	// LN(x) and the unary LOG(x) overload). Per-row warning 3020 diagnostics
+	// are reported by the shared post-pass, which also keeps folded scalar
+	// calls from collapsing the per-row warning count (#30214).
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Ln(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
-		if v1 <= 0 || v1 == 1 || v2 <= 0 {
-			appendLogarithmWarning(proc)
-		}
+	if err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 		if v1 == 1 {
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
@@ -4881,25 +4872,31 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 		}
 		return tempV2 / tempV1, nil
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		if v <= 0 {
-			appendLogarithmWarning(proc)
-		}
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Log2(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		if v <= 0 {
-			appendLogarithmWarning(proc)
-		}
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Lg(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 type opBuiltInRand struct {

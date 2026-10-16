@@ -38,12 +38,24 @@ func normalizeStrToDateScale(scale int32) int32 {
 	return scale
 }
 
-// appendStrToDateWarning appends MySQL-style STR_TO_DATE diagnostics when a
-// warning sink is available. Absent a sink the value behavior is unchanged.
-func appendStrToDateWarning(proc *process.Process, code uint16, msg string) {
-	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
-		appender.AppendWarningDiagnostic(code, msg)
+// strToDateWarningInputMax caps how many input bytes one diagnostic message
+// may carry. Diagnostic text must not scale with the input (#30213): the
+// MySQL 1411/1292 formats show the value, not the whole byte string.
+const strToDateWarningInputMax = 128
+
+// appendStrToDateWarning appends one MySQL-style STR_TO_DATE diagnostic. No
+// message is constructed when the process carries no warning sink, so a
+// discard-only evaluation keeps the kernel's allocation profile even for
+// multi-megabyte invalid inputs.
+func appendStrToDateWarning(proc *process.Process, code uint16, prefix, suffix string, input []byte) {
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
 	}
+	if len(input) > strToDateWarningInputMax {
+		input = input[:strToDateWarningInputMax]
+	}
+	appender.AppendWarningDiagnostic(code, fmt.Sprintf("%s: '%s'%s", prefix, input, suffix))
 }
 
 func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -69,7 +81,7 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 				value := types.DateFromCalendar(int32(time.year), time.month, time.day)
 				if truncated {
 					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
-						fmt.Sprintf("Truncated incorrect date value: '%s'", input))
+						"Truncated incorrect date value", "", v1)
 				}
 				if err := rs.Append(value, false); err != nil {
 					return err
@@ -77,7 +89,7 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 				continue
 			}
 			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
-				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
+				"Incorrect datetime value", " for function str_to_date", v1)
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -111,7 +123,7 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 					value := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 					if truncated {
 						appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
-							fmt.Sprintf("Truncated incorrect datetime value: '%s'", input))
+							"Truncated incorrect datetime value", "", v1)
 					}
 					if err := rs.Append(value, false); err != nil {
 						return err
@@ -120,7 +132,7 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 				}
 			}
 			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
-				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
+				"Incorrect datetime value", " for function str_to_date", v1)
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -156,7 +168,7 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 					if types.IsMySQLTime(value) {
 						if truncated {
 							appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
-								fmt.Sprintf("Truncated incorrect time value: '%s'", input))
+								"Truncated incorrect time value", "", v1)
 						}
 						if err := rs.Append(value, false); err != nil {
 							return err
@@ -166,7 +178,7 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 			}
 			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
-				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
+				"Incorrect datetime value", " for function str_to_date", v1)
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -174,6 +186,49 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 	}
 
 	return nil
+}
+
+// coreStrToDateViaEvaluate mirrors each builtIn*StrTo* wrapper's value vs
+// warning contract for one input: invalid parse or calendar/time fields map
+// to MySQL 1411, accepted input with trailing characters to 1292, clean
+// input to no diagnostic. Folding probes use it to ask whether one constant
+// evaluation would warn (#30213).
+func coreStrToDateViaEvaluate(cctx context.Context, target types.T, date, format []byte) (published bool, warning uint16) {
+	t := NewGeneralTime()
+	ok, truncated := coreStrToDate(cctx, t,
+		functionUtil.QuickBytesToStr(date), functionUtil.QuickBytesToStr(format))
+	if !ok {
+		return false, moerr.ER_WRONG_VALUE_FOR_TYPE
+	}
+	valid := false
+	switch target {
+	case types.T_date:
+		valid = types.ValidDate(int32(t.year), t.month, t.day)
+	case types.T_datetime:
+		valid = types.ValidDatetime(int32(t.year), t.month, t.day) &&
+			types.ValidTimeInDay(t.hour, t.minute, t.second)
+	case types.T_time:
+		hours := uint64(t.day)*24 + uint64(t.hour)
+		valid = types.ValidTime(hours, uint64(t.minute), uint64(t.second)) &&
+			types.IsMySQLTime(types.TimeFromClock(false, hours, t.minute, t.second, t.microsecond))
+	}
+	if !valid {
+		return false, moerr.ER_WRONG_VALUE_FOR_TYPE
+	}
+	if truncated {
+		return true, moerr.ER_TRUNCATED_WRONG_VALUE
+	}
+	return true, 0
+}
+
+// StrToDateConstantsWouldWarn reports whether one STR_TO_DATE evaluation of
+// these constant arguments would emit a diagnostic. The optimizer
+// constant-fold probe uses it to keep warning-bearing constants out of the
+// fold cache so every evaluated row retains its warning (#30213).
+func StrToDateConstantsWouldWarn(cctx context.Context, target types.T, date, format string) bool {
+	_, warning := coreStrToDateViaEvaluate(cctx, target,
+		functionUtil.QuickStrToBytes(date), functionUtil.QuickStrToBytes(format))
+	return warning != 0
 }
 
 func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) (bool, bool) {

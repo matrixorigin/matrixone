@@ -362,8 +362,10 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	// Reject folding before evaluation emits a warning with execLen=1. Leaving
 	// this child non-folded also prevents its parents from caching the result;
 	// normal Eval then owns the real batch length and selected-row mask.
-	if (expr.fid == function.DIV || expr.fid == function.INTEGER_DIV || expr.fid == function.MOD) &&
-		function.ScalarDivisionNeedsRowEvaluation(expr.parameterResults, proc) {
+	// Shared by DIV/INTEGER_DIV/MOD (#30211), LN/LOG/LOG2/LOG10 (#30214),
+	// STR_TO_DATE (#30213) and FORMAT (#30217); safe constants keep the
+	// folding fast path.
+	if function.ScalarDiagnosticNeedsRowEvaluation(expr.fid, expr.parameterResults, proc, expr.resultType) {
 		return nil
 	}
 
