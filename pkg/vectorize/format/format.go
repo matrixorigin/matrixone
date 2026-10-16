@@ -62,6 +62,17 @@ func getFormatFunctionWithLocaleMode(locale string) formatModeFunc {
 	return formatENUSWithMode
 }
 
+// IsValidLocale reports whether locale names a supported FORMAT locale.
+// Anything else falls back to en_US and, in MySQL terms, warrants an
+// ER_UNKNOWN_LOCALE warning from the caller.
+func IsValidLocale(locale string) bool {
+	if _, exist := localeToFormatFunction[locale]; exist {
+		return true
+	}
+	_, exist := localeToFormatFunctionInsensitive[strings.ToLower(locale)]
+	return exist
+}
+
 // localeToFormatFunction is the string represent of locale format function.
 var localeToFormatFunction = map[string]formatModeFunc{
 	//formatENUSWithMode

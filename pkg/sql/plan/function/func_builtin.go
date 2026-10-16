@@ -1724,7 +1724,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 			} else {
 				generalTime.ResetTime()
-				success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
+				success, _ := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
 				if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
 					val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
 					if err = rs.Append(val, false); err != nil {
@@ -4844,14 +4844,31 @@ func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWra
 	}, selectList)
 }
 
+// Issue #30214: MySQL emits warning 3020 (ER_INVALID_ARGUMENT_FOR_LOGARITHM,
+// "Invalid argument for logarithm") per evaluated invalid row for the LN/LOG
+// family, while still returning NULL. Values are unchanged here; only the
+// missing diagnostics are added.
+func appendLogarithmWarning(proc *process.Process) {
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_INVALID_ARGUMENT_FOR_LOGARITHM,
+			"Invalid argument for logarithm")
+	}
+}
+
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v <= 0 {
+			appendLogarithmWarning(proc)
+		}
 		return momath.Ln(v)
 	}, selectList)
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if v1 <= 0 || v1 == 1 || v2 <= 0 {
+			appendLogarithmWarning(proc)
+		}
 		if v1 == 1 {
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
@@ -4869,12 +4886,18 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v <= 0 {
+			appendLogarithmWarning(proc)
+		}
 		return momath.Log2(v)
 	}, selectList)
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v <= 0 {
+			appendLogarithmWarning(proc)
+		}
 		return momath.Lg(v)
 	}, selectList)
 }

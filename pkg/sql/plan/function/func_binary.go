@@ -6596,9 +6596,21 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
+// Issue #30217: MySQL emits warning 1649 (ER_UNKNOWN_LOCALE) when FORMAT
+// receives an unknown or NULL locale, while still falling back to en_US.
+func appendLocaleUnknownWarning(proc *process.Process, locale string) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
+			fmt.Sprintf("Unknown locale: '%s'", locale))
+	}
+}
+
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, false)
+		return formatWithNumericFirst(ivecs, result, nil, length, false)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6723,9 +6735,9 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	return nil
 }
 
-func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, true)
+		return formatWithNumericFirst(ivecs, result, proc, length, true)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6746,8 +6758,12 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 		} else {
 			if null3 {
+				appendLocaleUnknownWarning(proc, "")
 				val, err = format.GetNumberFormat(string(v1), string(v2), "en_US")
 			} else {
+				if !format.IsValidLocale(string(v3)) {
+					appendLocaleUnknownWarning(proc, string(v3))
+				}
 				val, err = format.GetNumberFormat(string(v1), string(v2), string(v3))
 			}
 			if err != nil {
@@ -6764,6 +6780,7 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 func formatWithNumericFirst(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
+	proc *process.Process,
 	length int,
 	withLocale bool,
 ) error {
@@ -6790,10 +6807,13 @@ func formatWithNumericFirst(
 		localeValue := "en_US"
 		if withLocale {
 			localeBytes, nullLocale := locale.GetStrValue(i)
-			if nullLocale {
-				localeValue = "en_US"
-			} else {
+			switch {
+			case nullLocale:
+				appendLocaleUnknownWarning(proc, "")
+			case format.IsValidLocale(string(localeBytes)):
 				localeValue = string(localeBytes)
+			default:
+				appendLocaleUnknownWarning(proc, string(localeBytes))
 			}
 		}
 

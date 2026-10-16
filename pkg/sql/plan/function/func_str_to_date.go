@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"fmt"
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,14 @@ func normalizeStrToDateScale(scale int32) int32 {
 	return scale
 }
 
+// appendStrToDateWarning appends MySQL-style STR_TO_DATE diagnostics when a
+// warning sink is available. Absent a sink the value behavior is unchanged.
+func appendStrToDateWarning(proc *process.Process, code uint16, msg string) {
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(code, msg)
+	}
+}
+
 func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
@@ -54,16 +63,21 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 		} else {
 			time.ResetTime()
 
-			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
-			if success {
-				if types.ValidDate(int32(time.year), time.month, time.day) {
-					value := types.DateFromCalendar(int32(time.year), time.month, time.day)
-					if err := rs.Append(value, false); err != nil {
-						return err
-					}
-					continue
+			input := functionUtil.QuickBytesToStr(v1)
+			success, truncated := coreStrToDate(proc.Ctx, time, input, functionUtil.QuickBytesToStr(v2))
+			if success && types.ValidDate(int32(time.year), time.month, time.day) {
+				value := types.DateFromCalendar(int32(time.year), time.month, time.day)
+				if truncated {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect date value: '%s'", input))
 				}
+				if err := rs.Append(value, false); err != nil {
+					return err
+				}
+				continue
 			}
+			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
+				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -90,16 +104,23 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 		} else {
 			time.ResetTime()
 
-			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			input := functionUtil.QuickBytesToStr(v1)
+			success, truncated := coreStrToDate(proc.Ctx, time, input, functionUtil.QuickBytesToStr(v2))
 			if success {
 				if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 					value := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
+					if truncated {
+						appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
+							fmt.Sprintf("Truncated incorrect datetime value: '%s'", input))
+					}
 					if err := rs.Append(value, false); err != nil {
 						return err
 					}
 					continue
 				}
 			}
+			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
+				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -126,12 +147,17 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 		} else {
 			time.ResetTime()
 
-			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			input := functionUtil.QuickBytesToStr(v1)
+			success, truncated := coreStrToDate(proc.Ctx, time, input, functionUtil.QuickBytesToStr(v2))
 			if success {
 				hours := uint64(time.day)*24 + uint64(time.hour)
 				if types.ValidTime(hours, uint64(time.minute), uint64(time.second)) {
 					value := types.TimeFromClock(false, hours, time.minute, time.second, time.microsecond)
 					if types.IsMySQLTime(value) {
+						if truncated {
+							appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE,
+								fmt.Sprintf("Truncated incorrect time value: '%s'", input))
+						}
 						if err := rs.Append(value, false); err != nil {
 							return err
 						}
@@ -139,6 +165,8 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 					}
 				}
 			}
+			appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE,
+				fmt.Sprintf("Incorrect datetime value: '%s' for function str_to_date", input))
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -148,48 +176,45 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) bool {
+func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) (bool, bool) {
 	ctx := make(map[string]int)
-	success := strToDate2(cctx, t, date, format, ctx)
+	success, truncated := strToDate2(cctx, t, date, format, ctx)
 	if !success {
-		return false
+		return false, false
 	}
 	if err := checkMysqlTime(cctx, t, ctx); err != nil {
-		return false
+		return false, false
 	}
-	return true
+	return true, truncated
 }
 
 // strToDate converts date string according to format,
 // the value will be stored in argument ctx. the second return value is true when success
-func strToDate2(cctx context.Context, t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
+func strToDate2(cctx context.Context, t *GeneralTime, date string, format string, ctx map[string]int) (success, truncated bool) {
 	date = trimWhiteSpace(date)
 	format = trimWhiteSpace(format)
 
 	token, formatRemain, succ := nextFormatToken(format)
 	if !succ {
-		return false
+		return false, false
 	}
 
 	if token == "" {
-		if len(date) != 0 {
-			// Extra characters at the end of date are ignored
-			return true
-		}
-		// Normal case. Both token and date are empty now.
-		return true
+		// Format exhausted. Characters remaining in date are ignored by
+		// MySQL with warning 1292 (ER_TRUNCATED_WRONG_VALUE).
+		return true, len(date) != 0
 	}
 
 	if len(date) == 0 {
 		if _, parsed := ctx[token]; !parsed {
 			ctx[token] = 0
 		}
-		return true
+		return true, false
 	}
 
 	dateRemain, succ := matchDateWithToken(t, date, token, ctx)
 	if !succ {
-		return false
+		return false, false
 	}
 
 	return strToDate2(cctx, t, dateRemain, formatRemain, ctx)
