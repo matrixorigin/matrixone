@@ -287,9 +287,11 @@ type ExecutionResourceBudget struct {
 	memoryGrowthParticipants  uint64
 	memoryGrowthReportedBytes uint64
 	// Physical headroom is observation, never allocation authority. Production
-	// samples the cgroup/host working-set headroom on a short shared cadence so
-	// spill decisions can react to Go heap, caches, and allocator residency that
-	// the exact query allocation ledger deliberately does not own.
+	// reads the shared system.MemoryDomain snapshot on a short cadence so spill
+	// decisions react to Go heap, caches, and allocator residency that the exact
+	// query allocation ledger deliberately does not own. The execution gate may
+	// credit clean reclaimable pages; the throttler's hard-pressure gate does
+	// not, but both policies consume the same immutable sample.
 	memoryHeadroomProvider func() (uint64, bool)
 	memoryHeadroomTTL      time.Duration
 	memoryHeadroomNow      func() time.Time

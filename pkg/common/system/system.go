@@ -488,40 +488,20 @@ func MemoryAvailable() uint64 {
 // not conflate that with measured==false (unavailable), because the two
 // demand opposite responses -- fail the request vs. fall back to another bound.
 func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
-	// Prefer the hierarchy walk: a constrained ancestor contributes its own
-	// usage and cache, not just its limit. Fall back to single-level accounting
-	// only when the hierarchy cannot be resolved.
-	if headroom, ok := hierarchicalCgroupHeadroom(pid); ok {
-		avail, measured = headroom, true
-	} else if limit := CgroupMemoryLimit(); limit > 0 {
-		used, err := cgroup.GetMemUsage(pid)
+	// Both execution admission and the resource throttlers consume this
+	// published sample. A refresh error keeps the last good sample available;
+	// only the first-ever failure is reported as an unavailable measurement.
+	snapshot, err := CurrentMemoryDomain()
+	if !snapshot.Measured || snapshot.Limit == 0 {
 		if err != nil {
-			logutil.Errorf("failed to get cgroup memory usage: %v", err)
-			return 0, false
+			logutil.Errorf("failed to get memory domain: %v", err)
 		}
-		// Same correction as the hierarchy walk: cgroup usage counts page cache and
-		// this function promises reclaimable cache is available.
-		usage := uint64(used)
-		if reclaimable, rok := reclaimableCgroupCache(cgroupStatPath(pid)); rok {
-			usage -= min(usage, reclaimable)
-		}
-		if usage >= limit {
-			// Measured, and genuinely exhausted. This is NOT the same as an
-			// unavailable measurement: reporting it as unmeasured is what let
-			// callers silently disable their memory bound on a full cgroup.
-			return 0, true
-		}
-		avail, measured = limit-usage, true
+		return 0, false
 	}
-	mem, err := hostMemoryStats()
 	if err != nil {
-		logutil.Errorf("failed to get memory stats: %v", err)
-		return avail, measured
+		logutil.Warnf("using stale memory domain sample after refresh failure: %v", err)
 	}
-	if measured {
-		return min(avail, mem.ActualFree), true
-	}
-	return mem.ActualFree, true
+	return snapshot.ReclaimableHeadroom(), true
 }
 
 func MemoryUsed() uint64 {

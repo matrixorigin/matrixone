@@ -26,6 +26,7 @@ import (
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,6 +125,32 @@ func TestFullRefreshClearsConfirmedRemovedCgroupLimit(t *testing.T) {
 			require.Equal(t, int64(160), m.limit.Load())
 		})
 	}
+}
+
+func TestMergeOwnerBootstrapPreservesSharedMemoryDomain(t *testing.T) {
+	shared := &cgroupMemoryBudget{}
+	shared.sample.Store(&cgroupMemorySample{
+		usage: 95, limit: 100, cgroup: true,
+	})
+	shared.domainProvider = func() (system.MemoryDomainSnapshot, error) {
+		return system.MemoryDomainSnapshot{}, errors.New("transient memory-domain read failure")
+	}
+
+	merge := &memThrottler{
+		cgroupBudget: shared,
+		limitRate:    0.75,
+	}
+	merge.fillDefaults()
+	merge.ForceRefresh()
+
+	require.Equal(t, uint64(100), merge.actualTotalMemory.Load())
+	require.Equal(t, uint64(100), merge.total.Load())
+	require.Equal(t, uint64(100), merge.cgroup.Load())
+	require.Same(t, shared.sample.Load(), merge.cgroupSnapshot())
+	merge.rss.Store(0)
+	left, ok := defaultAcquirePolicy(merge, 6)
+	require.False(t, ok)
+	require.Equal(t, int64(5), left)
 }
 
 func TestCgroupBudgetAcrossInstances(t *testing.T) {
@@ -1026,6 +1053,49 @@ func TestRSSReclamationCoordinatorDropsRecoveredPendingWork(t *testing.T) {
 		t.Fatalf("stale eviction target %d was executed after pressure recovery", target)
 	default:
 	}
+}
+
+func TestRSSReclamationCoordinatorDoesNotReserveCooldownForRecoveredWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	defer resetRSSReclamationCoordinatorForTest()
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(1)
+	var evictions atomic.Int32
+	var frees atomic.Int32
+	work := rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor: func(context.Context, int64) {
+			evictions.Add(1)
+		},
+		freeOSMemory: true,
+		freeAction:   "test-free",
+	}
+	oldFreeOSMemory := freeOSMemory
+	freeOSMemory = func() { frees.Add(1) }
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	// The final validity check happens inside execute while the cooldown lock is
+	// held. A recovered request must neither execute nor consume a cooldown.
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.execute(work)
+	require.Zero(t, evictions.Load())
+	require.Zero(t, frees.Load())
+	processRSSReclamation.mu.Lock()
+	require.Zero(t, processRSSReclamation.lastCacheEvict)
+	require.Zero(t, processRSSReclamation.lastFreeOSMemory)
+	processRSSReclamation.mu.Unlock()
+
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(3)
+	work.generation = 3
+	processRSSReclamation.execute(work)
+	require.Equal(t, int32(1), evictions.Load())
+	require.Equal(t, int32(1), frees.Load())
 }
 
 func TestRSSReclamationCoordinatorKeepsOtherOwnerPendingWork(t *testing.T) {

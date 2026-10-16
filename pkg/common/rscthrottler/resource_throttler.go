@@ -30,6 +30,7 @@ import (
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/elastic/gosigar/cgroup"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -236,10 +237,7 @@ func (c *rssReclamationCoordinator) enqueuePending(work rssReclamationWork) {
 func (c *rssReclamationCoordinator) run(work rssReclamationWork) {
 	for {
 		if work.valid() {
-			c.prepare(&work)
-			if work.valid() {
-				c.execute(work)
-			}
+			c.execute(work)
 		}
 
 		c.mu.Lock()
@@ -263,14 +261,16 @@ func (c *rssReclamationCoordinator) run(work rssReclamationWork) {
 	}
 }
 
-// prepare applies process-wide cooldowns immediately before execution.  A
-// request can become stale while it is pending; reserving a cooldown when it
-// is enqueued would allow that stale request to suppress the newer request
-// that actually needs to run.
-func (c *rssReclamationCoordinator) prepare(work *rssReclamationWork) {
+func (c *rssReclamationCoordinator) execute(work rssReclamationWork) {
+	// Select and publish cooldowns under the same lock as the final validity
+	// check. A pending request can recover after it is enqueued; a stale request
+	// must not consume the cooldown that a later live request needs. Once this
+	// handoff succeeds, the callbacks belong to an admitted reclamation pass.
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	if !work.valid() {
+		c.mu.Unlock()
+		return
+	}
 	now := time.Now().UnixNano()
 	if work.evictor != nil {
 		cacheExpired := c.lastCacheEvict == 0 ||
@@ -294,9 +294,8 @@ func (c *rssReclamationCoordinator) prepare(work *rssReclamationWork) {
 			c.lastFreeOSMemory = now
 		}
 	}
-}
+	c.mu.Unlock()
 
-func (c *rssReclamationCoordinator) execute(work rssReclamationWork) {
 	if work.evictor != nil {
 		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
 		started := time.Now()
@@ -328,21 +327,26 @@ type RSCThrottler interface {
 // cgroupMemorySample is immutable after publication. Admission reads one sample
 // per attempt so a refresh cannot mix usage with a different physical limit.
 type cgroupMemorySample struct {
-	usage int64
-	limit int64
+	usage  int64
+	limit  int64
+	cgroup bool
+	source system.MemoryDomainSource
 }
 
-// All production throttlers observe the current process's cgroup. Component
+// All production throttlers observe the shared process memory domain. Component
 // quotas remain local, but pending allocations must spend one shared budget.
 // Reservations are tracked even below hard pressure so entering pressure or
 // refreshing the sample cannot erase an outstanding claim.
 type cgroupMemoryBudget struct {
-	sample    atomic.Pointer[cgroupMemorySample]
-	reserved  atomic.Int64
-	refreshMu sync.Mutex
+	sample         atomic.Pointer[cgroupMemorySample]
+	reserved       atomic.Int64
+	refreshMu      sync.Mutex
+	domainProvider func() (system.MemoryDomainSnapshot, error)
 }
 
-var processCgroupBudget cgroupMemoryBudget
+var processCgroupBudget = cgroupMemoryBudget{
+	domainProvider: system.CurrentMemoryDomain,
+}
 
 func (m *memThrottler) cgroupSnapshot() *cgroupMemorySample {
 	if m.cgroupBudget != nil {
@@ -383,10 +387,12 @@ func (m *memThrottler) releaseCgroup(n int64) {
 type memThrottler struct {
 	limit atomic.Int64
 	rss   atomic.Int64
-	// cgroupSample includes memory charged to the whole cgroup, including
-	// filesystem cache and kernel/socket memory. RSS alone is insufficient for
-	// a container limit: the final pre-OOM TPCC sample had a material cgroup
-	// charge outside the process RSS, leaving less headroom than RSS reported.
+	// cgroupSample is the shared memory-domain sample. For a container it
+	// includes memory charged to the whole cgroup, including filesystem cache
+	// and kernel/socket memory; for a bare host it is the host domain. RSS alone
+	// is insufficient for a container limit: the final pre-OOM TPCC sample had
+	// a material cgroup charge outside the process RSS, leaving less headroom
+	// than RSS reported.
 	cgroupSample atomic.Pointer[cgroupMemorySample]
 	cgroupBudget *cgroupMemoryBudget
 	// rssReservedBase records the reserved bytes that were already reflected in
@@ -441,15 +447,18 @@ type memThrottler struct {
 func (m *memThrottler) String() string {
 	sample := m.cgroupSnapshot()
 	var usage int64
+	var source system.MemoryDomainSource
 	if sample != nil {
 		usage = sample.usage
+		source = sample.source
 	}
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
+		source,
 		common.HumanReadableBytes(int(m.cgroup.Load())),
 		common.HumanReadableBytes(int(usage)),
 		common.HumanReadableBytes(int(m.rss.Load())),
@@ -491,6 +500,7 @@ func (m *memThrottler) refresh(force bool) {
 		info           *process.MemoryInfoStat
 		total          uint64
 		reservedBefore int64
+		domain         *system.MemoryDomainSnapshot
 	)
 
 	defer func() {
@@ -501,24 +511,38 @@ func (m *memThrottler) refresh(force bool) {
 		)
 	}()
 
-	total = getHostTotalMemory()
-	cgroup, err = getCgroupMemoryLimit()
-	noCgroupLimit := errors.Is(err, memlimit.ErrNoLimit) ||
-		errors.Is(err, memlimit.ErrNoCgroup) ||
-		errors.Is(err, memlimit.ErrCgroupsNotSupported)
-	if noCgroupLimit {
-		cgroup = 0
+	validLimits := false
+	if m.cgroupBudget != nil && m.cgroupBudget.domainProvider != nil {
+		var snapshot system.MemoryDomainSnapshot
+		snapshot, err = m.cgroupBudget.domainProvider()
+		if err == nil && snapshot.Measured && snapshot.Limit > 0 {
+			domain = &snapshot
+			total = snapshot.Limit
+			if snapshot.IsCgroup() {
+				cgroup = snapshot.Limit
+			}
+			validLimits = true
+		}
+	} else {
+		total = getHostTotalMemory()
+		cgroup, err = getCgroupMemoryLimit()
+		noCgroupLimit := errors.Is(err, memlimit.ErrNoLimit) ||
+			errors.Is(err, memlimit.ErrNoCgroup) ||
+			errors.Is(err, memlimit.ErrCgroupsNotSupported)
+		if noCgroupLimit {
+			cgroup = 0
+		}
+		validLimits = total != 0 && (noCgroupLimit || (err == nil && cgroup != 0))
 	}
-	validLimits := total != 0 && (noCgroupLimit || (err == nil && cgroup != 0))
 	// A failed observation is not evidence that the limit was removed. Keep
 	// both the component quota and the shared pressure sample until a valid
 	// observation replaces them; in particular, do not publish zero on error.
 	if validLimits {
-		if cgroup != 0 && cgroup < total {
-			m.actualTotalMemory.Store(cgroup)
-		} else {
-			m.actualTotalMemory.Store(total)
+		actualTotal := total
+		if domain == nil && cgroup != 0 && cgroup < total {
+			actualTotal = cgroup
 		}
+		m.actualTotalMemory.Store(actualTotal)
 
 		// if the const limit option is set, we should not change the limit.
 		if m.options.constLimit < 0 {
@@ -526,13 +550,21 @@ func (m *memThrottler) refresh(force bool) {
 		}
 		m.cgroup.Store(cgroup)
 		m.total.Store(total)
-		m.refreshCgroupUsage()
+		if domain != nil {
+			m.publishMemoryDomain(domain)
+		} else {
+			m.refreshCgroupUsage()
+		}
 	} else if m.actualTotalMemory.Load() == 0 {
 		// Bootstrap a new owner without clearing another owner's valid shared
 		// sample. Subsequent failed observations retain the last local limits.
 		initialTotal := total
 		if sample := m.cgroupSnapshot(); sample != nil {
 			initialTotal = uint64(sample.limit)
+			m.total.Store(initialTotal)
+			if sample.cgroup {
+				m.cgroup.Store(initialTotal)
+			}
 		}
 		if initialTotal == 0 {
 			initialTotal = math.MaxInt64
@@ -582,6 +614,39 @@ func (m *memThrottler) refresh(force bool) {
 }
 
 func (m *memThrottler) refreshCgroupUsage() {
+	if m.cgroupBudget != nil && m.cgroupBudget.domainProvider != nil {
+		snapshot, err := m.cgroupBudget.domainProvider()
+		if err != nil || !snapshot.Measured || snapshot.Limit == 0 {
+			// A failed read must not erase the last known pressure budget while
+			// pending allocations still hold reservations against it.
+			return
+		}
+		m.publishMemoryDomain(&snapshot)
+		return
+	}
+	m.refreshCgroupUsageFromLegacySources()
+}
+
+func (m *memThrottler) publishMemoryDomain(snapshot *system.MemoryDomainSnapshot) {
+	// Serialize reads as well as publication across component owners, preventing
+	// an older, slow read from replacing a more recent pressure sample.
+	destination := &m.cgroupSample
+	if m.cgroupBudget != nil {
+		m.cgroupBudget.refreshMu.Lock()
+		defer m.cgroupBudget.refreshMu.Unlock()
+		destination = &m.cgroupBudget.sample
+	}
+	usage := uint64ToInt64(snapshot.Used)
+	limit := uint64ToInt64(snapshot.Limit)
+	if limit <= 0 {
+		return
+	}
+	destination.Store(&cgroupMemorySample{
+		usage: usage, limit: limit, cgroup: snapshot.IsCgroup(), source: snapshot.Source,
+	})
+}
+
+func (m *memThrottler) refreshCgroupUsageFromLegacySources() {
 	// Serialize reads as well as publication across component owners, preventing
 	// an older, slow read from replacing a more recent pressure sample.
 	destination := &m.cgroupSample
@@ -605,7 +670,17 @@ func (m *memThrottler) refreshCgroupUsage() {
 		// pending allocations still hold reservations against it.
 		return
 	}
-	destination.Store(&cgroupMemorySample{usage: usage, limit: int64(cgroupLimit)})
+	destination.Store(&cgroupMemorySample{
+		usage: usage, limit: int64(cgroupLimit), cgroup: true,
+		source: system.MemoryDomainSource("legacy-cgroup"),
+	})
+}
+
+func uint64ToInt64(value uint64) int64 {
+	if value > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(value)
 }
 
 func (m *memThrottler) currentMemoryUsage() int64 {
