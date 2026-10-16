@@ -14,6 +14,7 @@ select id, sum(v) over (order by at range between interval '00:01.5' minute_seco
 select id, sum(v) over (order by at range between interval 'abc' day preceding and current row) as s from dt order by id;
 select id, sum(v) over (order by at range between interval 1.5 second preceding and current row) as s from dt order by id;
 select id, sum(v) over (order by at range between interval '0:01' minute_second preceding and current row) as s from dt order by id;
+select id, sum(v) over (order by at range between interval TRUE second preceding and current row) as s from dt order by id;
 prepare interval_frame from "select id, sum(v) over (order by at range between interval ? second preceding and current row) as s from dt order by id";
 set @n=0;
 execute interval_frame using @n;
@@ -26,6 +27,11 @@ execute interval_frame using @n;
 set @n=NULL;
 execute interval_frame using @n;
 set @n=0;
+execute interval_frame using @n;
+-- Boolean parameters use numeric 0/1 and recover after invalid executions.
+set @n=TRUE;
+execute interval_frame using @n;
+set @n=FALSE;
 execute interval_frame using @n;
 deallocate prepare interval_frame;
 prepare numeric_frame from "select id, sum(v) over (order by id range between ? preceding and current row) as s from dt order by id";

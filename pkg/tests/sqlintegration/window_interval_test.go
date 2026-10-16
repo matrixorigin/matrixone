@@ -56,6 +56,7 @@ func TestWindowTemporalIntervals(t *testing.T) {
 			return "select id,sum(v) over(order by at range between interval " + bound + " preceding and current row) from dt order by id"
 		}
 		zero := []string{"1:10", "2:20", "3:30", "4:40", "5:50", "6:60"}
+		one := []string{"1:10", "2:30", "3:30", "4:70", "5:120", "6:180"}
 		fraction := []string{"1:10", "2:30", "3:60", "4:100", "5:140", "6:180"}
 		for _, bound := range []string{"'0 00:00:01.5' day_second", "'00:00:01.5' hour_second", "'00:01.5' minute_second"} {
 			t.Run(bound, func(t *testing.T) {
@@ -67,7 +68,9 @@ func TestWindowTemporalIntervals(t *testing.T) {
 		})
 		t.Run("literal controls", func(t *testing.T) {
 			require.Equal(t, fraction, query(t, frameQuery("1.5 second")))
-			require.Equal(t, []string{"1:10", "2:30", "3:30", "4:70", "5:120", "6:180"}, query(t, frameQuery("'0:01' minute_second")))
+			require.Equal(t, one, query(t, frameQuery("'0:01' minute_second")))
+			require.Equal(t, one, query(t, frameQuery("true second")))
+			require.Equal(t, zero, query(t, frameQuery("false second")))
 		})
 		t.Run("NULL interval consumers", func(t *testing.T) {
 			for _, typ := range []string{"date", "time(6)", "datetime(6)", "timestamp(6)"} {
@@ -81,7 +84,7 @@ func TestWindowTemporalIntervals(t *testing.T) {
 			for _, tc := range []struct {
 				value string
 				want  []string
-			}{{"0", zero}, {"1.5", fraction}, {"cast('0.000001' as decimal(38,6))", []string{"1:10", "2:20", "3:30", "4:70", "5:90", "6:60"}}, {"0.0000009", zero}, {"2", []string{"1:10", "2:30", "3:60", "4:100", "5:150", "6:210"}}, {"0", zero}} {
+			}{{"0", zero}, {"true", one}, {"false", zero}, {"1", one}, {"1.5", fraction}, {"cast('0.000001' as decimal(38,6))", []string{"1:10", "2:20", "3:30", "4:70", "5:90", "6:60"}}, {"0.0000009", zero}, {"2", []string{"1:10", "2:30", "3:60", "4:100", "5:150", "6:210"}}, {"0", zero}} {
 				execSQLRequire(t, ctx, db, "set @frame_offset="+tc.value)
 				require.Equal(t, tc.want, query(t, "execute frame_param using @frame_offset"))
 			}
@@ -93,7 +96,7 @@ func TestWindowTemporalIntervals(t *testing.T) {
 			for _, tc := range []struct {
 				value any
 				want  []string
-			}{{int64(0), zero}, {"1.5", fraction}, {float64(1.5), fraction}, {int64(0), zero}} {
+			}{{int64(0), zero}, {true, one}, {false, zero}, {int64(1), one}, {"1.5", fraction}, {float64(1.5), fraction}, {int64(0), zero}} {
 				func() {
 					rows, err := stmt.QueryContext(ctx, tc.value)
 					require.NoError(t, err)
@@ -111,9 +114,14 @@ func TestWindowTemporalIntervals(t *testing.T) {
 					require.Error(t, rows.Err(), "offset %v", value)
 				}()
 			}
-			rows, err := stmt.QueryContext(ctx, int64(0))
-			require.NoError(t, err)
-			require.Equal(t, zero, readWindowNullRows(t, rows))
+			for _, tc := range []struct {
+				value any
+				want  []string
+			}{{true, one}, {false, zero}, {int64(0), zero}} {
+				rows, err := stmt.QueryContext(ctx, tc.value)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			}
 		})
 		t.Run("empty input still validates parameters", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create table empty_dt like dt")
@@ -146,9 +154,13 @@ func TestWindowTemporalIntervals(t *testing.T) {
 					if tc.dynamic {
 						execute += ",@frame_limit"
 					}
-					for _, value := range []string{"0", "-1", "NULL", "9223372036854.775808", "1.5", "-1", "0"} {
+					values := []string{"0", "-1", "NULL", "9223372036854.775808", "1.5", "-1", "0"}
+					if tc.name == "literal" {
+						values = append(values, "true", "false")
+					}
+					for _, value := range values {
 						execSQLRequire(t, ctx, db, "set @frame_offset="+value)
-						if value == "0" || value == "1.5" {
+						if value == "0" || value == "1.5" || value == "true" || value == "false" {
 							require.Empty(t, query(t, execute))
 						} else {
 							_, err := db.ExecContext(ctx, execute)
@@ -158,14 +170,18 @@ func TestWindowTemporalIntervals(t *testing.T) {
 					stmt, err := db.PrepareContext(ctx, tc.sql)
 					require.NoError(t, err)
 					defer stmt.Close()
-					for _, value := range []any{int64(0), int64(-1), nil, "9223372036854.775808", "1.5", int64(-1), int64(0)} {
+					argsToTest := []any{int64(0), int64(-1), nil, "9223372036854.775808", "1.5", int64(-1), int64(0)}
+					if tc.name == "literal" {
+						argsToTest = append(argsToTest, true, false)
+					}
+					for _, value := range argsToTest {
 						func() {
 							args := []any{value}
 							if tc.dynamic {
 								args = append(args, int64(0))
 							}
 							rows, err := stmt.QueryContext(ctx, args...)
-							valid := value == int64(0) || value == "1.5"
+							valid := value == int64(0) || value == "1.5" || value == true || value == false
 							if valid {
 								require.NoError(t, err)
 								require.Empty(t, readWindowNullRows(t, rows))

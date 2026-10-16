@@ -162,6 +162,11 @@ func windowIntervalScalarText(vec *vector.Vector) (text string, numeric bool, er
 	switch vec.GetType().Oid {
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		return vec.GetStringAt(0), false, nil
+	case types.T_bool:
+		text = "0"
+		if vector.MustFixedColNoTypeCheck[bool](vec)[0] {
+			text = "1"
+		}
 	case types.T_int8:
 		text = fmt.Sprint(vector.MustFixedColNoTypeCheck[int8](vec)[0])
 	case types.T_int16:

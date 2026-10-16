@@ -71,6 +71,49 @@ func TestWindowPrepareMaterializesIntervalBounds(t *testing.T) {
 	}
 }
 
+func TestWindowIntervalBooleanMaterialization(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	for _, unit := range []struct {
+		name string
+		want int64
+		typ  types.IntervalType
+	}{{"second", 1000000, types.MicroSecond}, {"day", 1, types.Day}} {
+		for _, tc := range []struct {
+			name        string
+			value, null bool
+		}{{"true", true, false}, {"false", false, false}, {"NULL", false, true}} {
+			t.Run(unit.name+"/"+tc.name, func(t *testing.T) {
+				source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: tc.null, Value: &plan.Literal_Bval{Bval: tc.value},
+				}}}
+				raw := &plan.Expr{Typ: plan.Type{Id: int32(types.T_interval)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+					source, plan2.MakePlan2StringConstExprWithType(unit.name),
+				}}}}
+				original := raw.String()
+				got, err := materializeWindowInterval(proc, raw)
+				require.Equal(t, original, raw.String())
+				if tc.null {
+					require.ErrorContains(t, err, "negative, NULL or of non-integral type")
+					require.Nil(t, got)
+					return
+				}
+				require.NoError(t, err)
+				require.NotSame(t, raw, got)
+				magnitude := got.GetList().List[0]
+				require.NotSame(t, source, magnitude)
+				require.False(t, magnitude.GetLit().Isnull)
+				want := int64(0)
+				if tc.value {
+					want = unit.want
+				}
+				require.Equal(t, want, magnitude.GetLit().GetI64Val())
+				require.Equal(t, int64(unit.typ), got.GetList().List[1].GetLit().GetI64Val())
+			})
+		}
+	}
+}
+
 func TestNullIntervalRangeBoundaries(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
