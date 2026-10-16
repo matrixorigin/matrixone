@@ -625,6 +625,34 @@ func TestFormattedFloatStringByteBounds(t *testing.T) {
 	require.Equal(t, int32(34), resolved.GetReturnType().Width)
 }
 
+func TestLegacyFloatStringBoundsAreValidationOnly(t *testing.T) {
+	require.False(t, LegacyFloatStringBounds(nil))
+	resolved, err := GetFunctionByName(nil, "concat", []types.Type{types.T_float64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, int32(34), resolved.GetReturnType().Width)
+	inputs := []types.Type{types.T_float64.ToType()}
+	for _, resolve := range []func(context.Context, string, []types.Type) (FuncGetResult, error){
+		GetFunctionByName,
+		func(ctx context.Context, name string, inputs []types.Type) (FuncGetResult, error) {
+			return GetFunctionByNameWithOverload(ctx, name, inputs, 0)
+		},
+	} {
+		for _, width := range []int32{34, 32, 34} {
+			ctx := context.Background()
+			if width == 32 {
+				ctx = WithLegacyFloatStringBounds(ctx)
+			}
+			resolved, err := resolve(ctx, "concat", inputs)
+			require.NoError(t, err)
+			casts, needCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needCast)
+			require.Equal(t, width, casts[0].Width)
+			require.Equal(t, width, resolved.GetReturnType().Width)
+			require.Equal(t, []types.Type{types.T_float64.ToType()}, inputs)
+		}
+	}
+}
+
 func TestBinaryStringResultTypePromotionBoundaries(t *testing.T) {
 	for _, width := range []uint64{0, 1, types.MaxVarBinaryLen - 1, types.MaxVarBinaryLen} {
 		result := binaryStringResultType(stringResultBound{bytes: width})

@@ -85,23 +85,28 @@ type tableDumpExpression struct {
 }
 
 func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
+	return persistedTableExpressions(def, true)
+}
+
+func persistedTableExpressions(def *planpb.TableDef, divisionOnly bool) []tableDumpExpression {
 	var result []tableDumpExpression
+	include := func(origin string) bool { return !divisionOnly || strings.Contains(origin, "/") }
 	for _, col := range def.Cols {
 		if col == nil {
 			continue
 		}
-		if col.Default != nil && col.Default.Expr != nil && strings.Contains(col.Default.OriginString, "/") {
+		if col.Default != nil && col.Default.Expr != nil && include(col.Default.OriginString) {
 			result = append(result, tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr})
 		}
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil && strings.Contains(col.OnUpdate.OriginString, "/") {
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil && include(col.OnUpdate.OriginString) {
 			result = append(result, tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr})
 		}
-		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && strings.Contains(col.GeneratedCol.OriginString, "/") {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && include(col.GeneratedCol.OriginString) {
 			result = append(result, tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr})
 		}
 	}
 	for _, check := range def.Checks {
-		if check != nil && check.Check != nil && strings.Contains(check.OriginSql, "/") {
+		if check != nil && check.Check != nil && include(check.OriginSql) {
 			result = append(result, tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check})
 		}
 	}
@@ -147,10 +152,13 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool) (*planpb.Expr, error) {
+func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
 	if legacy {
 		bindCtx = function.WithLegacySpecialConsumers(bindCtx)
+	}
+	if len(legacyFloat) > 0 && legacyFloat[0] {
+		bindCtx = function.WithLegacyFloatStringBounds(bindCtx)
 	}
 	proc := ctx.GetProcess()
 	if proc == nil {
@@ -306,50 +314,38 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if visit.hasDivision {
 				maxIncrement = 30
 			}
-			var first, legacyFirst *planpb.Expr
-			var matchedLegacy bool
+			var first [4]*planpb.Expr
 			want := item.expr
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
 			for increment := int64(0); increment <= maxIncrement; increment++ {
-				budget.visits += visit.nodes
-				if budget.visits > tableDumpMaxCandidateVisits {
-					stmt.Free()
-					return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
-				}
-				candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, false)
-				if err == nil {
-					if first == nil {
-						first = candidate
-					} else if visit.hasDivision && !sameTableDumpBoundExpression(first, candidate) {
-						sensitive = true
+				for flavor := 0; flavor < 4; flavor++ {
+					legacySpecial, legacyFloat := flavor&1 != 0, flavor&2 != 0
+					if (legacySpecial && !visit.hasSpecial) || (legacyFloat && !hasLegacyFloatStringCast(want)) {
+						continue
 					}
-					matched = matched || sameTableDumpBoundExpression(want, candidate)
-				}
-				if visit.hasSpecial && (!matched || matchedLegacy) {
 					budget.visits += visit.nodes
 					if budget.visits > tableDumpMaxCandidateVisits {
 						stmt.Free()
 						return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					}
-					legacy, err := bindTableDumpExpression(ctx, target, item, ast, increment, true)
-					if err == nil {
-						if legacyFirst == nil {
-							legacyFirst = legacy
-						} else if visit.hasDivision && !sameTableDumpBoundExpression(legacyFirst, legacy) {
-							sensitive = true
-						}
-						if sameTableDumpBoundExpression(want, legacy) {
-							matched = true
-							matchedLegacy = true
-						}
+					candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, legacySpecial, legacyFloat)
+					if err != nil {
+						continue
 					}
+					if first[flavor] == nil {
+						first[flavor] = candidate
+					} else if visit.hasDivision && !sameTableDumpBoundExpression(first[flavor], candidate) {
+						sensitive = true
+					}
+					matched = matched || sameTableDumpBoundExpression(want, candidate)
 				}
 				if matched && sensitive {
 					break
 				}
 			}
+
 			stmt.Free()
 			if matched {
 				break
