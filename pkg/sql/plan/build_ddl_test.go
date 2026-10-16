@@ -5573,6 +5573,13 @@ func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
 	set(LowPrecisionFloatProtocolVersion-1, LowPrecisionFloatProtocolVersion-1)
 	_, err := runOneStmt(mock, t, "CREATE TABLE lowprec_fence (v float, w vecf32(4), x vecbf16(4))")
 	require.NoError(t, err)
+
+	view := "CREATE VIEW lowprec_fence_v AS SELECT CAST(n_nationkey AS bf16) v FROM nation"
+	_, err = runOneStmt(mock, t, view)
+	require.ErrorContains(t, err, fence)
+	set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion)
+	_, err = runOneStmt(mock, t, view)
+	require.NoError(t, err)
 }
 
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {

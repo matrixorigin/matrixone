@@ -266,7 +266,7 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatContracts)
 			require.True(t, features.Any())
 
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, plan2.LowPrecisionFloatProtocolVersion - 1} {
+			for _, old := range []int64{defines.MORPCVersion85, plan2.LowPrecisionFloatProtocolVersion - 1} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
 			}
@@ -281,7 +281,7 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			defer op.Release()
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-			for _, old := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, plan2.LowPrecisionFloatProtocolVersion - 1} {
+			for _, old := range []int64{defines.MORPCVersion85, plan2.LowPrecisionFloatProtocolVersion - 1} {
 				client.version = old
 				_, err = encodeRemoteScope(scope, c.proc)
 				require.ErrorContains(t, err, "remote destination")
