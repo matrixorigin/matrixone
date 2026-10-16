@@ -1,0 +1,919 @@
+{
+  "Protocol": "first-invocation; excluded warm-up; three measured rounds; separate EXPLAIN ANALYZE",
+  "Platform": "darwin/arm64",
+  "Toolchain": "go1.27.1",
+  "MemorySemantics": "RSS is process lifetime high-water; MemorySize is operator-reported, neither is query-accounted peak",
+  "Results": [
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "baseline",
+        "Outer": 8,
+        "InnerPerArm": 8,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.796944+08:00",
+          "Finished": "2026-10-16T15:28:29.798458+08:00",
+          "FirstRowNS": 1509041,
+          "CompletionNS": 1514291,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.798461+08:00",
+          "Finished": "2026-10-16T15:28:29.799272+08:00",
+          "FirstRowNS": 808041,
+          "CompletionNS": 811166,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.799276+08:00",
+          "Finished": "2026-10-16T15:28:29.800007+08:00",
+          "FirstRowNS": 728291,
+          "CompletionNS": 731083,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.800009+08:00",
+          "Finished": "2026-10-16T15:28:29.800675+08:00",
+          "FirstRowNS": 663375,
+          "CompletionNS": 665959,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.800677+08:00",
+          "Finished": "2026-10-16T15:28:29.80144+08:00",
+          "FirstRowNS": 761000,
+          "CompletionNS": 763709,
+          "Rows": 8,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416 bytes (min=416 bytes, max=416 bytes)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=576 bytes (min=288 bytes, max=288 bytes)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=8 (min=8, max=8) InputSize=368 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=552 bytes OutputSize=352 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=641.02 KiB (min=641.02 KiB, max=641.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=8 (min=8, max=8) InputSize=8.62 KiB OutputSize=552 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=682.65 KiB (min=682.65 KiB, max=682.65 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=24 outputRows=128 (min=128, max=128) InputSize=688 bytes OutputSize=8.62 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=208 bytes (min=0 bytes, max=208 bytes)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=480 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=544 bytes (min=480 bytes, max=480 bytes)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=832 bytes (min=832 bytes, max=832 bytes)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=208 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=104 bytes (min=104 bytes, max=104 bytes)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 355188736,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.514291,
+        "warm_max_first_row_ms": 0.761,
+        "warm_max_completion_ms": 0.763709,
+        "max_reported_operator_memory_bytes_approx": 699034,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "outer",
+        "Outer": 64,
+        "InnerPerArm": 8,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.863377+08:00",
+          "Finished": "2026-10-16T15:28:29.86486+08:00",
+          "FirstRowNS": 1467291,
+          "CompletionNS": 1482791,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.864862+08:00",
+          "Finished": "2026-10-16T15:28:29.866156+08:00",
+          "FirstRowNS": 1278583,
+          "CompletionNS": 1293750,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.866158+08:00",
+          "Finished": "2026-10-16T15:28:29.867347+08:00",
+          "FirstRowNS": 1173791,
+          "CompletionNS": 1188708,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.867349+08:00",
+          "Finished": "2026-10-16T15:28:29.868603+08:00",
+          "FirstRowNS": 1240041,
+          "CompletionNS": 1254041,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.868605+08:00",
+          "Finished": "2026-10-16T15:28:29.86977+08:00",
+          "FirstRowNS": 1151167,
+          "CompletionNS": 1165417,
+          "Rows": 64,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=2.25 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.25 KiB (min=3.25 KiB, max=3.25 KiB)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=2.25 KiB OutputSize=2.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.50 KiB (min=2.25 KiB, max=2.25 KiB)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=66 outputRows=64 (min=64, max=64) InputSize=2.77 KiB OutputSize=2.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=4.31 KiB OutputSize=2.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=641.02 KiB (min=641.02 KiB, max=641.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1024 outputRows=64 (min=64, max=64) InputSize=69.00 KiB OutputSize=4.31 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=685.27 KiB (min=685.27 KiB, max=685.27 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=80 outputRows=1024 (min=1024, max=1024) InputSize=3.95 KiB OutputSize=69.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=208 bytes (min=0 bytes, max=208 bytes)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=3.25 KiB OutputSize=3.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.25 KiB (min=3.75 KiB, max=3.75 KiB)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=64 outputRows=64 (min=64, max=64) InputSize=3.25 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=6.50 KiB (min=6.50 KiB, max=6.50 KiB)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=208 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=104 bytes (min=104 bytes, max=104 bytes)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 356139008,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.482791,
+        "warm_max_first_row_ms": 1.240041,
+        "warm_max_completion_ms": 1.254041,
+        "max_reported_operator_memory_bytes_approx": 701716,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "candidates",
+        "Outer": 8,
+        "InnerPerArm": 128,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.938101+08:00",
+          "Finished": "2026-10-16T15:28:29.939811+08:00",
+          "FirstRowNS": 1705000,
+          "CompletionNS": 1709584,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.939814+08:00",
+          "Finished": "2026-10-16T15:28:29.941068+08:00",
+          "FirstRowNS": 1250459,
+          "CompletionNS": 1254000,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.94107+08:00",
+          "Finished": "2026-10-16T15:28:29.942358+08:00",
+          "FirstRowNS": 1283041,
+          "CompletionNS": 1287625,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.94236+08:00",
+          "Finished": "2026-10-16T15:28:29.943581+08:00",
+          "FirstRowNS": 1218459,
+          "CompletionNS": 1221375,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:29.943585+08:00",
+          "Finished": "2026-10-16T15:28:29.944886+08:00",
+          "FirstRowNS": 1297417,
+          "CompletionNS": 1301292,
+          "Rows": 8,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416 bytes (min=416 bytes, max=416 bytes)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=576 bytes (min=288 bytes, max=288 bytes)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=8 (min=8, max=8) InputSize=368 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=552 bytes OutputSize=352 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=641.02 KiB (min=641.02 KiB, max=641.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=2048 outputRows=8 (min=8, max=8) InputSize=138.00 KiB OutputSize=552 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=685.27 KiB (min=685.27 KiB, max=685.27 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=264 outputRows=2048 (min=2048, max=2048) InputSize=3.72 KiB OutputSize=138.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.25 KiB (min=0 bytes, max=3.25 KiB)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=480 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=544 bytes (min=480 bytes, max=480 bytes)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=832 bytes (min=832 bytes, max=832 bytes)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.62 KiB (min=1.62 KiB, max=1.62 KiB)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 358825984,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.709584,
+        "warm_max_first_row_ms": 1.297417,
+        "warm_max_completion_ms": 1.301292,
+        "max_reported_operator_memory_bytes_approx": 701716,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "sparse",
+        "Outer": 8,
+        "InnerPerArm": 8,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": true,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.001082+08:00",
+          "Finished": "2026-10-16T15:28:30.002387+08:00",
+          "FirstRowNS": 1299500,
+          "CompletionNS": 1304708,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.00239+08:00",
+          "Finished": "2026-10-16T15:28:30.003268+08:00",
+          "FirstRowNS": 874584,
+          "CompletionNS": 877917,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.00327+08:00",
+          "Finished": "2026-10-16T15:28:30.004163+08:00",
+          "FirstRowNS": 889167,
+          "CompletionNS": 892292,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.004165+08:00",
+          "Finished": "2026-10-16T15:28:30.004929+08:00",
+          "FirstRowNS": 760666,
+          "CompletionNS": 763583,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.004931+08:00",
+          "Finished": "2026-10-16T15:28:30.005638+08:00",
+          "FirstRowNS": 704625,
+          "CompletionNS": 707166,
+          "Rows": 8,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416 bytes (min=416 bytes, max=416 bytes)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=576 bytes (min=288 bytes, max=288 bytes)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=8 (min=8, max=8) InputSize=368 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=560 bytes OutputSize=352 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=641.02 KiB (min=641.02 KiB, max=641.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=8 (min=8, max=8) InputSize=630 bytes OutputSize=560 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=680.21 KiB (min=680.21 KiB, max=680.21 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=24 outputRows=9 (min=9, max=9) InputSize=688 bytes OutputSize=630 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=208 bytes (min=0 bytes, max=208 bytes)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=480 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=544 bytes (min=480 bytes, max=480 bytes)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=832 bytes (min=832 bytes, max=832 bytes)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=208 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=104 bytes (min=104 bytes, max=104 bytes)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 359759872,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.304708,
+        "warm_max_first_row_ms": 0.889167,
+        "warm_max_completion_ms": 0.892292,
+        "max_reported_operator_memory_bytes_approx": 696535,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "distinct-cardinality-error",
+        "Outer": 8,
+        "InnerPerArm": 8,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": true,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.074821+08:00",
+          "Finished": "2026-10-16T15:28:30.076063+08:00",
+          "FirstRowNS": 0,
+          "CompletionNS": 1242250,
+          "Rows": 0,
+          "ErrorCode": 1242
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.076066+08:00",
+          "Finished": "2026-10-16T15:28:30.076927+08:00",
+          "FirstRowNS": 0,
+          "CompletionNS": 860958,
+          "Rows": 0,
+          "ErrorCode": 1242
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.076931+08:00",
+          "Finished": "2026-10-16T15:28:30.077738+08:00",
+          "FirstRowNS": 0,
+          "CompletionNS": 806875,
+          "Rows": 0,
+          "ErrorCode": 1242
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.07774+08:00",
+          "Finished": "2026-10-16T15:28:30.078471+08:00",
+          "FirstRowNS": 0,
+          "CompletionNS": 730917,
+          "Rows": 0,
+          "ErrorCode": 1242
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.078473+08:00",
+          "Finished": "2026-10-16T15:28:30.079196+08:00",
+          "FirstRowNS": 0,
+          "CompletionNS": 723500,
+          "Rows": 0,
+          "ErrorCode": 1242
+        }
+      ],
+      "Analyze": "",
+      "AnalyzeErrorCode": 1242,
+      "ProcessLifetimeRSSHighWaterBytes": 361349120,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.24225,
+        "warm_max_first_row_ms": null,
+        "warm_max_completion_ms": 0.806875,
+        "max_reported_operator_memory_bytes_approx": null,
+        "sum_reported_operator_spill_bytes_approx": null
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "width",
+        "Outer": 8,
+        "InnerPerArm": 8,
+        "Width": 256,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.131099+08:00",
+          "Finished": "2026-10-16T15:28:30.132224+08:00",
+          "FirstRowNS": 1120125,
+          "CompletionNS": 1125459,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.132226+08:00",
+          "Finished": "2026-10-16T15:28:30.132981+08:00",
+          "FirstRowNS": 750125,
+          "CompletionNS": 754875,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.132983+08:00",
+          "Finished": "2026-10-16T15:28:30.133783+08:00",
+          "FirstRowNS": 796292,
+          "CompletionNS": 800542,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.133786+08:00",
+          "Finished": "2026-10-16T15:28:30.134664+08:00",
+          "FirstRowNS": 872625,
+          "CompletionNS": 878583,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.134667+08:00",
+          "Finished": "2026-10-16T15:28:30.135435+08:00",
+          "FirstRowNS": 763375,
+          "CompletionNS": 768083,
+          "Rows": 8,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=2.28 KiB OutputSize=2.41 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=2.41 KiB (min=2.41 KiB, max=2.41 KiB)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=2.28 KiB OutputSize=2.28 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.56 KiB (min=2.28 KiB, max=2.28 KiB)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=8 (min=8, max=8) InputSize=2.36 KiB OutputSize=2.28 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=2.54 KiB OutputSize=2.34 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=643.02 KiB (min=643.02 KiB, max=643.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=8 (min=8, max=8) InputSize=40.62 KiB OutputSize=2.54 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=684.65 KiB (min=684.65 KiB, max=684.65 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=24 outputRows=128 (min=128, max=128) InputSize=2.67 KiB OutputSize=40.62 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=208 bytes (min=0 bytes, max=208 bytes)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=2.41 KiB OutputSize=2.47 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=2.53 KiB (min=2.47 KiB, max=2.47 KiB)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=2.41 KiB OutputSize=2.41 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.81 KiB (min=4.81 KiB, max=4.81 KiB)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=208 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=104 bytes (min=104 bytes, max=104 bytes)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 361431040,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.125459,
+        "warm_max_first_row_ms": 0.872625,
+        "warm_max_completion_ms": 0.878583,
+        "max_reported_operator_memory_bytes_approx": 701082,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "concurrency",
+        "Outer": 8,
+        "InnerPerArm": 8,
+        "Width": 0,
+        "Concurrency": 2,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.196381+08:00",
+          "Finished": "2026-10-16T15:28:30.198139+08:00",
+          "FirstRowNS": 1754459,
+          "CompletionNS": 1758334,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.196362+08:00",
+          "Finished": "2026-10-16T15:28:30.197584+08:00",
+          "FirstRowNS": 1217542,
+          "CompletionNS": 1222167,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.198158+08:00",
+          "Finished": "2026-10-16T15:28:30.199341+08:00",
+          "FirstRowNS": 1179958,
+          "CompletionNS": 1182667,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.198144+08:00",
+          "Finished": "2026-10-16T15:28:30.198959+08:00",
+          "FirstRowNS": 812292,
+          "CompletionNS": 815500,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.199357+08:00",
+          "Finished": "2026-10-16T15:28:30.200203+08:00",
+          "FirstRowNS": 841375,
+          "CompletionNS": 845541,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.199346+08:00",
+          "Finished": "2026-10-16T15:28:30.200116+08:00",
+          "FirstRowNS": 768250,
+          "CompletionNS": 770292,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.200218+08:00",
+          "Finished": "2026-10-16T15:28:30.201289+08:00",
+          "FirstRowNS": 1068458,
+          "CompletionNS": 1070958,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.200206+08:00",
+          "Finished": "2026-10-16T15:28:30.200994+08:00",
+          "FirstRowNS": 785000,
+          "CompletionNS": 787834,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.201309+08:00",
+          "Finished": "2026-10-16T15:28:30.202462+08:00",
+          "FirstRowNS": 1151209,
+          "CompletionNS": 1153875,
+          "Rows": 8,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.201293+08:00",
+          "Finished": "2026-10-16T15:28:30.202161+08:00",
+          "FirstRowNS": 851625,
+          "CompletionNS": 868084,
+          "Rows": 8,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416 bytes (min=416 bytes, max=416 bytes)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=288 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=576 bytes (min=288 bytes, max=288 bytes)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=10 outputRows=8 (min=8, max=8) InputSize=368 bytes OutputSize=288 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=552 bytes OutputSize=352 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=641.02 KiB (min=641.02 KiB, max=641.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=8 (min=8, max=8) InputSize=8.62 KiB OutputSize=552 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=682.65 KiB (min=682.65 KiB, max=682.65 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=24 outputRows=128 (min=128, max=128) InputSize=688 bytes OutputSize=8.62 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=208 bytes (min=0 bytes, max=208 bytes)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=480 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=544 bytes (min=480 bytes, max=480 bytes)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=416 bytes OutputSize=416 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=832 bytes (min=832 bytes, max=832 bytes)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=208 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=104 bytes (min=104 bytes, max=104 bytes)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=16 outputRows=16 (min=16, max=16) InputSize=192 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=192 bytes (min=192 bytes, max=192 bytes)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 361693184,
+      "Summary": {
+        "first_invocation_max_completion_ms": 1.758334,
+        "warm_max_first_row_ms": 1.151209,
+        "warm_max_completion_ms": 1.153875,
+        "max_reported_operator_memory_bytes_approx": 699034,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 0,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "combined",
+        "Outer": 64,
+        "InnerPerArm": 128,
+        "Width": 256,
+        "Concurrency": 2,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": false
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.265593+08:00",
+          "Finished": "2026-10-16T15:28:30.272151+08:00",
+          "FirstRowNS": 6527917,
+          "CompletionNS": 6558833,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.265576+08:00",
+          "Finished": "2026-10-16T15:28:30.271701+08:00",
+          "FirstRowNS": 6100875,
+          "CompletionNS": 6125125,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.27216+08:00",
+          "Finished": "2026-10-16T15:28:30.278285+08:00",
+          "FirstRowNS": 6094625,
+          "CompletionNS": 6125250,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.272158+08:00",
+          "Finished": "2026-10-16T15:28:30.278177+08:00",
+          "FirstRowNS": 5995958,
+          "CompletionNS": 6020042,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.278292+08:00",
+          "Finished": "2026-10-16T15:28:30.284225+08:00",
+          "FirstRowNS": 5904459,
+          "CompletionNS": 5932417,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.278292+08:00",
+          "Finished": "2026-10-16T15:28:30.284619+08:00",
+          "FirstRowNS": 6301083,
+          "CompletionNS": 6326875,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.284631+08:00",
+          "Finished": "2026-10-16T15:28:30.290687+08:00",
+          "FirstRowNS": 6028542,
+          "CompletionNS": 6055959,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.284625+08:00",
+          "Finished": "2026-10-16T15:28:30.29065+08:00",
+          "FirstRowNS": 6000667,
+          "CompletionNS": 6026042,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.290694+08:00",
+          "Finished": "2026-10-16T15:28:30.296641+08:00",
+          "FirstRowNS": 5917792,
+          "CompletionNS": 5947042,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 1,
+          "Started": "2026-10-16T15:28:30.290694+08:00",
+          "Finished": "2026-10-16T15:28:30.296668+08:00",
+          "FirstRowNS": 5953416,
+          "CompletionNS": 5974708,
+          "Rows": 64,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=18.25 KiB OutputSize=19.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=19.25 KiB (min=19.25 KiB, max=19.25 KiB)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=18.25 KiB OutputSize=18.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36.50 KiB (min=18.25 KiB, max=18.25 KiB)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=66 outputRows=64 (min=64, max=64) InputSize=18.77 KiB OutputSize=18.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=20.31 KiB OutputSize=18.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=657.02 KiB (min=657.02 KiB, max=657.02 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=1ms waitTime=0ms inputRows=16384 outputRows=64 (min=64, max=64) InputSize=5.08 MiB OutputSize=20.31 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=705.27 KiB (min=705.27 KiB, max=705.27 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=3ms waitTime=0ms inputRows=320 outputRows=16384 (min=16384, max=16384) InputSize=23.00 KiB OutputSize=5.08 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.25 KiB (min=0 bytes, max=3.25 KiB)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=19.25 KiB OutputSize=19.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=20.25 KiB (min=19.75 KiB, max=19.75 KiB)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=64 outputRows=64 (min=64, max=64) InputSize=19.25 KiB OutputSize=19.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=38.50 KiB (min=38.50 KiB, max=38.50 KiB)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.62 KiB (min=1.62 KiB, max=1.62 KiB)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 370671616,
+      "Summary": {
+        "first_invocation_max_completion_ms": 6.558833,
+        "warm_max_first_row_ms": 6.301083,
+        "warm_max_completion_ms": 6.326875,
+        "max_reported_operator_memory_bytes_approx": 722196,
+        "sum_reported_operator_spill_bytes_approx": 0
+      }
+    },
+    {
+      "Settings": {
+        "agg_spill_mem": 1,
+        "join_spill_mem": 0,
+        "max_dop": 1,
+        "sort_spill_mem": 0
+      },
+      "Profile": {
+        "Name": "forced-spill",
+        "Outer": 64,
+        "InnerPerArm": 128,
+        "Width": 0,
+        "Concurrency": 1,
+        "Sparse": false,
+        "Distinct": false,
+        "ForceSpill": true
+      },
+      "Samples": [
+        {
+          "Phase": "first-invocation",
+          "Round": -2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.365253+08:00",
+          "Finished": "2026-10-16T15:28:30.435924+08:00",
+          "FirstRowNS": 70653958,
+          "CompletionNS": 70671958,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "excluded-warmup",
+          "Round": -1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.435931+08:00",
+          "Finished": "2026-10-16T15:28:30.488252+08:00",
+          "FirstRowNS": 52306250,
+          "CompletionNS": 52321958,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 0,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.488259+08:00",
+          "Finished": "2026-10-16T15:28:30.549426+08:00",
+          "FirstRowNS": 61135833,
+          "CompletionNS": 61168333,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 1,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.549436+08:00",
+          "Finished": "2026-10-16T15:28:30.614046+08:00",
+          "FirstRowNS": 64592666,
+          "CompletionNS": 64610541,
+          "Rows": 64,
+          "ErrorCode": 0
+        },
+        {
+          "Phase": "measured",
+          "Round": 2,
+          "Worker": 0,
+          "Started": "2026-10-16T15:28:30.614052+08:00",
+          "Finished": "2026-10-16T15:28:30.674018+08:00",
+          "FirstRowNS": 59938083,
+          "CompletionNS": 59967417,
+          "Rows": 64,
+          "ErrorCode": 0
+        }
+      ],
+      "Analyze": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=2.25 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.25 KiB (min=3.25 KiB, max=3.25 KiB)\n  ->  Sort\n        Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=2.25 KiB OutputSize=2.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.50 KiB (min=2.25 KiB, max=2.25 KiB)\n        Sort Key: o.id INTERNAL\n        ->  Join\n              Analyze: timeConsumed=0ms waitTime=0ms inputRows=66 outputRows=64 (min=64, max=64) InputSize=2.77 KiB OutputSize=2.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=0 bytes, max=16 bytes)\n              Join Type: SINGLE\n              Join Cond: ((#[0,2] > 1) or (#[1,0] = 0))\n              ->  Aggregate\n                    Analyze: timeConsumed=16ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=4.31 KiB OutputSize=2.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=2.31 MiB (min=2.31 MiB, max=2.31 MiB) SpillRows=192 SpillSize=39.38 KiB (min=39.38 KiB, max=39.38 KiB)\n                    Group Key: #[0,0], #[0,1], #[0,2], #[0,3]\n                    Hash Key: #[0,3]\n                    Aggregate Functions: count(#[0,4]), any_value(#[0,5])\n                    ->  Aggregate\n                          Analyze: timeConsumed=26ms waitTime=0ms inputRows=16384 outputRows=64 (min=64, max=64) InputSize=1.08 MiB OutputSize=4.31 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=2.42 MiB (min=2.42 MiB, max=2.42 MiB) SpillRows=192 SpillSize=31.42 KiB (min=31.42 KiB, max=31.42 KiB)\n                          Group Key: o.id, o.pad, o.__mo_rowid, #[0,3], #[0,5], #[0,4], set_operation_float_key(#[0,4])\n                          Hash Key: #[0,3], #[0,5], set_operation_float_key(#[0,4])\n                          ->  Join\n                                Analyze: timeConsumed=6ms waitTime=0ms inputRows=320 outputRows=16384 (min=16384, max=16384) InputSize=7.00 KiB OutputSize=1.08 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.25 KiB (min=0 bytes, max=3.25 KiB)\n                                Join Type: LEFT\n                                Join Cond: (#[1,1] > o.id)\n                                ->  Window\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=64 outputRows=64 (min=64, max=64) InputSize=3.25 KiB OutputSize=3.75 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.25 KiB (min=3.75 KiB, max=3.75 KiB)\n                                      Window Function: row_number()\n                                      ->  Table Scan on scalar_set_capacity.outer_rows\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=64 outputRows=64 (min=64, max=64) InputSize=3.25 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=6.50 KiB (min=6.50 KiB, max=6.50 KiB)\n                                ->  Project\n                                      Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.25 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.62 KiB (min=1.62 KiB, max=1.62 KiB)\n                                      ->  Union All\n                                            Analyze: timeConsumed=0ms waitTime=0ms inputRows=256 outputRows=256 (min=256, max=256) InputSize=3.00 KiB OutputSize=3.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n                                            ->  Project\n                                                  Analyze: timeConsumed=0ms waitTime=0ms inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.50 KiB (min=1.50 KiB, max=1.50 KiB)\n                                                  ->  Table Scan on scalar_set_capacity.inner_rows\n                                                        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=128 outputRows=128 (min=128, max=128) InputSize=1.50 KiB OutputSize=1.50 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.00 KiB (min=3.00 KiB, max=3.00 KiB)\n              ->  Union All\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n                    ->  Project\n                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n                          ->  Values Scan \"*VALUES*\" \n                                Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)\n",
+      "AnalyzeErrorCode": 0,
+      "ProcessLifetimeRSSHighWaterBytes": 402931712,
+      "Summary": {
+        "first_invocation_max_completion_ms": 70.671958,
+        "warm_max_first_row_ms": 64.592666,
+        "warm_max_completion_ms": 64.610541,
+        "max_reported_operator_memory_bytes_approx": 2537554,
+        "sum_reported_operator_spill_bytes_approx": 72499
+      }
+    }
+  ],
+  "Provenance": {
+    "source_head": "83dc71b312cbb4e244e10c1ea943d0091092cb2a",
+    "event_key": "pr30184-b2624352b396509a",
+    "cpu": "Apple M4",
+    "host_memory_bytes": 17179869184,
+    "topology": "one CN, canonical embedded fixture; max_dop=1; shared host load uncontrolled",
+    "command": "MO_SCALAR_SET_CAPACITY_REPORT=\"$TMPDIR/pr30184-capacity.json\" .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=240s -run \"^$\" -bench \"^BenchmarkScalarSetFallbackCapacity$\" -benchtime=1x ./pkg/tests/sqlintegration",
+    "exit_status": 0,
+    "package_elapsed_seconds": 6.546,
+    "source_sha256": {
+      "pkg/tests/sqlintegration/scalar_set_capacity_bench_test.go": "6dbfdd52c83934064f4673efef3777733181da0de1d2b7fd7412b7575de00429",
+      "pkg/sql/compile/scalar_set_capacity_test.go": "eac29cbfb1610832e0ebc01ca85ebb8904976c4238c73d4943f8e027a7f86ef9"
+    },
+    "libmo_sha256": "29950f1dade8674042232fd65ade53ea65ef61ca2e698c15ba368e0a4c3c220e"
+  },
+  "ProposedLocalTargets": {
+    "O_max": 64,
+    "I_total_across_arms_max": 256,
+    "outer_payload_bytes_max": 256,
+    "concurrency_max": 2,
+    "first_invocation_completion_ms": 10000,
+    "warm_max_completion_ms": 5000,
+    "process_lifetime_RSS_highwater_bytes": 4294967296,
+    "operator_reported_memory_bytes": 268435456,
+    "operator_reported_spill_bytes_sum": 67108864,
+    "status": "predeclared local qualification proposal; not an admission limit or independently accepted production envelope"
+  },
+  "Limitations": [
+    "First invocation is not cold OS/storage cache evidence. Input tables have just been loaded.",
+    "EXPLAIN ANALYZE is a separate C=1 execution, including for timed C=2 profiles; its operator statistics are not concurrent-query peak.",
+    "Reported MemorySize is not query-accounted peak; process RSS is lifetime high-water including fixture setup and preceding profiles.",
+    "Logical analyze quantities are human-readable rounded observations; byte conversions are approximate.",
+    "No query-accounted peak at capacity scale, merge/network volume, spill file/reload counts, independently varied skew, high-distinctness envelope-boundary experiment, or multi-CN capacity acceptance.",
+    "Expected cardinality-error runs return no first row and EXPLAIN ANALYZE returns no runtime payload. Missing metrics are unavailable, not zero.",
+    "This artifact is an execution receipt, not an expected-result file or independent RFC approval."
+  ]
+}
