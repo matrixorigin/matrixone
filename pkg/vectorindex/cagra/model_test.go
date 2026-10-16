@@ -148,10 +148,9 @@ func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32, f
 	err = m.Build()
 	require.NoError(t, err)
 
-	tblcfg := testTblcfg()
-	sqls, err := m.ToSql(tblcfg)
+	err = m.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, m.FileSize)
 	require.NotEmpty(t, m.Path)
 	require.NotEmpty(t, m.Checksum)
 	require.Greater(t, m.FileSize, int64(0))
@@ -226,9 +225,9 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.Equal(t, int64(testNVectors), built.Len)
 
 	// ---- Save to file (triggers saveToFile internally) ----
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, built.FileSize)
 
 	tarPath := built.Path
 	checksum := built.Checksum
@@ -398,10 +397,10 @@ func TestModelNil(t *testing.T) {
 	_, _, err = idx2.Search(nil, 1)
 	require.NotNil(t, err)
 
-	// ToSql on a never-built model (Index nil, Dirty false) returns empty (no-op).
-	sqls, err := idx.ToSql(tblcfg)
+	// PreparePersistence on a never-built model (Index nil, Dirty false) returns empty (no-op).
+	err = idx.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, idx.FileSize)
 
 	// ToDeleteSql always works.
 	deleteSqls, err := idx.ToDeleteSql(tblcfg)
@@ -430,16 +429,15 @@ func TestModelEmptyBuild(t *testing.T) {
 	_ = sqlproc
 
 	idxcfg := testIdxcfg()
-	tblcfg := testTblcfg()
 
 	built, err := NewCagraModelForBuild[float32, float32]("test-empty", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	// InitEmpty with 0 would fail in CAGRA, so test saveToFile directly on empty Len.
 	// Simulate: set Index non-nil, Dirty=true, Len=0 by using a tiny index placeholder.
-	// Instead, just verify the ToSql path: Index nil → no file, returns empty slice.
+	// Instead, just verify the PreparePersistence path: Index nil → no file, returns empty slice.
 	built.Dirty = false // not dirty
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, built.FileSize)
 }

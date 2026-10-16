@@ -363,11 +363,13 @@ col6 date,
 col7 bool
 )infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 
+-- A tenant external-table scan is a server-local read and must be refused.
 select * from external_table;
 
 show table_number from test_db;
 
 
+-- SHOW TABLE_VALUES also scans the external data.
 show table_values from external_table;
 
 

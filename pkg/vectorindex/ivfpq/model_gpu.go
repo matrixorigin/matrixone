@@ -21,10 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -344,53 +342,43 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 	return nil
 }
 
-func (idx *IvfpqModel[B, Q]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+// PreparePersistence finishes the model artifact before SQL or admission checks.
+func (idx *IvfpqModel[B, Q]) PreparePersistence() error {
 	if err := idx.saveToFile(); err != nil {
-		return nil, err
+		return err
 	}
-	if len(idx.Path) == 0 {
-		return []string{}, nil
+	if idx.Path == "" {
+		idx.FileSize = 0
+		return nil
 	}
-
 	fi, err := os.Stat(idx.Path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	filesz := fi.Size()
-	idx.FileSize = filesz
+	if !fi.Mode().IsRegular() {
+		return moerr.NewInvalidInputNoCtx("index artifact must be a regular file")
+	}
+	idx.FileSize = fi.Size()
+	if idx.Checksum == "" {
+		idx.Checksum, err = vectorindex.CheckSum(idx.Path)
+	}
+	return err
+}
 
-	if filesz == 0 {
-		return []string{}, nil
+// PersistChunks opens only the artifact prepared by this model's native owner.
+func (idx *IvfpqModel[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	if idx.Path == "" || idx.FileSize == 0 {
+		return nil
 	}
-
-	logutil.Infof("IvfpqModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len)
-
-	sqls := make([]string, 0, 5)
-	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
-	n := 0
-	chunkid := int64(0)
-	for offset := int64(0); offset < filesz; {
-		chunksz := int64(vectorindex.MaxChunkSize)
-		if offset+chunksz > filesz {
-			chunksz = filesz - offset
-		}
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), %d)", idx.Id, chunkid, url, vectorindex.Tag_ModelChunk)
-		values = append(values, tuple)
-		offset += chunksz
-		chunkid++
-		n++
-		if n == 2000 {
-			sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
-			values = values[:0]
-			n = 0
-		}
+	fp, err := os.Open(idx.Path)
+	if err != nil {
+		return err
 	}
-	if len(values) > 0 {
-		sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
+	defer fp.Close()
+	if _, err = writer.WriteRange(fp, 0, idx.FileSize, idx.Id, 0, int(vectorindex.Tag_ModelChunk)); err != nil {
+		return err
 	}
-	return sqls, nil
+	return writer.Flush()
 }
 
 func (idx *IvfpqModel[B, Q]) Empty() bool {

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -178,6 +179,7 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvpars
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0, err
@@ -194,7 +196,6 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		},
 	}
 
-	param.Ctx = ctx.GetContext()
 	if err = fs.Read(param.Ctx, &vec); err != nil {
 		return 0, err
 	}
@@ -505,6 +506,9 @@ func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset 
 		return 0
 	}
 
+	oldCtx := param.Ctx
+	param.Ctx = ctx
+	defer func() { param.Ctx = oldCtx }()
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0
@@ -722,7 +726,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
@@ -946,6 +950,10 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	if err := AuthorizeExternalFileAccess(param, ctx.GetProcess()); err != nil {
+		return "", err
+	}
+
 	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
 	// before ReadDir or StatFile can perform object-store I/O.
 	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
@@ -958,7 +966,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	param.Ctx = ctx.GetContext()
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil

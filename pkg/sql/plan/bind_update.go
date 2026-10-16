@@ -1143,7 +1143,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
-		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
+		asyncColumns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || (len(tableDef.Checks) == 0 && len(asyncColumns) == 0) {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
@@ -1200,6 +1201,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			stmt.Ignore,
 			targetEligible,
 		)
+		if err != nil {
+			return 0, err
+		}
+
+		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, asyncColumns, lastNodeID, selectNodeTag, func(name string) (int32, bool) {
+			key := alias + "." + name
+			if pos, ok := newColName2Idx[key]; ok {
+				return pos, true
+			}
+			pos, ok := oldColName2Idx[key]
+			return pos, ok
+		}, targetEligible)
 		if err != nil {
 			return 0, err
 		}
