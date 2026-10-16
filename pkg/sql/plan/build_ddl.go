@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -3278,7 +3279,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 	}
 
 	// Column lookup is case-insensitive even when lower_case_table_names is 0.
-	columnNames := make([]string, 0, len(tableDef.Cols))
+	columnNames := make(map[string]struct{}, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden {
 			continue
@@ -3288,12 +3289,11 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		for _, existingName := range columnNames {
-			if strings.EqualFold(existingName, compareName) {
-				return moerr.NewErrDupFieldName(ctx, name)
-			}
+		key := equalFoldKey(compareName)
+		if _, exists := columnNames[key]; exists {
+			return moerr.NewErrDupFieldName(ctx, name)
 		}
-		columnNames = append(columnNames, compareName)
+		columnNames[key] = struct{}{}
 	}
 	return nil
 }
@@ -3373,6 +3373,29 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 	}
 }
 
+func isNativeUnicodeStringType(typ Type) bool {
+	return types.T(typ.Id).IsMySQLString() &&
+		types.IsUnicodeCollation(uint8(typ.Charset)) &&
+		typ.CollationVersion == uint32(collation.RevisionV1)
+}
+
+func hasNativeUnicodeUniqueIndex(indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef) bool {
+	for _, indexInfo := range indexInfos {
+		if indexInfo == nil {
+			continue
+		}
+		for _, keyPart := range indexInfo.KeyParts {
+			if keyPart == nil || keyPart.ColName == nil {
+				continue
+			}
+			if col, ok := colMap[keyPart.ColName.ColName()]; ok && isNativeUnicodeStringType(col.Typ) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // userColumnCount excludes MO-owned columns, including the cluster-table
 // account column, while counting user-defined generated columns normally.
 func userColumnCount(cols []*ColDef, clusterTable bool) int {
@@ -3449,7 +3472,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
 	}
 
-	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil ||
+		stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -3588,9 +3612,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					if err := rejectNativeUnicodeUniqueKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
-						return err
-					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
@@ -3827,7 +3848,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "unique"); err != nil {
+					keyFormat := collation.KeyFormatLegacy
+					if isNativeUnicodeStringType(col.Typ) {
+						keyFormat = collation.KeyFormatV1
+					}
+					if err := checkIndexColumnSupportabilityWithKeyFormat(ctx.GetContext(), col, key, "unique", keyFormat); err != nil {
 						return err
 					}
 				}
@@ -4277,6 +4302,36 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
+	}
+	// Native UCA unique keys use the canonical physical comparison-key format.
+	// This is a new-table-only capability: existing-table ALTER/CREATE INDEX
+	// paths still call the legacy supportability wrapper and remain rejected.
+	if hasNativeUnicodeUniqueIndex(uniqueIndexInfos, colMap) {
+		if stmt.Temporary || stmt.IsClusterTable || stmt.IsAsSelect ||
+			stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil ||
+			stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"native Unicode unique indexes require ordinary persistent tables",
+			)
+		}
+		if len(secondaryIndexInfos) != 0 || len(fullTextIndexInfos) != 0 {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"native Unicode unique indexes cannot be combined with secondary or fulltext indexes yet",
+			)
+		}
+		if err := RequirePersistedProtocolVersionForAuthoring(
+			ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion114,
+		); err != nil {
+			return err
+		}
+		createTable.TableDef.KeyFormat = collation.KeyFormatV1
+		// Keep the native-unique contract visible after optimizer projection
+		// prunes unrelated table columns from DML/scan shells.  This is the
+		// durable schema revision marker; the indexed column itself remains the
+		// authoritative proof on complete catalog definitions.
+		createTable.TableDef.CollationVersion = uint32(collation.RevisionV1)
 	}
 
 	// build index table
@@ -4875,7 +4930,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 			}
-			if err := checkIndexColumnSupportability(ctx.GetContext(), colMap[name], keyPart, "unique"); err != nil {
+			if err := checkIndexColumnSupportabilityWithKeyFormat(
+				ctx.GetContext(), colMap[name], keyPart, "unique", tableDef.KeyFormat,
+			); err != nil {
 				return err
 			}
 
@@ -5827,7 +5884,6 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
-
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 	}
@@ -6096,6 +6152,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
+	if err := rejectVersionedIndexMutation(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
@@ -6217,6 +6276,18 @@ func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
 			return moerr.NewInvalidInput(ctx, "cannot create index on Iceberg table mapping")
 		}
 		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
+}
+
+// Native Unicode UNIQUE tables use a versioned physical-key domain. Existing
+// index mutation paths still build legacy index metadata and cannot safely
+// extend or remove that domain, so fail closed until their complete migration
+// and backfill contract is implemented.
+func rejectVersionedIndexMutation(ctx context.Context, tableDef *TableDef) error {
+	if tableDef != nil && tableDef.KeyFormat == collation.KeyFormatV1 {
+		return moerr.NewNotSupported(ctx,
+			"index mutation on native Unicode unique tables is not supported yet")
 	}
 	return nil
 }
@@ -6363,6 +6434,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
+	if err := rejectVersionedIndexMutation(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 
@@ -6689,8 +6763,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
 
+	// FK data checks run after all ALTER actions. Keep the original name for
+	// binding and execution, but use the final relation name for those checks.
+	finalTableName := tableDef.Name
+	for _, option := range stmt.Options {
+		if rename, ok := option.(*tree.AlterOptionTableName); ok {
+			if name := string(rename.Name.ToTableName().ObjectName); name != tableDef.Name {
+				finalTableName = name
+			}
+		}
+	}
+
 	var detectSqls []string
 	var updateSqls []string
+	var renameFkSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	// Planning must consume ALTER actions in statement order without mutating
@@ -6832,7 +6918,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					sqls, err := genSqlsForCheckFKSelfRefer(
 						ctx.GetContext(),
 						databaseName,
-						currentTableDef.Name,
+						finalTableName,
 						currentTableDef.Cols,
 						[]*plan.ForeignKeyDef{fkData.Def},
 					)
@@ -6877,7 +6963,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					sql, err := genSqlForCheckFKConstraints(
 						ctx.GetContext(),
 						fkData.Def,
-						databaseName, tableDef.Name, tableDef.Cols,
+						databaseName, finalTableName, tableDef.Cols,
 						fkData.ParentDbName,
 						fkData.ParentTableName,
 						parentTableDef.Cols,
@@ -7182,7 +7268,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if !tableDef.IsTemporary {
-				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+				renameFkSqls = append(renameFkSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
 			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
@@ -7376,7 +7462,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	alterTable.DetectSqls = detectSqls
-	alterTable.UpdateFkSqls = updateSqls
+	// Ordered ADD/DROP catalog mutations use the original identity. Rename
+	// their surviving rows and incoming references only after all mutations.
+	alterTable.UpdateFkSqls = append(updateSqls, renameFkSqls...)
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

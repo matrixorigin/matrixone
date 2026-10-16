@@ -459,9 +459,12 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	disableLock              bool
+	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
+	// statement started; a retry restores it.
+	lastInsertIDBaseline    uint64
+	ignorePublish           bool
+	ignoreCheckExperimental bool
+	disableLock             bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

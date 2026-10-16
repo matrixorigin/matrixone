@@ -39,7 +39,7 @@ func TestDependentImplicitLockProjection(t *testing.T) {
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 	optimizer := plan2.NewMockOptimizer(true, proc)
 	stmts, err := mysql.Parse(proc.Ctx, "SELECT n.N_NATIONKEY, (SELECT (SELECT n.N_NATIONKEY)) FROM NATION n", 1)
 	require.NoError(t, err)

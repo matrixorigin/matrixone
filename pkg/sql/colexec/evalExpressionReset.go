@@ -338,6 +338,14 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	if !allParametersFolded || !canFold || (!atRuntime && expr.timeDependent) {
 		return nil
 	}
+	// A cached scalar result cannot represent per-evaluated-row diagnostics.
+	// Reject folding before evaluation emits a warning with execLen=1. Leaving
+	// this child non-folded also prevents its parents from caching the result;
+	// normal Eval then owns the real batch length and selected-row mask.
+	if (expr.fid == function.DIV || expr.fid == function.INTEGER_DIV || expr.fid == function.MOD) &&
+		function.ScalarDivisionNeedsRowEvaluation(expr.parameterResults, proc) {
+		return nil
+	}
 
 	// todo: I cannot understand these following codes, but I keep them here.
 	//  it seems to deal with some IN filter and very dangerous.

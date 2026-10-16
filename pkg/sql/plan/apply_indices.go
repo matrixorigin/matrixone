@@ -466,6 +466,12 @@ func fullTextOrderExprIsPure(expr *plan.Expr) bool {
 		if e.F == nil || e.F.Func == nil {
 			return false
 		}
+		// Python handlers have no purity declaration. The wrapper's registry
+		// flags do not prove that a handler cannot observe evaluation order.
+		functionID, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		if functionID == function.PYTHON_UDF {
+			return false
+		}
 		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
 		if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
