@@ -15,15 +15,18 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -160,6 +163,74 @@ func TestLowPrecisionFloatContractRemoteBoundaries(t *testing.T) {
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, plan2.LowPrecisionFloatProtocolVersion)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+		})
+	}
+}
+
+// The destination probe reports the version, but the execution stream peer is
+// older: the pipeline is refused on the stream before it is sent.
+func TestLowPrecisionFloatContractExecutionStreamCheck(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = plan2.LowPrecisionFloatProtocolVersion
+	vecf32 := lowPrecisionColExpr(types.T_array_float32)
+	projections := map[string]*planpb.Expr{
+		"cast float32 to bf16": lowPrecisionFuncExpr(function.CAST, types.T_bf16,
+			lowPrecisionColExpr(types.T_float32), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bf16)}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}),
+		"vector_matmul over vecf32": lowPrecisionFuncExpr(function.VECTOR_MATMUL, types.T_json, lowPrecisionColExpr(types.T_int64), vecf32),
+		"control float32":           lowPrecisionColExpr(types.T_float32),
+	}
+	for _, typ := range lowPrecisionFloatContractTypes {
+		projections[typ.String()] = lowPrecisionColExpr(typ)
+	}
+	scopes := map[string]func() (*Scope, func()){}
+	for name, expr := range projections {
+		scopes[name] = func() (*Scope, func()) {
+			op := projection.NewArgument()
+			op.ProjectList = []*planpb.Expr{expr}
+			return &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}, op.Release
+		}
+	}
+	scopes["vector_matmul group descriptor"] = func() (*Scope, func()) {
+		op := group.NewArgument()
+		op.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfVectorMatmul, false, []*planpb.Expr{lowPrecisionColExpr(types.T_int64), vecf32}, nil)}
+		return &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}, op.Release
+	}
+	for name, newScope := range scopes {
+		t.Run(name, func(t *testing.T) {
+			scope, release := newScope()
+			defer release()
+			var required int64
+			data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &required)
+			require.NoError(t, err)
+			if name == "control float32" {
+				require.Zero(t, required)
+			} else {
+				require.Equal(t, plan2.LowPrecisionFloatProtocolVersion, required)
+			}
+
+			for _, peer := range []int64{plan2.LowPrecisionFloatProtocolVersion - 1, plan2.LowPrecisionFloatProtocolVersion} {
+				stream := &fakeStreamSender{}
+				receiveCh := make(chan morpc.Message, 1)
+				receiveCh <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: peer}
+				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
+				err = sender.sendPipelineAfterProtocolCheck(required, data, nil, false, maxMessageSizeToMoRpc, "")
+				var cmds []pipeline.Method
+				for _, m := range stream.sent {
+					cmds = append(cmds, m.(*pipeline.Message).GetCmd())
+				}
+				switch {
+				case required == 0:
+					require.NoError(t, err)
+					require.Equal(t, []pipeline.Method{pipeline.Method_PipelineMessage}, cmds)
+				case peer < required:
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", plan2.LowPrecisionFloatProtocolVersion))
+					require.Equal(t, []pipeline.Method{pipeline.Method_PipelineProtocolCheck}, cmds)
+				default:
+					require.NoError(t, err)
+					require.Equal(t, []pipeline.Method{pipeline.Method_PipelineProtocolCheck, pipeline.Method_PipelineMessage}, cmds)
+				}
+			}
 		})
 	}
 }

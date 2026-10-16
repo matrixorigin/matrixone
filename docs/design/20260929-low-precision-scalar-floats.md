@@ -145,8 +145,10 @@ runs `plan.LowPrecisionFloatProtocolVersion` or later, the same statement runs.
 - **Remote execution.** A pipeline that carries one of these types (a literal, a column
   reference, a function argument or result, a CAST source or target, a table definition
   column, a group key or an aggregate argument or result type) is refused for a
-  destination below that version. The private integer CAST 5..8 sources are one case of
-  this rule.
+  destination below that version. The version is checked on the destination's query
+  service and again on the execution stream that carries the pipeline, before the
+  pipeline is sent, so a replaced or reused peer below that version receives nothing. The
+  private integer CAST 5..8 sources are one case of this rule.
 - **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
   constraint whose expression carries one of these types requires persisted-expression
   protocol `LowPrecisionFloatProtocolVersion`.
@@ -156,6 +158,8 @@ runs `plan.LowPrecisionFloatProtocolVersion` or later, the same statement runs.
   or sent) and one at that version (runs):
   `TestLowPrecisionFloatCatalogAuthoringProtocolFence` (authoring),
   `TestLowPrecisionFloatContractRemoteBoundaries` (placement, send, receiver),
+  `TestLowPrecisionFloatContractExecutionStreamCheck` (execution stream: every type, a
+  bound CAST, `vector_matmul` and its aggregate descriptor),
   `TestLowPrecisionFloatContractFeatures` (remote and persisted floors) and
   `TestLowPrecisionFloatIntegerArgumentProtocol` (private CAST 5..8).
 

@@ -146,6 +146,12 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
+	// The destination probe uses another connection; remoteRun confirms the
+	// version on the execution stream too.
+	if features.LowPrecisionFloatContracts && requiredVectorProtocol != nil &&
+		*requiredVectorProtocol < plan2.LowPrecisionFloatProtocolVersion {
+		*requiredVectorProtocol = plan2.LowPrecisionFloatProtocolVersion
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}

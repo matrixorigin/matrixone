@@ -604,6 +604,9 @@ an older binary something it cannot decode is refused below
   older destination is refused by the function rule above, which also matches the lowered
   aggregate descriptor (`TestLowPrecisionFloatContractVectorMatmulDescriptor`). Its own
   version byte versions the state among those binaries.
+- **Execution stream.** A pipeline with any of these types or functions confirms the
+  version on the execution stream before it is sent, as for the scalar types
+  (`TestLowPrecisionFloatContractExecutionStreamCheck`).
 - **Tests.** Every refusal point has a test below that version (refused) and one at that version (runs).
 
 ## Phasing
