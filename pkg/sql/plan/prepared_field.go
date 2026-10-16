@@ -326,7 +326,7 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			return result
 		}
 	default:
-		if pos := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
+		if pos, _ := preparedStringDomainSourceIndex(name, len(fn.Args)); pos >= 0 {
 			domain := fieldStringArgumentDeclaration(r.expr(fn.Args[pos]))
 			result = domain
 			result.parameterDeclaration = false
@@ -446,7 +446,7 @@ func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStrin
 		peer.resolved = types.Type{}
 	}
 	var numeric []types.Type
-	inferredBinary, declaredBinary := false, false
+	inferredBinary, declaredBinary, textPeer := false, false, false
 	for _, domain := range domains {
 		if domain.kind == fieldStringMarker {
 			domain = peer
@@ -459,6 +459,7 @@ func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStrin
 				numeric = append(numeric, domain.resolved)
 			}
 		default:
+			textPeer = textPeer || domain.kind == fieldStringText
 			if domain.kind == fieldStringBinary {
 				inferredBinary = inferredBinary || domain.inferredBinary
 				declaredBinary = declaredBinary || !domain.inferredBinary
@@ -469,6 +470,12 @@ func (r *preparedFieldStringResolver) commonDomains(domains []preparedFieldStrin
 		}
 	}
 	result.inferredBinary = inferredBinary && !declaredBinary
+	if textPeer && result.inferredBinary {
+		// Contextual BLOB inference is not a binary declaration competing
+		// with a text peer. Apply this at every common-value consumer, not
+		// only set outputs, without changing any retained producer fact.
+		result.kind, result.inferredBinary = fieldStringText, false
+	}
 	if result.kind != fieldStringNull || len(numeric) == 0 {
 		return result
 	}
@@ -498,7 +505,6 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 	}
 	if isPreparedSetOperationNode(node.NodeType) {
 		domains := make([]preparedFieldStringDomain, 0, len(node.Children))
-		textPeer := false
 		for _, child := range node.Children {
 			// UNION consumes materialized branch declarations before merging
 			// them, just as scalar and column references consume projections.
@@ -506,16 +512,9 @@ func (r *preparedFieldStringResolver) output(nodeID, tag, pos int32, fallback pr
 			if domain.kind == fieldStringOther {
 				return fallback
 			}
-			textPeer = textPeer || domain.kind == fieldStringText
 			domains = append(domains, domain)
 		}
-		result := r.commonDomains(domains)
-		if textPeer && result.inferredBinary {
-			// A contextual BLOB is not a binary declaration competing with a
-			// text branch. Keep the CASE fact unchanged; the set owns this type.
-			result.kind, result.inferredBinary = fieldStringText, false
-		}
-		return result
+		return r.commonDomains(domains)
 	}
 	values := node.ProjectList
 	switch node.NodeType {
@@ -651,13 +650,22 @@ type preparedFieldReturnSource struct {
 // The bound payload type (including NULL's aggregate placeholder type) cannot
 // decide whether provenance exists; numeric operands retain their numeric domain.
 func (b *baseBinder) rememberPreparedFieldNullIfDomain(expr *Expr, args []*Expr) {
-	state := preparedBindingState(b.GetContext())
-	if state == nil || len(args) != 3 {
+	if len(args) != 3 {
 		return
 	}
 	source := preparedFieldReturnSource{value: args[2]}
 	if cmp := args[0].GetF(); cmp != nil && len(cmp.Args) == 2 {
 		source.peer = cmp.Args[1]
+	}
+	b.rememberPreparedFieldReturnSource(expr, source)
+}
+
+// Declaration normalization owns runtime representation but retains its logical
+// source for dependency/history resolution. Reuse the binding-local return map.
+func (b *baseBinder) rememberPreparedFieldReturnSource(expr *Expr, source preparedFieldReturnSource) {
+	state := preparedBindingState(b.GetContext())
+	if state == nil {
+		return
 	}
 	if state.fieldReturnSources == nil {
 		state.fieldReturnSources = make(map[*Expr]preparedFieldReturnSource)

@@ -45,7 +45,7 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 		{"CONCAT marker", "select field(case when ? then concat(?) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"CONCAT compound", "select field(case when ? then concat(coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
 		{"CONCAT literal peer", "select field(case when ? then concat(?,'') else null end,'A','a')", false, types.T_any, types.T_text, false},
-		{"CONCAT compound literal peer", "select field(case when ? then concat(coalesce(?,null),'') else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"CONCAT compound literal peer", "select field(case when ? then concat(coalesce(?,null),'') else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"CONCAT_WS skips NULL compound", "select field(case when ? then concat_ws('',coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"CONCAT_WS LOWER NULL", "select field(case when ? then concat_ws('',lower(coalesce(?,NULL))) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"CONCAT_WS LOWER NULL text condition", "select field(case when ? then concat_ws('',lower(coalesce(?,NULL))) else null end,'A','a')", false, types.T_any, types.T_text, true},
@@ -244,6 +244,15 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select null) d where x<>'' limit 1)", false, true, true, false},
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else null end x union all select _binary '') d where x<>'' limit 1)", false, true, true, false},
 		{"(select x from (select case when ? then lower(coalesce(?,null)) else _binary '' end x union all select '') d where x<>'' limit 1)", false, true, false, false},
+		{"coalesce(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"coalesce(null,case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"concat(case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"concat('',case when ? then lower(coalesce(?,null)) else null end)", false, false, true, false},
+		{"if(1,case when ? then lower(coalesce(?,null)) else null end,'')", false, false, true, false},
+		{"coalesce(case when ? then lower(coalesce(?,null)) else null end,null)", false, true, true, false},
+		{"concat(case when ? then lower(coalesce(?,null)) else null end)", false, true, true, false},
+		{"coalesce(case when ? then lower(coalesce(?,null)) else null end,_binary '')", false, true, true, false},
+		{"concat(case when ? then lower(coalesce(?,null)) else null end,_binary '')", false, true, true, false},
 	} {
 		for _, textCondition := range []bool{false, true} {
 			name := "/numeric"

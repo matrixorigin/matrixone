@@ -573,7 +573,7 @@ SELECT FIELD(CONCAT_WS('',LOWER(x)),'A','a') FROM (SELECT _binary 'A' x UNION AL
 ➤ FIELD(CONCAT_WS(, LOWER(x)), A, a)[-5,64,0]  𝄀
 1
 SELECT FIELD(REVERSE(COALESCE(_binary 'a','')),'A','a'), HEX(REVERSE(COALESCE(_binary 'a','')));
-➤ FIELD(REVERSE(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(REVERSE(COALESCE(a, )))[-1,16383,0]  𝄀
+➤ FIELD(REVERSE(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(REVERSE(COALESCE(a, )))[12,2040,0]  𝄀
 2  ¦  61
 SELECT FIELD(LOWER(COALESCE(_binary 'A','')),'A','a'), HEX(LOWER(COALESCE(_binary 'A','')));
 ➤ FIELD(LOWER(COALESCE(A, )), A, a)[-5,64,0]  ¦  HEX(LOWER(COALESCE(A, )))[-1,16383,0]  𝄀
@@ -582,13 +582,13 @@ SELECT FIELD(UPPER(COALESCE(_binary 'a','')),'A','a'), HEX(UPPER(COALESCE(_binar
 ➤ FIELD(UPPER(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(UPPER(COALESCE(a, )))[-1,16383,0]  𝄀
 2  ¦  61
 SELECT FIELD(SUBSTRING(COALESCE(_binary 'a',''),1,1),'A','a'), HEX(SUBSTRING(COALESCE(_binary 'a',''),1,1));
-➤ FIELD(SUBSTRING(COALESCE(a, ), 1, 1), A, a)[-5,64,0]  ¦  HEX(SUBSTRING(COALESCE(a, ), 1, 1))[-1,16383,0]  𝄀
+➤ FIELD(SUBSTRING(COALESCE(a, ), 1, 1), A, a)[-5,64,0]  ¦  HEX(SUBSTRING(COALESCE(a, ), 1, 1))[12,2040,0]  𝄀
 2  ¦  61
 SELECT FIELD(REPEAT(COALESCE(_binary 'a',''),1),'A','a'), HEX(REPEAT(COALESCE(_binary 'a',''),1));
-➤ FIELD(REPEAT(COALESCE(a, ), 1), A, a)[-5,64,0]  ¦  HEX(REPEAT(COALESCE(a, ), 1))[-1,16383,0]  𝄀
+➤ FIELD(REPEAT(COALESCE(a, ), 1), A, a)[-5,64,0]  ¦  HEX(REPEAT(COALESCE(a, ), 1))[12,2040,0]  𝄀
 2  ¦  61
 SELECT FIELD(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')),'A','a'), HEX(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')));
-➤ FIELD(TRIM(both   from COALESCE( a , )), A, a)[-5,64,0]  ¦  HEX(TRIM(both   from COALESCE( a , )))[-1,16383,0]  𝄀
+➤ FIELD(TRIM(both   from COALESCE( a , )), A, a)[-5,64,0]  ¦  HEX(TRIM(both   from COALESCE( a , )))[12,2040,0]  𝄀
 2  ¦  61
 SELECT FIELD(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)),'A','a'), HEX(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)));
 ➤ FIELD(REVERSE(cast(COALESCE(a, ) as varchar)), A, a)[-5,64,0]  ¦  HEX(REVERSE(cast(COALESCE(a, ) as varchar)))[-1,16383,0]  𝄀
@@ -621,6 +621,34 @@ EXECUTE p_field_history USING @field_condition,@field_value;
 SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition,@field_value;
 ➤ FIELD(d.x, A, a)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(COALESCE(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS coalesce_f, FIELD(CONCAT(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS concat_f, FIELD(CONCAT('''',CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''A'',''a'') AS concat_rev_f, FIELD(IF(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS if_f, FIELD(COALESCE(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,NULL),''A'',''a'') AS null_peer_f, FIELD(CONCAT(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS binary_peer_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN TRUE THEN CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END ELSE '''' END,''A'',''a'')';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
 1
 DEALLOCATE PREPARE p_field_history;
 CREATE DATABASE field_history_dependencies;
