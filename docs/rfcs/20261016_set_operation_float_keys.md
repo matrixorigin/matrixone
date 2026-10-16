@@ -1,6 +1,6 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 5
+- Revision: 6
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
@@ -18,7 +18,8 @@ expression admission trigger the design-first gate. The earlier ordinary-fix
 exemption does not cover this expansion. Revision 3 supplied the missing design;
 revision 4 retains that architecture and mechanically advances set-key admission
 after official main allocated version 116;
-revision 5 adds the local capacity protocol, receipt and composed lifecycle tests.
+revision 5 adds the local capacity protocol, receipt and composed lifecycle tests;
+revision 6 extends accounted resource, input-distribution and composed fault evidence.
 These revisions do not assert repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
@@ -191,8 +192,8 @@ automatic admission limit is introduced here.
 Before accepting this design for rollout, planner/execution reviewers must record
 a named deployment profile and supported envelope: outer/candidate sizes, widths,
 selectivity, distinctness/skew, concurrency, CN placement and numerical latency,
-peak-memory and spill/disk budgets. Revision 5 records a measured local proposal below; an independently accepted
-production envelope remains outstanding.
+peak-memory and spill/disk budgets. Revisions 5 and 6 record measured local proposals below;
+an independently accepted production envelope remains outstanding.
 
 Validation must inspect the actual compiled plan while independently varying
 `O`, `I`, `M/(O*I)`, `U/M`, outer width, skew and concurrency. Include both a tiny
@@ -324,12 +325,111 @@ Existing owner tests provide additional, separate evidence:
   `TestResetRebuildsExpressionForNextAllocationGeneration` cover generation
   ownership and expression recreation.
 
-Owner tests do not establish composed in-flight merge/build/group cancellation
-or composed corrupt-spill recovery. Those boundaries and capacity-scale metrics
-above remain pending. No production fault hook or unrelated executor change is
+At revision 5, owner tests did not establish composed in-flight merge/build/group
+cancellation or composed corrupt-spill recovery. Revision 6 below adds specific
+compiled input/reload boundaries; it does not turn them into arbitrary mid-call
+cancellation proof. No production fault hook or unrelated executor change is
 introduced to hide those gaps. Independent acceptance must name this exact
 revision and the agreed supported envelope; this author-supplied evidence is
 not that approval.
+
+### Revision 6 extended capacity and composed failure receipt
+
+Revision 6 keeps the same proposed single-CN envelope and numerical latency,
+operator-memory, spill and process-RSS targets. It additionally requires the
+internal execution allocation-account generation peak to be <= 256 MiB. This
+remains a local qualification proposal awaiting independent acceptance, not a
+new admission limit or a claim about arbitrary deployments.
+
+The [revision 6 receipt](validation/20261016_scalar_set_capacity_r6.json) retains
+12 profiles and 75 public SQL samples, using the same first-invocation / excluded
+warm-up / three measured rounds protocol. High distinct membership is now
+measured at the envelope boundary. Balanced and skewed profiles hold `O=64`,
+total `I=256`, payload width 256 and two distinct values fixed: the two values
+occur 64:64 versus 127:1 times per arm. Both correctly return cardinality error
+1242, measuring work before the existing SINGLE rejection.
+
+| Profile | O / total I / payload bytes / C | Warm maximum completion ms | Internal account generation peak bytes | Physical merge input bytes sum |
+| --- | --- | --- | --- | --- |
+| baseline | 8/16/0/1 | 1.124 | 1,366,648 | 912 |
+| outer | 64/16/0/1 | 1.917 | 1,450,312 | 5840 |
+| candidates | 8/256/0/1 | 1.376 | 1,545,376 | 3792 |
+| sparse | 8/16/0/1 | 0.878 | 1,355,528 | 912 |
+| distinct-cardinality-error | 8/16/0/1 | 0.939 | 1,365,624 | unavailable |
+| width | 8/16/256/1 | 0.984 | 1,417,848 | 5008 |
+| concurrency | 8/16/0/2 | 1.205 | 1,366,648 | 912 |
+| combined | 64/256/256/2 | 9.995 | 4,820,544 | 41488 |
+| high-distinctness-boundary | 64/256/256/2 | 20.687 | 8,505,176 | unavailable |
+| balanced-two-values | 64/256/256/1 | 5.287 | 4,820,544 | unavailable |
+| skewed-two-values | 64/256/256/1 | 6.244 | 4,820,544 | unavailable |
+| forced-spill | 64/256/0/1 | 52.627 | 2,107,648 | 8720 |
+
+All available quantities meet the proposal's numerical targets. Every internal
+root reports one valid allocation generation, no failed generation and zero
+terminal account bytes. The largest measured account peak is 8,505,176 bytes;
+the largest process lifetime RSS high-water is 415,055,872 bytes. These are
+separate observations with different coverage, not additive query memory.
+
+Public `EXPLAIN ANALYZE FORMAT JSON` and `EXPLAIN PHYPLAN FORMAT JSON` are
+explicitly unsupported by this source. The harness therefore retains ordinary
+logical analysis plus full **physical-plan text** from a separate serial
+`EXPLAIN PHYPLAN ANALYZE` execution for every successful profile. That text
+includes exact integer operator input/output counters, network bytes and Group
+spill/reload ExtraStats. The combined profile records 41,488 bytes of summed
+merge inputs; repeated traversal at different merge stages is counted repeatedly.
+Observed network bytes are zero on this one-CN topology; this is no evidence
+about remote transport. Forced spill records 251 bucket creations, 313 write
+calls, 251 reloaded buckets, 375 reloaded records and 384 reloaded rows across
+the two physical Groups, with 72,492 reported spill bytes. Bucket creation,
+reload count and write calls are distinct quantities, not interchangeable.
+
+A separate internal-executor execution attaches a fresh `resource.Root` per
+worker and retains its terminal summary, including expected 1242 failures that
+cannot return an analyzed plan. It uses the public profile's resolved spill/DOP
+settings and database. Internal execution excludes MySQL protocol work and is
+not included in public latency samples. Two-worker internal profiles start via
+a barrier; their actual overlap is not measured. Sum of generation peaks is an
+upper bound, not a measured simultaneous peak. `Allocation.MaxGenerationPeak`
+covers accounted execution owners only. Internal `Memory` domain fields remain
+zero despite complete quality / zero missing-domain counters, so this receipt
+does not claim a complete allocator-domain or per-query resident peak. RSS
+remains the conservative whole-process lifetime high-water observation. Physical
+merge/spill metrics for cardinality-error profiles remain unavailable; the
+internal account peaks for those failures are measured and retained.
+
+The composed compile fixture now uses an owned local filesystem decorator and
+eight deterministic modes. In addition to revision 5's budget/post-output cancel
+controls, it validates:
+
+- WINDOW input cancellation after one nonempty batch has been delivered, on the
+  next child call. The actual unpartitioned materialization and its merge edge
+  have started. The test decorates only an unaccounted child edge and requires
+  TP compilation, preserving every allocation owner's discovery/cleanup methods.
+- GROUP cancellation at its synchronous post-build, post-writer-close file reopen
+  boundary, before reload. The existing file service supplies this seam.
+- Corrupt spill recovery at that same reopen boundary: truncate the reopened
+  file to one byte before returning it to GROUP. The real compiled fallback
+  returns typed `io.ErrUnexpectedEOF`; no truncation thread races a buffered
+  writer and no product fault hook is added.
+- Normal forced-spill control and subsequent TP Reset recovery with the fault
+  disabled. A fresh generation then executes successfully on the shared budget.
+
+Before Reset **and** after recovery, the test checks zero memory/spill-disk/FD
+reservations, zero live allocation metadata, successful removal of every named
+spill file, and `os.ErrClosed` for every created/reopened handle. Prepared
+operators are finally freed before Compile.Release, followed by zero MPool bytes
+and memory-growth participants before ledger Close. First cancellation/corrupt
+attempts each create two files, reopen one and remove both; the positive spill
+control creates/reopens/removes twelve files per execution. These tiny-fixture
+filesystem counts must not be substituted for capacity-scale bucket counters.
+The exact counts and terminal generation observations are in the receipt.
+
+This closes deterministic composed materialization-input, post-group-build /
+pre-reload, corrupt-reload, cleanup and subsequent-reuse evidence for this local
+profile. It does not inject cancellation in the middle of one batch's comparison
+or aggregation call, establish full allocator attribution, or qualify distributed
+placement/capacity. Independent acceptance of this exact revision and supported
+production envelope remains external; the author does not infer it from tests.
 
 ## Alternatives
 
@@ -407,11 +507,11 @@ acceptance or a capacity benchmark.
 | Historical CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
 | Selective typed-key filter work | Earlier unchanged-path receipt: 4,096 rows, one scan row per arm, two aggregation input rows, reported memory 262,270 bytes | A selective set-operation observation only; does not measure occurrence-based scalar fallback latency, concurrency or resident peak. | Separate from fallback acceptance |
 | Rebased capability allocation | Set-key placement/send/receive/Prepare/persisted tests at 116/117, plus division-only and combined-feature controls | Focused compile/colexec/planner boundary checks pass (3.073s/2.088s/1.517s); full planner, compile, colexec, function and protobuf-plan packages also pass. Fresh receipts are recorded in the implementation PR; historical 115/116 receipts above retain their original provenance. | Independent implementation review |
-| Global merge and reaggregation capacity | Revision 5 opt-in benchmark and linked receipt above | Nine actual fallback profiles, one excluded warm-up plus three measured rounds; local targets met for available metrics. Missing capacity-scale peaks/skew/volume/reload and topology evidence are listed explicitly. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
-| Composed partial failure/cancel/reset/spill recovery | Revision 5 composed compile test plus named owner fault tests above | Typed 4 KiB group rejection, post-materialization cancellation, TP Reset and same-budget fresh generation cleanup. Composed in-flight phase cancellation/corrupt-spill recovery remains unproven. | Execution reviewers: remaining composed boundaries |
+| Global merge and reaggregation capacity | Revision 6 benchmark and linked receipt above | Twelve actual fallback profiles and separate terminal internal roots; local targets met, including high-U/skew, measured account peaks, merge and spill/reload counters. Full allocator attribution and remote qualification are not claimed. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
+| Composed partial failure/cancel/reset/spill recovery | Revision 6 composed compile test plus named owner fault tests above | Typed 4 KiB rejection, WINDOW input / pre-reload cancellation, synchronous corrupt reload, first/final attempt file/handle/ledger cleanup and TP Reset/same-budget recovery. Mid-single-batch cancellation is not injected. | Execution reviewers: remaining composed boundaries |
 | Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
 
 Record any later acceptance with the immutable revision/commit link, reviewer,
 decision, supported capacity envelope and evidence links. Advance status to
 `in progress` only after independent approval; the author does not self-approve
-or infer acceptance from CI. Until then, revision 5 remains a reviewable draft.
+or infer acceptance from CI. Until then, revision 6 remains a reviewable draft.

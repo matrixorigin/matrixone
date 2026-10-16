@@ -29,7 +29,11 @@ import (
 	"time"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +41,8 @@ type scalarCapacityProfile struct {
 	Name                                   string
 	Outer, InnerPerArm, Width, Concurrency int
 	Sparse, Distinct, ForceSpill           bool
+	ValueKinds                             int
+	Skew                                   bool
 }
 type scalarCapacitySample struct {
 	Phase                    string
@@ -46,6 +52,8 @@ type scalarCapacitySample struct {
 	Rows, ErrorCode          int
 }
 type scalarCapacityResult struct {
+	Physical                         string
+	Internal                         []resource.StatementResourceSummary
 	Settings                         map[string]int64
 	Profile                          scalarCapacityProfile
 	Samples                          []scalarCapacitySample
@@ -75,6 +83,9 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "width", Outer: 8, InnerPerArm: 8, Width: 256, Concurrency: 1},
 		{Name: "concurrency", Outer: 8, InnerPerArm: 8, Concurrency: 2},
 		{Name: "combined", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2},
+		{Name: "high-distinctness-boundary", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2, Distinct: true},
+		{Name: "balanced-two-values", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Distinct: true, ValueKinds: 2},
+		{Name: "skewed-two-values", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Distinct: true, ValueKinds: 2, Skew: true},
 		{Name: "forced-spill", Outer: 64, InnerPerArm: 128, Concurrency: 1, ForceSpill: true},
 	}
 	var results []scalarCapacityResult
@@ -95,7 +106,7 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 			require.NoError(b, cleanupErr)
 		}()
 		for _, p := range profiles {
-			result := runScalarCapacityProfile(b, ctx, db, p)
+			result := runScalarCapacityProfile(b, ctx, db, cn.RawService().(cnservice.Service).GetSQLExecutor(), p)
 			results = append(results, result)
 		}
 	})
@@ -107,7 +118,7 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 	require.NoError(b, os.WriteFile(report, append(data, '\n'), 0600))
 }
 
-func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, p scalarCapacityProfile) scalarCapacityResult {
+func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, internal executor.SQLExecutor, p scalarCapacityProfile) scalarCapacityResult {
 	b.Helper()
 	conn, err := db.Conn(ctx)
 	require.NoError(b, err)
@@ -132,6 +143,15 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, p s
 		v := "-0e0"
 		if p.Distinct {
 			v = fmt.Sprint(i)
+			if p.ValueKinds > 0 {
+				v = fmt.Sprint(1 + i%p.ValueKinds)
+				if p.Skew {
+					v = "1"
+					if i == p.InnerPerArm {
+						v = "2"
+					}
+				}
+			}
 		}
 		values = append(values, fmt.Sprintf("(%d,%s)", i, v))
 	}
@@ -225,6 +245,71 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, p s
 			require.GreaterOrEqual(b, strings.Count(lower, "spillrows="), 2, "both aggregation stages must spill")
 		}
 	}
+
+	if !p.Distinct {
+		physicalRows, physicalErr := conns[0].QueryContext(ctx, "explain phyplan analyze "+query)
+		require.NoError(b, physicalErr)
+		func() {
+			defer physicalRows.Close()
+			for physicalRows.Next() {
+				var line string
+				require.NoError(b, physicalRows.Scan(&line))
+				result.Physical += line + "\n"
+			}
+			require.NoError(b, physicalRows.Err())
+		}()
+		require.Contains(b, result.Physical, "Merge")
+		if p.ForceSpill {
+			require.Contains(b, result.Physical, "GroupSpillReloadRecords:")
+			require.Contains(b, result.Physical, "GroupSpillBucketsCreated:")
+		}
+	}
+	// This separate internal-executor run captures terminal generation accounting,
+	// including cardinality failures that cannot return an EXPLAIN payload.
+	result.Internal = make([]resource.StatementResourceSummary, p.Concurrency)
+	internalErrors := make([]error, p.Concurrency)
+	startInternal := make(chan struct{})
+	var internalWG sync.WaitGroup
+	for worker := range result.Internal {
+		internalWG.Add(1)
+		go func(worker int) {
+			defer internalWG.Done()
+			<-startInternal
+			root := resource.NewRoot(resource.ConnInternal)
+			internalCtx := resource.ContextWithRoot(ctx, root)
+			opts := executor.Options{}.WithDatabase("scalar_set_capacity").WithResolveVariableFunc(func(name string, system, global bool) (any, error) {
+				if value, ok := result.Settings[name]; ok {
+					return value, nil
+				}
+				return executor.DefaultResolveVariable(name, system, global)
+			})
+			res, execErr := internal.Exec(internalCtx, query, opts)
+			res.Close()
+			internalErrors[worker] = execErr
+			result.Internal[worker] = root.PreResponseSummary()
+		}(worker)
+	}
+	close(startInternal)
+	internalWG.Wait()
+	for worker, summary := range result.Internal {
+		if p.Distinct {
+			var moError *moerr.Error
+			require.ErrorAs(b, internalErrors[worker], &moError)
+			require.Equal(b, moerr.ErrSubqueryNo1Row, moError.ErrorCode())
+		} else {
+			require.NoError(b, internalErrors[worker])
+		}
+		require.Positive(b, summary.Allocation.GenerationCount)
+		require.Equal(b, summary.Allocation.GenerationCount, summary.Allocation.ValidGenerationCount)
+		require.Zero(b, summary.Allocation.FailedGenerationCount)
+		require.Positive(b, summary.Allocation.MaxGenerationPeak)
+		require.Zero(b, summary.Allocation.LiveBytesAtTerminal)
+		require.LessOrEqual(b, summary.Allocation.MaxGenerationPeak, uint64(256<<20))
+		require.Zero(b, summary.MissingMemoryDomainCount)
+		require.Equal(b, "complete", summary.Quality.String())
+		b.Logf("internal-account profile=%s worker=%d generationPeak=%d missingDomains=%d quality=%s", p.Name, worker, summary.Allocation.MaxGenerationPeak, summary.MissingMemoryDomainCount, summary.Quality)
+	}
+
 	var usage syscall.Rusage
 	require.NoError(b, syscall.Getrusage(syscall.RUSAGE_SELF, &usage))
 	result.ProcessLifetimeRSSHighWaterBytes = usage.Maxrss
