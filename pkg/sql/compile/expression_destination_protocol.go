@@ -42,7 +42,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
-		{features.PythonRoutineContract, defines.MORPCVersion117,
+		{features.PythonRoutineContract, defines.MORPCVersion118,
 			"Python routine execution requires a versioned remote destination",
 			"remote destination does not support Python routine execution (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
