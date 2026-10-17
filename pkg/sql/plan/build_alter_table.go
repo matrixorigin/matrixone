@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -282,6 +283,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
+	pendingChecks, err := prepareAlterCopyChecks(cctx, copyTableDef, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
 	// The copied definition contains the source allocator's cached offset. It
 	// is not a user request and can be far ahead of the actual rows. The copy
 	// executor reconciles the explicit request, copied maximum, and source
@@ -341,6 +346,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
+			case *tree.CheckIndex:
+				// Names and drops were applied before column mutations. Bind
+				// surviving new expressions against the final schema below.
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
@@ -360,6 +368,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				// Already applied by prepareAlterCopyChecks.
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				found := false
 				for i, index := range copyTableDef.Indexes {
@@ -544,6 +554,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
 	); err != nil {
 		return nil, err
+	}
+	for _, check := range pendingChecks {
+		if err = appendCheckDef(cctx, copyTableDef, check.ConstraintSymbol, check.Expr, -1); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
@@ -1376,6 +1391,19 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
+	// Preserve the parser-owned AST: prepared statements may plan it again.
+	resolvedStmt := *stmt
+	resolvedStmt.Options = options
+	stmt = &resolvedStmt
+	// Generic CONSTRAINT drops must obey the same physical-key admission
+	// as the constraint-specific operations they resolve to.
+	if tableDef.KeyFormat == collation.KeyFormatV1 && hasVersionedIndexMutation(stmt.Options) {
+		return nil, rejectVersionedIndexMutation(ctx.GetContext(), tableDef)
+	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
@@ -1406,6 +1434,66 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+func hasVersionedIndexMutation(options []tree.AlterTableOption) bool {
+	for _, option := range options {
+		switch option := option.(type) {
+		case *tree.AlterOptionAlterIndex, *tree.AlterOptionAlterReIndex:
+			return true
+		case *tree.AlterOptionDrop:
+			if option.Typ == tree.AlterTableDropIndex ||
+				option.Typ == tree.AlterTableDropKey ||
+				option.Typ == tree.AlterTableDropPrimaryKey ||
+				option.Typ == tree.AlterTableDropColumn {
+				return true
+			}
+		case *tree.AlterOptionAdd:
+			switch option.Def.(type) {
+			case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+				return true
+			case *tree.ColumnTableDef:
+				if columnDefHasIndexAttribute(option.Def.(*tree.ColumnTableDef)) {
+					return true
+				}
+			}
+		case *tree.AlterAddCol:
+			if columnDefHasIndexAttribute(option.Column) {
+				return true
+			}
+		case *tree.AlterTableAddColumnClause:
+			for _, column := range option.NewColumns {
+				if columnDefHasIndexAttribute(column) {
+					return true
+				}
+			}
+		case *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableChangeColumnClause,
+			*tree.AlterTableRenameColumnClause:
+			// The current in-place column mutation code does not prove that an
+			// indexed source column retains the V1 physical-key contract.  Keep
+			// every such mutation fail-closed until it can rebind and validate
+			// the affected index definitions atomically.
+			return true
+		case *tree.AlterTableAlterColumnClause:
+			return true
+		}
+	}
+	return false
+}
+
+func columnDefHasIndexAttribute(column *tree.ColumnTableDef) bool {
+	if column == nil {
+		return false
+	}
+	for _, attr := range column.Attributes {
+		switch attr.(type) {
+		case *tree.AttributePrimaryKey, *tree.AttributeKey,
+			*tree.AttributeUnique, *tree.AttributeUniqueKey:
+			return true
+		}
+	}
+	return false
 }
 
 // Charset options remain compatibility no-ops, not conversions. Admit requests
@@ -1545,6 +1633,8 @@ Loop:
 			continue
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
+			case *tree.CheckIndex:
+				algorithm = plan.AlterTable_COPY
 			case *tree.PrimaryKeyIndex:
 				algorithm = plan.AlterTable_COPY
 			case *tree.ForeignKey:
@@ -1558,6 +1648,8 @@ Loop:
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropColumn:
 				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:

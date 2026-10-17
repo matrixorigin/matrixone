@@ -69,6 +69,7 @@ func (proc *Process) BuildProcessInfo(
 		// semantics with the process so those casts take the same adjustment
 		// path as they do on the coordinating CN.
 		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
+		procInfo.StatementRuntimeSelect = proc.IsSelectStatement()
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
@@ -164,6 +165,7 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
+			Account:                proc.Base.SessionInfo.Account,
 			User:                   proc.Base.SessionInfo.GetUser(),
 			Host:                   proc.Base.SessionInfo.GetHost(),
 			Role:                   proc.Base.SessionInfo.GetRole(),
@@ -362,6 +364,9 @@ func (c *codecService) Decode(
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
+	if value.StatementRuntimeSelect {
+		stmtProfile.SetStatementRuntimeProfile("Select", "DQL", value.StatementRuntimeIgnore)
+	}
 	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(

@@ -88,6 +88,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
@@ -563,6 +564,7 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
+	c.lastInsertIDBaseline = 0
 	c.disableLock = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
@@ -980,6 +982,11 @@ func closeMaterializedSourceGenerations(sources []*materialized.Source) {
 // after it returns, all submitted scope goroutines have quiesced and the
 // attempt closes both executed and statically planned-but-unstarted owners.
 func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	// Logical window arguments remain execution-time errors when LIMIT 0
+	// removes their physical operator. Check each retry before sources start.
+	if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
+		return err
+	}
 	startedSources, err := c.prePipelineInitializer()
 	defer closeMaterializedSourceGenerations(startedSources)
 	if err != nil {
@@ -2649,7 +2656,7 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	}
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
-	param.Ctx = c.proc.Ctx
+	param.Ctx = process.SQLFileAccessContext(c.proc.Ctx, c.proc)
 
 	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
 		// Keep the prepared plan's bound source and derived file metadata, but
@@ -2670,6 +2677,9 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 				return nil, err
 			}
 		}
+	}
+	if err := plan2.AuthorizeExternalFileAccess(param, proc); err != nil {
+		return nil, err
 	}
 	return param, nil
 }
@@ -3672,7 +3682,11 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 }
 
 func GetExternParallelSize(totalSize int64, cpuNum int) int {
-	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	return externParallelSize(totalSize, cpuNum, int64(colexec.WriteS3Threshold))
+}
+
+func externParallelSize(totalSize int64, cpuNum int, sizePerReader int64) int {
+	parallelSize := int(totalSize / sizePerReader)
 	if parallelSize < 1 {
 		return 1
 	} else if parallelSize < cpuNum {
@@ -5111,12 +5125,20 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
+	testConfig, observeRanges := moruntime.GetLoadDataTestConfig(c.proc.GetService(), param.Filepath)
 	stageNodes := c.externalScanStageNodes(node, param)
 	if len(stageNodes) == 0 && loadTimeScanNeedsCoordinator(node, param) {
 		stageNodes = engine.Nodes{{Addr: c.addr, Mcpu: c.capFanoutByMaxDop(max(c.ncpu, 1))}}
 	}
 	if len(stageNodes) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
+	}
+	if observeRanges && len(stageNodes) == 1 && stageNodes[0].Addr == c.addr {
+		// Small SQL fixtures otherwise retain a one-worker TP budget even
+		// after admission. Keep the selected local CN, and size a private
+		// worker budget by the test threshold, actual CPUs, and query max_dop.
+		stageNodes = slices.Clone(stageNodes)
+		stageNodes[0].Mcpu = c.capFanoutByMaxDop(externParallelSize(fileSize[0], c.ncpu, testConfig.MinSize))
 	}
 
 	if param.ScanType == tree.S3 {
@@ -5138,6 +5160,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	}
 
 	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+	if observeRanges {
+		parallelSize = externParallelSize(fileSize[0], mcpu, testConfig.MinSize)
+	}
 
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
@@ -5146,6 +5171,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 		fileOffset = append(fileOffset, arr)
 		if err != nil {
 			return nil, err
+		}
+		if observeRanges && testConfig.OnRanges != nil {
+			testConfig.OnRanges(parallelSize, slices.Clone(arr))
 		}
 	}
 
@@ -5163,16 +5191,11 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 			preIndex := pre
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Strict {
-				if 2*preIndex+2*count < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				} else if 2*preIndex < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-				} else {
-					continue
-				}
-			} else {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+			// A boundary probe can reach EOF in either strict mode, leaving
+			// fewer ranges than workers (for example, a single long record).
+			if 2*preIndex < len(fileOffset[j]) {
+				end := min(2*preIndex+2*count, len(fileOffset[j]))
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:end]...)
 			}
 		}
 		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(stageNodes), stageNodes[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
@@ -9454,6 +9477,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			return nil, err
 		}
 
+		// Writers own the logical input; the flush consumes their metadata.
+		multiUpdateArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
@@ -11195,6 +11220,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	// Internal SQL created synchronously by a user statement runs in a fresh
+	// process. Carry the parent session names explicitly so SQL file
+	// authorization sees the same authenticated identity after planning. This
+	// is independent of accountId, which only selects catalog execution scope.
+	var accountName, roleName string
+	if c.proc != nil && c.proc.Base != nil {
+		parentInfo := c.proc.GetSessionInfo()
+		accountName, roleName = parentInfo.Account, parentInfo.Role
+	}
+	options = options.WithSessionIdentity(accountName, roleName)
 	// Propagate the IsFrontend signal from the outer Compile's proc
 	// to the sub-execution. Without this, sub-Compiles spawned for
 	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)

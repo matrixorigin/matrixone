@@ -25,11 +25,13 @@ import (
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,6 +134,13 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				require.Error(t, err)
 				assertRows("execute owner_handle", []int{1, 2})
 				execSQLRequire(t, ctx, adminDB, "alter role "+roleName+" add rule \"select id from "+dbName+".t where tenant = 1\" on table "+dbName+".t")
+				if tc.migrate {
+					// The admin and migrated reader are different sessions on different CNs.
+					// Make the committed rule visible before SET ROLE clears the reader's cache.
+					commitTS := sourceCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+					require.False(t, commitTS.IsEmpty())
+					testutils.WaitLogtailApplied(t, commitTS, targetCN)
+				}
 				_, err = conn.ExecContext(ctx, "set role issue29148_missing_owner_role")
 				require.Error(t, err)
 				assertRows(innerSQL, []int{1})

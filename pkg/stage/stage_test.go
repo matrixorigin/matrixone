@@ -213,3 +213,15 @@ func TestCredentialsToMap(t *testing.T) {
 	require.Equal(t, cmap[PARAMKEY_PROVIDER], "minio")
 
 }
+
+func TestToPathQuotedCredentialsAndQuery(t *testing.T) {
+	u, err := url.Parse("s3://bucket/path?q=keep")
+	require.NoError(t, err)
+	s := StageDef{Url: u, Credentials: map[string]string{
+		PARAMKEY_AWS_KEY_ID: "key", PARAMKEY_AWS_SECRET_KEY: "a,b\"c", PARAMKEY_AWS_REGION: "region", PARAMKEY_ENDPOINT: "endpoint", PARAMKEY_PROVIDER: S3_PROVIDER_AMAZON,
+	}}
+	got, query, err := s.ToPath()
+	require.NoError(t, err)
+	require.Equal(t, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,\"secret=a,b\"\"c\"\n:/path", got)
+	require.Equal(t, "q=keep", query)
+}

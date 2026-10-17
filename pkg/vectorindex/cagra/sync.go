@@ -397,10 +397,9 @@ func (s *CagraSync) runSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
 	if len(sqls) == 0 {
 		return nil
 	}
-	opts := executor.Options{}
 	return runTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		for _, sql := range sqls {
-			res, err := exec.Exec(sql, opts.StatementOption())
+			res, err := exec.Exec(sql, sqlproc.StatementOption())
 			if err != nil {
 				return err
 			}

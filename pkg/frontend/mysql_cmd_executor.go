@@ -1483,6 +1483,7 @@ func doSetVar(
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
+		setNamesCollation       string
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
@@ -1506,9 +1507,12 @@ func doSetVar(
 	}
 	for _, assign := range sv.Assignments {
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				captureSystemReplayability(name)
 			}
 		} else if assign.System {
@@ -1573,12 +1577,62 @@ func doSetVar(
 				}
 			}
 		}
+		// SET NAMES DEFAULT is represented by a synthetic "names" assignment,
+		// so it cannot use the ordinary system-variable DEFAULT resolution above.
+		// The generic expression evaluator intentionally materializes DEFAULT as
+		// a boolean marker; resolve the SET NAMES form to the effective server
+		// default character set before the string system-variable setters see it.
+		if assign.SetNames {
+			if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				value, evalErr = ses.GetGlobalSysVar("character_set_server")
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				if value == nil {
+					value = gSysVarsDefs["character_set_server"].Default
+				}
+			}
+		}
 		if err := validateCharsetAssignment(assign, value); err != nil {
 			return evaluatedAssignment{}, err
+		}
+		setNamesCollation := ""
+		if assign.SetNames {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			switch {
+			case assign.Reserved != nil:
+				literal, literalOK := assign.Reserved.(*tree.NumVal)
+				if !literalOK {
+					return evaluatedAssignment{}, moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
+				}
+				setNamesCollation = literal.String()
+			case isDefault:
+				setNamesCollation, evalErr = resolveSetNamesDefaultCollation(ses)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				// character_set_server and collation_server are stored
+				// independently. Validate their effective pair before the
+				// session setters run so an inconsistent historical/global
+				// configuration cannot publish a partial SET NAMES DEFAULT
+				// state.
+				if evalErr = validateCharsetCollationPair(value, setNamesCollation); evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			default:
+				setNamesCollation, evalErr = resolveImplicitSetNamesCollation(ses, value)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			}
+			if evalErr = validateCharsetSystemVariable("collation_connection", setNamesCollation); evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
 		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
+			setNamesCollation:       setNamesCollation,
 			userVarIsBin:            isBin,
 			userVarRuntimeDomain:    runtimeDomain,
 			valueType:               valueType,
@@ -1648,9 +1702,12 @@ func doSetVar(
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				mark(name, replayable)
 			}
 			return
@@ -1687,16 +1744,22 @@ func doSetVar(
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
-			//replaced into three system variable:
-			//character_set_client, character_set_connection, and character_set_results
+			// SET NAMES updates the three character-set variables. An explicit
+			// COLLATE clause additionally updates collation_connection below.
 			replacedBy := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
 			for _, rb := range replacedBy {
-				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
+				err = setVarFunc(true, false, rb, value, sql)
 				if err != nil {
 					return err
 				}
+			}
+			// SET NAMES always changes the implicit connection collation when
+			// COLLATE is omitted. Explicit COLLATE and DEFAULT resolution were
+			// validated while evaluating the assignment, before any writes.
+			if err = setVarFunc(true, false, "collation_connection", item.setNamesCollation, sql); err != nil {
+				return err
 			}
 		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 			switch scope {
@@ -4747,6 +4810,21 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	// SessionInfo is reused across statements.  Role changes update the
+	// session's TenantInfo, so refresh the trusted names at the same boundary
+	// as the other statement-scoped fields before planning or execution.
+	if ses != nil {
+		if tenant := ses.GetTenantInfo(); tenant != nil {
+			// Read both names under one lock. Besides avoiding two lock
+			// acquisitions on every statement, this keeps the account/role pair
+			// from being sampled across a concurrent role transition.
+			tenant.mu.Lock()
+			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			tenant.mu.Unlock()
+			proc.Base.SessionInfo.Account = account
+			proc.Base.SessionInfo.Role = role
+		}
+	}
 	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
 	if !ok {
 		limit, ok = resolveSessionWarningRetentionLimit(ses)
@@ -4841,8 +4919,9 @@ func isSessionSQLModeSet(stmt tree.Statement) bool {
 	return false
 }
 
-func hasStatement(fragment string, parserSQLMode string) bool {
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+func hasStatement(input mysql.SQLContinuation, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, input.SQL, mysql.ParseSQLModeFlags(parserSQLMode))
+	scanner.CommentFlag = input.InExecutableComment
 	defer mysql.PutScanner(scanner)
 	for {
 		token, _ := scanner.Scan()
@@ -4866,7 +4945,7 @@ func prepareSQLModeStagedExecution(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	sql string,
-) (first string, remaining string, staged bool, err error) {
+) (first string, remaining mysql.SQLContinuation, staged bool, err error) {
 	lctn := parserLowerCaseTableNames(ses)
 	parserSQLMode := sessionSQLModeForParser(ses)
 	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
@@ -4881,34 +4960,34 @@ func prepareSQLModeStagedExecution(
 		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
 		freeStatements(stmts)
 		if !shouldStage {
-			return "", "", false, nil
+			return "", mysql.SQLContinuation{}, false, nil
 		}
 	} else {
-		probe := sql
+		probe := mysql.SQLContinuation{SQL: sql}
 		foundSQLModeSet := false
 		for hasStatement(probe, parserSQLMode) {
-			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			stmt, _, next, firstErr := p.ParseFirstStatementWithSQLMode(ctx, probe, lctn, parserSQLMode)
 			if firstErr != nil {
-				return "", "", false, parseErr
+				return "", mysql.SQLContinuation{}, false, parseErr
 			}
 			foundSQLModeSet = isSessionSQLModeSet(stmt)
 			stmt.Free()
-			probe = probe[end:]
+			probe = next
 			if foundSQLModeSet {
 				break
 			}
 		}
 		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
-			return "", "", false, parseErr
+			return "", mysql.SQLContinuation{}, false, parseErr
 		}
 	}
 
-	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(ctx, mysql.SQLContinuation{SQL: sql}, lctn, parserSQLMode)
 	if err != nil {
-		return "", "", false, err
+		return "", mysql.SQLContinuation{}, false, err
 	}
 	stmt.Free()
-	return sql[:end], sql[end:], true, nil
+	return first, next, true, nil
 }
 
 func nextSQLModeStatementInput(
@@ -4916,9 +4995,9 @@ func nextSQLModeStatementInput(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	input *UserInput,
-	sql string,
-) (*UserInput, string, error) {
-	stmt, end, err := p.ParseFirstWithSQLMode(
+	sql mysql.SQLContinuation,
+) (*UserInput, mysql.SQLContinuation, error) {
+	stmt, first, next, err := p.ParseFirstStatementWithSQLMode(
 		ctx,
 		sql,
 		parserLowerCaseTableNames(ses),
@@ -4928,7 +5007,7 @@ func nextSQLModeStatementInput(
 		return nil, sql, err
 	}
 	stmt.Free()
-	return newSQLStatementInput(input, sql[:end]), sql[end:], nil
+	return newSQLStatementInput(input, first), next, nil
 }
 
 func newSQLStatementInput(input *UserInput, sql string) *UserInput {
@@ -5652,6 +5731,13 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	if backSes, ok := ses.(*backSession); ok {
+		if hook := backSes.processHook; hook != nil {
+			if err = hook(execCtx.reqCtx, execCtx.proc); err != nil {
+				return err
+			}
+		}
+	}
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
@@ -6165,9 +6251,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	if ses.GetTenantInfo() != nil {
-		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
@@ -6189,7 +6272,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	executionInput := input
 	stagedSQLMode := false
-	stagedRemaining := ""
+	stagedRemaining := mysql.SQLContinuation{}
 	var err error
 	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
 		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
@@ -6534,7 +6617,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				stagedRemaining,
 			)
 			if nextErr != nil {
-				return recordParseError(newSQLStatementInput(input, stagedRemaining), nextErr)
+				failedSQL := stagedRemaining.SQL
+				if stagedRemaining.InExecutableComment {
+					failedSQL = "/*! " + failedSQL
+				}
+				return recordParseError(newSQLStatementInput(input, failedSQL), nextErr)
 			}
 			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
 			if nextErr != nil {
@@ -6666,7 +6753,7 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		}
 		return []string{sql}, []string{source}, nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6679,8 +6766,8 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 	byStatement := make([]string, 0, len(fragments))
 	bySource := sources[:0]
 	for i, fragment := range fragments {
-		if parsers.FragmentHasStatement(fragment) {
-			byStatement = append(byStatement, fragment)
+		if parsers.FragmentHasStatement(fragment.SQL) {
+			byStatement = append(byStatement, fragment.SQL)
 			bySource = append(bySource, sources[i])
 		}
 	}

@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -132,7 +132,6 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		exec("drop database if exists " + schema)
 		exec("create database " + schema)
 		exec("use " + schema)
-
 		// Native Unicode primary-key bytes are not yet canonicalized by the
 		// storage dedup/lock paths. Reject both single- and composite-key
 		// definitions instead of allowing collation-equivalent values to commit.
@@ -140,8 +139,79 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Error(t, err)
 		_, err = db.ExecContext(ctx, "create table composite_pk_rejected (s varchar(64) collate utf8mb4_unicode_ci, n int, primary key (s, n))")
 		require.Error(t, err)
-		_, err = db.ExecContext(ctx, "create table unique_rejected (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, unique key uk_s (s))")
+		exec("create table unique_native_allowed (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, v int, unique key uk_s (s))")
+		exec("insert into unique_native_allowed values (1, 'Alpha', 10)")
+		_, err = db.ExecContext(ctx, "insert into unique_native_allowed values (2, 'alpha', 20)")
 		require.Error(t, err)
+		require.Equal(t, 1, queryCount("select count(*) from unique_native_allowed"))
+		// The duplicate probe and the hidden unique-index lock must use the same
+		// UCA key for ODKU and INSERT IGNORE as the plain insert path.
+		exec("insert into unique_native_allowed values (2, 'Alpha ', 30) on duplicate key update v=values(v)")
+		require.Equal(t, 30, queryCount("select v from unique_native_allowed where id=1"))
+		exec("insert ignore into unique_native_allowed values (3, 'ALPHA', 40)")
+		require.Equal(t, 1, queryCount("select count(*) from unique_native_allowed"))
+		// UPDATE and DELETE must maintain the same canonical hidden key as
+		// INSERT.  After moving the existing row away from alpha, that key can
+		// be inserted again; deleting it must then release the beta key.
+		exec("update unique_native_allowed set s='Beta' where id=1")
+		exec("insert into unique_native_allowed values (4, 'alpha', 50)")
+		exec("delete from unique_native_allowed where id=4")
+		_, err = db.ExecContext(ctx, "insert into unique_native_allowed values (5, 'BETA ', 60)")
+		require.Error(t, err)
+		exec("replace into unique_native_allowed values (6, 'beta', 70)")
+		require.Equal(t, 1, queryCount("select count(*) from unique_native_allowed where id=6"))
+		require.Equal(t, 0, queryCount("select count(*) from unique_native_allowed where id=1"))
+		// A parent UPDATE with ON UPDATE CASCADE must lock the same canonical
+		// V1 key as the child-side FK probe, rather than the raw Unicode value.
+		exec("create table update_fk_parent (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, unique key uk_s (s))")
+		exec("create table update_fk_child (id int primary key, parent_s varchar(64) collate utf8mb4_unicode_ci, unique key uk_parent_s (parent_s), foreign key (parent_s) references update_fk_parent(s) on update cascade)")
+		exec("insert into update_fk_parent values (1, 'Alpha')")
+		exec("insert into update_fk_child values (1, 'alpha')")
+		exec("update update_fk_parent set s='Beta' where id=1")
+		require.Equal(t, 1, queryCount("select count(*) from update_fk_child where parent_s='beta'"))
+		// REPLACE must preserve the original parent value used by a foreign-key
+		// action.  The hidden V1 key is an opaque binary key and must not be
+		// reused as the old user-visible collation value.
+		exec("create table replace_fk_parent (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, unique key uk_s (s))")
+		exec("create table replace_fk_child (id int primary key, parent_s varchar(64) collate utf8mb4_unicode_ci, foreign key (parent_s) references replace_fk_parent(s))")
+		exec("insert into replace_fk_parent values (1, 'Alpha')")
+		exec("insert into replace_fk_child values (1, 'alpha')")
+		_, err = db.ExecContext(ctx, "replace into replace_fk_parent values (2, 'ALPHA')")
+		require.Error(t, err)
+		require.Equal(t, 1, queryCount("select count(*) from replace_fk_parent where id=1"))
+		require.Equal(t, 1, queryCount("select count(*) from replace_fk_child where parent_s='ALPHA'"))
+		exec("create table unique_utf8_native_allowed (id int primary key, s varchar(64) character set utf8 collate utf8_unicode_ci, unique key uk_s (s))")
+		exec("insert into unique_utf8_native_allowed values (1, 'Alpha')")
+		_, err = db.ExecContext(ctx, "insert into unique_utf8_native_allowed values (2, 'alpha')")
+		require.Error(t, err)
+		// Existing-table index mutation remains fail-closed while the migration
+		// and backfill contract for versioned keys is not implemented.
+		_, err = db.ExecContext(ctx, "create index idx_v on unique_native_allowed (v)")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "create unique index uk_s2 on unique_native_allowed (s)")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "alter table unique_native_allowed add index idx_v2 (v)")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "alter table unique_native_allowed drop index uk_s")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "drop index uk_s on unique_native_allowed")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "alter table unique_native_allowed drop column s")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "alter table unique_native_allowed modify s varchar(64)")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "alter table unique_native_allowed change s s varchar(64)")
+		require.Error(t, err)
+		require.Equal(t, 1, queryCount("select count(*) from unique_native_allowed"))
+
+		exec("create table unique_native_composite (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, n int, unique key uk_sn (s,n))")
+		exec("insert into unique_native_composite values (1, 'Alpha', 1), (2, 'alpha', 2), (3, null, 1), (4, null, 1)")
+		_, err = db.ExecContext(ctx, "insert into unique_native_composite values (5, 'ALPHA ', 1)")
+		require.Error(t, err)
+		require.Equal(t, 4, queryCount("select count(*) from unique_native_composite"))
+		exec("replace into unique_native_composite values (5, 'ALPHA ', 1)")
+		require.Equal(t, 1, queryCount("select count(*) from unique_native_composite where id=5"))
+		require.Equal(t, 0, queryCount("select count(*) from unique_native_composite where id=1"))
 		exec("create table unique_index_rejected (id int primary key, s varchar(64) collate utf8mb4_unicode_ci)")
 		_, err = db.ExecContext(ctx, "create unique index uk_s on unique_index_rejected (s)")
 		require.Error(t, err)
@@ -177,16 +247,34 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, "enum('MiXeD','ABC')", queryShowColumnField("show_full_columns_meta_probe", "choice", "Type").String)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
-		// Unicode revision through their rebuilt result type. Include mixed-width
-		// branches and typed NULLs so a revision-zero intermediate is observable
-		// at the comparison boundary.
+		// Unicode revision through their rebuilt result type. Ordinary NULLs are
+		// ignorable, while weak literals must not replace the native domain.
 		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,'x')='a'"))
 		require.Equal(t, 0, queryCount("select count(*) from words where coalesce('x',s)='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,cast(null as varchar(1)))='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,null)='a'"))
 		require.Equal(t, 3, queryCount("select count(*) from words where case when id=1 then 'a' else s end='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where case when id=1 then cast(null as varchar(1)) else s end='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where case when id=1 then null else s end='a'"))
 		require.Equal(t, 3, queryCount("select count(*) from words where if(id=1,s,'a')='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where if(id=1,cast(null as varchar(1)),s)='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where if(id=1,null,s)='a'"))
+		// Typed NULL retains its static collation source. A native COLLATE keeps
+		// these mixed-width expressions valid, but a revision-zero SQL CAST and
+		// the native column have equal implicit priority and must be rejected.
+		for _, expression := range []string{
+			"coalesce(s,%s)",
+			"case when id=1 then %s else s end",
+			"if(id=1,%s,s)",
+		} {
+			query := "select count(*) from words where " + expression + "='a'"
+			native := fmt.Sprintf(query, "cast(null as varchar(1)) collate utf8mb4_unicode_ci")
+			require.Equal(t, 2, queryCount(native), native)
+
+			legacy := fmt.Sprintf(query, "cast(null as varchar(1))")
+			var count int
+			queryErr := db.QueryRowContext(ctx, legacy).Scan(&count)
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, queryErr, &sqlErr, legacy)
+			require.Equal(t, uint16(1267), sqlErr.Number, legacy)
+		}
 		require.Equal(t, 2, queryCount("select count(*) from words where least(s,'z')='a'"))
 		require.Equal(t, 2, queryCount("select count(*) from words where greatest(s,'0')='a'"))
 		require.Equal(t, 2, queryCount("select count(*) from words where repeat(s,1)='a'"))

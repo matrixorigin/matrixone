@@ -667,7 +667,13 @@ func isMissingTableByIdForFkCleanup(err error) bool {
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
 
-	dbName := c.db
+	// The planner has already resolved the (possibly schema-qualified) target
+	// database into the plan. Use it instead of the current database so that
+	// `ALTER VIEW other_db.v` does not touch `current_db.v`.
+	dbName := qry.GetDatabase()
+	if dbName == "" {
+		dbName = c.db
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -2526,17 +2532,27 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
 				}
 			}
+			// The frontend has already parsed and remapped the policy on the
+			// outer CTAS source. Carry that typed policy into the generated
+			// INSERT instead of reparsing redacted diagnostic SQL.
+			ctxWithSession = attachInternalExecutorRewriteOption(
+				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
+			ctxWithSession, sequenceState := attachInternalSequenceState(ctxWithSession, c.proc)
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
 			defer func() {
 				c.proc.Ctx = oldCtx
 			}()
-			return c.runSqlWithResultAndOptions(
+			result, err := c.runSqlWithResultAndOptions(
 				createAsSelectSql,
 				NoAccountId,
 				statementOption,
 			)
+			if err == nil && sequenceState.output != nil {
+				sequenceState.output.apply(c.proc)
+			}
+			return result, err
 		}()
 		if err != nil {
 			return err
@@ -2546,6 +2562,14 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 	}
 
 	return nil
+}
+
+func (c *Compile) ctasRewriteOption() *tree.RewriteOption {
+	createTable, ok := c.stmt.(*tree.CreateTable)
+	if !ok || createTable.AsSource == nil {
+		return nil
+	}
+	return createTable.AsSource.RewriteOption
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {

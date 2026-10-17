@@ -250,24 +250,24 @@ select date_add(time '12:00:00', interval cast(1.0000000 as decimal(12,7)) secon
          date_add(time '12:00:00', interval 1 minute_second) as decimal_integer_minute_second;
 drop table temporal_decimal_intervals;
 
--- Round scalar DECIMAL once after converting to microseconds. The same
+-- Calendar SECOND truncates scalar DECIMAL to microseconds. The same
 -- half-microsecond value must agree across literal and column bindings.
 create table temporal_scalar_ties(n decimal(18,7));
 insert into temporal_scalar_ties values (34410126.8315485), (-34410126.8315485);
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
-         cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_column_tie
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_column_tie
 from temporal_scalar_ties where n > 0;
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
-         cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_column_tie
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_column_tie
 from temporal_scalar_ties where n < 0;
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(34410126.8315485 as decimal(18,7)) second) =
-         cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_literal_tie,
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_literal_tie,
        date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(-34410126.8315485 as decimal(18,7)) second) =
-         cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_literal_tie;
 drop table temporal_scalar_ties;
 
--- DOUBLE scalar intervals use the same binary rounding for columns and
--- literals; DECIMAL ties above intentionally round from exact decimal text.
+-- DOUBLE scalar SECOND intervals also truncate to microseconds for columns
+-- and literals; DECIMAL ties above retain exact source decimal text.
 create table temporal_scalar_double(n double);
 insert into temporal_scalar_double values (34410126.8315485e0), (-34410126.8315485e0);
 select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
@@ -301,14 +301,14 @@ select date_add(time '12:00:00', interval f hour_second) is null as float_overfl
 from temporal_numeric_repr where f > 100000000000000;
 drop table temporal_numeric_repr;
 
--- Numeric source identity, compound units, and the static DATE + fractional
+-- Numeric source identity, compound units, and the static DATE + calendar
 -- DAY family are observable through normal SQL and prepared statements.
 select date_add(time '12:00:00', interval cast(-1.5 as double) second) = cast('11:59:58.5' as time(6)) as cast_double,
        date_add(time '12:00:00', interval cast(-0.0000005 as double) second) = cast('11:59:59.999999' as time(6)) as negative_float_tie,
        date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(1.5 as decimal(40,1)) hour_second) =
          cast('2024-01-01 00:01:05' as datetime(6)) as datetime_compound,
        date_add(cast('2024-01-01' as date), interval cast(1.5 as decimal(40,1)) day) =
-         cast('2024-01-02 12:00:00' as datetime(6)) as fractional_day;
+         cast('2024-01-03' as date) as fractional_day;
 select date_add(cast('2024-01-01' as date), interval 1 day) as integer_day,
        date_add(cast('2024-01-01' as date), interval cast(1.0 as decimal(4,1)) day) as decimal_day;
 select day('2024-00-15') as raw_day, dayofmonth('2024-00-15') as raw_dayofmonth,

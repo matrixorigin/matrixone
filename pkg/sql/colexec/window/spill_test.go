@@ -15,9 +15,9 @@
 package window
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -187,9 +187,9 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 			before := generation.Snapshot()
 			result, err := vm.Exec(arg, proc)
 			require.Nil(t, result.Batch)
-			var resourceErr *process.ExecutionResourceError
-			require.True(t, errors.As(err, &resourceErr))
-			require.Equal(t, tc.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
+			require.Contains(t, err.Error(), "window spill")
 			after := generation.Snapshot()
 			require.Equal(t, before.SpillDiskUsed, after.SpillDiskUsed)
 			require.Equal(t, before.SpillFDUsed, after.SpillFDUsed)

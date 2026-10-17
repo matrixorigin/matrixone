@@ -879,14 +879,20 @@ const (
 	FORMAT_BYTES     = 596
 	FORMAT_PICO_TIME = 597
 
-	FUNCTION_END_NUMBER = 598
+	TO_CALENDAR_INTERVAL        = 598
+	CHECK_ASYNC_DATALINK_SOURCE = 599
+
+	FUNCTION_END_NUMBER = 600
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
@@ -1352,6 +1358,7 @@ var functionIdRegister = map[string]int32{
 	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"point":                          ST_POINT,
 	"st_point":                       ST_POINT,
 	"st_point32":                     ST_POINT32,
 	"st_pointfromtext":               ST_POINTFROMTEXT,
