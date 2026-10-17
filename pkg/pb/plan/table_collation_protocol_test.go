@@ -27,8 +27,9 @@ func TestTableCollationFunctionFeature(t *testing.T) {
 		display string
 		want    bool
 	}{
-		{"execution_identity", 599, "", true},
-		{"renamed_execution_identity", 599, "format_bytes", true},
+		{"execution_identity", 600, "", true},
+		{"renamed_execution_identity", 600, "format_bytes", true},
+		{"async_datalink_identity", 599, "internal_table_collation", false},
 		{"calendar_interval_identity", 598, "internal_table_collation", false},
 		{"format_bytes_control", 596, "internal_table_collation", false},
 		{"format_pico_control", 597, "internal_table_collation", false},

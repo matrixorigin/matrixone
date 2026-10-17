@@ -2572,9 +2572,10 @@ func appendPrimaryConstraintPlan(
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-		// needCheck := true
-		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := config.CNPrimaryCheck.Load()
+		needCheck := !builder.qry.LoadTag || builder.checkLoadPrimaryKey
+		// The legacy LOAD fallback must check both input and snapshot keys,
+		// including when CNPrimaryCheck selects a different path for other DML.
+		useFuzzyFilter := config.CNPrimaryCheck.Load() || builder.checkLoadPrimaryKey
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false

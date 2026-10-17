@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -660,7 +661,10 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 			break
 		}
 	}
-	require.ElementsMatch(t, values, resultValues)
+	// Values are generated in order. Sort the owned output copy to compare
+	// the complete multiset without quadratic pairwise matching.
+	slices.Sort(resultValues)
+	require.Equal(t, values, resultValues)
 	require.Positive(t, tc.barg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
 	require.LessOrEqual(t, account.Snapshot().Peak, account.Snapshot().Limit)
 	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)

@@ -183,12 +183,14 @@ func TestUTSummaryUsesInstalledAnalyzer(t *testing.T) {
 		shadow         bool
 		analysisStatus int
 		testStatus     int
+		currentFailure bool
 	}{
 		{name: "GOBIN outside PATH with spaces"},
 		{name: "first GOPATH entry", useGOPATH: true},
 		{name: "stale PATH executable", shadow: true},
 		{name: "analyzer failure", analysisStatus: 42},
 		{name: "test failure", testStatus: 1},
+		{name: "current report failure", currentFailure: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -202,7 +204,7 @@ func TestUTSummaryUsesInstalledAnalyzer(t *testing.T) {
 			installed := filepath.Join(binDir, "go-ut-analysis")
 			called := filepath.Join(dir, "called")
 			template := filepath.Join(dir, "analyzer")
-			if err := os.WriteFile(template, []byte("#!/bin/bash\nprintf '%s\\n' \"$0\" > \"$MOCK_ANALYSIS_CALLED\"\nexit \"$MOCK_ANALYSIS_STATUS\"\n"), 0o755); err != nil {
+			if err := os.WriteFile(template, []byte("#!/bin/bash\nprintf '%s\\n' \"$0\" > \"$MOCK_ANALYSIS_CALLED\"\nif [[ $MOCK_CURRENT_FAILURE == true ]]; then : > \"$CASE_DIR/ut-report/failed/outputs/current\"; fi\nexit \"$MOCK_ANALYSIS_STATUS\"\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			mock, err := os.ReadFile(filepath.Join(writeMockGo(t), "go"))
@@ -216,16 +218,20 @@ if [[ "$MOCK_SHADOW" == true ]]; then
  printf '#!/bin/bash\nexit 99\n' > "$CASE_DIR/optools/go-ut-analysis"
  chmod +x "$CASE_DIR/optools/go-ut-analysis"
 fi
+mkdir -p "$BUILD_WKSP/ut-report/failed/outputs"
+printf 'previous failure\n' > "$BUILD_WKSP/ut-report/failed/outputs/stale"
 : > "$UT_REPORT"
 ut_summary
+[[ ! -e "$BUILD_WKSP/ut-report/failed/outputs/stale" ]] || exit 93
+[[ -n $(find "$G_WKSP" -path '*previous-failed*/failed/outputs/stale' -type f -print -quit) ]] || exit 94
 `
 			out, err := scheduleHarnessWithMock(t, script, string(mock),
 				"MOCK_GOBIN="+gobin, "MOCK_GOPATH="+gopath, "MOCK_INSTALLED_TOOL="+installed,
 				"MOCK_ANALYSIS_TEMPLATE="+template, "MOCK_ANALYSIS_CALLED="+called,
 				"MOCK_ANALYSIS_STATUS="+strconv.Itoa(tc.analysisStatus), "MOCK_TEST_STATUS="+strconv.Itoa(tc.testStatus),
-				"MOCK_SHADOW="+strconv.FormatBool(tc.shadow),
+				"MOCK_SHADOW="+strconv.FormatBool(tc.shadow), "MOCK_CURRENT_FAILURE="+strconv.FormatBool(tc.currentFailure),
 				"MOCK_GO_SUCCEED_AFTER=1", "MOCK_GO_FAILURE_STATUS=42", "MOCK_GO_BUILD_INFO=")
-			if failed := tc.analysisStatus != 0 || tc.testStatus != 0; (err != nil) != failed {
+			if failed := tc.analysisStatus != 0 || tc.testStatus != 0 || tc.currentFailure; (err != nil) != failed {
 				t.Fatalf("summary: %v\n%s", err, out)
 			}
 			actual, readErr := os.ReadFile(called)

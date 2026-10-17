@@ -1,6 +1,42 @@
 # #28998：C03 验证与交付记录
 
-## 当前维护轮次：依赖表达式评审修复及 main b3d6b21fe9 合并（2026-10-16）
+## 当前维护轮次：main a322466757 冲突修复（2026-10-17，本地验证完成）
+
+原head cabf62437e50d69c27e834200e58fdf1c281e4b5；正常合并冻结官方main a322466757b9b0165c59fbda565608653d923b2a。本轮旧编号599由main文件访问鉴权函数占用，保留其599，将未发布C03函数顺延600/END601；MORPC118、migration4.0.15/min4.0.14/offset4、PB18均不改。共享feature walk与正/负控制同步600，新增599即使伪造C03显示名也不误判。mock保留main无map分配switch和C03 collation_server语义；parser由合并grammar owner强制双次生成一致，无手改生成源码。
+
+上一轮82.12%及各测试指标仅保留历史资格，不冒充此轮含新依赖/执行ID输入。以下全为本轮Go1.27.1/Darwin/arm64/native终态PASS/exit0，源码冻结不变，未完成/中断/失败profile不纳入。此轮没有C03既有SQL/oracle/数据/skip/预算修改，主干公共SQL/预期变更原样保留，无genrs、不申请复审。
+
+|完整owner|顶层测试|PASS事件|包执行秒数|
+|---|---:|---:|---|
+|PB plan/pipeline|65|213|0.910 / 1.229|
+|sysview|29|65|0.983|
+|bootstrap|64|162|7.872|
+|v4_0_15|1|7|1.042|
+|CN|150|321|10.759|
+|function|2118|11192|20.455|
+|plan|3841|16453|24.906|
+|compile|1464|3333|22.710|
+|frontend|2485|6012|20.539|
+|explain|141|439|5.542|
+|mysql parser|220|1839|0.975|
+|parser facade|35|102|0.886|
+|tree|78|149|0.925|
+
+共13组/40287 PASS事件；完整SQL integration52/359/107.070s、multicn count3为15/45/104.575s、完整isolated18/49/96.216s、原optimistic CDC1/1/6.797s、原Issue28909+29148为2/9/8.480s（顶层/PASS/包秒数）。17包vet/lint均exit0、0 issues，120个变更Go文件gofmt清洁，固定base空白检查exit0。
+
+严格非生成差分可执行token覆盖804/980=82.04%（门槛75%）；辅助changed-block948/1077=88.02%。只合并上述13组完整成功atomic profiles，无映射/缺采集计未覆盖，SQL mode-only/失败/中断及旧输入profiles排除。
+
+四项race独立测量B=30s：migration T=.01、derived-publication T=0、init-retry T=.20、CN-authoring T=.02，各按公式N=100压力通过。完整race frontend2484/6011/30.550s、bootstrap64/162/6.154s、CN150/321/11.715s；沿用现有!race allocation隔离及既有mock skip，没有新增skip。不称全仓race。
+
+真实public仍为原run.sh -g -n、27脚本、同一native实例双轮；每轮3022总计/3021成功/0失败/1既有ignore/0异常，Java58s/51s，driver160.92s PASS，build/driver/BVT/FULL/FINISH均exit0。54个source及54个mirror哈希相同，比较errors空、两轮fixture及DB/account/snapshot残留均0，服务/端口关闭和admission release均ready；owned cluster28001/PID89391退出。保留2819条服务ERROR，未见panic/fatal/data-race签名，不称零ERROR。二进制、native dylib、私有driver及Go build-info哈希闭合；源码/index/commit整树和两父身份由资格脚本检查。
+
+本轮只读变化地图为固定a322上的167个PR路径、25个新增/上游交互路径；20个非生成/非oracle交互文件1447行逐hunk审阅。主干文件访问认证身份、CHECK/组合DROP主键、explicit CAST warning、CTAS sequence及CN engine-owned drainage均保留；C03首个typed owner、严格赋值、DEFAULT/V1、恢复身份和协议118负控不退回旧逻辑。parser双次owner输出SHA一致；plan/pipeline模式、载体和generator逐SHA配对一致，仅复用生成/descriptor证明，PB执行为新运行。native源码/flags不变，Makefile变更仅UT/SCA；dragonboat更新后的执行证据已刷新。
+
+资源低水位时只暂停自己的调度器、让已有parser子任务自然完成，再对745个Go archive作APFS透明压缩，逐SHA/mtime相同、无open handle、缓存路径/内容保留，物理blocks节省7.185741GiB；未驱逐未来normal/race缓存，未终止任何编译/测试/其它任务，两调度器恢复后全部消费者通过。源码/WIP/模块/native/数据库/binary/证据均保留。
+
+后续只读观察到官方main38a27e67a15890df7ca6fc418c6a57ae3a0b924d（单个TAE table-tail flush修复，协议117及函数599不变）；仅作merge-tree兼容检查，未合入/不冒充后续main运行资格。上述运行范围固定a322，不代表Linux CI、GPU/全仓UT/race或旧二进制滚动升级；历史Darwin full-optools限制仍在。
+
+## 历史维护轮次：依赖表达式评审修复及 main b3d6b21fe9 合并（2026-10-16）
 
 本轮最终冻结输入的本地执行终态已收齐；源/index/commit和远端交付另核验。后续历史章节只保留各自输入/模式范围，不冒充本轮重跑。冻结 main=`b3d6b21fe9d260c91e1777529a48a9d93061af33`，原 PR head=`05d97d39697fc7adc0b5719f3f297490c9664376`。本轮 C03 MORPC118，保留 main117 独立 LEAST/GREATEST；599/END600、升级4.0.15与 PB18 不变。
 

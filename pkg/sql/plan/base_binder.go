@@ -1845,6 +1845,9 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,
 	depth int32,
 ) (numericAstTypeScan, error) {
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return numericAstTypeScan{}, err
+	}
 	var owner *tree.Select
 	switch selectStmt := subquery.Select.(type) {
 	case *tree.Select:
@@ -5122,40 +5125,38 @@ func bindFuncExprImplUdf(
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
-		var expr *plan.Expr
-
-		if !strings.Contains(sql, "select") {
+		expressionBody := !strings.Contains(sql, "select")
+		if expressionBody {
 			sql = "select " + sql
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
+		}
+		substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, stmt := range substmts {
+				stmt.Free()
 			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
-			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			subquery := tree.NewSubquery(substmts[0], false)
-			expr, err = b.impl.BindSubquery(subquery, false)
-			if err != nil {
-				return nil, err
+		}()
+		var bodyExpr tree.Expr
+		if expressionBody {
+			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		}
+		if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
+			b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
+			// The caller's VALUES AST does not contain subqueries introduced by
+			// a SQL UDF. Inspect the parsed expression as well as query bodies,
+			// before either binder can create a relational branch. SQL spelling
+			// and wrappers must not bypass the statement's admission boundary.
+			if !expressionBody || valueExprContainsSubquery(bodyExpr) {
+				return nil, moerr.NewNotSupported(b.GetContext(),
+					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
 		}
-		return expr, nil
+		if expressionBody {
+			return b.impl.BindExpr(bodyExpr, depth, false)
+		}
+		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5826,6 +5827,8 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 		return true
 	case *plan.Expr_Lit:
 		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_Vec:
+		return rule.IsDecimal256ScalarConstant(expr)
 	case *plan.Expr_F:
 		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
 			return false

@@ -210,21 +210,7 @@ func buildColumnAndConstraint(
 			if err != nil {
 				return nil, err
 			}
-			uniqueIndex := &tree.UniqueIndex{
-				KeyParts: []*tree.KeyPart{
-					{
-						ColName: specNewColumn.Name,
-					},
-				},
-			}
-
-			constrNames := map[string]bool{}
-			// Check not empty constraint name whether is duplicated.
-			for _, idx := range targetTableDef.Indexes {
-				constrNames[indexNameKey(idx.IndexName)] = true
-			}
-			// set empty constraint names(index and unique index)
-			setEmptyUniqueIndexName(constrNames, uniqueIndex)
+			uniqueIndex := newAlterColumnUniqueIndex(targetTableDef, specNewColumn)
 
 			indexDef, err := checkAddColumWithUniqueKey(ctx.GetContext(), targetTableDef, uniqueIndex)
 			if err != nil {

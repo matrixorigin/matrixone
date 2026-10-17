@@ -15172,6 +15172,18 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	{
+		functionId: CHECK_ASYNC_DATALINK_SOURCE,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, volatile: true,
+			args:    []types.T{types.T_datalink, types.T_bool},
+			retType: func(_ []types.Type) types.Type { return types.T_bool.ToType() },
+			newOp:   func() executeLogicOfOverload { return CheckAsyncDatalinkSource },
+		}},
+	},
 	// function `load_text`
 	// Like load_file but returns the datalink's EXTRACTED plain text (PDF/DOCX
 	// parsed via GetPlainText), not the raw bytes — so it yields the same text the

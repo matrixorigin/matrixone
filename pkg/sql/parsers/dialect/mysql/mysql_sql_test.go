@@ -61,6 +61,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterConstraintDropIntent(t *testing.T) {
+	for _, test := range []struct {
+		clause string
+		typ    tree.AlterTableDropType
+	}{
+		{"drop check ck", tree.AlterTableDropCheck},
+		{"drop constraint ck", tree.AlterTableDropConstraint},
+		{"drop foreign key ck", tree.AlterTableDropForeignKey},
+	} {
+		t.Run(test.clause, func(t *testing.T) {
+			sql := "alter table t " + test.clause
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			alter := stmt.(*tree.AlterTable)
+			drop := alter.Options[0].(*tree.AlterOptionDrop)
+			require.Equal(t, test.typ, drop.Typ)
+			require.Equal(t, tree.Identifier("ck"), drop.Name)
+			require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -5287,7 +5310,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
-			output: "alter table tbl1 drop foreign key fk_name",
+			output: "alter table tbl1 drop constraint fk_name",
 		},
 		{
 			input:  "explain force execute st using @a",

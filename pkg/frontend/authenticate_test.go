@@ -4875,6 +4875,12 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
+		tenant.DefaultRole = publicRoleName
+		tenant.DefaultRoleID = publicRoleID
+		ok, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+
 	})
 
 	convey.Convey("backup fail", t, func() {
@@ -14751,6 +14757,8 @@ func TestDoRemoveStageFiles(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 
 	dir := t.TempDir()

@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-16，冻结main `b3d6b21fe9d260c91e1777529a48a9d93061af33`）：保留main协议112/113，以及native Unicode UNIQUE **114**、calendar interval **115**、scalar division warning **116**、collation-aware LEAST/GREATEST **117**和`TO_CALENDAR_INTERVAL=598`。未发布C03顺延 **118**、`INTERNAL_TABLE_COLLATION=599`、`FUNCTION_END_NUMBER=600`；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配或main最新能力；历史112下SHOW binary展示已由SHOW NULL/information_schema binary合同纠正。
+当前维护编号（2026-10-17，冻结main `a322466757b9b0165c59fbda565608653d923b2a`）：保留main协议112/113，以及native Unicode UNIQUE **114**、calendar interval **115**、scalar division warning **116**、collation-aware LEAST/GREATEST **117**和`TO_CALENDAR_INTERVAL=598`。未发布C03保持协议 **118**、函数顺延`INTERNAL_TABLE_COLLATION=600`、`FUNCTION_END_NUMBER=601`；保留main文件访问鉴权函数`CHECK_ASYNC_DATALINK_SOURCE=599`；独立迁移 **4.0.15**、`CreateTable.database_defaults#18`不变。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配或main最新能力；历史112下SHOW binary展示已由SHOW NULL/information_schema binary合同纠正。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 

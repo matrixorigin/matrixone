@@ -338,7 +338,7 @@ const (
 	planInt64TypeID                   int32 = 23
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
-	internalTableCollationFunctionID  int32 = 599
+	internalTableCollationFunctionID  int32 = 600
 	maxVarcharWidth                   int32 = 65535
 )
 

@@ -75,7 +75,12 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 		}
 		exec(t, "create database review29349")
 		exec(t, "use review29349")
-		defer conn.ExecContext(context.Background(), "drop database review29349")
+		defer func() {
+			cleanupCtx, stop := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer stop()
+			_, err := conn.ExecContext(cleanupCtx, "drop database review29349")
+			require.NoError(t, err)
+		}()
 		t.Run("unassigned_variable_alias", func(t *testing.T) {
 			exec(t, "set @alias_of_unassigned = @never_assigned")
 			require.Equal(t, [][]string{{"NULL"}}, query(t, "select @alias_of_unassigned"))
@@ -312,7 +317,9 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				require.NoError(t, cleanupErr, statement)
 			}
 			exec(t, "create table ntile_source(id int)")
-			defer cleanupSQL(t, "drop table ntile_source")
+			// The enclosing database owns this table. Drop it once with the database
+			// after every domain scenario, rather than running redundant catalog DDL
+			// on the session needed by the following prepared-statement checks.
 			exec(t, "insert into ntile_source values (1),(2)")
 			readBuckets := func(rows *sql.Rows) ([][2]int64, error) {
 				var got [][2]int64

@@ -242,6 +242,7 @@ func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 			{name: "import native pins snapshot", run: runIcebergSQLEngineEmbeddedImportNativePinsSnapshot},
 			{name: "branch ref read and append write intent", run: runIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent},
 			{name: "write DML and maintenance SQL", run: runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL},
+			{name: "native schema evolution", run: runIcebergSQLEngineEmbeddedSchemaEvolution},
 			// This scenario replaces the fixture's object provider and disables its
 			// residency row, so keep it last while the suite shares catalog state.
 			{name: "credential security and redaction", run: runIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction},
