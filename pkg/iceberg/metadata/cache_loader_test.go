@@ -16,6 +16,7 @@ package metadata
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +122,92 @@ func TestCachedTableMetadataLoaderReadsMetadataLocation(t *testing.T) {
 	}
 	if loaded.Metadata.Location != "s3://warehouse/sales/orders" || reader.calls != 1 {
 		t.Fatalf("unexpected object metadata load result metadata=%+v calls=%d", loaded.Metadata, reader.calls)
+	}
+}
+
+func TestCachedTableMetadataLoaderSnapshotlessRevalidation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		optIn    bool
+		etag     string
+		selector api.SnapshotSelector
+		metadata string
+		refresh  bool
+	}{
+		{name: "conditional empty", optIn: true, etag: "empty-1", refresh: true},
+		{name: "empty without ETag", optIn: true, refresh: true},
+		{name: "legacy caller", etag: "empty-1"},
+		{name: "explicit snapshot", optIn: true, selector: api.SnapshotSelector{SnapshotID: 22, HasSnapshotID: true}},
+		{name: "explicit timestamp", optIn: true, selector: api.SnapshotSelector{TimestampMS: 1710000200000, HasTimestampMS: true}},
+		{name: "other ref", optIn: true, selector: api.SnapshotSelector{RefName: "audit"}},
+		{name: "populated", optIn: true, metadata: sampleMetadataJSON},
+		{name: "dangling ref", optIn: true, metadata: strings.Replace(emptySnapshotMetadataJSON, `"refs": {}`, `"refs": {"main":{"snapshot-id":22,"type":"branch"}}`, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := tc.metadata
+			if payload == "" {
+				payload = emptySnapshotMetadataJSON
+			}
+			calls := 0
+			client := &catalog.MockClient{LoadTableFunc: func(_ context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+				calls++
+				if calls == 2 && req.IfNoneMatch != tc.etag {
+					t.Fatalf("conditional ETag: got %q, want %q", req.IfNoneMatch, tc.etag)
+				}
+				if calls == 2 && tc.etag != "" {
+					return &api.LoadTableResponse{NotModified: true, ETag: tc.etag}, nil
+				}
+				return &api.LoadTableResponse{MetadataLocation: "s3://warehouse/empty/metadata.json", MetadataJSON: []byte(payload), ETag: tc.etag}, nil
+			}}
+			loader := CachedTableMetadataLoader{Catalog: client, Metadata: NativeFacade{}, Cache: NewCache(time.Hour, 1<<20), SnapshotSelector: tc.selector, RevalidateSnapshotless: tc.optIn}
+			for range 2 {
+				loaded, err := loader.Load(context.Background(), cacheLoadTableRequest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if calls == 2 && tc.etag != "" && (!loaded.CacheHit || !loaded.Revalidated) {
+					t.Fatalf("304 must reuse cached empty metadata: %+v", loaded)
+				}
+			}
+			wantCalls := 1
+			if tc.refresh {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
+				t.Fatalf("catalog calls: got %d, want %d", calls, wantCalls)
+			}
+		})
+	}
+}
+
+func TestLocalScanPlannerSnapshotlessRevalidationFailure(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprint("canceled=", canceled), func(t *testing.T) {
+			fixture := newPlannerFixtureWithMetadata(t, 0, emptySnapshotMetadataJSON)
+			planner := fixture.planner()
+			req := api.ScanPlanRequest{CatalogRequest: cacheLoadTableRequest().CatalogRequest, Namespace: api.Namespace{"sales"}, Table: "empty_orders"}
+			if _, err := planner.PlanScan(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fixture.client.LoadTableFunc = func(context.Context, api.LoadTableRequest) (*api.LoadTableResponse, error) {
+				if canceled {
+					cancel()
+					return nil, context.Canceled
+				}
+				return nil, api.NewError(api.ErrTableNotFound, "table dropped", nil)
+			}
+			plan, err := planner.PlanScan(ctx, req)
+			code := api.ErrTableNotFound
+			if canceled {
+				code = api.ErrPlanningTimeout
+			}
+			assertIcebergCode(t, err, code)
+			if plan != nil || fixture.reader.totalCalls() != 0 {
+				t.Fatalf("failed refresh must not return a stale empty plan: %+v", plan)
+			}
+		})
 	}
 }
 
