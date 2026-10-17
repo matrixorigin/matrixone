@@ -350,6 +350,10 @@ func TestCluster_DebugUpdateCNLabelWithContext(t *testing.T) {
 			cancelCanceled()
 			err = c.DebugUpdateCNLabelWithContext(canceledCtx, "cn0", map[string][]string{})
 			require.ErrorIs(t, err, context.Canceled)
+			expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+			defer cancelExpired()
+			err = c.DebugUpdateCNLabelWithContext(expiredCtx, "cn0", map[string][]string{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 
 			err = c.DebugUpdateCNLabelWithContext(context.Background(), "cn0", map[string][]string{})
 			require.ErrorContains(t, err, "context deadline not set")
@@ -357,7 +361,7 @@ func TestCluster_DebugUpdateCNLabelWithContext(t *testing.T) {
 			callsAfterInvalidContext := hc.updateCNLabelCalls
 			hc.RUnlock()
 			require.Equal(t, calls, callsAfterInvalidContext,
-				"unbounded label updates must be rejected before contacting HAKeeper")
+				"invalid or finished contexts must be rejected before contacting HAKeeper")
 
 			updateErr := errors.New("label update failed")
 			hc.Lock()

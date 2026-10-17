@@ -119,7 +119,8 @@ type CNWorkStateUpdaterWithContext interface {
 }
 
 // CNLabelUpdaterWithContext is an optional capability for callers that need a
-// CN label update to share their own bounded operation deadline. The legacy
+// CN label update to share their own bounded operation deadline. The context
+// must be non-nil and have a deadline. The legacy
 // MOCluster.DebugUpdateCNLabel method retains its fixed timeout for existing
 // operational callers.
 type CNLabelUpdaterWithContext interface {
