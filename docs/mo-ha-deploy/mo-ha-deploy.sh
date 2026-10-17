@@ -1010,6 +1010,26 @@ stage_check(){
       wrn "MO 客户端端口 $maddr:$MO_PORT 未监听（MO 可能仍在启动）"
     fi
   fi
+  # --vip 是对外入口：p_vip Started 不代表地址真的在本机网卡上，
+  # 若同时把 --mo-bind-ip 指到 VIP，外部会在"检查全绿"的情况下连不上。
+  if [ -n "$VIP" ]; then
+    local _va="${VIP%%/*}"
+    if wait_for 60 "pcs status 2>&1 | grep -qE 'p_vip.*Started'"; then
+      ok "VIP 资源 p_vip Started (${_va})"
+      if command -v ip >/dev/null 2>&1; then
+        if ip -o addr show 2>/dev/null | grep -q "[[:space:]]${_va}/"; then
+          ok "VIP ${_va} 已配置在本机网卡上"
+        else
+          wrn "VIP ${_va} 未出现在本机网卡上：请检查 IPaddr2 参数(掩码/网卡)与 p_vip 日志"
+        fi
+      else
+        info "未找到 ip 命令，跳过 VIP 地址确认（可手工 ip addr show 核对 ${_va}）"
+      fi
+    else
+      wrn "VIP 资源 p_vip 未 Started，外部入口 ${_va} 不可用"
+    fi
+  fi
+
   if [ -b "$DRBD_VOLUME" ]; then
     local _dstat; _dstat="$(drbdadm status "$DRBD_RESOURCE" 2>/dev/null)"
     printf '%s\n' "$_dstat" | sed 's/^/    /'
