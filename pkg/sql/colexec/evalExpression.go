@@ -460,8 +460,8 @@ func newExpressionExecutorWithAllocation(
 		// or directly constructed expression that bypasses pipeline decoding.
 		if int32(overloadID>>32) == function.SET_OPERATION_FLOAT_KEY {
 			version, known := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-			if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion118 {
-				return nil, moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 118")
+			if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion119 {
+				return nil, moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 119")
 			}
 		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
