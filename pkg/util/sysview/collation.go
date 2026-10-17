@@ -86,6 +86,37 @@ func InformationSchemaCharacterSetsCheckSQL() string {
 	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
 }
 
+// InformationSchemaCollationsCheckSQL verifies the complete advertised metadata,
+// including row count, so stale, missing and duplicate rows require a refresh.
+func InformationSchemaCollationsCheckSQL() string {
+	if len(SupportedCollationDefinitions) == 0 {
+		return "SELECT 1 WHERE FALSE"
+	}
+
+	conditions := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		conditions = append(conditions, fmt.Sprintf(
+			"COLLATION_NAME = '%s' AND CHARACTER_SET_NAME = '%s' AND ID = %d AND IS_DEFAULT = '%s' AND IS_COMPILED = '%s' AND SORTLEN = %d AND PAD_ATTRIBUTE = '%s'",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+
+	checks := make([]string, 0, len(conditions))
+	checks = append(checks, conditions[0])
+	for _, condition := range conditions[1:] {
+		checks = append(checks, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
+		))
+	}
+	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE (SELECT COUNT(*) FROM information_schema.COLLATIONS) = %d AND %s LIMIT 1", len(SupportedCollationDefinitions), strings.Join(checks, " AND "))
+}
+
 // databaseDefaultsMetadataSQL projects admitted effective identities, not SQL
 // aliases. Unknown/corrupt metadata returns NULL rather than a server fallback.
 func databaseDefaultsMetadataSQL(charset bool) string {
