@@ -2694,15 +2694,7 @@ func buildCreateTable(
 		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
 		// metadata joins attribute the source table's expression to the target.
 		//
-		// Snapshot/account restore shares this planner branch, but the restore
-		// marker is carried by the background process rather than by the nested
-		// CLONE statement that is reparsed for the restore. Consult both markers
-		// so an internal restore keeps the captured explicit identity.
-		isRestore := cloneStmt != nil && cloneStmt.IsRestore
-		if !isRestore && ctx.GetProcess() != nil && ctx.GetProcess().GetSessionInfo() != nil {
-			isRestore = ctx.GetProcess().GetSessionInfo().IsRestore
-		}
-		if !isRestore {
+		if !preserveCheckNamesForRestore(ctx, cloneStmt) {
 			renameCheckConstraintsForClone(tableDef)
 		}
 
@@ -4509,6 +4501,26 @@ func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
 // <table>_chk_<ordinal> counting this table's CHECK definitions from one.
 func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
 	return fmt.Sprintf("%s_chk_%d", tableDef.Name, len(tableDef.Checks)+1)
+}
+
+// Ordinary data-branch clones also run through ExecRestore, which sets both
+// statement and process restore markers. The outer operation's clone level is
+// authoritative: only a genuine restore should keep captured CHECK identities.
+// Retain the marker fallback for callers without an outer clone context.
+func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
+	switch ctx.GetContext().Value(tree.CloneLevelCtxKey{}) {
+	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
+		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
+		return false
+	case tree.RestoreCloneLevelTable, tree.RestoreCloneLevelDatabase,
+		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
+		return true
+	}
+	if cloneStmt != nil && cloneStmt.IsRestore {
+		return true
+	}
+	return ctx.GetProcess() != nil && ctx.GetProcess().GetSessionInfo() != nil &&
+		ctx.GetProcess().GetSessionInfo().IsRestore
 }
 
 // renameCheckConstraintsForClone regenerates CHECK names for a table created

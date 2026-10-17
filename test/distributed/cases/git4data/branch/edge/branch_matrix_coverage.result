@@ -146,6 +146,10 @@ constraint fk_child_parent foreign key(parent_id) references parent(id)
 ) comment = 'branch constraint table';
 insert into child(parent_id, code, qty) values (1, 'base-a', 10.00), (2, 'base-b', 20.00);
 data branch create table child_branch from child;
+insert into child_branch(parent_id, code, qty) values (1, 'bad-check', -1.00);
+constraint violation: Check constraint 'child_branch_chk_1' is violated
+insert into child(parent_id, code, qty) values (1, 'bad-check', -1.00);
+constraint violation: Check constraint 'chk_qty' is violated
 update child_branch set qty = qty + 5 where code = 'base-a';
 insert into child_branch(parent_id, qty) values (2, 77.75);
 insert into child_branch(parent_id, code, qty) values (1, null, 1.00);
