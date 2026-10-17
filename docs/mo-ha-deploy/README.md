@@ -23,7 +23,7 @@ MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资�
 cd /root/mo-ha-deploy
 cp deploy.env.example node1.env     # 在 node2 上复制为 node2.env
 chmod 600 node1.env
-vi node1.env    # 至少改 SELF / PEER / SELF_IP / PEER_IP / DRBD_DEVICE / fencing 参数
+vi node1.env    # 至少改 SELF / PEER / SELF_IP / PEER_IP / DRBD_DEVICE / HACLUSTER_PW / fencing 参数
 ```
 
 **顺序很重要：先非引导节点，再引导节点。**
@@ -88,6 +88,8 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 ## 五、注意
 
 - 不要给 MatrixOne 建 systemd 服务，容器由 Pacemaker 管理。
+- `--hacluster-password` 没有默认值，两台必须一致；密码只能用字母/数字与 `._@%+=,:/_-`，含引号/空白/`$` 等会被脚本直接拒绝。
+- `--teardown` 会 `wipefs`  DRBD 裸盘，属破坏性操作，必须显式加 `--yes`（或交互输入 `yes`）才会执行。
 - 不要 `systemctl enable drbd`，它与 Pacemaker 冲突；模块靠 `/etc/modules-load.d/drbd.conf` 加载。
 - 脚本会先 `docker pull` 镜像再建资源，避免 `p_mo` 启动超时导致资源误切换。
 - 纯双节点在网络分区时两侧都会停写（安全但保守），生产建议加 witness / 仲裁盘。
