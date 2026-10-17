@@ -41,6 +41,10 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 		return &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: v}}}}
 	}
 
+	target := func(oid types.T) *plan.Expr {
+		return &plan.Expr{Typ: oid.ToType().PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	}
+
 	for _, tc := range []struct {
 		name         string
 		fn           string
@@ -52,6 +56,11 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 		{"ln valid argument folds", "ln", []*plan.Expr{f64(2)}, 0, true},
 		{"log invalid base warns per row", "log", []*plan.Expr{f64(1), f64(2)}, 3, false},
 		{"format unknown locale warns per row", "format", []*plan.Expr{i64(1234567), i64(2), sval("zz_ZZ")}, 3, false},
+		{"str_to_date invalid date warns per row", "str_to_date", []*plan.Expr{sval("2024-02-30"), sval("%Y-%m-%d"), target(types.T_date)}, 3, false},
+		{"str_to_date trailing datetime warns per row", "str_to_date", []*plan.Expr{sval("2024-01-02 10:30:45xyz"), sval("%Y-%m-%d %H:%i:%s"), target(types.T_datetime)}, 3, false},
+		{"str_to_date invalid time warns per row", "str_to_date", []*plan.Expr{sval("bad"), sval("%H:%i:%s"), target(types.T_time)}, 3, false},
+		{"str_to_date valid date folds", "str_to_date", []*plan.Expr{sval("2024-01-02"), sval("%Y-%m-%d"), target(types.T_date)}, 0, true},
+		{"format string number warns per row", "format", []*plan.Expr{sval("1234.5"), i64(2), sval("bad_locale")}, 3, false},
 		{"format known locale folds", "format", []*plan.Expr{i64(1234567), i64(2), sval("de_DE")}, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

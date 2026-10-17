@@ -48,7 +48,15 @@ const strToDateWarningInputMax = 128
 // discard-only evaluation keeps the kernel's allocation profile even for
 // multi-megabyte invalid inputs.
 func appendStrToDateWarning(proc *process.Process, code uint16, prefix, suffix string, input []byte) {
-	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if proc == nil {
+		return
+	}
+	sink := proc.GetWarningSink()
+	if counter, ok := sink.(process.WarningDiagnosticCountAppender); ok && process.WarningDiagnosticRetentionLimitForProcess(proc) == 0 {
+		counter.AppendWarningCount(1)
+		return
+	}
+	appender, ok := sink.(warningDiagnosticAppender)
 	if !ok {
 		return
 	}
@@ -66,6 +74,12 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -107,6 +121,12 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -150,6 +170,12 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {

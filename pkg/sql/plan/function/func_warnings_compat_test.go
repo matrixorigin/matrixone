@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,14 @@
 package function
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -240,4 +243,75 @@ func TestStrToDatetimeWarnings(t *testing.T) {
 	require.Equal(t, "Incorrect datetime value: '2024-02-30 10:30:45' for function str_to_date", warnings.warnings[0].msg)
 	require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warnings.warnings[1].code)
 	require.Equal(t, "Truncated incorrect datetime value: '2024-01-02 10:30:45xyz'", warnings.warnings[1].msg)
+}
+
+// Masked branches must not publish diagnostics for unevaluated rows.
+func TestStrToDateWarningsRespectSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		fn   executeLogicOfOverload
+		zero any
+	}{
+		{"date", types.T_date.ToType(), builtInStrToDate, []types.Date{0, 0, 0}},
+		{"datetime", types.T_datetime.ToType(), builtInStrToDatetime, []types.Datetime{0, 0, 0}},
+		{"time", types.T_time.ToType(), builtInStrToTime, []types.Time{0, 0, 0}},
+	} {
+		for _, all := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/all=%t", tc.name, all), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				test := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "bad", "bad"}, []bool{false, false, true}),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil),
+				}, NewFunctionTestResult(tc.typ, false, tc.zero, []bool{true, true, true}), tc.fn).
+					WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: all, SelectList: []bool{false, true, true}})
+				ok, info := test.RunAndFree()
+				require.True(t, ok, info)
+				want := 1
+				if all {
+					want = 0
+				}
+				require.Len(t, sink.warnings, want)
+			})
+		}
+	}
+}
+
+func TestStrToDateWarningMessageBound(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
+	input := []byte(strings.Repeat("x", 1024))
+	appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE, "Incorrect datetime value", " for function str_to_date", input)
+	require.Equal(t, "Incorrect datetime value: '"+strings.Repeat("x", strToDateWarningInputMax)+"' for function str_to_date", sink.warnings[0].msg)
+	probe := &process.WarningProbe{}
+	proc.WarningSink = probe
+	appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE, "Incorrect datetime value", " for function str_to_date", input)
+	require.True(t, probe.Warned(), "count-only probes must still prevent unsafe constant folding")
+}
+
+// Keep diagnostic construction bounded even during optimizer probes that
+// retain only warning presence. Inputs are allocated outside the timed loop.
+func BenchmarkStrToDateWarningDiscard(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	defer proc.Free()
+	input := []byte(strings.Repeat("x", 2<<20))
+	for _, probe := range []bool{false, true} {
+		b.Run(fmt.Sprintf("probe=%t", probe), func(b *testing.B) {
+			if probe {
+				proc.WarningSink = &process.WarningProbe{}
+			} else {
+				proc.WarningSink = nil
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE, "Incorrect datetime value", " for function str_to_date", input)
+			}
+		})
+	}
 }
