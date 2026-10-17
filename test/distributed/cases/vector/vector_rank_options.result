@@ -51,6 +51,37 @@ Project[2] (cost=2.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=10
 select @@probe_limit;
 ➤ @@probe_limit[-1,16383,0]  𝄀
 5
+set session probe_limit = 4;
+select @@probe_limit;
+➤ @@probe_limit[-1,16383,0]  𝄀
+4
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+-- @regex("NProbe: 4", true)
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+Project[2] (cost=2.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0]  𝄀
+  ->  Sort[1] (cost=2.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=100.00)  𝄀
+        Output: #[0,0]  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan[0] on ix [l2_distance] (cost=3.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=72.00)  𝄀
+              Output: pkid, score  𝄀
+              Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 4, BucketExpandStep: 0, ThreadsSearch: 0
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
+-- @regex("NProbe: 9", true)
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+Project[2] (cost=2.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0]  𝄀
+  ->  Sort[1] (cost=2.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=100.00)  𝄀
+        Output: #[0,0]  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan[0] on ix [l2_distance] (cost=3.00 outcnt=2.00 selectivity=0.6667 dop=0 blockNum=1 rowsize=72.00)  𝄀
+              Output: pkid, score  𝄀
+              Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 9, BucketExpandStep: 0, ThreadsSearch: 0
+select @@probe_limit;
+➤ @@probe_limit[-1,16383,0]  𝄀
+4
 select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1';
 ➤ id[-5,64,0]  𝄀
 1  𝄀
@@ -83,4 +114,7 @@ set probe_limit = @saved_probe_limit;
 set experimental_ivf_index = @saved_ivf;
 set enable_vector_auto_mode_by_default = @saved_auto;
 set enable_vector_prefilter_by_default = @saved_pre;
+select @@probe_limit = @saved_probe_limit as probe_limit_restored;
+➤ probe_limit_restored[-7,1,0]  𝄀
+1
 drop database vector_rank_options;
