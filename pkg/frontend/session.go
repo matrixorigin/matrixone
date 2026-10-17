@@ -2640,6 +2640,20 @@ func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
 }
 
 func (ses *Session) refreshRewritePolicyAndValidatePrepared(ctx context.Context) {
+	if prior := authorizationEpochFor(ctx, ses); prior != nil {
+		prior.mu.Lock()
+		minimum := prior.minimum
+		prior.mu.Unlock()
+		if rewriteRuleSessionIdentity(ses) != prior.identity || ses.getLastCommitTS().Greater(minimum) {
+			// SET ROLE has completed its principal transition. Validate handles with
+			// a complete new policy owner; the earlier rewrite/admission cannot lend
+			// authorization to this new principal. The caller's epoch remains invalid
+			// for any further authorization and ends at its statement boundary.
+			var validation *authorizationEpoch
+			ctx, validation = beginAuthorizationEpoch(ctx, ses, nil)
+			defer validation.end()
+		}
+	}
 	policy, err := captureRewritePolicy(ctx, ses)
 	ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, err)
 }
@@ -2690,6 +2704,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
+		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
 	}
 	return be
 }
@@ -4409,16 +4424,18 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	if _, ok := leadingHintContent(innerSQL); ok {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	policy, err := captureRewritePolicy(ctx, ses)
-	if err != nil {
-		return err
-	}
-
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
 		inMigration:       true,
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
+	}
+	var migrationEpoch *authorizationEpoch
+	tempExecCtx.reqCtx, migrationEpoch = beginAuthorizationEpoch(ctx, ses, tempExecCtx)
+	defer migrationEpoch.end()
+	policy, err := captureRewritePolicy(tempExecCtx.reqCtx, ses)
+	if err != nil {
+		return err
 	}
 	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{

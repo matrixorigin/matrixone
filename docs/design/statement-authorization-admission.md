@@ -1,7 +1,6 @@
 # Statement authorization snapshot admission
 
-Revision: 2 (2026-10-17). Status: proposed; implementation waits for the
-design review of this exact revision. Owner: frontend / transaction client.
+Revision: 2 (2026-10-17). Status: design approved; implementation in progress. Owner: frontend / transaction client.
 Issue: #29133. Implementation: PR #30400. Review feedback: 5555768268.
 
 ## Problem and gate
@@ -125,8 +124,14 @@ at A. This prevents a mixed decision when a concurrent commit both grants
 access and adds a restrictive role rule. Sampling a proof whose partition
 already contains changes ahead of A yields zero, as today: zero means a fresh
 uncacheable snapshot-A read, not permission to stamp old rows with a new vector.
-Cache proof publication retains the existing pre-read stamp, generation and
-identity checks.
+The epoch atomically publishes one proof with A and reuses that proof within
+A; later B cannot change the contents authorized at A. Every reuse validates
+principal, cancellation, lifetime and the current causal minimum. Failed or
+ended acquisition publishes no usable proof. Zero stays uncacheable for the
+entire epoch. A new epoch always acquires and samples again. Cache publication
+retains the existing pre-read stamp, generation and identity checks. This
+same-A sampling consolidation was independently confirmed against revision 2
+by the design reviewer before validation.
 
 Background read-only commits carry no user write frontier. Their internal
 completion must not advance the upstream Session beyond A and invalidate the
@@ -185,6 +190,13 @@ rules. The design does not exempt admin or empty-rule sessions from freshness.
 
 ## Cost model, validation and delivery gate
 
+Snapshot A is exclusive. The completed acquisition proves application through
+A.Prev(); transaction creation rechecks that applied frontier, including close
+and cancellation, and installs exactly A. Waiting for A itself would demand a
+new logtail notification and defeat admission reuse. A real timestamp-waiter
+regression seeds one frontier and sends no later notification; both data and
+authorization creation must complete from that frontier.
+
 All state is O(1) per active statement. Catalog proof sampling remains bounded
 by the existing eight-table vector. There is at most one reusable admission per
 epoch and no unbounded retry or waiter map. Real catalog read transactions still
@@ -223,7 +235,9 @@ unrelated code change is a permitted substitute.
 
 ## Design review record
 
-Pending exact-revision review by the required gpt-6-astra medium design agent.
-Implementation must wait for a traceable PASS of revision 2. RC data/retry
+Independent gpt-6-astra medium design review: PASS of revision 2 at design-only
+commit `23c27718e085cdc9aec20e54b745a98842f9a67f`, SHA-256
+`e078fd951cd9d11182f4607b650f8a38b00ca6f6eab038506714a2f38282d223`.
+The review completed before implementation. RC data/retry
 semantics, fixed authorization snapshot installation and parser compatibility
 are explicit decisions above. Material deviations return to design review.

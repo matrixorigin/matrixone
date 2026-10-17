@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -68,7 +69,7 @@ func BenchmarkRoleRuleFreshnessTCP(b *testing.B) {
 			require.NoError(b, err)
 			cfg := cn.GetServiceConfig().CN
 			b.Logf("configuration: sacrificing-freshness=%d txn-limit=%d", cfg.Txn.EnableSacrificingFreshness, cfg.Txn.Limit)
-			ctx, cancel := context.WithTimeout(b.Context(), 10*time.Minute)
+			ctx, cancel := context.WithTimeout(b.Context(), 15*time.Minute)
 			defer cancel()
 			open := func(user string) (*sql.DB, *sql.Conn) {
 				db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cfg.Frontend.Port))
@@ -97,59 +98,99 @@ func BenchmarkRoleRuleFreshnessTCP(b *testing.B) {
 				"insert into app.t values (1,1),(2,2)", "create role reader",
 				"create user learner identified by '111' default role reader", "grant reader to learner",
 				"grant connect on account * to reader", "grant select on table app.t to reader",
-				"alter role reader add rule 'select id, tenant from app.t where tenant=1' on table app.t",
 			} {
 				exec(owner, text)
 			}
-			for _, protocol := range []string{"text", "binary"} {
-				func() {
-					started := time.Now()
-					_, conn := open("role_perf#learner#reader")
-					connect := time.Since(started)
-					const query = "select id from app.t order by id"
-					read := func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) }
-					var prepare time.Duration
-					if protocol == "binary" {
-						started = time.Now()
-						stmt, err := conn.PrepareContext(ctx, query)
-						require.NoError(b, err)
-						defer stmt.Close()
-						prepare = time.Since(started)
-						read = func() (*sql.Rows, error) { return stmt.QueryContext(ctx) }
+			counter, ok := cn.RawService().(cnservice.Service).GetTxnClient().(interface{ SnapshotAdmissionCounters() (uint64, uint64) })
+			require.True(b, ok, "build both matched benchmark trees with the documented count-only instrumentation")
+			for _, rules := range []bool{false, true} {
+				if rules {
+					for _, role := range []string{"reader", "accountadmin"} {
+						exec(owner, "alter role "+role+" add rule 'select id, tenant from app.t where tenant=1' on table app.t")
 					}
-					request := func() {
-						rows, err := read()
-						require.NoError(b, err)
-						defer rows.Close()
-						require.True(b, rows.Next())
-						var id int
-						require.NoError(b, rows.Scan(&id))
-						require.Equal(b, 1, id)
-						require.False(b, rows.Next(), "the mandatory rule must exclude tenant 2")
-						require.NoError(b, rows.Err())
-					}
-					started = time.Now()
-					request()
-					emitRoleFreshnessSample(b, map[string]any{"mode": mode, "protocol": protocol, "phase": "first-execution", "connect_ns": connect.Nanoseconds(), "prepare_ns": prepare.Nanoseconds(), "latency_ns": time.Since(started).Nanoseconds()})
-					for round := 0; round <= 3; round++ {
-						before := roleFreshnessSnapshotObservations(b)
-						started = time.Now()
-						var samples []int64
-						for time.Since(started) < 5*time.Second {
-							start := time.Now()
+				}
+				for _, administrator := range []bool{false, true} {
+					for _, protocol := range []string{"text", "binary"} {
+						func() {
+							sampleBase := func(phase string) map[string]any {
+								return map[string]any{"mode": mode, "protocol": protocol, "rules": rules, "admin": administrator, "phase": phase}
+							}
+							beforeConnect, _ := counter.SnapshotAdmissionCounters()
+							started := time.Now()
+							user := "role_perf#learner#reader"
+							if administrator {
+								user = "role_perf#admin#accountadmin"
+							}
+							_, conn := open(user)
+							connect := time.Since(started)
+							afterConnect, _ := counter.SnapshotAdmissionCounters()
+							const query = "select id from app.t order by id"
+							read := func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) }
+							var prepare time.Duration
+							if protocol == "binary" {
+								started = time.Now()
+								stmt, err := conn.PrepareContext(ctx, query)
+								require.NoError(b, err)
+								defer stmt.Close()
+								prepare = time.Since(started)
+								read = func() (*sql.Rows, error) { return stmt.QueryContext(ctx) }
+							}
+							afterPrepare, _ := counter.SnapshotAdmissionCounters()
+							request := func() {
+								rows, err := read()
+								require.NoError(b, err)
+								defer rows.Close()
+								var ids []int
+								for rows.Next() {
+									var id int
+									require.NoError(b, rows.Scan(&id))
+									ids = append(ids, id)
+								}
+								require.NoError(b, rows.Err())
+								expected := []int{1, 2}
+								if rules {
+									expected = []int{1}
+								}
+								require.Equal(b, expected, ids)
+							}
+							started = time.Now()
 							request()
-							samples = append(samples, time.Since(start).Nanoseconds())
-						}
-						elapsed := time.Since(started)
-						observations := roleFreshnessSnapshotObservations(b) - before
-						sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-						phase := "measured"
-						if round == 0 {
-							phase = "warmup"
-						}
-						emitRoleFreshnessSample(b, map[string]any{"mode": mode, "protocol": protocol, "phase": phase, "round": round, "requests": len(samples), "errors": 0, "elapsed_ns": elapsed.Nanoseconds(), "requests_per_second": float64(len(samples)) / elapsed.Seconds(), "p50_ns": samples[len(samples)/2], "p95_ns": samples[(len(samples)-1)*95/100], "snapshot_observations": observations, "snapshot_observations_per_request": float64(observations) / float64(len(samples))})
+							firstLatency := time.Since(started)
+							afterFirst, _ := counter.SnapshotAdmissionCounters()
+							first := sampleBase("first-execution")
+							first["connect_ns"], first["prepare_ns"], first["latency_ns"] = connect.Nanoseconds(), prepare.Nanoseconds(), firstLatency.Nanoseconds()
+							first["connect_admissions"], first["prepare_admissions"], first["first_admissions"] = afterConnect-beforeConnect, afterPrepare-afterConnect, afterFirst-afterPrepare
+							emitRoleFreshnessSample(b, first)
+							for round := 0; round <= 3; round++ {
+								before := roleFreshnessSnapshotObservations(b)
+								admittedBefore, successfulBefore := counter.SnapshotAdmissionCounters()
+								started = time.Now()
+								var samples []int64
+								for time.Since(started) < 5*time.Second {
+									start := time.Now()
+									request()
+									samples = append(samples, time.Since(start).Nanoseconds())
+								}
+								elapsed := time.Since(started)
+								admittedAfter, successfulAfter := counter.SnapshotAdmissionCounters()
+								observations := roleFreshnessSnapshotObservations(b) - before
+								sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+								phase := "measured"
+								if round == 0 {
+									phase = "warmup"
+								}
+								sample := sampleBase(phase)
+								sample["round"], sample["requests"], sample["errors"] = round, len(samples), 0
+								sample["elapsed_ns"], sample["requests_per_second"] = elapsed.Nanoseconds(), float64(len(samples))/elapsed.Seconds()
+								sample["p50_ns"], sample["p95_ns"] = samples[len(samples)/2], samples[(len(samples)-1)*95/100]
+								sample["snapshot_observations"], sample["snapshot_observations_per_request"] = observations, float64(observations)/float64(len(samples))
+								sample["admission_attempts"], sample["admission_successes"] = admittedAfter-admittedBefore, successfulAfter-successfulBefore
+								sample["admissions_per_request"] = float64(admittedAfter-admittedBefore) / float64(len(samples))
+								emitRoleFreshnessSample(b, sample)
+							}
+						}()
 					}
-				}()
+				}
 			}
 		})
 	}

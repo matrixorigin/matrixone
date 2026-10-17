@@ -1,5 +1,11 @@
 # Role-rule freshness: authenticated TCP measurements
 
+Historical measurements of the earlier request-only implementation. The current
+statement-owned admission design and its expanded matched matrix are documented
+in [Statement authorization admission](statement-authorization-admission.md).
+The reproduction command below applies to the pinned historical harness; the
+current harness requires the count-only instrumentation described in that report.
+
 Measured on 2026-10-16 UTC to close PR 30400's request-admission review.
 The candidate performs one successful role-catalog freshness proof per stable
 prepared request, shared by the parse, computation-wrapper and parameter

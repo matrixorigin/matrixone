@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -51,6 +52,41 @@ func (e *Engine) GetPrivilegeCacheVersion(
 	if err != nil {
 		return version, minimum, err
 	}
+	return e.privilegeCacheVersionAtSnapshot(ctx, account, minimum, snapshot)
+}
+
+// AcquireCatalogSnapshot exposes the transaction client's statement capability
+// using the client's readiness/logtail gate. Unsupported clients
+// retain the independent-read path, never a guessed snapshot.
+func (e *Engine) AcquireCatalogSnapshot(ctx context.Context, minimum timestamp.Timestamp) (*txnclient.SnapshotAdmission, bool, error) {
+	return txnclient.AcquireSnapshotAdmission(ctx, e.cli, minimum)
+}
+
+// ValidateCatalogSnapshot checks a live epoch before reusing a proof already
+// sampled at that same fixed authorization snapshot.
+func (e *Engine) ValidateCatalogSnapshot(ctx context.Context, minimum timestamp.Timestamp, admission *txnclient.SnapshotAdmission) (timestamp.Timestamp, error) {
+	return admission.Snapshot(ctx, e.cli, minimum)
+}
+
+// GetPrivilegeCacheVersionWithAdmission samples the same proof at the current
+// statement's already admitted snapshot, without another limiter/logtail wait.
+func (e *Engine) GetPrivilegeCacheVersionWithAdmission(ctx context.Context, account uint32, minimum timestamp.Timestamp, admission *txnclient.SnapshotAdmission) (PrivilegeCacheVersion, timestamp.Timestamp, error) {
+	snapshot, err := admission.Snapshot(ctx, e.cli, minimum)
+	if err != nil {
+		return PrivilegeCacheVersion{}, minimum, err
+	}
+	version, nextMinimum, err := e.privilegeCacheVersionAtSnapshot(ctx, account, minimum, snapshot)
+	if err != nil {
+		return PrivilegeCacheVersion{}, nextMinimum, err
+	}
+	if _, err = admission.Snapshot(ctx, e.cli, minimum); err != nil {
+		return PrivilegeCacheVersion{}, nextMinimum, err
+	}
+	return version, nextMinimum, nil
+}
+
+func (e *Engine) privilegeCacheVersionAtSnapshot(ctx context.Context, account uint32, minimum, snapshot timestamp.Timestamp) (PrivilegeCacheVersion, timestamp.Timestamp, error) {
+	var version PrivilegeCacheVersion
 	if snapshot.IsEmpty() {
 		return version, minimum, nil
 	}

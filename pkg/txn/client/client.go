@@ -624,10 +624,49 @@ func (client *txnClient) doCreateTxn(
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	admission := op.opts.snapshotAdmission
+	authorization := op.opts.authorizationSnapshot
+	// Creation-only capabilities never survive into a RestartTxn generation or
+	// retain a completed statement's context for the data transaction's lifetime.
+	explicitSnapshot := op.opts.explicitSnapshot
+	op.opts.snapshotAdmission, op.opts.authorizationSnapshot, op.opts.explicitSnapshot = nil, nil, false
+	if (admission != nil && authorization != nil) ||
+		((admission != nil || authorization != nil) && explicitSnapshot) ||
+		(authorization != nil && op.opts.options.CacheWriteEnabled()) {
+		err = moerr.NewInternalError(ctx, "conflicting snapshot admission options")
+		op.closeUnadmitted(err)
+		return nil, err
+	}
+	if authorization != nil {
+		// Apply after every option so option order cannot restore RC advancement.
+		op.mu.txn.Isolation = txn.TxnIsolation_SI
+		op.opts.options = op.opts.options.WithReadOnly()
+	}
+	var admittedSnapshot timestamp.Timestamp
+	if admission != nil || authorization != nil {
+		capability := admission
+		if authorization != nil {
+			capability = authorization
+			admittedSnapshot, err = capability.Snapshot(ctx, client, minTS)
+		} else {
+			admittedSnapshot, err = capability.claim(ctx, client, minTS)
+		}
+		if err != nil {
+			op.closeUnadmitted(err)
+			return nil, err
+		}
+		var finishCreation func()
+		ctx, finishCreation = capability.creationContext(ctx)
+		defer finishCreation()
+	}
+
 	// Admission throttling obeys both the caller's cancellation and client
 	// shutdown. No client ownership exists yet, so failure closes only this
 	// unadmitted operator generation.
-	if err = client.limiter.Wait(ctx, client.closeCtx); err != nil {
+	if admission == nil {
+		err = client.limiter.Wait(ctx, client.closeCtx)
+	}
+	if err != nil {
 		if client.isClosed() {
 			err = moerr.NewClientClosedNoCtx()
 		}
@@ -672,7 +711,10 @@ func (client *txnClient) doCreateTxn(
 		return nil, err
 	}
 
-	ts := client.determineTxnSnapshot(minTS)
+	ts := admittedSnapshot
+	if ts.IsEmpty() {
+		ts = client.determineTxnSnapshot(minTS)
+	}
 	if !op.opts.skipWaitPushClient {
 		snapshotCtx := ctx
 		var closeC <-chan struct{}
@@ -684,7 +726,14 @@ func (client *txnClient) doCreateTxn(
 				defer cancelOnClose()
 			}
 		}
-		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
+		waitMinimum := ts
+		if !admittedSnapshot.IsEmpty() {
+			// Snapshot A is exclusive: its completed admission proves logtail
+			// application through A.Prev(). Waiting for A would unnecessarily
+			// require the next notification before every transaction creation.
+			waitMinimum = admittedSnapshot.Prev()
+		}
+		if err := op.updateSnapshotWithClose(snapshotCtx, waitMinimum, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
 					return nil, waitErr
@@ -701,6 +750,11 @@ func (client *txnClient) doCreateTxn(
 			// be relied on to release active/queued client ownership.
 			return nil, createErr
 		}
+	}
+	if !admittedSnapshot.IsEmpty() {
+		// A waiter may return a later applied timestamp. Authorization reads
+		// must remain at exactly A; ordinary RC data advancement happens later.
+		op.SetSnapshotTS(admittedSnapshot)
 	}
 
 	util.LogTxnSnapshotTimestamp(
@@ -729,6 +783,17 @@ func (client *txnClient) doCreateTxn(
 	if closed {
 		err := moerr.NewClientClosedNoCtx()
 		return nil, err
+	}
+	if admission != nil || authorization != nil {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		capability.mu.RLock()
+		defer capability.mu.RUnlock()
+		if err = capability.validate(ctx, client, minTS); err != nil {
+			return nil, err
+		}
 	}
 	admissionComplete = true
 	return op, nil

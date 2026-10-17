@@ -846,6 +846,17 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	} else if hasSelectedIsolation {
 		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
+	if backSes != nil && backSes.authorizationSnapshot != nil {
+		opts = append(opts, txnclient.WithAuthorizationSnapshot(backSes.authorizationSnapshot))
+	} else if ses, ok := execCtx.ses.(*Session); ok {
+		admission, err := statementSnapshotOption(execCtx.reqCtx, ses, pu.TxnClient)
+		if err != nil {
+			return err
+		}
+		if admission != nil {
+			opts = append(opts, admission)
+		}
+	}
 
 	var (
 		tempCtx    context.Context

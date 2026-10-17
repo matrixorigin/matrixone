@@ -60,10 +60,9 @@ type rewriteHintPayload struct {
 	RemapDb map[string]string `json:"remapdb"`
 }
 
-// rewritePolicySnapshot freezes the effective request policy before any
-// statement in a multi-statement COM_QUERY can mutate session variables. SQL
-// text is still rewritten one staged statement at a time, using the SQL mode
-// that is current when that statement is parsed.
+// rewritePolicySnapshot freezes one semantic statement's effective policy.
+// A later COM_QUERY continuation captures a new policy before materialization,
+// including the principal, session layers and SQL mode current for that statement.
 //
 // Role rules are access control: they are always loaded and applied when the
 // session has any, regardless of enable_remap_hint. sessionEnabled (the
@@ -149,7 +148,7 @@ func roleRuleCacheVersion(ctx context.Context, ses *Session) (any, error) {
 	if !ok {
 		return nil, nil
 	}
-	version, minimum, err := eng.GetPrivilegeCacheVersion(ctx, tenant.GetTenantID(), ses.getLastCommitTS())
+	version, minimum, err := statementCatalogVersion(ctx, ses, eng)
 	if err != nil {
 		return nil, err
 	}
@@ -963,7 +962,11 @@ func loadRuleCache(ctx context.Context, ses *Session) (_ map[string]string, retE
 		return map[string]string{}, nil
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{cancelTxnCreateWithRequest: true})
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{cancelTxnCreateWithRequest: true})
+	if err != nil {
+		return nil, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer bh.Close()
 	// This executor owns its transaction; the user's existing data snapshot and
 	// isolation setting must not control mandatory authorization reads.

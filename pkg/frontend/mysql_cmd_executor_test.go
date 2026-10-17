@@ -3389,7 +3389,15 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			// Execution now stages one original raw statement at a time.
+			fixtureSQL := append([]string{"create table A(a varchar(100),b int,c float)", "select a,b,c from A"}, self_handle_sql...)
+			normalize := func(s string) string { return strings.Trim(strings.ToLower(s), "; \t\r\n") }
+			for i, sql := range fixtureSQL {
+				if normalize(execCtx.input.getSql()) == normalize(sql) {
+					return []ComputationWrapper{cws[i]}, nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected fixture statement: %s", execCtx.input.getSql())
 		})
 		defer stubs.Reset()
 
