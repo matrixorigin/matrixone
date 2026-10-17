@@ -1,7 +1,7 @@
 # Statement authorization snapshot admission
 
-Revision: 2 (2026-10-17). Status: design approved; implementation and validation complete. Owner: frontend / transaction client.
-Issue: #29133. Implementation: PR #30400. Review feedback: 5555768268.
+Revision: 3 (2026-10-17). Status: design approved; performance acceptance pending. Owner: frontend / transaction client.
+Issue: #29133. Implementation: PR #30400. Review feedback: 5555768268, 5557316266.
 
 ## Problem and gate
 
@@ -177,6 +177,57 @@ Cleanup-only prepared lookup still performs no I/O. Every live prepared lookup
 retains generation/invalidation checks. Error returns preserve the known handle
 so EXECUTE/FETCH can release cursor accounting and pending parameters.
 
+## Revision 3: remove redundant hot-path work
+
+The epoch carries its two context values and prepared-request stamp directly.
+All other values delegate to its original standard cancellation context,
+including the private context keys required by `context.Cause` and child
+cancellation. A notification channel is created only when another consumer
+actually waits for acquisition. An exact-owner cancellation comparison does
+not materialize a Done channel; independent callers retain the cancellation
+bridge. Terminal cleanup completes under the existing epoch mutex once, so a
+concurrent or outer terminal boundary cannot return before cancellation ends.
+
+The admission token lazily creates its shared cancellation child only for
+potentially waiting creation. End still seals the token under its mutex;
+initialization after End immediately cancels the child. Each creation adapter
+captures that stable lifetime and owns only its own cancellation. A direct
+data creation may avoid an adapter only when the native monotonic frontier
+already covers A.Prev() and the existing client mutex atomically proves open,
+ready, no abort barrier and immediately available capacity. Ordinary opening
+and this path share the same admission transition. Final close, cancellation,
+token and failed-creation cleanup checks remain mandatory. Authorization
+transactions and every potentially waiting path retain normal admission.
+
+Prepared refresh uses the same complete proof, retry, publication and
+invalidation owner as full policy capture. It discards value metadata instead
+of cloning unused maps. Full capture still returns independent immutable maps.
+Production proofs stay typed on the hot path; only cold cache publication
+boxes the catalog vector. A lookup already holding the session mutex checks
+the request stamp there, and releases that mutex before any actual refresh.
+Principal, context lifetime, generation, revision and handle checks remain.
+
+One proof can share the idle-subscription access-time sample across its warm
+table reads. This timestamp only maintains idle reclamation bookkeeping; it
+is neither the authorization snapshot nor a freshness cache. A cold/waiting
+path discards it before later warm reads. All eight physical identities,
+versions, pending/visibility checks and fault checks are still sampled.
+
+Single COM_QUERY preflight uses the existing MySQL scanner to detect whether
+there can be another statement, without building an unused AST for trailing
+delimiters or semicolons in literals/comments. The parser remains authoritative
+for actual splitting, SQL mode and eager syntax validation of ordinary batches.
+Sibling diagnostic contexts are built only for an actual continuation, using
+the original request parent captured before an implicit commit replaces the
+first epoch.
+
+These refinements do not waive the default-throughput requirement. The current
+source and functional evidence are recorded in the
+[hot-path validation report](../performance/statement-authorization-hot-path.md).
+That report distinguishes unsuccessful pilots and diagnostic probes from
+acceptance measurements; the historical revision-2 matrix is not a new-head
+performance result.
+
 ## Alternatives and compatibility
 
 1. Current independent proofs preserve correctness but demonstrably add hot-path
@@ -251,3 +302,8 @@ After rebase, the same approved design blob is retained in commit
 The review completed before implementation. RC data/retry
 semantics, fixed authorization snapshot installation and parser compatibility
 are explicit decisions above. Material deviations return to design review.
+
+Revision 3 received incremental gpt-6-astra medium design and source reviews
+before each implementation change. The completed source review found no
+additional correctness or lifecycle blocker; the default performance gate
+remains open and is not implied by that source approval.
