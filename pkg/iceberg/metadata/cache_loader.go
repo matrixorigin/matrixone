@@ -32,6 +32,9 @@ type CachedTableMetadataLoader struct {
 	ExternalRef       string
 	SnapshotSelector  api.SnapshotSelector
 	PlanningMaxMemory int64
+	// RevalidateSnapshotless observes the first commit before the cached empty
+	// table expires. Only default/main scans opt in; other callers retain TTL reuse.
+	RevalidateSnapshotless bool
 }
 
 type LoadedTableMetadata struct {
@@ -73,17 +76,25 @@ func (l CachedTableMetadataLoader) Load(ctx context.Context, req api.LoadTableRe
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg cached metadata loader requires metadata facade", nil)
 	}
 	locationKey := l.locationCacheKey(req)
+	var stale CacheEntry
+	var hasStale bool
 	if cached, ok := l.Cache.Get(locationKey); ok && cached.Metadata != nil {
-		return &LoadedTableMetadata{
-			Metadata:         cached.Metadata,
-			CacheHit:         true,
-			MetadataBytes:    cached.SizeBytes,
-			LocationCacheKey: locationKey,
-			MetadataCacheKey: l.metadataCacheKey(req, cached.MetadataLocation),
-		}, nil
+		if !l.RevalidateSnapshotless || !isSnapshotlessScan(cached.Metadata, l.SnapshotSelector) {
+			return &LoadedTableMetadata{
+				Metadata:         cached.Metadata,
+				CacheHit:         true,
+				MetadataBytes:    cached.SizeBytes,
+				LocationCacheKey: locationKey,
+				MetadataCacheKey: l.metadataCacheKey(req, cached.MetadataLocation),
+			}, nil
+		}
+		// A fresh empty entry can change on the first external commit. Reuse
+		// conditional loading when an ETag exists, otherwise reload its metadata.
+		stale, hasStale = cached, true
+	} else {
+		stale, hasStale = l.Cache.GetStaleForRevalidation(locationKey)
 	}
 
-	stale, hasStale := l.Cache.GetStaleForRevalidation(locationKey)
 	loadReq := req
 	if hasStale {
 		loadReq.IfNoneMatch = stale.ETag

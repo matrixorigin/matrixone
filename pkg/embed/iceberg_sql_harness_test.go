@@ -282,6 +282,10 @@ func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
 		err = tenantSQL.Exec(fmt.Sprintf("select * from %s.native_orders for iceberg snapshot 101", fixture.databaseName))
 		require.Error(t, err)
 		require.Contains(t, strings.ToLower(err.Error()), "iceberg")
+
+		t.Run("native snapshot-less table", func(t *testing.T) {
+			runIcebergSQLEngineEmbeddedSnapshotlessTable(t, c, tenantSQL, fixture)
+		})
 	})
 }
 
