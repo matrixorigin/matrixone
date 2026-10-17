@@ -543,8 +543,17 @@ func TestSnapshotAdmissionEndRacesLazyInitialization(t *testing.T) {
 	}()
 	go func() { <-start; a.End(); close(ended) }()
 	close(start)
-	<-ended
-	got := <-created
+	select {
+	case <-ended:
+	case <-ctx.Done():
+		t.Fatal("End did not finish during initialization")
+	}
+	var got creation
+	select {
+	case got = <-created:
+	case <-ctx.Done():
+		t.Fatal("initialization did not finish after End")
+	}
 	t.Cleanup(got.finish)
 	select {
 	case <-got.ctx.Done():
@@ -555,6 +564,35 @@ func TestSnapshotAdmissionEndRacesLazyInitialization(t *testing.T) {
 	require.NoError(t, ctx.Err(), "token End cannot cancel its parent")
 	_, err = a.Snapshot(ctx, c, timestamp.Timestamp{})
 	require.Error(t, err)
+}
+
+func TestSnapshotAdmissionCreationAdaptersShareLifetime(t *testing.T) {
+	c, _ := admissionTestClient(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
+	require.NoError(t, err)
+	t.Cleanup(a.End)
+	observer := &admissionCancellationObserver{Context: a.ctx}
+	a.ctx = observer
+	first, finishFirst := a.creationContext(ctx)
+	t.Cleanup(finishFirst)
+	second, finishSecond := a.creationContext(ctx)
+	t.Cleanup(finishSecond)
+	require.EqualValues(t, 1, observer.registrations.Load(), "creations share one token cancellation child")
+	finishFirst()
+	require.ErrorIs(t, first.Err(), context.Canceled)
+	require.NoError(t, second.Err(), "finishing one creation cannot cancel its sibling")
+	_, err = a.Snapshot(ctx, c, timestamp.Timestamp{})
+	require.NoError(t, err, "finishing creation cannot end the token")
+	a.End()
+	select {
+	case <-second.Done():
+		require.ErrorIs(t, second.Err(), context.Canceled)
+	case <-ctx.Done():
+		t.Fatal("End did not cancel the shared lifetime")
+	}
+	require.NoError(t, ctx.Err())
 }
 
 func (w *admissionNotifyingWaiter) GetTimestampWithClose(ctx context.Context, ts timestamp.Timestamp, closed <-chan struct{}) (timestamp.Timestamp, error) {
