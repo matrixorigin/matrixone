@@ -1,0 +1,24 @@
+service-type = "TN"
+data-dir = "./mo-data"
+
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = "./mo-data/local2"
+
+__SHARED_FILESERVICE__
+[log]
+level = "info"
+
+[tn]
+uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+port-base = 19000
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

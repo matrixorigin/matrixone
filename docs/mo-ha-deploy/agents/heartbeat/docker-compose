@@ -1,0 +1,290 @@
+#!/bin/sh
+# Version: 1.1.2
+# Date: 2020-06-24
+#
+# Resource script for running docker-compose
+#
+# Description:  Manages docker services using docker-compose as an OCF
+#               resource in an High Availability setup.
+#               It relies on a well-tested docker compose YAML file which
+#               distributed on an identical location on all cluster nodes.
+#
+# Caveat: 1. A YAML file (docker-compose.yml) and an optional Dockerfile
+#            must be provided in a working directory.
+#         2. It is suggested to test run the docker-compose and verify
+#            on all cluster nodes before enabling this agent.
+#
+# docker-compose OCF script's Author: Kenny Chen <netman@study-area.org>
+# License: GNU General Public License (GPL)
+#
+#	usage: $0 {start|stop|status|monitor|validate-all|meta-data}
+#
+#	The "start" arg starts docker service.
+#	The "stop" arg stops it.
+#
+# OCF parameters:
+# OCF_RESKEY_binpath
+# OCF_RESKEY_dirpath
+# OCF_RESKEY_ymlfile
+#
+##########################################################################
+# Initialization:
+
+: ${OCF_ROOT:=/usr/lib/ocf}
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+# Defaults
+OCF_RESKEY_binpath_default=/usr/bin/docker-compose
+OCF_RESKEY_ymlfile_default=docker-compose.yml
+: ${OCF_RESKEY_binpath=${OCF_RESKEY_binpath_default}}
+: ${OCF_RESKEY_ymlfile=${OCF_RESKEY_ymlfile_default}}
+
+USAGE="Usage: $0 {start|stop|status|monitor|validate-all|meta-data}"
+
+##########################################################################
+
+usage()
+{
+	echo $USAGE >&2
+}
+
+meta_data()
+{
+cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="docker-compose" version="1.0.3">
+<version>1.0</version>
+<longdesc lang="en">
+Manages docker services using docker-compose as an OCF resource in an High Availability setup.
+It relies on a well-tested docker compose YAML file which distributed on an identical location on all cluster nodes.
+
+Caveat: 1. A YAML file (docker-compose.yml) and an optional Dockerfile
+           must be provided in a working directory.
+        2. It is suggested to test run the docker-compose and verify on all cluster nodes
+           before enabling this agent.
+</longdesc>
+<shortdesc lang="en">This script manages docker services using docker-compose.</shortdesc> 
+
+<parameters>
+
+<parameter name="binpath">
+<longdesc lang="en">
+The docker-composer binary path.
+For example, "/usr/bin/docker-compose"
+</longdesc>
+<shortdesc lang="en">The docker-composer binary path</shortdesc>
+<content type="string" default="$OCF_RESKEY_binpath_default"/>
+</parameter>
+
+<parameter name="dirpath" required="1">
+<longdesc lang="en">
+The directory contains docker compose yaml file.
+For example, "/data/docker"
+</longdesc>
+<shortdesc lang="en">Directory contains docker compose files</shortdesc>
+<content type="string"/>
+</parameter>
+
+<parameter name="ymlfile">
+<longdesc lang="en">
+The docker-compose yaml file.
+For example, "docker-compose.yml"
+</longdesc>
+<shortdesc lang="en">The docker compose yaml</shortdesc>
+<content type="string" default="$OCF_RESKEY_ymlfile_default"/>
+</parameter>
+
+</parameters>
+
+<actions>
+<action name="start" timeout="240s"/>
+<action name="stop" timeout="20s"/>
+<action name="monitor" depth="0" timeout="10s" interval="60s" />
+<action name="validate-all" timeout="5s" />
+<action name="meta-data"  timeout="5s"/>
+</actions>
+</resource-agent>
+END
+exit $OCF_SUCCESS
+}
+
+if [ -r "$OCF_RESKEY_binpath" -a -x "$OCF_RESKEY_binpath" ]; then
+	COMMAND="$OCF_RESKEY_binpath"
+else
+	COMMAND="$OCF_RESKEY_binpath_default"
+fi
+
+DIR="$OCF_RESKEY_dirpath"
+PRE="$(echo ${DIR##*/} | tr A-Z a-z | sed 's/[^a-z0-9]//g')"
+YML="$OCF_RESKEY_ymlfile"
+
+docker_kill()
+{
+	for i in $(docker ps --all | awk -e '$NF ~ /\<'"${PRE}"'_.*_[0-9]+\>/ {print $1}'); do
+		docker kill $i >/dev/null 2>&1
+		docker rm $i >/dev/null 2>&1 || RTV=false
+	done
+	if [ "$RTV" = false ]; then
+		ocf_log err "failed to kill docker"
+		return $OCF_ERR_GENERIC
+	else
+		RUN=false
+	fi
+}
+
+docker_compose_status()
+{
+	# use docker-compose ps if YML found, otherwise try docker ps and kill containers
+	if [ -r "$DIR/$YML" ]; then
+		DKPS=$(cd $DIR; $COMMAND -f $YML ps -q)
+
+		# get number of all containers
+		[ -n "$DKPS" ] && PSNU=$(echo "$DKPS" | wc -l)
+		# get number of running containers
+		for UUID in $DKPS; do
+			UP=$(docker inspect --format='{{.State.Running}}' "$UUID")
+			[ "$UP" = "true" ] && UPNU=$((UPNU+1))
+		done
+		
+		if [ "${PSNU:-0}" -ne 0 ]; then
+			if [ ${UPNU:-0} -eq 0 ]; then
+				ocf_log info "docker service is running but not in up state."
+				return $OCF_NOT_RUNNING
+			elif [ "$PSNU" -eq $UPNU ]; then
+				ocf_log info "docker service is up and running"
+				return $OCF_SUCCESS
+			else
+				ocf_log err "docker service is running with partial up state"
+				return $OCF_ERR_GENERIC
+			fi
+		else
+			RUN=false
+		fi
+	else
+		STAT_MSG=$(docker ps --all | awk -e '$NF ~ /\<'"$PRE"'_.*_[0-9]+\>/ {print $1}')
+		if [ -z "$STAT_MSG" ]; then
+			RUN=false
+		else
+			ocf_log log "docker service is running without docker-compose, try to kill..."
+			docker_kill
+		fi
+	fi
+	[ "$RUN" = false ] && {
+		ocf_log info "docker service is not running"
+		return $OCF_NOT_RUNNING
+	}
+}
+
+docker_compose_start()
+{
+	docker_compose_validate_all
+	docker_compose_status >/dev/null 2>&1
+	retVal=$?
+	# return success if docker service is running
+	[ $retVal -eq $OCF_SUCCESS ] && exit $OCF_SUCCESS
+
+	cd $DIR
+	$COMMAND -f $YML up -d || {
+		ocf_log err "Error. docker-compose returned error $?."
+		exit $OCF_ERR_GENERIC
+	}
+
+	ocf_log info "docker service started."
+	exit $OCF_SUCCESS
+}
+
+docker_compose_stop()
+{
+	# use docker-compose down if YML found, otherwise try docker kill and rm
+	if [ -r "$DIR/$YML" ]; then
+		docker_compose_validate_all
+		cd $DIR
+		$COMMAND -f $YML down || {
+			ocf_log err "Error on shutting down docker service, try docker kill..."
+			RUN_KILL=true
+		}
+	else
+		RUN_KILL=true
+	fi
+	if [ "$RUN_KILL" = true ]; then
+		docker_kill
+		[ "$RTV" = false ] && {
+			ocf_log err "Error. Could not stop docker services."
+			return $OCF_ERR_GENERIC
+		}
+	fi
+	ocf_log info "docker service stopped."
+	exit $OCF_SUCCESS
+}
+
+docker_compose_monitor()
+{
+	docker_compose_status
+}
+
+docker_compose_validate_all()
+{
+	if ! check_binary "$OCF_RESKEY_binpath"; then
+		ocf_log err "missing binary $OCF_RESKEY_binpath."
+		exit $OCF_ERR_ARGS
+	fi
+	if [ ! -e "$OCF_RESKEY_dirpath" ]; then
+		ocf_log err "diretory $OCF_RESKEY_dirpath is not found."
+		exit $OCF_ERR_ARGS
+	elif [ ! -d "$OCF_RESKEY_dirpath" ]; then
+		ocf_log err "diretory $OCF_RESKEY_dirpath is not a directory."
+		exit $OCF_ERR_ARGS
+	fi
+	if [ ! -e "$OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile" ]; then
+		ocf_log err "yaml file $OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile is not found."
+		exit $OCF_ERR_ARGS
+	fi
+
+	return $OCF_SUCCESS
+}
+
+
+#
+# Main
+#
+
+if [ $# -ne 1 ]; then
+	usage
+	exit $OCF_ERR_ARGS
+fi
+
+case $1 in
+	start)	
+		docker_compose_start
+		;;
+
+	stop)	
+		docker_compose_stop
+		;;
+
+	status)	
+		docker_compose_status
+		;;
+
+	monitor)
+		docker_compose_monitor
+		;;
+
+	validate-all)
+		docker_compose_validate_all
+		;;
+
+	meta-data)
+		meta_data
+		;;
+
+	usage)	usage
+		exit $OCF_SUCCESS
+		;;
+
+	*)	usage
+		exit $OCF_ERR_UNIMPLEMENTED
+		;;
+esac
