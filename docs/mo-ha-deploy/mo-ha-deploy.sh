@@ -558,10 +558,27 @@ require_nodes(){
   esac
 }
 
+# 破坏性操作前的护栏：拒绝把系统盘/已挂载盘当 DRBD 裸盘（wipefs/mkfs 不可逆）。
+guard_drbd_device(){
+  if [ "$DRY_RUN" = 1 ]; then
+    info "(dry-run) 跳过 ${DRBD_DEVICE} 占用检查（实跑时该盘或其分区已挂载会被拒绝）"
+    return 0
+  fi
+  if ! command -v lsblk >/dev/null 2>&1; then
+    wrn "未找到 lsblk，无法校验 ${DRBD_DEVICE} 是否已挂载，请自行确认它不是系统盘"
+    return 0
+  fi
+  local _mp
+  _mp=$(lsblk -no MOUNTPOINT "$DRBD_DEVICE" 2>/dev/null | grep -v '^[[:space:]]*$' | tr '\n' ' ' || true)
+  [ -n "$_mp" ] || return 0
+  die "${DRBD_DEVICE} 或其子分区已挂载（${_mp}），拒绝 wipefs/mkfs：--drbd-device 必须是专用空盘，请核对是否误填了系统盘"
+}
+
 stage_drbd(){
   hdr "阶段 drbd: 配置 DRBD"
   require_nodes
   [ -b "$DRBD_DEVICE" ] || [ "$DRY_RUN" = 1 ] || die "$DRBD_DEVICE 不是块设备"
+  [ "$FORMAT_DRBD" = 1 ] && guard_drbd_device
   local quorum_opts=""
   [ "$DRBD9_QUORUM" = 1 ] && quorum_opts="
   options {
@@ -821,6 +838,7 @@ stage_teardown(){
   if [ "$DRY_RUN" = 1 ] || mountpoint -q "$DATA_DIR" 2>/dev/null; then
     run "umount $DATA_DIR" || die "umount $DATA_DIR 失败（仍被占用）：已跳过 wipefs，请手工卸载后重跑 teardown"
   fi
+  guard_drbd_device
   runq "drbdadm wipe-md $DRBD_RESOURCE 2>/dev/null || true"
   runq "wipefs -a $DRBD_DEVICE" || wrn "wipefs -a $DRBD_DEVICE 失败，请手工确认该盘已清空"
   runq "rm -f /etc/drbd.d/$DRBD_RESOURCE.res /etc/modules-load.d/drbd.conf"
