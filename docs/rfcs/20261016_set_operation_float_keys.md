@@ -1,10 +1,10 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 9
+- Revision: 10
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Rebase baseline: official main `aa8d4278bdb940fe2e2b50a02fc2d9c5c362c3b7`
+- Rebase baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 
 # Signed-zero set membership and scalar reaggregation
@@ -25,8 +25,10 @@ executes its sparse and concurrent boundary cases with enforced benchmark budget
 revision 8 reconciles upstream function allocation and refreshes evidence after
 the official-main rebase. Revision 9 preserves newly merged diagnostic/folding
 semantics, resolves the shared executor test append conflict and refreshes the
-same validation protocol. These revisions do not assert repository approval or
-advance implementation approval.
+same validation protocol. Revision 10 preserves upstream table charset and
+grouping-query-block semantics, advances the set-key allocation, and retains
+previous capacity receipts as historical evidence. These revisions do not assert
+repository approval or advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
 wire field, worker, queue, persisted occurrence identity or recovery protocol.
@@ -48,7 +50,7 @@ FLOAT and DOUBLE set operations compare their physical membership keys while
 returning the original visible values. Positive and negative zero remain distinct;
 NULL, NaN normalization, ALL multiplicities, and the shared GROUP BY/DISTINCT
 contracts retain their existing owners. UNION ALL needs no membership key.
-The internal `set_operation_float_key` registry identity is 600, with overloads
+The internal `set_operation_float_key` registry identity is 601, with overloads
 0 (FLOAT) and 1 (DOUBLE). No user-visible column is added.
 
 There are three planning routes; their admission proofs must remain separate:
@@ -647,6 +649,51 @@ distributed or whole-allocator capacity. Independent acceptance of the exact
 RFC/S1 deployment contract remains pending; this scoped rebase does not supply
 or waive that repository decision.
 
+### Revision 10 table-collation and grouping integration
+
+This revision rebases onto official main
+`b111224b0c624773389b390cd3cf1223126b6ee2`, including transactional
+charset defaults/table conversion and grouping provenance isolation across
+query blocks. The main implementation remains authoritative for both features.
+Grouping output normalization and active-key predicate simplification are
+preserved alongside set-key membership and integer/bool predicate pushdown.
+The subsequent official-main fixture rollback, HTTP-trace ownership and
+HashBuild terminal-classification fixes are also retained unchanged; all 19
+topic patches replay identically onto this final baseline.
+
+Main has allocated MORPC 118 and function 600 to table collation. Set keys
+therefore use MORPC **119**, encoded function **601**, and sentinel **602**.
+Placement, actual-destination sends, receive-before-decode, Prepare/executor,
+and persisted read/authoring checks use 119. Immediate predecessor 118 rejects
+set keys while table collation retains its released 118 admission. Independent
+division 116 and LEAST/GREATEST 117 controls retain their own floors.
+
+Revision 9 and older capacity receipts remain immutable measurements of their
+recorded source and environment. This integration does not claim new capacity
+qualification on the changed grouping/charset/pipeline dependencies. The S1 deployment
+preconditions, numerical budgets and pending independent acceptance remain
+unchanged. Fresh functional/protocol validation on this source passes the
+complete protobuf-plan, function, planner, compile and colexec package suites
+with `-short -tags matrixone_test -count=1`. Scoped vet and incremental lint
+also pass (0 issues). Public `TestSetOperationSignedZero` and
+`TestGroupingSetQueryBlockIsolation` pass together with race enabled (146 named
+PASS events, 9.853 s package). Complete process, HashBuild and compile race
+suites pass (3.314 s, 3.671 s and 12.461 s), including all eight composed
+scalar fallback resource/recovery modes. The new table-only/key-only/combined protocol
+controls exercise feature identity, persisted floors, actual-destination sends
+and rejection before decode at the 118/119 boundary.
+
+The prior head's Ubuntu UT failure in run 39032714230 attempt 1 is a
+`context deadline exceeded` assertion in the deferred database cleanup of
+`TestIssue29876CrossDatabaseCorrelation`. Official main corrects the demonstrated
+workload/teardown budget mismatch using its existing two-minute SQL operation
+policy and verifies resource absence with independent bounded contexts. The
+updated exact case and deterministic cleanup lifecycle controls pass locally
+with race enabled (13.738 s package). This does not establish the historical
+timing cause, production DROP latency or a flaky/non-PR classification. Fresh
+CI remains pending.
+This documentation does not grant independent design or capacity approval.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -664,33 +711,36 @@ GROUP BY equality and avoids a new set executor/wire schema.
 
 ## Compatibility, rollout and rollback
 
-Official main at this revision ends at MORPC 117. This capability uses MORPC
-**118**. The feature walker recognizes encoded function identity 600 without
+Official main at this revision ends at MORPC 118. This capability uses MORPC
+**119**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar
 composition adds no separate function identity or wire field. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 118 regardless of that policy; a combined expression
-requires 118. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 119 regardless of that policy; a combined expression
+requires 119. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 118.
+admitted at 117, and a combined expression with a set key requires 119.
+The released table-collation function retains identity 600 and floor 118;
+table-only expressions remain admitted at 118, while a combined expression
+with a set key requires 119.
 
-Placement requires workers advertising 118 or newer; missing or old capabilities
+Placement requires workers advertising 119 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 118. Operator expression construction checks the same floor
+missing or below 119. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 118. These checks add no per-row work or new resource owner.
+also require 119. These checks add no per-row work or new resource owner.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 118 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 117 rejects these
+then release the 119 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 118 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 118. Lowering a new binary's floor does not rewrite existing
-catalog expressions or teach an old binary identity 600.
+under a floor below 119. Lowering a new binary's floor does not rewrite existing
+catalog expressions or teach an old binary identity 601.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
 persisted expressions and remove or rewrite them to an old-supported definition;
