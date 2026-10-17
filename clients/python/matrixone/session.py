@@ -652,7 +652,7 @@ class Session(SQLAlchemySession):
                 from sqlalchemy import text
 
                 # Call parent's execute() with text()
-                result = super().execute(text(final_sql), **kwargs)
+                result = super().execute(text(final_sql.replace(':', r'\:')), **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -1254,7 +1254,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
                 from sqlalchemy import text
 
                 # Call parent's execute() with text()
-                result = await super().execute(text(final_sql), **kwargs)
+                result = await super().execute(text(final_sql.replace(':', r'\:')), **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
