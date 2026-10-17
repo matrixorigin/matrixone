@@ -245,6 +245,9 @@ func (s *ApplyState) ApplyPositionMask(ctx context.Context, dataFile string, sta
 	if rowCount <= 0 {
 		return nil, nil
 	}
+	if err := validatePositionRowOrdinalRange(startRowOrdinal, rowCount); err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
 	if err := s.CheckMemory(ctx); err != nil {
 		return nil, err
 	}
@@ -278,15 +281,30 @@ func (s *ApplyState) ApplyEqualityMask(ctx context.Context, rows [][]any) ([]boo
 	return keep, nil
 }
 
-func RowOrdinals(startRowOrdinal int64, rowCount int) []int64 {
+// validatePositionRowOrdinalRange rejects corrupted metadata before a wrapped
+// ordinal silently misses a position delete. rowCount must be positive.
+func validatePositionRowOrdinalRange(startRowOrdinal int64, rowCount int) error {
+	if startRowOrdinal < 0 || startRowOrdinal > math.MaxInt64-int64(rowCount-1) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg position row ordinal range is invalid", map[string]string{
+			"start_row_ordinal": strconv.FormatInt(startRowOrdinal, 10),
+			"row_count":         strconv.Itoa(rowCount),
+		})
+	}
+	return nil
+}
+
+func RowOrdinals(startRowOrdinal int64, rowCount int) ([]int64, error) {
 	if rowCount <= 0 {
-		return nil
+		return nil, nil
+	}
+	if err := validatePositionRowOrdinalRange(startRowOrdinal, rowCount); err != nil {
+		return nil, err
 	}
 	out := make([]int64, rowCount)
 	for i := range out {
 		out[i] = startRowOrdinal + int64(i)
 	}
-	return out
+	return out, nil
 }
 
 func equalityKey(values []any) string {
