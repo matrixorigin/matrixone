@@ -3448,6 +3448,15 @@ func TestPitrRecreateTableStopsBeforeDropOnForeignKeyLookupFailure(t *testing.T)
 			"a failed metadata read must never be followed by USE, DROP, or CLONE")
 	})
 
+	t.Run("referenced table is skipped", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lookup] = newMrsForRestoreStringRows(
+			[]string{"db_name", "table_name"}, [][]interface{}{{"child_db", "child_table"}})
+		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "pitr_30393", 123, info))
+		require.Equal(t, []string{lookup}, bh.executedSQLs)
+	})
+
 	t.Run("healthy lookup continues restore", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
