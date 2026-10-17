@@ -1,5 +1,5 @@
 service-type = "LOG"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 # LogService never uses object storage; its data (HAKeeper metadata + dragonboat
 # raft logdb) lives on local disk, which is the DRBD-protected volume.

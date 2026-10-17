@@ -459,7 +459,7 @@ S3
 [[fileservice]]
 name = "SHARED"
 backend = "DISK-V2"
-data-dir = "./mo-data/shared2"
+data-dir = "/mo-data/shared2"
 LOCAL
   fi
 }
