@@ -41,6 +41,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+analytics = [
+    "pyarrow>=18.0.0",
+]
 dev = [
     "pytest>=6.0",
     "pytest-asyncio>=0.18.0",
