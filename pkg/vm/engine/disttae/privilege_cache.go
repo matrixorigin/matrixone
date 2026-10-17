@@ -100,6 +100,7 @@ func (e *Engine) privilegeCacheVersionAtSnapshot(ctx context.Context, account ui
 		return version, minimum, nil
 	}
 	version.account = account
+	var subscriptionAccessTime int64
 	for i, name := range [...]string{
 		catalog.MO_DATABASE, catalog.MO_TABLES,
 		"mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs",
@@ -120,8 +121,8 @@ func (e *Engine) privilegeCacheVersionAtSnapshot(ctx context.Context, account ui
 			partitionAccount = uint64(account)
 		}
 		var pending bool
-		ps, err := e.pClient.toSubscribeTable(ctx, partitionAccount, id, name,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, &pending)
+		ps, err := e.pClient.toSubscribeTableWithAccessTime(ctx, partitionAccount, id, name,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, &subscriptionAccessTime, &pending)
 		if err != nil {
 			return PrivilegeCacheVersion{}, minimum, err
 		}

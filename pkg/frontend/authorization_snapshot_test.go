@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -69,6 +71,48 @@ type authorizationWaitContext struct {
 	context.Context
 	ready chan struct{}
 	once  sync.Once
+}
+
+type authorizationDoneObserver struct {
+	context.Context
+	calls atomic.Uint64
+}
+
+func (c *authorizationDoneObserver) Done() <-chan struct{} {
+	c.calls.Add(1)
+	return c.Context.Done()
+}
+
+type authorizationUncomparableContext struct {
+	context.Context
+	data []byte
+}
+
+func TestAuthorizationEpochCallerCancellationBridge(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancelParent)
+	origin, cancel := context.WithCancel(parent)
+	t.Cleanup(cancel)
+	observer := &authorizationDoneObserver{Context: origin}
+	e := &authorizationEpoch{ctx: observer, cancel: cancel}
+	require.Nil(t, e.watchCallerCancellation(e))
+	require.Zero(t, observer.calls.Load(), "the exact owner does not materialize Done for a comparison")
+	// A context implementation need not be comparable. The concrete owner
+	// comparison is safe, and shared cancellation still needs no bridge.
+	require.Nil(t, e.watchCallerCancellation(authorizationUncomparableContext{Context: e, data: []byte{1}}))
+	caller, cancelCaller := context.WithCancel(parent)
+	t.Cleanup(cancelCaller)
+	stop := e.watchCallerCancellation(caller)
+	require.NotNil(t, stop)
+	t.Cleanup(func() { stop() })
+	cancelCaller()
+	select {
+	case <-origin.Done():
+		require.ErrorIs(t, origin.Err(), context.Canceled)
+	case <-parent.Done():
+		t.Fatal("independent caller did not cancel the acquisition owner")
+	}
+	require.NoError(t, parent.Err())
 }
 
 func (c *authorizationWaitContext) Done() <-chan struct{} {

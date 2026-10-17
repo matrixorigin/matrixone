@@ -222,7 +222,11 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 	versionOf func(context.Context, *Session) (any, error),
 ) (*rewritePolicySnapshot, error) {
-	return refreshRewritePolicy(ctx, ses, versionOf, true)
+	policy, err := refreshRewritePolicy(ctx, ses, versionOf, true)
+	if err != nil {
+		return nil, err
+	}
+	return &policy, nil
 }
 
 // Prepared execution needs the current proof and generation, not another copy
@@ -235,7 +239,7 @@ func refreshPreparedRewritePolicy(ctx context.Context, ses *Session) error {
 
 func refreshRewritePolicy(ctx context.Context, ses *Session,
 	versionOf func(context.Context, *Session) (any, error), materialize bool,
-) (*rewritePolicySnapshot, error) {
+) (rewritePolicySnapshot, error) {
 	request := rewritePolicyRequestFor(ctx, ses)
 	if request != nil {
 		request.mu.Lock()
@@ -245,7 +249,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 	var stamp rewritePolicyRefreshStamp
 
 	sessionEnabled := ses.rewriteEnabled.Load()
-	policy := &rewritePolicySnapshot{
+	policy := rewritePolicySnapshot{
 		sessionEnabled: sessionEnabled,
 		captured:       materialize,
 	}
@@ -263,9 +267,9 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 	// session's local invalidation, so reuse without a proof would enforce a
 	// stale policy indefinitely (issue #29133).
 	cacheReloaded := false
-	fail := func(err error) (*rewritePolicySnapshot, error) {
+	fail := func(err error) (rewritePolicySnapshot, error) {
 		ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
-		return nil, err
+		return rewritePolicySnapshot{}, err
 	}
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -380,7 +384,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 	if cacheReloaded {
 		// Every cache reload, including one after a failed SET ROLE, closes the
 		// generation boundary for handles published under the previous policy.
-		ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, nil)
+		ses.validatePreparedStatementsAfterRewritePolicyRefresh(&policy, nil)
 	}
 	if err := ctx.Err(); err != nil {
 		return fail(err)

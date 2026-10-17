@@ -158,10 +158,7 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 		e.mu.Unlock()
 
 		// No session/epoch lock covers limiter admission or logtail I/O.
-		stop := func() bool { return true }
-		if ctx.Done() != e.ctx.Done() {
-			stop = context.AfterFunc(ctx, e.cancel)
-		}
+		stop := e.watchCallerCancellation(ctx)
 		minimum := e.owner.getLastCommitTS()
 		a, _, err := eng.AcquireCatalogSnapshot(e.ctx, minimum)
 		var version disttae.PrivilegeCacheVersion
@@ -172,7 +169,9 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 			// controls; never replace it with a newer authorization snapshot.
 			version, minimum, proofErr = eng.GetPrivilegeCacheVersionWithAdmission(e.ctx, e.identity.account, minimum, a)
 		}
-		stop()
+		if stop != nil {
+			stop()
+		}
 		if callerErr := ctx.Err(); callerErr != nil {
 			a.End()
 			a = nil
@@ -202,6 +201,16 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 		e.mu.Unlock()
 		return a, err
 	}
+}
+
+// The exact owner already delegates cancellation to e.ctx. Avoid materializing
+// its Done channel just to compare it to itself; independent callers retain the
+// cancellation bridge that terminates a blocked acquisition.
+func (e *authorizationEpoch) watchCallerCancellation(ctx context.Context) func() bool {
+	if ctx == e || ctx.Done() == e.ctx.Done() {
+		return nil
+	}
+	return context.AfterFunc(ctx, e.cancel)
 }
 
 func sessionCatalogEngine(ses *Session) *disttae.Engine {

@@ -271,7 +271,7 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					capture := func() *rewritePolicySnapshot {
 						policy, err := refreshRewritePolicy(ctx, ses, versionOf, materialize)
 						require.NoError(t, err)
-						return policy
+						return &policy
 					}
 					initial := capture()
 					old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyGeneration: initial.generation}
