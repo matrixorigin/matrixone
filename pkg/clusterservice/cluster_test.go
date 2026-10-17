@@ -308,8 +308,15 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 				return true
 			}
 			hc.addCN("cn0")
+			started := time.Now()
 			err := c.DebugUpdateCNLabel("cn0", map[string][]string{"k1": {"v1"}})
+			finished := time.Now()
 			require.NoError(t, err)
+			hc.RLock()
+			deadline := hc.updateCNLabelDeadline
+			hc.RUnlock()
+			require.False(t, deadline.Before(started.Add(3*time.Second)))
+			require.False(t, deadline.After(finished.Add(3*time.Second)))
 			c.ForceRefresh(true)
 			c.GetCNService(NewServiceIDSelector("cn0"), apply)
 			require.Equal(t, 1, len(cns))
@@ -351,6 +358,18 @@ func TestCluster_DebugUpdateCNLabelWithContext(t *testing.T) {
 			hc.RUnlock()
 			require.Equal(t, calls, callsAfterInvalidContext,
 				"unbounded label updates must be rejected before contacting HAKeeper")
+
+			updateErr := errors.New("label update failed")
+			hc.Lock()
+			hc.updateCNLabelErr = updateErr
+			hc.Unlock()
+			require.ErrorIs(t, c.DebugUpdateCNLabelWithContext(ctx, "cn0", nil), updateErr)
+			hc.RLock()
+			callsAfterError := hc.updateCNLabelCalls
+			labelsAfterError := hc.value.CNStores[0].Labels
+			hc.RUnlock()
+			require.Equal(t, calls+1, callsAfterError)
+			require.Equal(t, map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}}, labelsAfterError)
 		},
 	)
 }
@@ -447,6 +466,7 @@ type testHAKeeperClient struct {
 	updateCNWorkStateDeadline time.Time
 	updateCNLabelCalls        int
 	updateCNLabelDeadline     time.Time
+	updateCNLabelErr          error
 }
 
 func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
@@ -505,6 +525,9 @@ func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNSt
 	defer c.Unlock()
 	c.updateCNLabelCalls++
 	c.updateCNLabelDeadline, _ = ctx.Deadline()
+	if c.updateCNLabelErr != nil {
+		return c.updateCNLabelErr
+	}
 	for i, cn := range c.value.CNStores {
 		if cn.UUID == label.UUID {
 			c.value.CNStores[i].Labels = label.Labels
