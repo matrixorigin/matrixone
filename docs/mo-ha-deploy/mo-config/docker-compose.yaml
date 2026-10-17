@@ -1,0 +1,19 @@
+services:
+  matrixone:
+    image: __MO_IMAGE__
+    container_name: matrixone
+    # 固定 hostname：dragonboat 的磁盘目录依赖它，两台机与切换前后必须一致
+    hostname: mo-ha
+    # Pacemaker 控制启停，Docker 绝不能自动重启
+    restart: "no"
+    entrypoint: ["/mo-service"]
+    command: ["-launch", "/etc/mo-conf/launch.toml", "-debug-http=:6060"]
+    ports:
+      - "__MO_PORT__:6001"
+    volumes:
+      - __DATA_DIR__:/mo-data
+      - __MO_DIR__/conf:/etc/mo-conf:ro
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
