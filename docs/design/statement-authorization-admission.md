@@ -156,6 +156,13 @@ COM_QUERY starts a new epoch before capture/rewrite and wrapper construction.
 The raw SQL continuation, including executable comments, is split by the MySQL
 parser; semicolon text scanning is not a statement boundary.
 
+A replacement BEGIN commits the preceding user transaction before the new
+statement owner and policy are captured at the advanced commit frontier. It
+uses the same complete refresh boundary as implicit-commit DDL, while keeping
+BEGIN separate from the DDL statement-end commit flag: the newly opened user
+transaction remains active and rollbackable. Commit failure preserves the
+existing error conversion and does not execute the replacement statement.
+
 Ordinary batches preserve the existing eager syntax-validation behavior before
 executing the first statement, without performing authorization or creating a
 transaction during validation. Execution then stages original raw statement

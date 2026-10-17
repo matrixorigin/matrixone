@@ -113,6 +113,13 @@ func TestStatementAuthorizationEpochAcrossCatalogCommit(t *testing.T) {
 		var count int
 		require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from app.t").Scan(&count))
 		require.Equal(t, 2, count)
+		// Replacement BEGIN commits the preceding writer before acquiring its new
+		// epoch, while the replacement transaction itself remains rollbackable.
+		mustExec(t, ctx, owner, "begin; insert into app.marker values (1); begin; insert into app.marker values (2); rollback")
+		var marker int
+		require.NoError(t, owner.QueryRowContext(ctx, "select count(*), min(id) from app.marker").Scan(&count, &marker))
+		require.Equal(t, 1, count, "replacement BEGIN's write must roll back")
+		require.Equal(t, 1, marker, "the preceding transaction must commit")
 		// An implicit commit advances the real session minimum. Re-establish the
 		// whole authorization/rewrite owner before creating the DDL's transaction.
 		mustExec(t, ctx, owner, "begin")

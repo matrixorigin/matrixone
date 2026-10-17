@@ -6574,9 +6574,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
-		if execCtx.implicitCommitBefore {
+		// Replacement BEGIN also commits an existing transaction. Keep it separate
+		// from implicitCommitBefore, which additionally commits DDL at statement
+		// completion and must not commit the new transaction opened by BEGIN.
+		_, replacementBegin := stmt.(*tree.BeginTransaction)
+		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
+				if replacementBegin && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+					// Preserve createUnsafe's existing BEGIN error contract.
+					err = moerr.NewInternalError(execCtx.reqCtx, writeWriteConflictsErrorInfo())
+				}
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
 				return err
 			}
