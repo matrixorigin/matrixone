@@ -51,7 +51,7 @@ MO_START_TIMEOUT="${MO_START_TIMEOUT:-600}"
 CHECK_SETTLE_SEC="${CHECK_SETTLE_SEC:-180}"; CHECK_MO_WAIT="${CHECK_MO_WAIT:-300}"
 DRBD9_QUORUM="${DRBD9_QUORUM:-0}"; FORMAT_DRBD="${FORMAT_DRBD:-0}"
 BOOTSTRAP="${BOOTSTRAP:-0}"; DRY_RUN="${DRY_RUN:-0}"; ASSUME_YES="${ASSUME_YES:-0}"
-HACLUSTER_PW="${HACLUSTER_PW:-hacluster}"; OPEN_PORTS="${OPEN_PORTS:-1}"
+HACLUSTER_PW="${HACLUSTER_PW:-}"; OPEN_PORTS="${OPEN_PORTS:-1}"
 VIP="${VIP:-}"
 # 对象存储（可选）：设置 S3_BUCKET 即启用
 S3_ENDPOINT="${S3_ENDPOINT:-}"; S3_BUCKET="${S3_BUCKET:-}"; S3_REGION="${S3_REGION:-}"
@@ -139,12 +139,12 @@ mo-ha-deploy.sh — MatrixOne 双机主备(DRBD+Pacemaker/STONITH) 一键部署
   --drbd9-quorum         使用 DRBD9 quorum majority(需 kmod-drbd 9.x)
   --docker-mode M        official(默认)|distro|skip
   --no-pull-image        不在部署时预拉 MO 镜像(默认先 docker pull，避免启动超时)
-  --hacluster-password P pcsd hacluster 密码(两台须一致)
+  --hacluster-password P pcsd hacluster 密码(必填，两台须一致)
   --stages LIST          pre,pkg,docker,moconf,drbd,cluster,fence,resources,check,teardown
   --teardown             等价于 --stages teardown(销毁集群/DRBD/MO，危险)
   --no-open-ports        不自动配置防火墙
   --dry-run              只打印不执行
-  --yes                  免交互
+  --yes                  免交互(teardown 等破坏性阶段必需)
 EOF
 }
 
@@ -207,6 +207,19 @@ while [ $# -gt 0 ]; do
     *) die "未知参数: $1 (--help 查看用法)";;
   esac
 done
+
+# ----------------------------- 凭据校验 -------------------------------------
+# 凭据会经 bash -c 拼入命令，含引号/空白/;|& 等元字符会被错误解析，提前拦下。
+check_secret(){
+  local name="$1" val="$2"
+  [ -n "$val" ] || return 0
+  case "$val" in
+    *[!A-Za-z0-9._@%+=,:/_-]*)
+      die "$name 含 shell 元字符(引号/空白/\$ 等)，会破坏部署命令；请改用字母/数字/._@%+=,:/_- 组合" ;;
+  esac
+}
+check_secret "--fence-password" "$FENCE_PASSWORD"
+check_secret "--hacluster-password" "$HACLUSTER_PW"
 
 # ----------------------------- pcs 代理绕过 ---------------------------------
 # pcs 客户端通过 https://<node>:2224 访问 pcsd；若环境设置了 HTTP(S)_PROXY，
@@ -356,8 +369,9 @@ stage_pkg(){
 
 # ----------------------------- 阶段 docker ----------------------------------
 compose_wrapper_path(){
-  # ocf:heartbeat:docker-compose 默认调 /usr/bin/docker-compose
-  echo "/usr/bin/docker-compose"
+  # 放 /usr/local/bin，避免覆盖发行版/第三方提供的 /usr/bin/docker-compose。
+  # ocf:heartbeat:docker-compose 的 binpath 由本脚本显式指定，路径可自选。
+  echo "/usr/local/bin/docker-compose"
 }
 stage_docker(){
   hdr "阶段 docker: 安装 Docker 与 compose"
@@ -384,13 +398,21 @@ stage_docker(){
     *) die "--docker-mode 只能是 official|distro|skip";;
   esac
   runq "systemctl enable --now docker || true"
-  # compose wrapper（存在 docker compose 插件时）
-  if [ "$DRY_RUN" = 1 ] || [ -x /usr/bin/docker ]; then
-    run "cat > $(compose_wrapper_path) <<'WRAP'
+  # compose wrapper：仅在 docker compose 插件确实可用时创建，避免生成不可用的 shim
+  local wpath; wpath="$(compose_wrapper_path)"
+  if [ "$DRY_RUN" = 1 ] || { [ -x /usr/bin/docker ] && /usr/bin/docker compose version >/dev/null 2>&1; }; then
+    if [ "$DRY_RUN" != 1 ] && [ -e "$wpath" ] && ! grep -q 'docker compose' "$wpath" 2>/dev/null; then
+      wrn "$wpath 已存在且非本脚本生成，保留原文件"
+    else
+      run "mkdir -p $(dirname "$wpath")
+cat > $wpath <<'WRAP'
 #!/bin/sh
 exec /usr/bin/docker compose \"\$@\"
 WRAP
-chmod 0755 $(compose_wrapper_path)"
+chmod 0755 $wpath"
+    fi
+  else
+    wrn "docker compose 插件不可用，跳过创建 $wpath（请自行准备 docker-compose）"
   fi
   run "mkdir -p $DATA_DIR $MO_DIR/conf"
   # 预拉 MO 镜像（避免 docker-compose RA start 超时触发资源迁移）
@@ -490,7 +512,12 @@ resource ${DRBD_RESOURCE} {
   }${quorum_opts}
 }
 DRBD"
-  runq "drbdadm create-md ${DRBD_RESOURCE} --force 2>&1 | tail -3 || true"
+  # 已有元数据时不要用 --force 覆盖：重跑本阶段会重建元数据，破坏既有卷
+  if [ "$DRY_RUN" != 1 ] && drbdadm dump-md "$DRBD_RESOURCE" >/dev/null 2>&1; then
+    info "检测到已有 DRBD 元数据，跳过 create-md"
+  else
+    runq "drbdadm create-md ${DRBD_RESOURCE} --force 2>&1 | tail -3 || true"
+  fi
 
   if [ "$DRY_RUN" != 1 ] && [ "$FORMAT_DRBD" = 1 ]; then
     if [ "$BOOTSTRAP" != 1 ]; then
@@ -516,6 +543,7 @@ DRBD"
 # ----------------------------- 阶段 cluster --------------------------------
 stage_cluster(){
   hdr "阶段 cluster: corosync/pacemaker"
+  [ -n "$HACLUSTER_PW" ] || die "缺少 --hacluster-password（pcsd 认证密码，两台必须一致）"
   runq "systemctl enable --now pcsd || true"
   runq "echo 'hacluster:${HACLUSTER_PW}' | chpasswd"
   runq "mkdir -p /etc/corosync /var/lib/corosync /var/log/corosync"
@@ -639,6 +667,12 @@ stage_resources(){
 stage_teardown(){
   hdr "阶段 teardown: 清理既有 HA 配置 (危险)"
   info "将销毁集群、DRBD、MO 容器与数据目录挂载（保留 $DRBD_DEVICE 数据需自行 backup）"
+  if [ "$DRY_RUN" != 1 ] && [ "$ASSUME_YES" != 1 ]; then
+    if [ ! -t 0 ]; then die "teardown 是破坏性操作(含 wipefs $DRBD_DEVICE)，非交互执行必须显式加 --yes"; fi
+    printf "  确认销毁？输入 yes 继续: "
+    local _a=""; read -r _a || true
+    [ "$_a" = "yes" ] || die "已取消 teardown"
+  fi
   runq "pcs cluster stop --all 2>/dev/null || true"
   runq "pcs cluster destroy --all 2>/dev/null || true"
   runq "systemctl disable --now corosync pacemaker pcsd sbd 2>/dev/null || true"
@@ -688,10 +722,20 @@ stage_check(){
 
   wait_for 120 "pcs stonith status 2>&1 | grep -q 'Started'" \
     && ok "fencing 设备已 Started" || bad "fencing 设备未 Started"
-  # 节点覆盖
-  local cfg; cfg="$(pcs stonith config 2>/dev/null | tr '\n' ' ')"
+  # 节点覆盖：只解析 pcmk_host_list / pcmk_host_map 的值。
+  # 不能用全文 grep 节点名——资源名本身叫 fence_<node>，会让检查恒为真。
+  local cov
+  cov="$(pcs stonith config 2>/dev/null | awk '
+    {
+      while (match($0, /(pcmk_host_list|pcmk_host_map)=[^[:space:]]+/)) {
+        s = substr($0, RSTART, RLENGTH); sub(/^[^=]*=/, "", s)
+        n = split(s, a, /[;:,]/)
+        for (i = 1; i <= n; i++) { gsub(/"/, "", a[i]); if (a[i] != "") print a[i] }
+        $0 = substr($0, RSTART + RLENGTH)
+      }
+    }' | sort -u)"
   for n in "$SELF" "$PEER"; do
-    if printf '%s' "$cfg" | grep -qE "$n"; then ok "节点 $n 已被 fencing 覆盖"; else bad "节点 $n 未被 fencing 覆盖"; fi
+    if printf '%s\n' "$cov" | grep -qxF "$n"; then ok "节点 $n 已被 fencing 覆盖"; else bad "节点 $n 未被 fencing 覆盖"; fi
   done
   pcs status 2>&1 | grep -qi "Failed Actions" && bad "存在 Failed Actions" || ok "无 Failed Actions"
 
@@ -714,7 +758,7 @@ stage_check(){
 open_ports(){
   [ "$OPEN_PORTS" = 1 ] || return 0
   hdr "配置防火墙"
-  local tcp="2224 7788 7789 $MO_PORT" udp="5405 5404"
+  local tcp="2224 $DRBD_PORT $MO_PORT" udp="5405 5404"
   if command -v firewall-cmd >/dev/null 2>&1; then
     runq "systemctl enable --now firewalld || true"
     for p in $tcp; do runq "firewall-cmd --permanent --add-port=$p/tcp || true"; done
@@ -724,7 +768,7 @@ open_ports(){
     for p in $tcp; do runq "ufw allow $p/tcp || true"; done
     for p in $udp; do runq "ufw allow $p/udp || true"; done
   else
-    info "未检测到 firewalld/ufw，跳过（请自行放行 2224/tcp,5405/udp,7789/tcp,${MO_PORT}/tcp）"
+    info "未检测到 firewalld/ufw，跳过（请自行放行 2224/tcp,5405/udp,${DRBD_PORT}/tcp,${MO_PORT}/tcp）"
   fi
 }
 
@@ -740,7 +784,9 @@ main(){
   stage_enabled fence && stage_fence
   stage_enabled resources && stage_resources
   stage_enabled teardown && stage_teardown
-  stage_enabled check && open_ports
+  # 防火墙与 STAGES 解耦：OPEN_PORTS 是独立开关(--no-open-ports 关闭)。
+  # 若挂在 check 上，按 README 的 node2 阶段列表部署时会漏放行 pcsd/corosync/DRBD 端口。
+  open_ports
   if stage_enabled check; then stage_check; fi
   printf "\n${G}完成${N}：$SELF ($([ "$BOOTSTRAP" = 1 ] && echo 引导节点 || echo 普通节点))\n"
   [ "$BOOTSTRAP" != 1 ] && info "提示：请在引导节点执行本脚本(加 --bootstrap)以组建集群并创建资源。"
