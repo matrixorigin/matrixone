@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func TestRollupDerivedFilterPushdownRespectsGroupingFlag(t *testing.T) {
 				scan := onlyTableScanBelow(t, query, agg)
 				if agg.GroupingFlag[0] {
 					require.True(t, containsFilterFunction(scan.FilterList, test.filterName),
-						"predicate on a real group key must reach the table scan")
+						"predicate on a real group key must reach the table scan; aggregate filters: %v", agg.FilterList)
 					require.False(t, containsFilterFunction(agg.FilterList, test.filterName))
 				} else {
 					require.False(t, containsFilterFunction(scan.FilterList, test.filterName),
@@ -275,4 +276,65 @@ func containsFilterFunction(filters []*planpb.Expr, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestSimplifyActiveGroupingFilter(t *testing.T) {
+	builder, _ := genBuilderAndCtx(t)
+	const tag int32 = 7
+	for _, tc := range []struct {
+		name     string
+		flags    []bool
+		typ      types.T
+		change   func(*planpb.Expr) *planpb.Expr
+		simplify bool
+	}{
+		{name: "active", flags: []bool{true}, simplify: true},
+		{name: "active-varchar", typ: types.T_varchar, flags: []bool{true}, simplify: true},
+		{name: "inactive", flags: []bool{false}},
+		{name: "dynamic-missing-flags"},
+		{name: "foreign-tag", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr {
+			e.GetF().Args[0].GetF().Args[0].GetCol().RelPos++
+			e.GetF().Args[2].GetCol().RelPos++
+			return e
+		}},
+		{name: "invalid-position", flags: []bool{true, true}, change: func(e *planpb.Expr) *planpb.Expr {
+			e.GetF().Args[0].GetF().Args[0].GetCol().ColPos = 1
+			e.GetF().Args[2].GetCol().ColPos = 1
+			return e
+		}},
+		{name: "mismatched-value", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr { e.GetF().Args[0].GetF().Args[0].GetCol().ColPos++; return e }},
+		{name: "not-null-then", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr { e.GetF().Args[1] = makePlan2Int64ConstExprWithType(0); return e }},
+		{name: "wrong-null-type", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr { e.GetF().Args[1].Typ.Width++; return e }},
+		{name: "wrong-function-id", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr {
+			e.GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.ABS, 0)
+			return e
+		}},
+		{name: "grouping-observer", flags: []bool{true}, change: func(e *planpb.Expr) *planpb.Expr {
+			out, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "grouping", []*planpb.Expr{e})
+			require.NoError(t, err)
+			return out
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := planpb.Type{Id: int32(types.T_int64)}
+			if tc.typ == types.T_varchar {
+				typ = planpb.Type{Id: int32(types.T_varchar), Width: 152}
+			}
+			key := GetColExpr(typ, tag, 0)
+			normalized, err := normalizeGroupingSetProjects(builder.GetContext(), []*planpb.Expr{key}, []*planpb.Expr{key}, true)
+			require.Equal(t, key.Typ, normalized[0].Typ, "normalization preserves the output type and collation provenance")
+			require.NoError(t, err)
+			expr := normalized[0]
+			if tc.change != nil {
+				expr = tc.change(expr)
+			}
+			before := DeepCopyExpr(expr)
+			got := simplifyActiveGroupingFilter(expr, tag, 1, tc.flags)
+			if tc.simplify {
+				require.True(t, exprStructuralEqual(key, got))
+			} else {
+				require.True(t, exprStructuralEqual(before, got), "unsafe normalization must remain")
+			}
+		})
+	}
 }

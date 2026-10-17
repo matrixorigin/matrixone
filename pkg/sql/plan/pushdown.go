@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -372,7 +373,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			// happen after set-operation columns are replaced by branch literals.
 			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
 				node.FilterList = append(node.FilterList, filter)
-			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				continue
+			}
+			hasAggregate := containsTag(filter, aggregateTag)
+			hasGrouping := false
+			if !hasAggregate {
+				hasGrouping = containGrouping(filter)
+				if hasGrouping {
+					// Only revisit predicates already blocked by GROUPING. Ordinary
+					// aggregate filters keep their existing expression walks.
+					filter = simplifyActiveGroupingFilter(filter, groupTag, len(node.GroupBy), node.GroupingFlag)
+					hasGrouping = containGrouping(filter)
+				}
+			}
+			if !hasAggregate && !hasGrouping &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
@@ -1462,6 +1476,45 @@ func unwrapIsTrueFromMarkJoinEqualities(
 	}
 
 	return conditions
+}
+
+// simplifyActiveGroupingFilter removes output NULL normalization only for this
+// static branch's active keys. Their GROUPING bit is zero, so the wrapper is a
+// value identity in a predicate. Keep synthetic/dynamic keys and real GROUPING
+// observers intact; output projections must retain their query-block boundary.
+func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) *plan.Expr {
+	if len(flags) == 0 {
+		return expr
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.GROUPING {
+		return expr
+	}
+	if id == function.IFF && len(fn.Args) == 3 {
+		key := fn.Args[2]
+		col := key.GetCol()
+		probe := fn.Args[0].GetF()
+		null := fn.Args[1]
+		if col != nil && col.RelPos == groupTag && col.ColPos >= 0 &&
+			int(col.ColPos) < groupCount && int(col.ColPos) < len(flags) && flags[col.ColPos] &&
+			probe != nil && probe.Func != nil && len(probe.Args) == 1 &&
+			exprStructuralEqual(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
+			probeID, _ := function.DecodeOverloadID(probe.Func.Obj)
+			keyType, nullType, resultType := key.Typ, null.Typ, expr.Typ
+			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
+			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) {
+				return key
+			}
+		}
+	}
+	for i, arg := range fn.Args {
+		fn.Args[i] = simplifyActiveGroupingFilter(arg, groupTag, groupCount, flags)
+	}
+	return expr
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below
