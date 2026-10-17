@@ -1,10 +1,10 @@
 service-type = "CN"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK-V2"
-data-dir = "./mo-data/local2"
+data-dir = "/mo-data/local2"
 
 __SHARED_FILESERVICE__
 [log]

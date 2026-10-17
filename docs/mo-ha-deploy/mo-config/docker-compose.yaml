@@ -6,6 +6,10 @@ services:
     hostname: mo-ha
     # Pacemaker 控制启停，Docker 绝不能自动重启
     restart: "no"
+    # 优雅关闭：给 /mo-service 足够时间 flush；缺省 10s 后 Docker 会直接 SIGKILL
+    stop_grace_period: 60s
+    # 固定工作目录：配置里的相对路径以 / 为基准（本 kit 已改用绝对路径，这里显式置防）
+    working_dir: /
     entrypoint: ["/mo-service"]
     command: ["-launch", "/etc/mo-conf/launch.toml", "-debug-http=:6060"]
     ports:
@@ -17,3 +21,9 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
+    # 长期运行：限制容器日志，避免撑满系统盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
