@@ -1778,6 +1778,7 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(rows)
 
+			var generation *process.ExecutionResourceGeneration
 			for b.Loop() {
 				b.StopTimer()
 				input := batch.NewWithSize(5)
@@ -1795,7 +1796,8 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 					[]aggexec.AggFuncExecExpression{countStarAgg()})
 				g.GroupByHashKey = test.hashKey
 				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-				allocation := installGroupTestAllocation(b, g, proc, 1<<30)
+				allocation := installGroupTestAllocation(b, g, proc, 1<<30, generation)
+				generation = allocation.generation
 				b.StartTimer()
 
 				if err := g.Prepare(proc); err != nil {
