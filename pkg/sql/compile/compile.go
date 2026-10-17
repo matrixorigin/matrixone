@@ -1402,6 +1402,17 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if queryUsesScalarSetReaggregation(qry) {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(qry)
+		if featureErr != nil {
+			return nil, featureErr
+		}
+		if err = validateRemoteExpressionFeatures(c.proc, features); err != nil {
+			return nil, err
+		}
+		// A single coordinator owns the permit, work counter and occurrence IDs.
+		c.execType = plan2.ExecTypeTP
+	}
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -1428,6 +1439,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 
 	ncpu := int32(c.ncpu)
+	if queryUsesScalarSetReaggregation(qry) {
+		ncpu = 1
+	}
 	if qry.MaxDop > 0 {
 		ncpu = min(ncpu, int32(qry.MaxDop))
 	}
@@ -1461,6 +1475,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		steps = append(steps, scopes...)
 	}
 	c.markProductProducerRegions(steps)
+	if err = validateScalarSetScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
+		return nil, err
+	}
 	if err = validateSequenceScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
 		return nil, err
 	}
@@ -6691,7 +6708,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
 		return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 	}
-	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
+	if node.ScalarSetReaggregation || containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
 		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
 		// Keep WINDOW local: it has no remote encoding. The same local
 		// stage also gives statement-invariant ON diagnostics a single owner.
@@ -7096,6 +7113,9 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
 	if isMixedJSONNumericAsof(node) {
 		return true
+	}
+	if node.ScalarSetReaggregation {
+		return false
 	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||

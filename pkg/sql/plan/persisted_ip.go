@@ -171,7 +171,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.TableCollationFunction {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
-	if features.SetOperationFloatKeys {
+	if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
 	}
 	if features.CalendarIntervalNormalization {

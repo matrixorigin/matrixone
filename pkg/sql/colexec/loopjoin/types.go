@@ -136,6 +136,8 @@ type LoopJoin struct {
 	// PairCondition evaluates one actual candidate pair. A nil result requests
 	// ExecYield; the caller retains both inputs until the next Call resumes it.
 	PairCondition                 func(*process.Process, *batch.Batch, int, *batch.Batch, int) (*vector.Vector, error)
+	ScalarSetReaggregation        bool
+	ScalarSetLease                *process.ScalarSetExecutionLease
 	ctr                           container
 	LeftTypes                     []types.Type
 	RightTypes                    []types.Type
@@ -214,6 +216,7 @@ func (loopJoin *LoopJoin) ClearAllocationAccount(
 	loopJoin.allocationAccount = nil
 	loopJoin.resultAllocation = nil
 	loopJoin.conditionAllocation = nil
+	loopJoin.ScalarSetLease = nil
 	return nil
 }
 

@@ -138,6 +138,30 @@ type AllocationAccountSnapshot struct {
 	Sealed bool
 }
 
+// RetainedMemoryReservation charges borrowed storage whose physical allocation
+// cannot carry this account. It owns admission only, never the borrowed buffer.
+// Consumers without physical backing provenance may conservatively charge it
+// again; an allocation selection alone is not such provenance.
+type RetainedMemoryReservation struct {
+	account  *AllocationAccount
+	owner    AllocationOwner
+	size     uint64
+	released atomic.Bool
+}
+
+func (a *AllocationAccount) ReserveRetainedMemory(size uint64, owner AllocationOwner) (*RetainedMemoryReservation, error) {
+	if err := a.acquire(size, owner); err != nil {
+		return nil, err
+	}
+	return &RetainedMemoryReservation{account: a, owner: owner, size: size}, nil
+}
+
+func (r *RetainedMemoryReservation) Release() {
+	if r != nil && r.released.CompareAndSwap(false, true) {
+		r.account.release(r.size, r.owner)
+	}
+}
+
 // AllocationAccountOwnerSnapshot is exact, bounded observation state for one
 // repository owner class. Current is live capacity at the snapshot boundary;
 // Peak is that owner's high-water capacity within the generation.

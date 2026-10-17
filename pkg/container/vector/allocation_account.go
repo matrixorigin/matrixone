@@ -327,6 +327,42 @@ func (v *Vector) AllocationAccountSelection() *AllocationAccountSelection {
 	return v.allocationAccount
 }
 
+// RetainedBytes conservatively counts storage kept alive by this vector. An
+// allocation selection only governs future allocations and is not backing
+// provenance. Views include the source's complete retained capacity before an
+// offset slice can hide its prefix. Shared storage may be counted twice.
+func (v *Vector) RetainedBytes() uint64 {
+	if v == nil {
+		return 0
+	}
+	metadata := uint64(v.allocatedMetadataBytes())
+	size := retainedBytesAdd(v.retainedPayloadBytes(), metadata)
+	size = retainedBytesAdd(size, v.nsp.RetainedStorageBytes())
+	size = retainedBytesAdd(size, v.gsp.RetainedStorageBytes())
+	return size
+}
+
+func retainedBytesAdd(a, b uint64) uint64 {
+	if b > ^uint64(0)-a {
+		return ^uint64(0)
+	}
+	return a + b
+}
+
+func (v *Vector) retainedPayloadBytes() uint64 {
+	size := uint64(cap(v.data)) + uint64(cap(v.area))
+	for _, lease := range []BufferLease{v.dataLease, v.areaLease} {
+		if lease != nil {
+			n := uint64(cap(lease.Bytes()))
+			if charged := lease.AccountedBytes(); charged > 0 {
+				n = max(n, uint64(charged))
+			}
+			size = retainedBytesAdd(size, n)
+		}
+	}
+	return max(size, v.borrowedBackingBytes)
+}
+
 // CanSetAllocationAccount reports whether selection can be installed without
 // converting or relabeling an existing physical allocation.
 func (v *Vector) CanSetAllocationAccount(
