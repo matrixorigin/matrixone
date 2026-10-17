@@ -3682,7 +3682,11 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 }
 
 func GetExternParallelSize(totalSize int64, cpuNum int) int {
-	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	return externParallelSize(totalSize, cpuNum, int64(colexec.WriteS3Threshold))
+}
+
+func externParallelSize(totalSize int64, cpuNum int, sizePerReader int64) int {
+	parallelSize := int(totalSize / sizePerReader)
 	if parallelSize < 1 {
 		return 1
 	} else if parallelSize < cpuNum {
@@ -5121,12 +5125,20 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
+	testConfig, observeRanges := moruntime.GetLoadDataTestConfig(c.proc.GetService(), param.Filepath)
 	stageNodes := c.externalScanStageNodes(node, param)
 	if len(stageNodes) == 0 && loadTimeScanNeedsCoordinator(node, param) {
 		stageNodes = engine.Nodes{{Addr: c.addr, Mcpu: c.capFanoutByMaxDop(max(c.ncpu, 1))}}
 	}
 	if len(stageNodes) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
+	}
+	if observeRanges && len(stageNodes) == 1 && stageNodes[0].Addr == c.addr {
+		// Small SQL fixtures otherwise retain a one-worker TP budget even
+		// after admission. Keep the selected local CN, and size a private
+		// worker budget by the test threshold, actual CPUs, and query max_dop.
+		stageNodes = slices.Clone(stageNodes)
+		stageNodes[0].Mcpu = c.capFanoutByMaxDop(externParallelSize(fileSize[0], c.ncpu, testConfig.MinSize))
 	}
 
 	if param.ScanType == tree.S3 {
@@ -5148,6 +5160,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	}
 
 	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+	if observeRanges {
+		parallelSize = externParallelSize(fileSize[0], mcpu, testConfig.MinSize)
+	}
 
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
@@ -5156,6 +5171,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 		fileOffset = append(fileOffset, arr)
 		if err != nil {
 			return nil, err
+		}
+		if observeRanges && testConfig.OnRanges != nil {
+			testConfig.OnRanges(parallelSize, slices.Clone(arr))
 		}
 	}
 
