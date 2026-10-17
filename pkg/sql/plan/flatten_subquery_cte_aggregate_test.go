@@ -244,8 +244,10 @@ func TestDeepNonEqualityScalarAggregateDoesNotEscapeIntoExists(t *testing.T) {
 					WHERE k.N_REGIONKEY < o.N_NATIONKEY)))`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
-			require.ErrorContains(t, err, "deep non-equality correlated aggregate")
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, p.GetQuery().Correlation)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }
