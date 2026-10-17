@@ -5827,6 +5827,8 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 		return true
 	case *plan.Expr_Lit:
 		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_Vec:
+		return rule.IsDecimal256ScalarConstant(expr)
 	case *plan.Expr_F:
 		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
 			return false

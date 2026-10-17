@@ -18,7 +18,7 @@ select left(statement, 47) stmt, json_unquote(json_extract(stats, '$[7]')) = @pa
 -- Server-side LOAD returns one OK packet.
 set @packet_cnt=1;
 -- @ignore:2,3,4
-select left(statement, 16) as stmt, json_unquote(json_extract(stats, '$[7]')) = @packet_cnt check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data infile%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
+select left(statement, 16) as stmt, json_unquote(json_extract(stats, '$[7]')) = @packet_cnt check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'sys' and statement like 'load data infile%into table bvt_query_tcp_server.rawlog_withnull%' and statement_type = 'Load' order by request_at desc limit 1;
 -- LOCAL LOAD returns one file-request packet followed by one OK packet.
 set @packet_cnt=2;
 -- @ignore:2,3,4

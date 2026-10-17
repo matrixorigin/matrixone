@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -1209,6 +1210,7 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	// applies while the replacement generation is being connected or admitted.
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		logutil.IsExpectedConnectionCloseError(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||

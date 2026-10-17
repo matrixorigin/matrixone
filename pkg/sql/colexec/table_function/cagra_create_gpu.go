@@ -33,6 +33,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
@@ -53,7 +54,7 @@ var cagra_runSql = sqlexec.RunSql
 // cagraBuilder is the (B, Q)-erased build interface the create state drives.
 // *cagraPkg.CagraBuild[B, Q] satisfies it for every wired (base, storage)
 // combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
-// end() routes through ToInsertSql instead.
+// end() routes through PreparePersistence instead.
 type cagraBuilder interface {
 	// AddRow takes the raw base-type bytes of one vector (4*dim for an f32 base,
 	// 2*dim for an f16 base); the concrete builder reinterprets them to its
@@ -62,9 +63,10 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PersistChunks(writer *sqlexec.ChunkInserter) error
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
-	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
+	// PreparePersistence. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
 	DeviceDemand() map[int]int64
 	Destroy() error
@@ -124,7 +126,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts, buildSnapshotTS(proc),
+		sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
 			metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
 	}
 	// No builder selected → init didn't set one. Nothing to do for the cuvs
@@ -146,7 +148,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// escape: every query reads all sub-indexes at once, and distribution_mode is
 	// persisted, so no future device set redistributes it.
 	//
-	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
+	// Placed after PreparePersistence (which packs and stamps the sizes) and before the
 	// statements are executed, so a refusal persists nothing.
 	if demand := u.builder.DeviceDemand(); len(demand) > 0 {
 		// This algorithm's own fraction, read from its cost class, so the gate
@@ -195,20 +197,27 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 	logutil.Infof("CAGRA create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
 		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
-	for i, s := range sqls {
-		logutil.Infof("CAGRA create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
-		t0 := time.Now()
-		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
-		if err != nil {
-			logutil.Errorf("CAGRA create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
-			return err
+	storageProc := sqlexec.NewSqlProcess(proc)
+	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
+		stmt := storageProc.StatementOption()
+		if u.builder != nil {
+			writer, err := sqlexec.NewChunkInserter(storageProc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
+			if err != nil {
+				return err
+			}
+			if err := u.builder.PersistChunks(writer); err != nil {
+				return err
+			}
 		}
-		logutil.Infof("CAGRA create: SQL %d/%d done in %v", i+1, len(sqls), time.Since(t0))
-		res.Close()
-	}
-	logutil.Infof("CAGRA create: all %d SQLs committed for `%s`.`%s`",
-		len(sqls), u.tblcfg.DbName, u.tblcfg.IndexTable)
-	return nil
+		for _, sql := range sqls {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (u *cagraCreateState) reset(tf *TableFunction, proc *process.Process) {

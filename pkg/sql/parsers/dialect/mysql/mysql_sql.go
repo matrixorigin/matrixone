@@ -28700,7 +28700,7 @@ yydefault:
 			yyLOCAL = &tree.ExternParam{
 				ExParamConst: tree.ExParamConst{
 					ScanType: tree.INLINE,
-					Format:   yyDollar[4].str,
+					Format:   strings.ToLower(yyDollar[4].str),
 					Data:     yyDollar[8].str,
 				},
 				ExParam: tree.ExParam{
