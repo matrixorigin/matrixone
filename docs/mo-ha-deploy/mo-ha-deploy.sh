@@ -377,7 +377,7 @@ stage_pre(){
   require_nodes
   [ -n "$DRBD_DEVICE" ] || die "缺少 --drbd-device"
   command -v hostnamectl >/dev/null 2>&1 && run "hostnamectl set-hostname $SELF"
-  run "sed -i '/# MO-HA-BEGIN/,/# MO-HA-END/d' /etc/hosts"
+  strip_hosts_block
   run "printf '# MO-HA-BEGIN\n$SELF_IP $SELF\n$PEER_IP $PEER\n# MO-HA-END\n' >> /etc/hosts"
   run "printf 'net.ipv4.ip_nonlocal_bind=1\nvm.swappiness=10\n' > /etc/sysctl.d/90-mo-ha.conf"
   run "sysctl --system >/dev/null 2>&1 || true"
@@ -559,6 +559,21 @@ stage_moconf(){
 # ----------------------------- 阶段 drbd ------------------------------------
 # 节点身份校验：预阶段与 DRBD/集群阶段都要拦，避免 --stages drbd 单独跑时绕过。
 # 同名/同 IP 会生成只有单个 host 段的 DRBD 配置且不报错。
+# 只删除成对的 MO-HA 标记块。缺 END 时绝不能用 sed 范围地址：GNU sed 会从 BEGIN
+# 一直删到文件末尾，把 /etc/hosts 里其它条目一起抹掉（stage_pre / stage_teardown 共用）。
+strip_hosts_block(){
+  [ -f /etc/hosts ] || return 0
+  local b e
+  b="$(grep -c '^# MO-HA-BEGIN$' /etc/hosts 2>/dev/null || true)"
+  e="$(grep -c '^# MO-HA-END$' /etc/hosts 2>/dev/null || true)"
+  if [ "${b:-0}" = "${e:-0}" ]; then
+    run "sed -i '/^# MO-HA-BEGIN$/,/^# MO-HA-END$/d' /etc/hosts"
+  else
+    wrn "/etc/hosts 的 MO-HA 标记不成对 (BEGIN=${b:-0} END=${e:-0})：只删除标记行，保留其余内容"
+    run "sed -i '/^# MO-HA-BEGIN$/d;/^# MO-HA-END$/d' /etc/hosts"
+  fi
+}
+
 require_nodes(){
   [ -n "$SELF" ] && [ -n "$PEER" ] && [ -n "$SELF_IP" ] && [ -n "$PEER_IP" ] \
     || die "缺少参数: --self/--peer/--self-ip/--peer-ip"
@@ -882,7 +897,7 @@ stage_teardown(){
   runq "wipefs -a $DRBD_DEVICE" || wrn "wipefs -a $DRBD_DEVICE 失败，请手工确认该盘已清空"
   runq "rm -f /etc/drbd.d/$DRBD_RESOURCE.res /etc/modules-load.d/drbd.conf"
   # stage_pre / stage_fence 写入的其它残留一并清理
-  run "sed -i '/# MO-HA-BEGIN/,/# MO-HA-END/d' /etc/hosts"
+  strip_hosts_block
   runq "rm -f /etc/sysctl.d/90-mo-ha.conf /etc/sysconfig/sbd /etc/default/sbd 2>/dev/null || true"
   runq "sysctl --system >/dev/null 2>&1 || true"
   runq "rm -rf $MO_DIR"
