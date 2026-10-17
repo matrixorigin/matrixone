@@ -358,12 +358,12 @@ stage_pkg(){
     rpm)
       enable_ha_repo
       runq "$PKG install -y epel-release || true"
-      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all"
+      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd"
       runq "modprobe drbd 2>/dev/null || true"
       ensure_drbd_module_rpm || true
       ;;
     deb)
-      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra"
+      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd"
       # drbd 内核模块在 linux-modules-extra，必须与当前运行内核版本匹配
       runq "DEBIAN_FRONTEND=noninteractive apt-get install -y linux-modules-extra-\$(uname -r) 2>/dev/null || true"
       runq "depmod -a 2>/dev/null || true"
@@ -619,14 +619,20 @@ stage_fence(){
 
   if [ "$FENCE_SCENARIO" = "sbd" ]; then
     [ -n "$SBD_DEVICE" ] || die "sbd 场景需要 --sbd-device"
-    run "cat > /etc/sysconfig/sbd <<SBD
+    # 配置路径按发行版：RHEL 系 /etc/sysconfig/sbd，Debian/Ubuntu 为 /etc/default/sbd
+    local sbd_conf=/etc/sysconfig/sbd
+    [ "$OS_FAMILY" = deb ] && sbd_conf=/etc/default/sbd
+    if [ "$DRY_RUN" != 1 ] && [ ! -e "$WATCHDOG" ]; then
+      die "sbd 需要 watchdog 设备 $WATCHDOG（modprobe softdog，或改用硬件 watchdog）"
+    fi
+    run "cat > $sbd_conf <<SBD
 SBD_DEVICE=\"${SBD_DEVICE}\"
 SBD_PACEMAKER=yes
 SBD_STARTMODE=always
 SBD_WATCHDOG_DEV=${WATCHDOG}
 SBD_WATCHDOG_TIMEOUT=5
 SBD"
-    runq "systemctl enable --now sbd || true"
+    runq "systemctl enable --now sbd" || die "sbd 启动失败：请确认 sbd 已安装且 $sbd_conf 与 watchdog 正确"
     runq "pcs stonith create fence_${DRBD_RESOURCE} external/sbd pcmk_delay_max=${FENCE_DELAY_MAX} op monitor interval=30s"
     return 0
   fi
