@@ -2637,3 +2637,95 @@ func TestCheckChangeTypeCompatibleVectorDimension(t *testing.T) {
 	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_varchar, 10), vec(types.T_varchar, 20)),
 		"a non-vector same-type width change is unaffected")
 }
+
+func TestAlterBinaryConversionPreservesDeclaredCapacity(t *testing.T) {
+	for _, source := range []struct {
+		id       types.T
+		target   types.T
+		charset  uint32
+		revision uint32
+	}{
+		{types.T_char, types.T_binary, uint32(types.CharsetUTF8), 0},
+		{types.T_varchar, types.T_varbinary, uint32(types.CharsetUTF8MB4UnicodeCI), 1},
+		{types.T_text, types.T_blob, uint32(types.CharsetUTF8), 0},
+	} {
+		t.Run(source.id.String(), func(t *testing.T) {
+			original := &TableDef{Name: "t", DefaultCharset: source.charset, CollationVersion: source.revision, Cols: []*ColDef{{Name: "v", Typ: Type{Id: int32(source.id), Width: 2, Charset: source.charset, CollationVersion: source.revision}}}}
+			copy := DeepCopyTableDef(original, true)
+			require.NoError(t, applyAlterTableBinaryConversion(copy))
+			require.Equal(t, int32(source.target), copy.Cols[0].Typ.Id)
+			require.Equal(t, int32(2), copy.Cols[0].Typ.Width)
+			require.Zero(t, copy.Cols[0].Typ.CollationVersion)
+			require.Equal(t, uint32(types.CharsetBinary), copy.DefaultCharset)
+			require.Equal(t, int32(source.id), original.Cols[0].Typ.Id)
+			require.Equal(t, source.charset, original.DefaultCharset)
+		})
+	}
+	for _, corrupt := range []func(*TableDef){
+		func(td *TableDef) { td.Cols[0].Typ.Charset = 4; td.Cols[0].Typ.CollationVersion = 1 },
+		func(td *TableDef) { td.KeyFormat = 1 },
+		func(td *TableDef) { td.Cols[0].Typ.Charset = 256 },
+	} {
+		td := &TableDef{Name: "bad", Cols: []*ColDef{{Name: "v", Typ: Type{Id: int32(types.T_varchar), Width: 2}}}}
+		corrupt(td)
+		before, err := td.Marshal()
+		require.NoError(t, err)
+		require.Error(t, applyAlterTableBinaryConversion(td))
+		after, err := td.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, before, after, "rejected original metadata must remain unchanged")
+	}
+}
+
+func TestAlterBinaryConvertAlgorithm(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want plan.AlterTable_AlgorithmType
+	}{
+		{"ALTER TABLE t CONVERT TO CHARACTER SET binary", plan.AlterTable_COPY},
+		{"ALTER TABLE t DEFAULT CHARACTER SET binary", plan.AlterTable_INPLACE},
+		{"ALTER TABLE t CONVERT TO CHARACTER SET utf8mb4", plan.AlterTable_INPLACE},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			got, err := ResolveAlterTableAlgorithm(context.Background(), stmt.(*tree.AlterTable).Options, &TableDef{})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestAlterBinaryConversionUsesFinalCombinedSchema(t *testing.T) {
+	for _, clauses := range []string{
+		"ADD COLUMN extra VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"ADD COLUMN (extra VARCHAR(2), extra2 VARCHAR(2)), CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, ADD COLUMN (extra VARCHAR(2), extra2 VARCHAR(2))",
+		"CONVERT TO CHARACTER SET binary, ADD COLUMN extra VARCHAR(2) CHARACTER SET utf8mb4",
+		"MODIFY COLUMN v VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, MODIFY COLUMN v VARCHAR(2) CHARACTER SET utf8mb4",
+		"CHANGE COLUMN v value_col VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, CHANGE COLUMN v value_col VARCHAR(2) CHARACTER SET utf8mb4",
+	} {
+		t.Run(clauses, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer(t)
+			old := mock.ctxt.tables["auto_incr_t"]
+			old.Cols[1].Typ = Type{Id: int32(types.T_varchar), Width: 2, Charset: uint32(types.CharsetUTF8)}
+			before, err := old.Marshal()
+			require.NoError(t, err)
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t "+clauses)
+			require.NoError(t, err)
+			copy := p.GetDdl().GetAlterTable().CopyTableDef
+			for _, col := range copy.Cols {
+				if col.Name == "v" || col.Name == "extra" || col.Name == "extra2" || col.Name == "value_col" {
+					require.Equal(t, int32(types.T_varbinary), col.Typ.Id)
+					require.Equal(t, int32(2), col.Typ.Width)
+				}
+			}
+			require.Equal(t, uint32(types.CharsetBinary), copy.DefaultCharset)
+			after, err := old.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}

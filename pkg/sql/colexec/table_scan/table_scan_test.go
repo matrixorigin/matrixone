@@ -128,7 +128,7 @@ func TestPadCharColumnsToFullLength(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], nil, true, proc.Mp()))
 	bat.SetRowCount(3)
 
-	require.NoError(t, padCharColumnsToFullLength(bat, proc))
+	require.NoError(t, padCharColumnsToFullLength(bat, proc, nil))
 	require.Equal(t, "MO      ", string(bat.Vecs[0].GetBytesAt(0)))
 	require.Equal(t, "你好      ", string(bat.Vecs[0].GetBytesAt(1)))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(2))
@@ -614,4 +614,78 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	defer empty.Clean(mp)
 	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
 	require.Equal(t, 0, empty.RowCount())
+}
+
+func TestPadCharPreservesHiddenFunctionalStorageKey(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(3)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_char, 20, 0))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[i], []byte("1"), false, proc.Mp()))
+	}
+	bat.SetRowCount(1)
+	// Reordered/pruned attributes include a visible user column with a reserved-
+	// looking name. Only actual metadata, not spelling or ordinal, decides.
+	scan := NewArgument().WithColumnDefs([]string{"__mo_fi_user", "key", "public"}, []*pbplan.ColDef{
+		{Name: "key", Hidden: true}, {Name: "public"}, {Name: "__mo_fi_user"},
+	})
+	require.Equal(t, []bool{false, true, false}, scan.HiddenColumns)
+	require.NoError(t, padCharColumnsToFullLength(bat, proc, scan.HiddenColumns))
+	require.Equal(t, "1                   ", string(bat.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, "1", string(bat.Vecs[1].GetBytesAt(0)))
+	require.Equal(t, "1                   ", string(bat.Vecs[2].GetBytesAt(0)))
+	scan.Reset(proc, false, nil)
+	require.Equal(t, []bool{false, true, false}, scan.HiddenColumns)
+	// Reuse on another source must replace the previous visibility.
+	scan.WithColumnDefs([]string{"key"}, []*pbplan.ColDef{{Name: "key"}})
+	require.Equal(t, []bool{false}, scan.HiddenColumns)
+	bat.Clean(proc.Mp())
+	scan.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestTableScanPadCharStorageVisibilityAtReadAndFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "PAD_CHAR_TO_FULL_LENGTH", nil })
+	reader := mock_frontend.NewMockReader(ctrl)
+	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
+	reader.EXPECT().Close().Return(nil).AnyTimes()
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ []string, _ *plan.Expr, _ interface{}, bat *batch.Batch) (bool, error) {
+		for _, v := range bat.Vecs {
+			require.NoError(t, vector.AppendBytes(v, []byte("1"), false, proc.Mp()))
+		}
+		bat.SetRowCount(1)
+		return false, nil
+	})
+	char := pbplan.Type{Id: int32(types.T_char), Width: 20}
+	scan := NewArgument().WithTypes([]pbplan.Type{char, char}).WithColumnDefs([]string{"key", "__mo_fi_user"}, []*pbplan.ColDef{{Name: "key", Hidden: true}, {Name: "__mo_fi_user"}})
+	scan.Reader = reader
+	scan.Attrs = []string{"key", "__mo_fi_user"}
+	require.NoError(t, scan.Prepare(proc))
+	result, err := scan.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, "1", string(result.Batch.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, "1                   ", string(result.Batch.Vecs[1].GetBytesAt(0)))
+	// Full-schema late filter: visible column has not been loaded yet.
+	late := batch.NewWithSize(2)
+	late.Vecs[0] = vector.NewVec(types.New(types.T_char, 20, 0))
+	late.Vecs[1] = vector.NewVec(types.New(types.T_char, 20, 0))
+	require.NoError(t, vector.AppendBytes(late.Vecs[0], []byte("1"), false, proc.Mp()))
+	late.SetRowCount(1)
+	_, err = scan.evalFilter(proc, late, []int{0})
+	require.NoError(t, err)
+	require.Equal(t, "1", string(late.Vecs[0].GetBytesAt(0)))
+	require.Zero(t, late.Vecs[1].Length())
+	require.NoError(t, vector.AppendBytes(late.Vecs[1], []byte("1"), false, proc.Mp()))
+	require.NoError(t, padCharColumnsToFullLength(late, proc, scan.HiddenColumns))
+	require.Equal(t, "1", string(late.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, "1                   ", string(late.Vecs[1].GetBytesAt(0)))
+	late.Clean(proc.Mp())
+	scan.Free(proc, false, nil)
+	scan.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }

@@ -733,7 +733,12 @@ func (exec *txnExecutor) Exec(
 		state := captureSequenceStatementState(proc)
 		sequenceState.output = &state
 	}
-	result.LastInsertID = proc.GetStatementLastInsertID()
+	if insert, ok := c.stmt.(*tree.Insert); ok && len(insert.OnDuplicateUpdate) > 0 &&
+		!(len(insert.OnDuplicateUpdate) == 1 && insert.OnDuplicateUpdate[0] == nil) {
+		result.LastInsertID, _ = proc.GetODKUProtocolIDForSource(insert.IsValuesSource())
+	} else {
+		result.LastInsertID = proc.GetStatementLastInsertID()
+	}
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()

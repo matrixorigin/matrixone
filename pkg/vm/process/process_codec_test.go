@@ -97,6 +97,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		LastInsertID:                        500,
 		MaxErrorCount:                       128,
 		MaxErrorCountSet:                    true,
 		LCTimeNames:                         "fr_FR",
@@ -157,6 +158,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			LastInsertId:                        500,
 			MaxErrorCount:                       128,
 			MaxErrorCountSet:                    true,
 		})
@@ -169,6 +171,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, uint64(500), info.LastInsertID)
 		require.Equal(t, 128, info.MaxErrorCount)
 		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
@@ -1118,6 +1121,21 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 	})
 }
 
+func TestBuildProcessInfoBaselinePresenceRequiresActualOwner(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LastInsertIDSet = false
+	proc.SetLastInsertID(0)
+	info, err := proc.BuildProcessInfo("select last_insert_id()")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.LastInsertIdSet)
+	require.Zero(t, info.SessionInfo.LastInsertId)
+	proc.Base.LastInsertID = nil
+	info, err = proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.False(t, info.SessionInfo.LastInsertIdSet, "a missing owner cannot be advertised as authoritative0")
+}
+
 func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
@@ -1143,5 +1161,35 @@ func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, selectStatement, forwarded.StatementRuntimeSelect)
 		}()
+	}
+}
+
+func TestProcessInfoSelectAndODKUOrdinalUseDistinctWireFields(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		selectStatement bool
+		ordinal         uint64
+		wire            []byte
+	}{
+		{"neither", false, 0, nil},
+		{"select_only", true, 0, []byte{0x88, 0x01, 0x01}},
+		{"ordinal_only", false, 9, []byte{0x90, 0x01, 0x09}},
+		{"both", true, 9, []byte{0x88, 0x01, 0x01, 0x90, 0x01, 0x09}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Independent wire fixtures pin SELECT to tag 17 and ODKU to tag 18;
+			// a round trip alone could hide a coordinated encoder/decoder swap.
+			var fromWire pipeline.ProcessInfo
+			require.NoError(t, fromWire.Unmarshal(tc.wire))
+			require.Equal(t, tc.selectStatement, fromWire.StatementRuntimeSelect)
+			require.Equal(t, tc.ordinal, fromWire.OdkuOrdinalBase)
+			info := &pipeline.ProcessInfo{StatementRuntimeSelect: tc.selectStatement, OdkuOrdinalBase: tc.ordinal}
+			data, err := info.Marshal()
+			require.NoError(t, err)
+			var decoded pipeline.ProcessInfo
+			require.NoError(t, decoded.Unmarshal(data))
+			require.Equal(t, tc.selectStatement, decoded.StatementRuntimeSelect)
+			require.Equal(t, tc.ordinal, decoded.OdkuOrdinalBase)
+		})
 	}
 }

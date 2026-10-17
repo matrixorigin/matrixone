@@ -322,7 +322,12 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 			require.True(t, features.Any())
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion101, floor)
+			requiredVersion := defines.MORPCVersion101
+			if name == "concat" || name == "concat_ws" {
+				requiredVersion = defines.MORPCVersion118
+			}
+			require.Equal(t, requiredVersion == defines.MORPCVersion118, features.JSONOpaqueTextContracts)
+			require.Equal(t, requiredVersion, floor)
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			op := projection.NewArgument()
 			defer op.Release()
@@ -334,22 +339,22 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
-			place(defines.MORPCVersion100)
+			place(requiredVersion - 1)
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			place(defines.MORPCVersion101)
+			place(requiredVersion)
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
-			client.version = defines.MORPCVersion100
+			client.version = requiredVersion - 1
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 101")
+			require.ErrorContains(t, err, "version "+strconv.FormatInt(requiredVersion, 10))
 			require.Equal(t, client.calls, client.releases)
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt := runtime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 101")
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, requiredVersion-1)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version "+strconv.FormatInt(requiredVersion, 10))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, requiredVersion)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 			args[0] = plan2.MakePlan2StringConstExprWithType("text")
 			expr, err = plan2.BindFuncExprImplByPlanExpr(context.Background(), fnName, args)
@@ -357,6 +362,7 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 			features, err = planpb.RequiredRemoteExpressionFeatures(expr)
 			require.NoError(t, err)
 			require.False(t, features.JSONInputContracts)
+			require.False(t, features.JSONOpaqueTextContracts)
 			require.False(t, features.YearBitCast)
 		})
 	}

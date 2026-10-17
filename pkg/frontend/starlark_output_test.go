@@ -140,6 +140,11 @@ func TestStarlarkOutputDeclaredTypes(t *testing.T) {
 					require.Error(t, err)
 					var sqlErr *moerr.Error
 					require.ErrorAs(t, err, &sqlErr)
+					if tc.typ == "binary(3)" || tc.typ == "varbinary(3)" {
+						require.Equal(t, moerr.ErrCastWidthExceeded, sqlErr.ErrorCode())
+						require.Equal(t, uint16(1406), sqlErr.MySQLCode())
+						require.Equal(t, "22001", sqlErr.SqlState())
+					}
 					require.Equal(t, int64(99), got.Value)
 					require.Equal(t, "rollback;", back.executedSQLs[len(back.executedSQLs)-1])
 				} else {

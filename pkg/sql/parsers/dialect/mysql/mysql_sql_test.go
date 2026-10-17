@@ -5134,7 +5134,7 @@ var (
 			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a collate = b",
+			output: "alter table t1 convert to character set a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",

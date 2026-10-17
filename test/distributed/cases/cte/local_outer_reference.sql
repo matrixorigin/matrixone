@@ -373,6 +373,8 @@ drop table guarded_values;
 
 -- Outer columns in ordinary COUNT HAVING must be rebound above the
 -- aggregate's LEFT JOIN, including empty input and HAVING-deleted rows.
+set @having_saved_mode=@@session.sql_mode;
+set session sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION';
 create table having_keys(id int primary key, k int);
 insert into having_keys values (1,1),(2,1),(3,0);
 select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
@@ -381,6 +383,11 @@ from having_keys p order by p.id;
 select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
               having count(*) in (p.k,2)) as c
 from having_keys p order by p.id;
+set session sql_mode='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION';
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2 having count(*)=p.k) as c from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2 having count(*) in (p.k,2)) as c from having_keys p order by p.id;
+set session sql_mode=@having_saved_mode;
+set @having_saved_mode=null;
 -- Ordinary correlated COUNT HAVING preserves bound user and system variables,
 -- including the empty input and HAVING-deleted result row.
 set @having_limit=1;

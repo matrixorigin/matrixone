@@ -895,3 +895,27 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		})
 	}
 }
+
+// HAVING compares an aggregate result with the outer row after aggregation;
+// the outer column is not an argument of COUNT or ANY_VALUE.
+func TestCorrelatedCountHavingSQLModes(t *testing.T) {
+	for _, compatible := range []bool{false, true} {
+		name := "only_full_group_by"
+		if compatible {
+			name = "without_only_full_group_by"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, predicate := range []string{"count(*)=p.n_regionkey", "count(*) in (p.n_regionkey,2)"} {
+				sql := "select p.n_nationkey, (select count(*) from tpch.nation a where a.n_nationkey=p.n_nationkey and a.n_nationkey<2 having " + predicate + ") from tpch.nation p"
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				mode := "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
+				if compatible {
+					mode = "STRICT_TRANS_TABLES"
+				}
+				mock.ctxt.SetSqlModeOverride(mode)
+				_, err := runOneStmt(mock, t, sql)
+				require.NoError(t, err, sql)
+			}
+		})
+	}
+}

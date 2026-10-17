@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +86,33 @@ func TestPersistedDDLReplayRemapsExistingExpressions(t *testing.T) {
 	replay = ddlReplayForTable(WithPersistedDDLReplay(context.Background(), old, changedExpr), "copy")
 	require.Nil(t, replay.columns["q"].generated)
 	require.Nil(t, ddlReplayForTable(WithPersistedDDLReplay(context.Background(), old, target), "other"))
+}
+
+func TestPersistedDDLReplayRebindsChangedOwningAssignmentTarget(t *testing.T) {
+	text := planpb.Type{Id: int32(types.T_varchar), Width: 2, Charset: uint32(types.CharsetUTF8)}
+	constant := MakePlan2StringConstExprWithType("中")
+	constant.Typ = text
+	old := &planpb.TableDef{Name: "converted", Cols: []*planpb.ColDef{
+		{ColId: 1, Name: "v", Typ: text, Default: &planpb.Default{Expr: constant, OriginString: "'中'"}, OnUpdate: &planpb.OnUpdate{Expr: DeepCopyExpr(constant)}, GeneratedCol: &planpb.GeneratedCol{Expr: DeepCopyExpr(constant)}},
+		{ColId: 2, Name: "unchanged", Typ: text, Default: &planpb.Default{Expr: DeepCopyExpr(constant), OriginString: "'中'"}},
+	}}
+	converted := DeepCopyTableDef(old, true)
+	converted.Cols[0].Typ.Id = int32(types.T_varbinary)
+	converted.Cols[0].Typ.Charset = uint32(types.CharsetBinary)
+	before, err := old.Marshal()
+	require.NoError(t, err)
+	replay := ddlReplayForTable(WithPersistedDDLReplay(context.Background(), old, converted), "converted")
+	require.Nil(t, replay.columns["v"], "changed owning target must rebind constant/default/generated/on-update")
+	require.NotNil(t, replay.columns["unchanged"].defaultExpr, "unchanged unrelated binding remains preserved")
+	after, err := old.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	// Catalog lineage and nullability alone do not change the assignment value domain.
+	lineage := DeepCopyTableDef(old, true)
+	lineage.Cols[0].Typ.Table = "new_catalog_lineage"
+	lineage.Cols[0].Typ.NotNullable = true
+	replay = ddlReplayForTable(WithPersistedDDLReplay(context.Background(), old, lineage), "converted")
+	require.NotNil(t, replay.columns["v"].defaultExpr)
+	require.NotNil(t, replay.columns["v"].generated)
+	require.NotNil(t, replay.columns["v"].onUpdate)
 }

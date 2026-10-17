@@ -390,6 +390,12 @@ const (
 // from native DECIMAL64/128 variance and standard deviation.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
+	JSONFunctionalIndexSemantics  bool
+	SessionLastInsertIDBaseline   bool
+	ODKUStatementResult           bool
+	JSONMinMaxTypedComparison     bool
+	JSONStringConsumerOverload    bool
+	JSONOpaqueTextContracts       bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
@@ -418,14 +424,16 @@ type RemoteExpressionFeatures struct {
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
-	SpecialIntegerConsumers                 bool
-	TemporalResultContracts                 bool
-	InvalidTemporalResultContract           bool
-	NormalizedIntervalUnits                 bool
-	LegacyIntervalUnits                     bool
-	WeekSessionDefault                      bool
-	MediumIntAssignmentBounds               bool
-	DateNumericResultContracts              bool
+	SpecialIntegerConsumers       bool
+	TemporalResultContracts       bool
+	InvalidTemporalResultContract bool
+	NormalizedIntervalUnits       bool
+	LegacyIntervalUnits           bool
+	WeekSessionDefault            bool
+	MediumIntAssignmentBounds     bool
+	DateNumericResultContracts    bool
+	// BinaryAssignmentSemantics requires v119 for byte capacity and physical BINARY replay.
+	BinaryAssignmentSemantics               bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
@@ -434,7 +442,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONFunctionalIndexSemantics || features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -460,7 +468,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
-		features.DateNumericResultContracts ||
+		features.DateNumericResultContracts || features.BinaryAssignmentSemantics ||
 		features.DecimalStatisticalResultContracts ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
 		features.LeastGreatestCollationSemantics
@@ -906,6 +914,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	var metadataErr error
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
@@ -922,7 +931,22 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
+				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// LAST_INSERT_ID() is function237/overload0; remote evaluation
+				// needs the captured session baseline, not a worker-local zero.
+				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
+				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
+				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
+				if len(fn.Args) > 1 && fn.Args[1] != nil {
+					target := fn.Args[1].Typ
+					binaryTarget := target.Id == planBinaryTypeID || target.Id == planVarbinaryTypeID
+					assignment := id == mediumIntStrictCastFunctionID || id == mediumIntAssignmentCastFunctionID || id == mediumIntIgnoreCastFunctionID
+					// Ordinary positive-width CAST is also the legacy IGNORE fallback;
+					// explicit BINARY uses Scale=-1 and zero-width opaque casts stay valid.
+					fallback := id == 21 && target.Width > 0 && target.Scale != -1
+					features.BinaryAssignmentSemantics = features.BinaryAssignmentSemantics || (binaryTarget && (assignment || fallback))
+				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
 				}
@@ -1151,7 +1175,29 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) {
+		// The same owner walk sees lowered protobuf tracking metadata even
+		// when there are no session-function expressions. Getter interfaces
+		// avoid coupling plan to pipeline, which already imports plan.
+		switch metadata := owner.(type) {
+		case *IndexDef:
+			if metadataErr == nil {
+				var required bool
+				required, metadataErr = JSONFunctionalIndexSemantics(metadata)
+				features.JSONFunctionalIndexSemantics = features.JSONFunctionalIndexSemantics || required
+			}
+		case interface{ GetTrackOdkuResult() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
+		case interface{ GetOdkuResultTracking() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetOdkuResultTracking()
+		case *DedupJoinCtx:
+			features.ODKUStatementResult = features.ODKUStatementResult ||
+				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
+		}
 	})
+	if err == nil {
+		err = metadataErr
+	}
 	return
 }
 
@@ -1630,7 +1676,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 	})
 }
 
-func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error, metadataVisitors ...func(any)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1655,6 +1701,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				return nil
 			}
 			seen[pointer] = struct{}{}
+			for _, observe := range metadataVisitors {
+				observe(value.Interface())
+			}
 			return walk(value.Elem())
 		}
 		switch value.Kind() {
@@ -1700,6 +1749,94 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	switch kind {
 	case reflect.Interface, reflect.Pointer, reflect.Struct, reflect.Slice, reflect.Array, reflect.Map:
 		return true
+	default:
+		return false
+	}
+}
+
+// RequiresMORPCVersion114JSONStringConsumerOverload detects the distinct JSON-aware
+// ELT identity and the independent opaque producer/rendering contract. The
+// historical helper name is retained; the combined protocol floor is now v118.
+// CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
+func RequiresMORPCVersion114JSONStringConsumerOverload(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
+}
+
+const (
+	remoteJSONStringConsumerELTFunctionID int32 = 384
+)
+
+func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
+	if overloadID != 1 {
+		return false
+	}
+	switch functionID {
+	case remoteJSONStringConsumerELTFunctionID:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsJSONMinMaxAggregate identifies the unchanged MIN/MAX overload zero with a
+// physical JSON argument. DISTINCT sets the high bit of the aggregate identity.
+// Lowered pipelines retain Op and arguments but no outer function expression.
+func IsJSONMinMaxAggregate(op int64, args []*Expr) bool {
+	op = int64(uint64(op) & ^(uint64(1) << 63))
+	return (op == int64(139)<<32 || op == int64(137)<<32) &&
+		len(args) > 0 && args[0] != nil && args[0].Typ.Id == planJSONTypeID
+}
+
+// isJSONOpaqueTextContract fences operations that create subtype-preserving
+// opaque JSON or render its MySQL line-wrapped visible text. Stored JSON can
+// contain an opaque value at any nesting depth, without a CAST in this plan.
+func isJSONOpaqueTextContract(expr *Expr, fn *Function, id int32) bool {
+	stringType := func(id int32) bool {
+		switch id {
+		case 60, 61, 64, 65, 70, 71, 72:
+			return true
+		}
+		return false
+	}
+	switch id {
+	case 21, mediumIntStrictCastFunctionID, mediumIntAssignmentCastFunctionID, mediumIntIgnoreCastFunctionID:
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		source := fn.Args[0].Typ.Id
+		// A marker itself can be provisionally TEXT before binary binding.
+		// A deterministic numeric or explicit text conversion around a marker
+		// owns its result type; do not rescan its subtree or infer uncertainty.
+		parameterSource := fn.Args[0].GetP() != nil
+		if expr.Typ.Id == planJSONTypeID {
+			return parameterSource || source == 0 || source == 64 || source == 65 || source == 70
+		}
+		return source == planJSONTypeID && stringType(expr.Typ.Id)
+	case 326: // Python UDF transports JSON as its visible text, regardless of return type.
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
+	case 366: // JSON_OBJECT renders typed keys; values retain their binary JSON.
+		for i := 0; i < len(fn.Args); i += 2 {
+			if arg := fn.Args[i]; arg != nil {
+				switch arg.Typ.Id {
+				case planJSONTypeID:
+					return true
+				}
+			}
+		}
+		return false
+	case 16, 76, 253, 256, 257, 459, 460, 461, 462: // JSON text renderers and schema validators
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

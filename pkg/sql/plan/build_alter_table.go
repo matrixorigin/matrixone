@@ -271,6 +271,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, moerr.NewInternalError(ctx, "only the sys account can alter the cluster table")
 	}
 
+	// Reject unsupported source metadata before any COPY mutation can erase
+	// its identity, including a combined MODIFY followed by CONVERT.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return nil, err
+	}
+
 	// 2. split alter_option list
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
@@ -292,6 +298,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// executor reconciles the explicit request, copied maximum, and source
 	// allocator state after the rows are visible in this transaction.
 	copyTableDef.AutoIncrOffset = 0
+	hasBinaryConversion := false
+	for _, option := range stmt.Options {
+		if charset, ok := option.(*tree.TableOptionCharset); ok && isBinaryCharsetConversion(charset) {
+			hasBinaryConversion = true
+		}
+	}
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
@@ -340,6 +352,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		for _, idxDef := range tableDef.Indexes {
 			affectedIndexes = append(affectedIndexes, idxDef.IndexName)
 		}
+	}
+
+	if hasBinaryConversion {
+		// Type and comparison domains can change even when key column names do
+		// not. Rebuild every dependent index through the existing COPY owner.
+		affectedAllIdxCols()
 	}
 
 	for _, spec := range validAlterSpecs {
@@ -467,11 +485,23 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			// is resolved by ResolveAlterTableAlgorithm via the full options list
 		case *tree.AlterOptionLock:
 			// lock already validated by resolveAndValidateLock; no-op here
+		case *tree.TableOptionCharset:
+			// Binary CONVERT is applied after the final column mutations. Other
+			// charset/default compatibility clauses retain the existing no-op.
+
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
 		}
 		if err != nil {
+			return nil, err
+		}
+	}
+	// CONVERT applies to the final schema, including columns introduced or
+	// explicitly redeclared by ADD/MODIFY/CHANGE in either clause order. Default
+	// charset overrides must not escape this statement-wide conversion.
+	if hasBinaryConversion {
+		if err := applyAlterTableBinaryConversion(copyTableDef); err != nil {
 			return nil, err
 		}
 	}
@@ -847,7 +877,7 @@ func buildAlterCopyAddIndex(
 		}
 		if err := buildSecondaryIndexDef(
 			indexInfo, []*tree.Index{index}, colMap,
-			copyTableDef.Indexes, primaryKeyName, ctx,
+			copyTableDef.Indexes, primaryKeyName, ctx, copyTableDef,
 		); err != nil {
 			return nil, "", err
 		}
@@ -1316,6 +1346,36 @@ func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, erro
 	return replicaTableDef, nil
 }
 
+// isBinaryCharsetConversion limits the implemented conversion to MySQL's
+// nonbinary-string to binary-string mapping. Other charset conversion requests
+// retain their existing compatibility behavior; this does not enable native keys.
+func isBinaryCharsetConversion(option *tree.TableOptionCharset) bool {
+	return option != nil && option.Convert && strings.EqualFold(option.Charset, "binary")
+}
+
+func applyAlterTableBinaryConversion(tableDef *TableDef) error {
+	// Reject genuine native/unknown identities before rewriting any copied
+	// metadata, rather than normalizing an unsupported persisted format.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return err
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		before := col.Typ.Id
+		applyCharsetToPlanType(&col.Typ, uint32(types.CharsetBinary))
+		if col.Typ.Id != before {
+			// Binary strings have no UCA semantic revision. Preserve declared
+			// width: CHAR/VARCHAR(n) become BINARY/VARBINARY(n) bytes, not 4*n.
+			col.Typ.CollationVersion = 0
+		}
+	}
+	tableDef.DefaultCharset = uint32(types.CharsetBinary)
+	tableDef.CollationVersion = 0
+	return plan.RequireLegacyCollations(tableDef)
+}
+
 func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	// ALTER TABLE tbl_name
 	//		[alter_option [, alter_option] ...]
@@ -1496,7 +1556,7 @@ func columnDefHasIndexAttribute(column *tree.ColumnTableDef) bool {
 	return false
 }
 
-// Charset options remain compatibility no-ops, not conversions. Admit requests
+// Except for binary CONVERT handled by COPY, charset options retain compatibility no-ops. Admit requests
 // before either ALTER algorithm can ignore, rewrite, or discard their metadata.
 func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterTableOption) error {
 	var charsetOptions []tree.TableOption
@@ -1709,6 +1769,12 @@ Loop:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:
 			algorithm = plan.AlterTable_COPY
+		case *tree.TableOptionCharset:
+			if isBinaryCharsetConversion(option) {
+				algorithm = plan.AlterTable_COPY
+			} else {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
 		default:

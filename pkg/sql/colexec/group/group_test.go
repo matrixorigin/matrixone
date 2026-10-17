@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -5028,4 +5029,130 @@ func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
 				"remote producers still need the v66 trust marker")
 		})
 	}
+}
+
+func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_json)}, nil),
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, []*plan.Expr{colExpr(1, types.T_json)}, nil),
+	}
+	encode := func(value int64) []byte {
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		raw, err := bj.Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+	var partials []*batch.Batch
+	t.Cleanup(func() {
+		for _, partial := range partials {
+			partial.Clean(proc.Mp())
+		}
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	for _, value := range []int64{1, 256} {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		for key := int32(0); key < 64; key++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], encode(value), false, proc.Mp()))
+		}
+		input.SetRowCount(64)
+		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+		g.NeedEval = false
+		g.SpillMem = 2
+		g.AppendChild(child)
+		require.NoError(t, g.Prepare(proc))
+		for {
+			result, err := vm.Exec(g, proc)
+			require.NoError(t, err)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			partials = append(partials, cloneBatch(t, proc, result.Batch))
+		}
+		// Partial groups emit encoded states instead of writing finalized spill files.
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+	}
+	child := colexec.NewMockOperator().WithBatchs(partials)
+	mg := newMergeGroupOp(aggs)
+	mg.SpillMem = 2
+	mg.AppendChild(child)
+	t.Cleanup(func() { mg.Free(proc, false, nil) })
+	require.NoError(t, mg.Prepare(proc))
+	seen := make(map[int32]bool)
+	for {
+		result, err := vm.Exec(mg, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			key := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[row]
+			require.False(t, seen[key])
+			seen[key] = true
+			require.Equal(t, encode(1), result.Batch.Vecs[1].GetBytesAt(row))
+			require.Equal(t, encode(256), result.Batch.Vecs[2].GetBytesAt(row))
+		}
+	}
+	require.Len(t, seen, 64)
+	require.Positive(t, mg.OpAnalyzer.GetOpStats().SpillRows, "mergegroup must physically spill")
+}
+
+func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := make([]*batch.Batch, 0, 2)
+	for _, value := range []int64{1, 256} {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		raw, err := bj.Marshal()
+		require.NoError(t, err)
+		for key := int32(0); key < 64; key++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], raw, false, proc.Mp()))
+		}
+		input.SetRowCount(64)
+		inputs = append(inputs, input)
+	}
+	aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_json)}, nil), aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, []*plan.Expr{colExpr(1, types.T_json)}, nil)}
+	child := colexec.NewMockOperator().WithBatchs(inputs)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+	g.SpillMem = 2
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, g.Prepare(proc))
+	seen := make(map[int32]bool)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			key := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[row]
+			require.False(t, seen[key])
+			seen[key] = true
+			minJSON, err := types.DecodeJson(result.Batch.Vecs[1].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "1", string(minJSON))
+			maxJSON, err := types.DecodeJson(result.Batch.Vecs[2].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "256", string(maxJSON))
+		}
+	}
+	require.Len(t, seen, 64)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "final group must physically spill")
 }

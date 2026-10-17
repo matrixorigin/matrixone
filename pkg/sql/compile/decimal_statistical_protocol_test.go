@@ -34,6 +34,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMergedPipelineExpressionProtocolContracts(t *testing.T) {
+	double := types.T_float64.ToType().PlanType()
+	decimal := &pipeline.Aggregate{
+		Op:         aggexec.AggIdOfVarPop,
+		Expr:       []*planpb.Expr{{Typ: types.T_decimal128.ToType().PlanType()}},
+		ResultType: &double,
+	}
+	jsonMin := &pipeline.Aggregate{
+		Op:   aggexec.AggIdOfMin,
+		Expr: []*planpb.Expr{{Typ: types.T_json.ToType().PlanType()}},
+	}
+	group := &pipeline.Group{Aggs: []*pipeline.Aggregate{decimal, jsonMin}}
+	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{Op: int32(vm.Group), Agg: group}},
+	}}}
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	var decoded pipeline.Pipeline
+	require.NoError(t, decoded.Unmarshal(data))
+	features, err := requiredRemotePipelineExpressionFeatures(&decoded)
+	require.NoError(t, err)
+	require.True(t, features.DecimalStatisticalResultContracts)
+	require.True(t, features.JSONMinMaxTypedComparison)
+	require.False(t, features.InvalidDecimalStatisticalResultContract)
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
+
+	// Main's appended LEAST overload must survive alongside lowered JSON and
+	// DECIMAL aggregate metadata; the combined owner takes the maximum floor.
+	p.Children[0].InstructionList[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.LEAST, function.LeastGreatestCollationOverload)},
+	}}}}
+	features, err = requiredRemotePipelineExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	require.True(t, features.JSONMinMaxTypedComparison)
+	require.True(t, features.DecimalStatisticalResultContracts)
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
+	group.Aggs = []*pipeline.Aggregate{decimal}
+	features, err = requiredRemotePipelineExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	require.False(t, features.JSONMinMaxTypedComparison)
+	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+	p.Children[0].InstructionList[0].ProjectList = nil
+	features, err = requiredRemotePipelineExpressionFeatures(p)
+	require.NoError(t, err)
+	require.False(t, features.JSONMinMaxTypedComparison)
+	require.Equal(t, defines.MORPCVersion113, remoteExpressionProtocolVersion(features))
+	decimal.ResultType = nil
+	features, err = requiredRemotePipelineExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.InvalidDecimalStatisticalResultContract)
+}
+
 func TestDecimalStatisticalProtocolPlacementSendReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "var_pop", []*planpb.Expr{{Typ: types.New(types.T_decimal128, 38, 18).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}})
