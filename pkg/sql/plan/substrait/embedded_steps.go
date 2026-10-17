@@ -24,7 +24,7 @@ import (
 // scan node. The native importer inlines ReferenceRel; MO inputs are destructive
 // streams, so those occurrences cannot share a read binding. The caller first
 // validates the original candidate and uses this query for both export and the
-// producer specifications. Flight retains its shared-step contract.
+// producer specifications.
 func ExpandEmbeddedMOSteps(query *planpb.Query) (*planpb.Query, error) {
 	if query == nil || len(query.Steps) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: embedded expansion requires a query root")
