@@ -930,7 +930,8 @@ main(){
   done
   [ "$_fw" = 1 ] || open_ports
   if stage_enabled check; then stage_check; fi
-  printf "\n${G}完成${N}：$SELF ($([ "$BOOTSTRAP" = 1 ] && echo 引导节点 || echo 普通节点))\n"
+  # $SELF 来自 --self，不能直接当 printf 格式串（% / \ 会被解释）
+  printf "\n${G}完成${N}：%s (%s)\n" "$SELF" "$([ "$BOOTSTRAP" = 1 ] && echo 引导节点 || echo 普通节点)"
   [ "$BOOTSTRAP" != 1 ] && info "提示：请在引导节点执行本脚本(加 --bootstrap)以组建集群并创建资源。"
   return "$CHECK_RC"
 }
