@@ -134,18 +134,18 @@ id    v
 1    1
 2    -1
 create table anonymous_checks(v int,check(v>=0),check(v<=100));
-alter table anonymous_checks drop check __mo_chk_1;
+alter table anonymous_checks drop check anonymous_checks_chk_1;
 alter table anonymous_checks add check(v > -10);
 select constraint_name from information_schema.table_constraints
 where table_schema=database() and table_name='anonymous_checks' and constraint_type='CHECK'
 order by constraint_name;
 constraint_name
-__mo_chk_2
-__mo_chk_3
+anonymous_checks_chk_2
+anonymous_checks_chk_3
 insert into anonymous_checks values (-11);
-constraint violation: Check constraint '__mo_chk_3' is violated
+constraint violation: Check constraint 'anonymous_checks_chk_3' is violated
 insert into anonymous_checks values (101);
-constraint violation: Check constraint '__mo_chk_2' is violated
+constraint violation: Check constraint 'anonymous_checks_chk_2' is violated
 create table final_columns(id int primary key);
 insert into final_columns values (1);
 alter table final_columns add constraint ck_added check(w>0), add column w int default 1;
@@ -175,7 +175,7 @@ create table runs(id int primary key,status varchar(20));
 insert into runs values (1,'RUNNING');
 alter table runs add check(status in ('SCHEDULED','FAILED','FINISHED','RUNNING','KILLED'));
 insert into runs values (2,'INVALID');
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'runs_chk_1' is violated
 update runs set status='FINISHED' where id=1;
 select * from runs order by id;
 id    status

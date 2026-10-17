@@ -554,7 +554,10 @@ func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
+# This is an ownership/ordering test, not a one-second cleanup benchmark.
+# Leave scheduling headroom for the TERM handler's report publication on a
+# busy race runner, while staying below the harness's 15-second deadline.
+UT_HELPER_TERM_GRACE_TICKS=20
 trap handle_ut_termination TERM
 UT_REPORT="$CASE_DIR/ut-report.json"
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -563,7 +566,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
+	trap 'if [[ -f "$UT_REPORT" ]] && grep -q "^engine$" "$UT_REPORT"; then : > "$CASE_DIR/report-consumed-early"; fi; : > "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
@@ -944,11 +947,33 @@ exit 99
 
 func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	t.Parallel()
-	script := `source ./run_ut.sh UT
+	for _, tc := range []struct {
+		name, termDelay string
+	}{
+		{name: "ready", termDelay: "0"},
+		{name: "delayed-completion", termDelay: "2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
+# Verify cancellation ownership and report ordering, not one-second cleanup.
+# Allow the delayed completion and CI scheduling jitter within the harness's
+# 15-second deadline; keep the production runner's grace unchanged.
+UT_HELPER_TERM_GRACE_TICKS=20
 trap handle_ut_termination TERM
-trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+function check_cancellation() {
+ status=$?
+ if [[ "$status" == 143 ]]; then
+  [[ -z "$CURRENT_UT_PID$PLAN_RACE_JOB_PID" ]] || status=94
+  if ut_process_group_alive "$writer_pid" || ut_process_group_alive "$plan_pid"; then status=95; fi
+  [[ ! -e "$CASE_DIR/report-consumed-early" ]] || status=96
+ fi
+ printf '\nCANCEL_REPORT\n'
+ cat "$UT_REPORT"
+ exit "$status"
+}
+trap check_cancellation EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
 mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
@@ -959,25 +984,38 @@ start_ut_command heavy 'heavy writer' bash -c '
  printf "heavy\n" >&9
  IFS= read -r _ <&8
 '
+writer_pid=$CURRENT_UT_PID
+function finish_plan_fixture() {
+ # Model a TERM handler descheduled before publishing its completion marker.
+ # The owner must wait, not merge a report whose writer is still active.
+ if [[ "$PLAN_TERM_DELAY" != 0 ]]; then sleep "$PLAN_TERM_DELAY"; fi
+ if [[ "$(<"$UT_REPORT")" == *plan-* ]]; then : > "$CASE_DIR/report-consumed-early"; fi
+ printf 'plan-stopped\n' >> "$PLAN_RACE_REPORT"
+ publish_ut_helper_completion 143 || exit 125
+ exit 143
+}
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
+ trap finish_plan_fixture TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
  printf 'plan\n' >&9
  IFS= read -r _ <&8
 }
 start_plan_race example/plan
+plan_pid=$PLAN_RACE_JOB_PID
 IFS= read -r -t 10 first <&9 || exit 91
 IFS= read -r -t 10 second <&9 || exit 92
 [[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
 kill -TERM "$$"
 `
-	out, err := scheduleHarness(t, script)
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 143 {
-		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
-	}
-	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nheavy-start\nheavy-stopped\nplan-start\nplan-stopped\nengine\n") {
-		t.Fatalf("writer was not stopped before merging: %s", out)
+			out, err := scheduleHarness(t, script, "PLAN_TERM_DELAY="+tc.termDelay)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 143 {
+				t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+			}
+			if !strings.HasSuffix(string(out), "CANCEL_REPORT\nheavy-start\nheavy-stopped\nplan-start\nplan-stopped\nengine\n") {
+				t.Fatalf("writer was not stopped before merging: %s", out)
+			}
+		})
 	}
 }
 
@@ -1452,7 +1490,8 @@ exit 99
 `
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
+# Like the engine/plan fixtures, allow scheduling headroom for TERM cleanup.
+UT_HELPER_TERM_GRACE_TICKS=20
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 start_light_race example/light-package 2

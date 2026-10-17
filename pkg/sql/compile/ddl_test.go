@@ -2264,6 +2264,114 @@ func TestAlterViewEmptyDatabaseFallsBackToSession(t *testing.T) {
 	require.NotNil(t, current.createCtx)
 }
 
+func TestCheckConstraintNamesAvailable(t *testing.T) {
+	ctx := context.Background()
+	db := newStubDatabase("db")
+	db.rels["sibling_a"] = &stubRelation{
+		name: "sibling_a",
+		tableDef: &plan2.TableDef{
+			Checks: []*plan2.CheckDef{{Name: "sibling_a_chk_1"}, {Name: "ck_positive"}},
+		},
+	}
+	db.rels["sibling_b"] = &stubRelation{
+		name:     "sibling_b",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "sibling_b_chk_1"}}},
+	}
+	for _, flag := range []uint64{features.Partition, features.IndexTable} {
+		db.rels[fmt.Sprintf("physical_%d", flag)] = &stubRelation{
+			tableDef: &plan2.TableDef{FeatureFlag: flag, Checks: []*plan2.CheckDef{{Name: "borrowed_ck"}}},
+		}
+	}
+	// Physical children do not independently own their borrowed CHECK names.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "parent", []*plan2.CheckDef{{Name: "borrowed_ck"}}))
+
+	// No checks on the new table: nothing to validate.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t", nil))
+	// Fresh names pass even when siblings own other constraints.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "new_t_chk_1"}, {Name: "ck_limit"}}))
+	// Names compare case-insensitively, like MySQL.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "NEWT"}}))
+	// Reusing a name from another table in the same database is rejected.
+	err := checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "ck_positive"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'ck_positive'")
+	// Case-insensitive duplicate detection.
+	err = checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "CK_POSITIVE"}})
+	require.Error(t, err)
+}
+
+func TestValidateRenamedCheckConstraintNames(t *testing.T) {
+	db := newStubDatabase("db")
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProcess(t), disableLock: true}
+	db.rels["t"] = &stubRelation{
+		name:     "t",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "own_explicit_ck"}}},
+	}
+	db.rels["sibling"] = &stubRelation{
+		name:     "sibling",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "u_chk_1"}}},
+	}
+
+	// Empty checks never block a rename.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u", nil))
+
+	// A plain generated name simply follows the table.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u2",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}}))
+
+	// Same-table duplicate: the rewritten generated name lands on an
+	// explicit name owned by the table itself.
+	err := c.validateRenamedCheckConstraintNames("db", "t", "u",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}, {Name: "u_chk_1"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
+
+	// Cross-table duplicate: a sibling already owns the resulting name.
+	err = c.validateRenamedCheckConstraintNames("db", "t", "u",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
+
+	// The renamed table's own pre-rename names never count as siblings.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
+		[]*plan2.CheckDef{{Name: "own_explicit_ck"}}))
+	// A legacy name shared with a sibling is inherited, not a new claim.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
+		[]*plan2.CheckDef{{Name: "u_chk_1"}}))
+}
+
+func TestComposeCheckNamesAcrossAlterActions(t *testing.T) {
+	checks := []*plan2.CheckDef{{Name: "t_chk_1"}, {Name: "explicit_ck"}}
+
+	// No rename-table action: the set is untouched.
+	qry := &plan2.AlterTable{}
+	require.Same(t, checks[0], composeCheckNamesAcrossAlterActions(qry, checks)[0])
+
+	// A rename-table action in the same ALTER composes the move into the set.
+	qry = &plan2.AlterTable{Actions: []*plan2.AlterTable_Action{
+		{Action: &plan2.AlterTable_Action_AlterName{AlterName: &plan2.AlterTableName{OldName: "t", NewName: "u"}}},
+		{Action: &plan2.AlterTable_Action_AlterRenameColumn{AlterRenameColumn: &plan2.AlterRenameColumn{OldName: "a", NewName: "b"}}},
+	}}
+	composed := composeCheckNamesAcrossAlterActions(qry, checks)
+	require.Equal(t, "u_chk_1", composed[0].Name)
+	require.Equal(t, "explicit_ck", composed[1].Name)
+
+	// Chained rename-table actions compose in order.
+	qry.Actions = append(qry.Actions,
+		&plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_AlterName{AlterName: &plan2.AlterTableName{OldName: "u", NewName: "v"}}})
+	composed = composeCheckNamesAcrossAlterActions(qry, checks)
+	require.Equal(t, "v_chk_1", composed[0].Name)
+
+	// Empty input stays empty.
+	require.Empty(t, composeCheckNamesAcrossAlterActions(qry, nil))
+}
+
 func TestLockDroppedRelation(t *testing.T) {
 	retryErr := moerr.NewTxnNeedRetryNoCtx()
 	catalogErr := errors.New("catalog lock failed")

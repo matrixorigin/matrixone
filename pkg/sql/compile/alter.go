@@ -1098,7 +1098,11 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	// The temporary relation is not externally visible. Its parent backrefs are
 	// reconciled after the original relation is replaced, so avoid materializing
 	// an intermediate parent->temporary-table relationship here.
-	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	//
+	// The replica intentionally keeps the source CHECK constraint names: it
+	// replaces the source table, it is not an unrelated sibling, so the 3822
+	// duplicate-name scan does not apply.
+	opts := executor.StatementOption{}.WithIgnoreForeignKey().WithTrustedCheckConstraintNames()
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
 	}
@@ -1153,6 +1157,15 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 	if isTemp && originRel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
 		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	if !isTemp {
+		// The replica is a trusted physical replacement, but ADD CHECK still
+		// authors new logical identities. Validate them before any replica or
+		// lineage catalog effects, excluding the source's inherited names.
+		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName,
+			qry.TableDef.GetChecks(), qry.CopyTableDef.GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	replacementAdmission := dropLifecycleAdmission{}
