@@ -156,7 +156,7 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if builder.qry.LoadTag || builder.isRestore {
+	if (builder.qry.LoadTag && !builder.checkLoadPrimaryKey) || builder.isRestore {
 		return true
 	}
 
@@ -3396,7 +3396,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			replaceColRefTag(expr, oldSelectTag, selectTag)
 		}
 	} else if builder.canSkipDedup(tableDef) && onDupAction != plan.Node_UPDATE {
-		// load do not handle primary/unique key confliction
+		// Explicit exemptions and LOAD modes without primary-key validation.
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] {
 				continue
@@ -3752,7 +3752,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				return 0, err
 			}
 
-			if !idxDef.Unique {
+			// LOAD still maintains index tables, but unique-key conflict handling
+			// is separate from ordinary LOAD's primary-key validation.
+			if !idxDef.Unique || builder.qry.LoadTag {
 				continue
 			}
 
@@ -4396,6 +4398,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
+	}
+
+	var asyncEligible *plan.Expr
+	if onDupAction == plan.Node_UPDATE && physicalChangedRowsInputPos >= 0 {
+		asyncEligible = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: physicalChangedRowsInputPos}}}
+	}
+	lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, dmlCtx.asyncDatalinkColumns[0], lastNodeID, selectTag, func(name string) (int32, bool) { pos, ok := colName2Idx[tableDef.Name+"."+name]; return pos, ok }, asyncEligible)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

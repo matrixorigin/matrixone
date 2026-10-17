@@ -109,7 +109,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			"snapshot_id": strconv.FormatInt(snapshot.SnapshotID, 10),
 		})
 	}
-	schema, schemaID, err := snapshotSchema(loaded.Metadata, snapshot)
+	schema, schemaID, err := scanSchema(loaded.Metadata, snapshot, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -220,10 +220,11 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 				}
 				continue
 			}
+			entry, err = NormalizeManifestEntry(entry, read.Manifest)
+			if err != nil {
+				return nil, err
+			}
 			file := normalizeDataFile(entry.DataFile)
-			file.SequenceNumber = firstNonZeroInt64(file.SequenceNumber, entry.SequenceNumber, read.Manifest.SequenceNumber)
-			file.FileSequenceNumber = firstNonZeroInt64(file.FileSequenceNumber, entry.FileSequence, read.Manifest.SequenceNumber)
-			file.SpecID = read.Manifest.PartitionSpecID
 			if read.Manifest.Content == api.ManifestContentDeletes {
 				if !req.EnableDeleteApply {
 					return nil, ValidateP0ManifestFile(read.Manifest)
@@ -650,6 +651,15 @@ func selectScanManifests(ctx context.Context, manifests []api.ManifestFile, prun
 		selectedData = append(selectedData, manifest)
 	}
 	return selectedData, selectedDeletes, pruned, nil
+}
+
+// Branches share the current table schema; time travel and tags retain the
+// schema at snapshot creation. ResolveSnapshot has already validated the ref.
+func scanSchema(meta *api.TableMetadata, snapshot api.Snapshot, selector api.SnapshotSelector) (api.Schema, int, error) {
+	if selector.HasSnapshotID || selector.HasTimestampMS || strings.EqualFold(meta.Refs[strings.TrimSpace(selector.RefName)].Type, "tag") {
+		return snapshotSchema(meta, snapshot)
+	}
+	return snapshotSchema(meta, api.Snapshot{})
 }
 
 func snapshotSchema(meta *api.TableMetadata, snapshot api.Snapshot) (api.Schema, int, error) {

@@ -270,7 +270,7 @@ create database db01;
 use db01;
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data local infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t11;
 drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile' comment = 'stage11';
@@ -476,7 +476,7 @@ col6 smallint unsigned,
 col7 int unsigned,
 col8 bigint unsigned
 );
-load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
+load data local infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
 select * from jsonline_t1;
 drop stage if exists ex_stage03;
 create stage ex_stage03 url = 'file:///$resources/into_outfile' comment = 'ex_stage03';

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -65,7 +66,7 @@ func TestLoadTimeReaderPlacement(t *testing.T) {
 			ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD), TbColToDataCol: map[string]int32{"v": 0}},
 		}
 		param := csvLoadFanoutParam("")
-		param.Ctx = c.proc.Ctx
+		param.Ctx = fileservice.WithSQLFileAccess(c.proc.Ctx, "sys", "moadmin")
 		param.ScanType, param.Format, param.Parallel = tree.S3, format, true
 		return c, n, param
 	}
@@ -136,7 +137,9 @@ func TestLoadTimeReaderPlacement(t *testing.T) {
 		checkScopes(t, c, ss)
 		require.Len(t, ss, 1)
 		require.Equal(t, 2, ss[0].NodeInfo.Mcpu)
-		require.Len(t, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset, 4)
+		// The fixture ends before the nominal split; worker placement stays
+		// parallel while only the final whole-file range is assigned.
+		require.Equal(t, []int64{0, -1}, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
 	})
 	for _, control := range []string{"non TIME", "foreign TIME", "Arrow", "omitted TIME", "user variable"} {
 		t.Run(control+" control", func(t *testing.T) {

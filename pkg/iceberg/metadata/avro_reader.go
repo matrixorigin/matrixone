@@ -517,6 +517,16 @@ func manifestEntryFromRecord(record map[string]any) (api.ManifestEntry, error) {
 			"file": api.RedactPath(file.FilePath),
 		})
 	}
+	// Absent columns are v1's concrete zero; present nulls are v2 inheritance.
+	_, hasDataSequence := record["sequence_number"]
+	_, hasFileSequence := record["file_sequence_number"]
+	_, entry.SequenceNumberSet = optionalInt64(record, "sequence_number")
+	_, entry.FileSequenceSet = optionalInt64(record, "file_sequence_number")
+	entry.SequenceNumberSet = entry.SequenceNumberSet || !hasDataSequence
+	entry.FileSequenceSet = entry.FileSequenceSet || !hasFileSequence
+	if status != api.ManifestEntryAdded && (!entry.SequenceNumberSet || !entry.FileSequenceSet) {
+		return api.ManifestEntry{}, api.NewError(api.ErrMetadataInvalid, "Iceberg non-added manifest entry has null sequence numbers", nil)
+	}
 	entry.DataFile.SequenceNumber = entry.SequenceNumber
 	entry.DataFile.FileSequenceNumber = entry.FileSequence
 	return entry, nil

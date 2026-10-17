@@ -488,7 +488,8 @@ func newExpressionExecutorWithAllocation(
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
 				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
-			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
+			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
+			executor.volatile = overload.CannotFold() || executor.stringToNumericCast || executor.rowScopedDecimalCast
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
