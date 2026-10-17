@@ -91,6 +91,141 @@ func TestLocalScanPlannerBuildsSnapshotTasksAndProfile(t *testing.T) {
 	}
 }
 
+func TestLocalScanPlannerSnapshotlessTable(t *testing.T) {
+	for _, current := range []string{"-1", "null", "omitted"} {
+		for _, ref := range []string{"", " main "} {
+			t.Run(current+"/ref="+ref, func(t *testing.T) {
+				payload := strings.Replace(emptySnapshotMetadataJSON, `"current-snapshot-id": -1,`, `"current-snapshot-id": `+current+`,`, 1)
+				if current == "omitted" {
+					payload = strings.Replace(payload, `"current-snapshot-id": omitted,`, "", 1)
+				}
+				payload = strings.Replace(payload, `"refs": {},`, "", 1)
+				fixture := newPlannerFixtureWithMetadata(t, 0, payload)
+				planner := fixture.planner()
+				plan, err := planner.PlanScan(context.Background(), api.ScanPlanRequest{
+					CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+					Namespace:      api.Namespace{"sales"}, Table: "empty_orders", Ref: ref,
+					ProjectionIDs: []int{1}, ResidualSQL: "id > 10", EnableDeleteApply: true,
+					DeleteMaxMemoryBytes: 1024, EnableDeleteSpill: true,
+				})
+				if err != nil {
+					t.Fatalf("plan snapshot-less table: %v", err)
+				}
+				if len(plan.DataTasks) != 0 || len(plan.DeleteTasks) != 0 {
+					t.Fatalf("snapshot-less table must have no tasks: %+v", plan)
+				}
+				if len(plan.ColumnMapping) != 1 || plan.ColumnMapping[0].FieldID != 1 || !plan.ColumnMapping[0].Projected || plan.ColumnMapping[0].MOType.String() != "BIGINT" {
+					t.Fatalf("empty scan must retain the current schema: %+v", plan.ColumnMapping)
+				}
+				if plan.Snapshot.SnapshotID != NoCurrentSnapshotID || plan.Snapshot.SchemaID != 0 || plan.Snapshot.RefName != strings.TrimSpace(ref) || plan.Snapshot.PlanningMode != localPlanningMode || len(plan.Snapshot.PartitionSpecIDs) != 1 || plan.Snapshot.PartitionSpecIDs[0] != 0 {
+					t.Fatalf("unexpected empty snapshot plan: %+v", plan.Snapshot)
+				}
+				if plan.Snapshot.MetadataLocationHash == "" || plan.Snapshot.MetadataLocation == "" || strings.Contains(plan.Snapshot.MetadataLocation, "warehouse") || plan.Snapshot.ManifestList != "" || plan.Snapshot.ManifestListHash != "" {
+					t.Fatalf("unexpected empty scan paths: %+v", plan.Snapshot)
+				}
+				if plan.ResidualFilter.AlwaysTrue || plan.ResidualFilter.ExpressionSQL != "id > 10" || plan.DeleteMaxMemoryBytes != 1024 || !plan.EnableDeleteSpill {
+					t.Fatalf("empty scan lost execution options: %+v", plan)
+				}
+				if plan.Profile.MetadataBytes <= 0 || plan.Profile.PlanningCacheMiss != 1 || plan.Profile.ManifestListBytes != 0 || plan.Profile.ManifestBytes != 0 || plan.Profile.DataFilesSelected != 0 {
+					t.Fatalf("unexpected empty scan profile: %+v", plan.Profile)
+				}
+				if calls := fixture.reader.totalCalls(); calls != 0 {
+					t.Fatalf("empty scan read %d objects", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestLocalScanPlannerSnapshotlessTableErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata string
+		selector api.SnapshotSelector
+		code     api.ErrorCode
+	}{
+		{name: "missing branch", selector: api.SnapshotSelector{RefName: "audit"}, code: api.ErrTableNotFound},
+		{name: "explicit snapshot", selector: api.SnapshotSelector{SnapshotID: 22, HasSnapshotID: true}, code: api.ErrTableNotFound},
+		{name: "explicit timestamp", selector: api.SnapshotSelector{TimestampMS: 1710000200000, HasTimestampMS: true}, code: api.ErrTableNotFound},
+		{name: "dangling main", metadata: strings.Replace(emptySnapshotMetadataJSON, `"refs": {}`, `"refs": {"main":{"snapshot-id":22,"type":"branch"}}`, 1), code: api.ErrTableNotFound},
+		{name: "explicit sentinel ref", metadata: strings.Replace(emptySnapshotMetadataJSON, `"refs": {}`, `"refs": {"main":{"snapshot-id":-1,"type":"branch"}}`, 1), code: api.ErrTableNotFound},
+		{name: "dangling current", metadata: strings.Replace(emptySnapshotMetadataJSON, `"current-snapshot-id": -1`, `"current-snapshot-id": 22`, 1), code: api.ErrMetadataInvalid},
+		{name: "missing current schema", metadata: strings.Replace(emptySnapshotMetadataJSON, `"current-schema-id": 0`, `"current-schema-id": 99`, 1), code: api.ErrMetadataInvalid},
+		{name: "unsupported format", metadata: strings.Replace(emptySnapshotMetadataJSON, `"format-version": 2`, `"format-version": 3`, 1), code: api.ErrUnsupportedFeature},
+		{name: "unsupported type", metadata: strings.Replace(emptySnapshotMetadataJSON, `"type": "long"`, `"type": "variant"`, 1), code: api.ErrUnsupportedFeature},
+		{name: "retained history without current", metadata: strings.Replace(strings.Replace(sampleMetadataJSON, `"current-snapshot-id": 22`, `"current-snapshot-id": null`, 1), `"main": {"snapshot-id": 22, "type": "branch"},`, "", 1), code: api.ErrTableNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := tc.metadata
+			if payload == "" {
+				payload = emptySnapshotMetadataJSON
+			}
+			fixture := newPlannerFixtureWithMetadata(t, 0, payload)
+			_, err := fixture.planner().PlanScan(context.Background(), api.ScanPlanRequest{
+				CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+				Namespace:      api.Namespace{"sales"}, Table: "empty_orders", Snapshot: tc.selector,
+			})
+			assertIcebergCode(t, err, tc.code)
+		})
+	}
+}
+
+func TestLocalScanPlannerSnapshotlessTableBudgetAndCancellation(t *testing.T) {
+	fixture := newPlannerFixtureWithMetadata(t, 0, emptySnapshotMetadataJSON)
+	load := fixture.client.LoadTableFunc
+	fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		if req.IfNoneMatch != "" {
+			return &api.LoadTableResponse{NotModified: true}, nil
+		}
+		return load(ctx, req)
+	}
+	planner := fixture.planner()
+	req := api.ScanPlanRequest{CatalogRequest: cacheLoadTableRequest().CatalogRequest, Namespace: api.Namespace{"sales"}, Table: "empty_orders"}
+	plan, err := planner.PlanScan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner.PlanningMaxMemory = plan.Profile.MetadataBytes + 511
+	_, err = planner.PlanScan(context.Background(), req)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	planner.PlanningMaxMemory++
+	plan, err = planner.PlanScan(context.Background(), req)
+	if err != nil {
+		t.Fatalf("exact mapping budget: %v", err)
+	}
+	if plan.Profile.PlanningCacheHits != 1 {
+		t.Fatalf("expected cached metadata: %+v", plan.Profile)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = planner.PlanScan(ctx, req)
+	assertIcebergCode(t, err, api.ErrPlanningTimeout)
+}
+
+func TestLocalScanPlannerSnapshotlessTableFirstCommit(t *testing.T) {
+	fixture := newPlannerFixtureWithMetadata(t, 1, emptySnapshotMetadataJSON)
+	planner := fixture.planner()
+	req := api.ScanPlanRequest{CatalogRequest: cacheLoadTableRequest().CatalogRequest, Namespace: api.Namespace{"sales"}, Table: "orders", Ref: "main"}
+	plan, err := planner.PlanScan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DataTasks) != 0 {
+		t.Fatal("expected empty initial table")
+	}
+	fixture.client.LoadTableFunc = func(context.Context, api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		return &api.LoadTableResponse{MetadataLocation: "s3://warehouse/sales/orders/metadata/v3.metadata.json", MetadataJSON: []byte(sampleMetadataJSON), ETag: "etag-2"}, nil
+	}
+	plan, err = planner.PlanScan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Snapshot.SnapshotID != 22 || len(plan.DataTasks) != 1 {
+		t.Fatalf("first commit remained empty: %+v", plan)
+	}
+}
+
 func TestLocalScanPlannerUsesCacheOnSecondPlanning(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPlannerFixture(t, 1)

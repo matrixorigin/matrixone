@@ -489,7 +489,9 @@ func (s *service) Start() (err error) {
 		if err != nil || complete {
 			return err
 		}
-		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)); err != nil {
+		// Fresh derived schema also publishes the C03 TABLES function. Existing
+		// complete clusters keep the skip path above during a rolling upgrade.
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion118)); err != nil {
 			return err
 		}
 		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)

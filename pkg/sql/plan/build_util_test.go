@@ -1228,7 +1228,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
-func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+func TestBuildGeneratedExprFunctionsAreDeterministic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	cases := []struct {
 		name             string
@@ -1239,6 +1239,9 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		generatedSQLType string
 		generatedType    plan.Type
 	}{
+		{name: "bit_count_text", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varchar(16)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_numeric", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "int", baseType: plan.Type{Id: int32(types.T_int32)}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_binary", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
 		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},

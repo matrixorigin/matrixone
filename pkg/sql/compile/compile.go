@@ -658,6 +658,8 @@ func (c *Compile) run(s *Scope) error {
 		return err
 	case CreateDatabase:
 		return s.CreateDatabase(c)
+	case AlterDatabase:
+		return s.AlterDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
@@ -1200,6 +1202,8 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(CreateDatabase).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_ALTER_DATABASE:
+			return []*Scope{newScope(AlterDatabase).withPlan(pn)}, nil
 		case plan.DataDefinition_DROP_DATABASE:
 			return []*Scope{
 				newScope(DropDatabase).
