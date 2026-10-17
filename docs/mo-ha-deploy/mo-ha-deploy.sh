@@ -27,6 +27,18 @@ while [ $_i -lt ${#_argv[@]} ]; do
 done
 if [ -n "$CONFIG_FILE" ]; then
   [ -r "$CONFIG_FILE" ] || { echo "ERROR: 无法读取 --config 文件: $CONFIG_FILE" >&2; exit 1; }
+  # 该文件是被 root source 的（等效 root 执行任意 shell），因此拒绝 group/other 可写：
+  # 否则任何能改写它的人都能借本次 sudo 取得 root，而运维通常把它当作纯数据文件。
+  _cf_mode=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || stat -f '%Lp' "$CONFIG_FILE" 2>/dev/null || true)
+  case "$_cf_mode" in
+    ''|*[!0-7]*) : ;;
+    *) if [ $((8#$_cf_mode & 022)) -ne 0 ]; then
+         echo "ERROR: $CONFIG_FILE 权限为 ${_cf_mode}（group/other 可写）。该文件会被 shell source（等效 root 执行），" >&2
+         echo "       请 chmod 600 并确保来源可信后重试。" >&2
+         exit 1
+       fi;;
+  esac
+  echo "[*] 读取配置 ${CONFIG_FILE}（按 shell 脚本 source 执行，仅使用可信来源）" >&2
   set -a; . "$CONFIG_FILE"; set +a
 fi
 
@@ -147,7 +159,8 @@ mo-ha-deploy.sh — MatrixOne 双机主备(DRBD+Pacemaker/STONITH) 一键部署
 【行为控制】
   --drbd-src-url URL     DRBD 源码包(默认 LINBIT 9.2.20；内核模块包缺失时用于源码构建)
   --no-drbd-kernel-build 禁止源码构建 DRBD 内核模块(只用发行版/ELRepo 包)
-  --config FILE          从文件读取上述变量(KEY=VALUE，CLI 覆盖文件)
+  --config FILE          从文件读取上述变量(CLI 覆盖文件)。注意：该文件被 shell source，
+                          内容会被 root 执行，须 chmod 600 且仅用可信来源；group/other 可写会被拒绝
   --bootstrap            引导节点(建集群/fencing/资源)；仅一台使用
   --format-drbd          首次格式化 DRBD(仅 bootstrap 一次)
   --drbd9-quorum         使用 DRBD9 quorum majority(需 kmod-drbd 9.x)

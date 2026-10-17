@@ -22,7 +22,7 @@ MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资�
 ```bash
 cd /root/mo-ha-deploy
 cp deploy.env.example node1.env     # 在 node2 上复制为 node2.env
-chmod 600 node1.env
+chmod 600 node1.env      # 含凭据；且该文件会被 root source，务必仅用可信来源
 vi node1.env    # 至少改 SELF / PEER / SELF_IP / PEER_IP / DRBD_DEVICE / HACLUSTER_PW / fencing 参数
 ```
 
