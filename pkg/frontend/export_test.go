@@ -32,13 +32,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func sysFileAccessTestProcess() *process.Process {
+	return &process.Process{Base: &process.BaseProcess{SessionInfo: process.SessionInfo{Account: "sys", Role: "moadmin"}}}
+}
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 
 func Test_initExportFileParam(t *testing.T) {
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{
 			Lines: &tree.Lines{
 				TerminatedBy: &tree.Terminated{},
@@ -67,7 +72,7 @@ func Test_initExportFileParam(t *testing.T) {
 
 func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile succ", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -99,7 +104,7 @@ func Test_openNewFile(t *testing.T) {
 
 func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -121,7 +126,7 @@ func Test_formatOutputString(t *testing.T) {
 
 func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -167,7 +172,7 @@ func Test_writeToCSVFile(t *testing.T) {
 
 func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -198,7 +203,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -275,7 +280,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	// []float32/[]float64 and then did value.([]byte) — a panic for []types.BF16 /
 	// []types.Float16 / []int8 and raw-byte corruption for []uint8.
 	convey.Convey("exportDataFromResultSetToCSVFile narrow vectors", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines:    &tree.Lines{TerminatedBy: &tree.Terminated{}},
 				Fields:   &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}},
@@ -310,7 +315,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	})
 
 	convey.Convey("exportDataToCSVFile fail", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -357,7 +362,7 @@ func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
 		bat.Vecs[0] = vec
 		bat.SetRowCount(1)
 
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
 			},
@@ -420,7 +425,7 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	column := &MysqlColumn{}
 	column.SetName("value")
 	mrs.AddColumn(column)
-	ep := &ExportConfig{mrs: mrs}
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
 	bytesChan := make(chan *BatchByte, 1)
 	bytesChan <- &BatchByte{index: 0}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -444,7 +449,7 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 func Test_getExportFormat(t *testing.T) {
 	convey.Convey("getExportFormat returns correct format", t, func() {
 		// Test default format (empty string returns "csv")
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				ExportFormat: "",
 			},
@@ -826,7 +831,7 @@ func Test_getEffectiveMaxFileSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ep := &ExportConfig{
+			ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 				userConfig: &tree.ExportParam{
 					MaxFileSize: tt.maxFileSize,
 					SplitSize:   tt.splitSize,

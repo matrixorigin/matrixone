@@ -148,7 +148,7 @@ func TestHnswSearchParamFailF64(t *testing.T) {
 
 func TestHnswSearchIndexTableConfigFailF64(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
+	hnswTestRunSQL = mock_hnswTestRunSQL
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
 	ut := newHnswSearchTestCaseF64(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)

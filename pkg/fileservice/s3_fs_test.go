@@ -489,7 +489,7 @@ func testS3FS(
 }
 
 func TestDynamicS3(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
@@ -516,7 +516,7 @@ func TestDynamicS3(t *testing.T) {
 }
 
 func TestDynamicS3Opts(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
@@ -540,7 +540,7 @@ func TestDynamicS3Opts(t *testing.T) {
 }
 
 func TestDynamicS3NoKey(t *testing.T) {
-	ctx := WithParallelMode(context.Background(), ParallelForce)
+	ctx := WithParallelMode(WithSQLFileAccess(context.Background(), "sys", "moadmin"), ParallelForce)
 	prefix := "etl-prefix"
 	buf := new(strings.Builder)
 	w := csv.NewWriter(buf)
@@ -566,7 +566,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 }
 
 func TestDynamicMinio(t *testing.T) {
-	ctx := WithParallelMode(context.Background(), ParallelForce)
+	ctx := WithParallelMode(WithSQLFileAccess(context.Background(), "sys", "moadmin"), ParallelForce)
 	buf := new(strings.Builder)
 	w := csv.NewWriter(buf)
 	err := w.Write([]string{

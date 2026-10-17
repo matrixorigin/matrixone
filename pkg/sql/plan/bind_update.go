@@ -416,6 +416,33 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
+		columns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(columns) == 0 {
+			continue
+		}
+		alias := dmlCtx.aliases[i]
+		rowIDPos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(), "missing row_id for Datalink target %s", alias)
+		}
+		eligible, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{{Typ: selectNode.ProjectList[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: rowIDPos}}}})
+		if err != nil {
+			return 0, err
+		}
+		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, columns, lastNodeID, selectNodeTag, func(name string) (int32, bool) {
+			key := alias + "." + name
+			if pos, ok := newColName2Idx[key]; ok {
+				return pos, true
+			}
+			pos, ok := oldColName2Idx[key]
+			return pos, ok
+		}, eligible)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	for i, tableDef := range dmlCtx.tableDefs {
 		if updateAutoIncrCols[i] {
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_PRE_INSERT,
@@ -429,6 +456,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}, bindCtx)
 		}
+
 	}
 
 	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(

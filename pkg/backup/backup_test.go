@@ -1676,7 +1676,7 @@ func TestBackup(t *testing.T) {
 		{
 			name: "t2",
 			args: args{
-				ctx: context.Background(),
+				ctx: fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin"),
 				bs:  bs,
 				cfg: &Config{
 					Timestamp:  types.TS{},

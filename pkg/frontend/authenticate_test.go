@@ -4524,6 +4524,12 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
+		tenant.DefaultRole = publicRoleName
+		tenant.DefaultRoleID = publicRoleID
+		ok, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+
 	})
 
 	convey.Convey("backup fail", t, func() {
@@ -12550,6 +12556,8 @@ func TestDoRemoveStageFiles(t *testing.T) {
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	ses.proc.Base.SessionInfo.Account = "sys"
+	ses.proc.Base.SessionInfo.Role = "moadmin"
 
 	dir := t.TempDir()
 	stageURL := &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}

@@ -16,7 +16,6 @@ package hnsw
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -606,49 +605,60 @@ func (s *HnswSync[T]) nextTimestamp() int64 {
 }
 
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
-	// save to files and then save to database
 	s.ts = s.nextTimestamp()
-	sqls, err := s.ToSql(s.ts)
-	if err != nil {
-		return err
+	dirty := make([]*HnswModel[T], 0, len(s.indexes))
+	for _, idx := range s.indexes {
+		if !idx.Dirty.Load() {
+			continue
+		}
+		if err := idx.PreparePersistence(); err != nil {
+			return err
+		}
+		dirty = append(dirty, idx)
 	}
-
-	if len(sqls) == 0 {
+	if len(dirty) == 0 {
 		return nil
 	}
-
-	err = s.runSqls(sqlproc, sqls)
-	if err != nil {
-		return err
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	veccache.Cache.Remove(s.tblcfg.IndexTable)
-
-	return nil
-}
-
-func (s *HnswSync[T]) runSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
-	/*
-		for _, s := range sqls {
-			os.Stderr.WriteString(fmt.Sprintf("sql : %s\n", s))
-		}
-	*/
-	opts := executor.Options{}
 	err := runTxn(sqlproc, func(exec executor.TxnExecutor) error {
-		for _, sql := range sqls {
-			res, err := exec.Exec(sql, opts.StatementOption())
+		stmt := sqlproc.StatementOption()
+		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, s.tblcfg.DbName, s.tblcfg.IndexTable, 2000)
+		if err != nil {
+			return err
+		}
+		metas := make([]string, 0, len(dirty))
+		ts := s.ts
+		for _, idx := range dirty {
+			deletes, err := idx.ToDeleteSql(s.tblcfg)
 			if err != nil {
 				return err
 			}
+			for _, sql := range deletes {
+				res, err := exec.Exec(sql, stmt)
+				res.Close()
+				if err != nil {
+					return err
+				}
+			}
+			if err := idx.PersistChunks(writer); err != nil {
+				return err
+			}
+			if idx.FileSize == 0 {
+				continue
+			}
+			metas = append(metas, fmt.Sprintf("(%s, %s, %d, %d)", sqlquote.String(idx.Id), sqlquote.String(idx.Checksum), ts, idx.FileSize))
+			ts++
+		}
+		if len(metas) > 0 {
+			res, err := exec.Exec(fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", ")), stmt)
 			res.Close()
+			return err
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-
+	veccache.Cache.Remove(s.tblcfg.IndexTable)
 	return nil
 }
 
@@ -722,67 +732,4 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 	idxlen := s.last.Len.Add(1)
 	full = (idxlen >= int64(s.last.MaxCapacity))
 	return s.last, full, nil
-}
-
-// generate SQL to update the secondary index tables
-// 1. sync the metadata table
-// 2. sync the index file to index table
-func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
-
-	if len(s.indexes) == 0 {
-		return []string{}, nil
-	}
-
-	sqls := make([]string, 0, len(s.indexes)+1)
-
-	metas := make([]string, 0, len(s.indexes))
-	for _, idx := range s.indexes {
-		// check Dirty.  Only update when Dirty is true
-		if !idx.Dirty.Load() {
-			continue
-		}
-
-		// delete sql
-		deletesqls, err := idx.ToDeleteSql(s.tblcfg)
-		if err != nil {
-			return nil, err
-		}
-		if len(deletesqls) > 0 {
-			sqls = append(sqls, deletesqls...)
-		}
-
-		// insert sql
-		indexsqls, err := idx.ToSql(s.tblcfg)
-		if err != nil {
-			return nil, err
-		}
-
-		// skip when sqls is empty which means the index is empty
-		if len(indexsqls) == 0 {
-			continue
-		}
-
-		sqls = append(sqls, indexsqls...)
-
-		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := vectorindex.CheckSum(idx.Path)
-		if err != nil {
-			return nil, err
-		}
-
-		finfo, err := os.Stat(idx.Path)
-		if err != nil {
-			return nil, err
-		}
-		fs := finfo.Size()
-
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
-		ts++
-	}
-
-	if len(metas) > 0 {
-		metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", "))
-		sqls = append(sqls, metasql)
-	}
-	return sqls, nil
 }

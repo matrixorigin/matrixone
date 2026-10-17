@@ -101,6 +101,7 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
+			Account:               proc.Base.SessionInfo.Account,
 			User:                  proc.Base.SessionInfo.GetUser(),
 			Host:                  proc.Base.SessionInfo.GetHost(),
 			Role:                  proc.Base.SessionInfo.GetRole(),

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // CagraBuild manages bulk index construction across one or more CagraModel sub-indexes.
@@ -171,9 +172,9 @@ func (b *CagraBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	return nil
 }
 
-// ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
+// PreparePersistence finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
-func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
+func (b *CagraBuild[B, Q]) PreparePersistence(ts int64) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
@@ -191,14 +192,12 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	metas := make([]string, 0, len(b.indexes))
 
 	for _, idx := range b.indexes {
-		// ToSql calls saveToFile which packs the index to a tar file,
+		// PreparePersistence calls saveToFile which packs the index to a tar file,
 		// frees GPU memory, and sets idx.Checksum / idx.FileSize.
-		indexsqls, err := idx.ToSql(b.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-		sqls = append(sqls, indexsqls...)
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
+		metas = append(metas, fmt.Sprintf("(%s, %s, %d, %d)", sqlquote.String(idx.Id), sqlquote.String(idx.Checksum), ts, idx.FileSize))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",
@@ -207,7 +206,16 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
-// Destroy frees all GPU memory and removes any temporary files.
+// PersistChunks writes the artifacts prepared by this builder.
+func (b *CagraBuild[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range b.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *CagraBuild[B, Q]) Destroy() error {
 	var errs error
 	if b.current != nil {

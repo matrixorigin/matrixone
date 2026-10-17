@@ -23,10 +23,11 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	asyncDatalinkColumns map[int][]string
+	objRefs              []*plan.ObjectRef
+	tableDefs            []*plan.TableDef
+	aliases              []string
+	isClusterTable       []bool
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	updatePartCol  []bool                 //If update cols contains col that Partition expr used
@@ -389,6 +390,17 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 
 	nowIdx := len(dmlCtx.tableDefs)
+	columns, err := asyncDatalinkColumns(tableDef)
+	if err != nil {
+		return err
+	}
+	if len(columns) > 0 {
+		if dmlCtx.asyncDatalinkColumns == nil {
+			dmlCtx.asyncDatalinkColumns = make(map[int][]string)
+		}
+		dmlCtx.asyncDatalinkColumns[nowIdx] = columns
+	}
+
 	dmlCtx.isClusterTable = append(dmlCtx.isClusterTable, isClusterTable)
 	dmlCtx.objRefs = append(dmlCtx.objRefs, objRef)
 	dmlCtx.tableDefs = append(dmlCtx.tableDefs, tableDef)

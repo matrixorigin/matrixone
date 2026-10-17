@@ -33,6 +33,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
@@ -52,7 +53,7 @@ var cagra_runSql = sqlexec.RunSql
 // cagraBuilder is the (B, Q)-erased build interface the create state drives.
 // *cagraPkg.CagraBuild[B, Q] satisfies it for every wired (base, storage)
 // combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
-// end() routes through ToInsertSql instead.
+// end() routes through PreparePersistence instead.
 type cagraBuilder interface {
 	// AddRow takes the raw base-type bytes of one vector (4*dim for an f32 base,
 	// 2*dim for an f16 base); the concrete builder reinterprets them to its
@@ -61,7 +62,8 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64) ([]string, error)
+	PreparePersistence(ts int64) ([]string, error)
+	PersistChunks(writer *sqlexec.ChunkInserter) error
 	Destroy() error
 }
 
@@ -115,7 +117,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts)
+		sqls, err = u.builder.PreparePersistence(ts)
 	}
 	// No builder selected → init didn't set one. Nothing to do for the cuvs
 	// side; the CDC tail (if any) below still emits.
@@ -148,14 +150,27 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 			len(u.cdcTail), u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.IndexTable)
 	}
 
-	for _, s := range sqls {
-		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
-		if err != nil {
-			return err
+	storageProc := sqlexec.NewSqlProcess(proc)
+	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
+		stmt := storageProc.StatementOption()
+		if u.builder != nil {
+			writer, err := sqlexec.NewChunkInserter(storageProc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
+			if err != nil {
+				return err
+			}
+			if err := u.builder.PersistChunks(writer); err != nil {
+				return err
+			}
 		}
-		res.Close()
-	}
-	return nil
+		for _, sql := range sqls {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (u *cagraCreateState) reset(tf *TableFunction, proc *process.Process) {

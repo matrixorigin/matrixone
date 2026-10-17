@@ -2864,6 +2864,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, dmlCtx.asyncDatalinkColumns[0], lastNodeID, selectTag, func(name string) (int32, bool) { pos, ok := colName2Idx[tableDef.Name+"."+name]; return pos, ok }, nil)
+	if err != nil {
+		return 0, err
+	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 

@@ -132,6 +132,10 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.Fileparam.FileCnt = 1
 	}
 	param.Ctx = proc.Ctx
+	if param.Extern.ScanType != tree.INLINE && !param.Extern.Local && param.ForeignScan == nil {
+		param.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
+	}
+	param.Extern.Ctx = param.Ctx
 	param.addParquetProfile(icebergParquetProfileStats(param))
 
 	// Filter public preprocessing

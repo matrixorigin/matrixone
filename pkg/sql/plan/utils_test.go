@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1003,7 +1005,7 @@ func TestValidateAndSetHivePartitionOptions_Disabled(t *testing.T) {
 	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
 	stmt.Param.Option = []string{"filepath", "/x", "format", "parquet"}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	assert.False(t, stmt.Param.HivePartitioning)
 }
 
@@ -1031,7 +1033,7 @@ func TestValidateAndSetHivePartitionOptions_DisabledWithColumnsRejected(t *testi
 			stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
 			stmt.Param.Option = tc.opts
 			ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-			err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+			err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 		})
@@ -1054,7 +1056,7 @@ func TestValidateAndSetHivePartitionOptions_HappyPath(t *testing.T) {
 			Default: &plan.Default{NullAbility: true},
 		},
 	)
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	assert.True(t, stmt.Param.HivePartitioning)
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 	require.Equal(t, 1, len(stmt.Param.HivePartitionColTypes))
@@ -1073,7 +1075,7 @@ func TestValidateAndSetHivePartitionOptions_MissingColsAutoInferenceNoHiveDirs(t
 	stmt.Param.FileService = makeHiveMemoryFS(t, "data/plain/file.parquet")
 	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan()
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto inference found no hive-style partition directories")
 }
@@ -1092,7 +1094,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInference(t *testing.T) {
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.True(t, stmt.Param.HivePartitioning)
 	assert.Equal(t, []string{"year", "month"}, stmt.Param.HivePartitionCols)
 	require.Equal(t, 2, len(stmt.Param.HivePartitionColTypes))
@@ -1112,7 +1114,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceFromRawFilepath(t *test
 	stmt.Param.Option = []string{"filepath", dir, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.Equal(t, dir, stmt.Param.Filepath)
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 }
@@ -1129,7 +1131,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceExplicitAuto(t *testing
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 }
 
@@ -1146,7 +1148,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceMixedKeys(t *testing.T)
 		&plan.ColDef{Name: "dt", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mixed keys")
 }
@@ -1158,7 +1160,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceUndeclaredColumn(t *tes
 	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "partition column 'year' not found")
 }
@@ -1177,7 +1179,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceMaxListCalls(t *testing
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto inference exceeded")
 	assert.Contains(t, err.Error(), "specify hive_partition_columns explicitly")
@@ -1304,7 +1306,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicateHiveKey(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan()
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate option key")
 }
@@ -1318,7 +1320,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicateFormat(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate option key 'format'")
 }
@@ -1331,7 +1333,7 @@ func TestValidateAndSetHivePartitionOptions_NonParquetFormat(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only supports format='parquet'")
 }
@@ -1345,7 +1347,7 @@ func TestValidateAndSetHivePartitionOptions_StageFilepath(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support stage external tables")
 }
@@ -1359,7 +1361,7 @@ func TestValidateAndSetHivePartitionOptions_StageNameSet(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support stage external tables")
 }
@@ -1372,7 +1374,7 @@ func TestValidateAndSetHivePartitionOptions_ColumnNotFound(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found in table columns")
 }
@@ -1385,7 +1387,7 @@ func TestValidateAndSetHivePartitionOptions_HiddenColumn(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}, Hidden: true})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a hidden column")
 }
@@ -1402,7 +1404,7 @@ func TestValidateAndSetHivePartitionOptions_GeneratedColumn(t *testing.T) {
 		Typ:          plan.Type{Id: int32(types.T_int32)},
 		GeneratedCol: &plan.GeneratedCol{},
 	})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a generated column")
 }
@@ -1415,12 +1417,12 @@ func TestValidateAndSetHivePartitionOptions_VectorType(t *testing.T) {
 		"hive_partition_columns", "emb",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
 
 	ct = makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float64)}})
-	err = validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err = validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
 }
@@ -1433,7 +1435,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicatePartitionColumn(t *testing.
 		"hive_partition_columns", "year,year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate partition column")
 }
@@ -1458,7 +1460,7 @@ func TestValidateAndSetHivePartitionOptions_MultiLevelAndNullability(t *testing.
 		// month: no Default → treated as nullable (default true)
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}},
 	)
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	require.Len(t, stmt.Param.HivePartitionColTypes, 2)
 	assert.False(t, stmt.Param.HivePartitionColTypes[0].NullAbility, "year declared NOT NULL")
 	assert.True(t, stmt.Param.HivePartitionColTypes[1].NullAbility, "month default nullable when Default is nil")
@@ -1474,7 +1476,7 @@ func TestValidateAndSetHivePartitionOptions_InvalidHiveValue(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be 'true' or 'false'")
 }
@@ -1641,3 +1643,10 @@ func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
 
 // Avoid unused import warning when some branches of types are not directly referenced.
 var _ = types.T_int32
+
+func hiveInferenceProcess(t *testing.T) *process.Process {
+	p := testutil.NewProcess(t)
+	p.Base.SessionInfo.Account = "sys"
+	p.Base.SessionInfo.Role = "moadmin"
+	return p
+}
