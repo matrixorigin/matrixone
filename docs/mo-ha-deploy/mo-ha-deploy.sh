@@ -749,6 +749,10 @@ stage_teardown(){
   runq "wipefs -a $DRBD_DEVICE 2>/dev/null || true"
   runq "umount $DATA_DIR 2>/dev/null || true"
   runq "rm -f /etc/drbd.d/$DRBD_RESOURCE.res /etc/modules-load.d/drbd.conf"
+  # stage_pre / stage_fence 写入的其它残留一并清理
+  run "sed -i '/# MO-HA-BEGIN/,/# MO-HA-END/d' /etc/hosts"
+  runq "rm -f /etc/sysctl.d/90-mo-ha.conf /etc/sysconfig/sbd /etc/default/sbd 2>/dev/null || true"
+  runq "sysctl --system >/dev/null 2>&1 || true"
   runq "rm -rf $MO_DIR"
   info "teardown 完成"
 }
