@@ -1293,7 +1293,8 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		overload int64
 		want     bool
 	}{
-		{600, 0, true}, {600, 1, true},
+		{601, 0, true}, {601, 1, true},
+		{600, 0, false}, // upstream INTERNAL_TABLE_COLLATION
 		{599, 0, false}, // upstream CHECK_ASYNC_DATALINK_SOURCE
 		{598, 0, false},
 	} {
