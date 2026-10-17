@@ -1337,8 +1337,9 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				overloadId:           1,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -1353,10 +1354,11 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
 			},
 			{
-				overloadId: FormatIntegerPrecisionLocaleOverload,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
-				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
-				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
+				overloadId:           FormatIntegerPrecisionLocaleOverload,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType:              func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:                func() executeLogicOfOverload { return formatIntegerPrecision },
 			},
 		},
 	},
@@ -9308,8 +9310,9 @@ var supportedMathBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_float64},
+				overloadId:           0,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9329,8 +9332,9 @@ var supportedMathBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_float64},
+				overloadId:           0,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9339,8 +9343,9 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_float64, types.T_float64},
+				overloadId:           1,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9360,8 +9365,9 @@ var supportedMathBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_float64},
+				overloadId:           0,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9381,8 +9387,9 @@ var supportedMathBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_float64},
+				overloadId:           0,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -11724,8 +11731,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
+				overloadId:           0,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_datetime, 0, normalizeStrToDateScale(parameters[2].Scale))
 				},
@@ -11736,8 +11744,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			},
 
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_date},
+				overloadId:           1,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_varchar, types.T_varchar, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_date.ToType()
 				},
@@ -11748,8 +11757,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			},
 
 			{
-				overloadId: 2,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_time},
+				overloadId:           2,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_varchar, types.T_varchar, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.New(types.T_time, 0, normalizeStrToDateScale(parameters[2].Scale))
 				},

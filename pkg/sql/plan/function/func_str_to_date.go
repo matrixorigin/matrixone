@@ -214,49 +214,6 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// coreStrToDateViaEvaluate mirrors each builtIn*StrTo* wrapper's value vs
-// warning contract for one input: invalid parse or calendar/time fields map
-// to MySQL 1411, accepted input with trailing characters to 1292, clean
-// input to no diagnostic. Folding probes use it to ask whether one constant
-// evaluation would warn (#30213).
-func coreStrToDateViaEvaluate(cctx context.Context, target types.T, date, format []byte) (published bool, warning uint16) {
-	t := NewGeneralTime()
-	ok, truncated := coreStrToDate(cctx, t,
-		functionUtil.QuickBytesToStr(date), functionUtil.QuickBytesToStr(format))
-	if !ok {
-		return false, moerr.ER_WRONG_VALUE_FOR_TYPE
-	}
-	valid := false
-	switch target {
-	case types.T_date:
-		valid = types.ValidDate(int32(t.year), t.month, t.day)
-	case types.T_datetime:
-		valid = types.ValidDatetime(int32(t.year), t.month, t.day) &&
-			types.ValidTimeInDay(t.hour, t.minute, t.second)
-	case types.T_time:
-		hours := uint64(t.day)*24 + uint64(t.hour)
-		valid = types.ValidTime(hours, uint64(t.minute), uint64(t.second)) &&
-			types.IsMySQLTime(types.TimeFromClock(false, hours, t.minute, t.second, t.microsecond))
-	}
-	if !valid {
-		return false, moerr.ER_WRONG_VALUE_FOR_TYPE
-	}
-	if truncated {
-		return true, moerr.ER_TRUNCATED_WRONG_VALUE
-	}
-	return true, 0
-}
-
-// StrToDateConstantsWouldWarn reports whether one STR_TO_DATE evaluation of
-// these constant arguments would emit a diagnostic. The optimizer
-// constant-fold probe uses it to keep warning-bearing constants out of the
-// fold cache so every evaluated row retains its warning (#30213).
-func StrToDateConstantsWouldWarn(cctx context.Context, target types.T, date, format string) bool {
-	_, warning := coreStrToDateViaEvaluate(cctx, target,
-		functionUtil.QuickStrToBytes(date), functionUtil.QuickStrToBytes(format))
-	return warning != 0
-}
-
 func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) (bool, bool) {
 	ctx := make(map[string]int)
 	success, truncated := strToDate2(cctx, t, date, format, ctx)

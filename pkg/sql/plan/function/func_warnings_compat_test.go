@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -56,7 +57,7 @@ func TestFormatUnknownLocaleWarning(t *testing.T) {
 	require.Equal(t, uint16(moerr.ER_UNKNOWN_LOCALE), warnings.warnings[0].code)
 	require.Equal(t, "Unknown locale: 'zz_ZZ'", warnings.warnings[0].msg)
 	require.Equal(t, uint16(moerr.ER_UNKNOWN_LOCALE), warnings.warnings[1].code)
-	require.Equal(t, "Unknown locale: ''", warnings.warnings[1].msg)
+	require.Equal(t, "Unknown locale: 'NULL'", warnings.warnings[1].msg)
 }
 
 // TestFormatUnknownLocaleWarningNumeric covers the exact DECIMAL/INTEGER
@@ -86,7 +87,7 @@ func TestFormatUnknownLocaleWarningNumeric(t *testing.T) {
 	require.Equal(t, uint16(moerr.ER_UNKNOWN_LOCALE), warnings.warnings[0].code)
 	require.Equal(t, "Unknown locale: 'zz_ZZ'", warnings.warnings[0].msg)
 	require.Equal(t, uint16(moerr.ER_UNKNOWN_LOCALE), warnings.warnings[1].code)
-	require.Equal(t, "Unknown locale: ''", warnings.warnings[1].msg)
+	require.Equal(t, "Unknown locale: 'NULL'", warnings.warnings[1].msg)
 }
 
 // Issue #30214: MySQL emits warning 3020 (ER_INVALID_ARGUMENT_FOR_LOGARITHM)
@@ -311,6 +312,140 @@ func BenchmarkStrToDateWarningDiscard(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				appendStrToDateWarning(proc, moerr.ER_WRONG_VALUE_FOR_TYPE, "Incorrect datetime value", " for function str_to_date", input)
+			}
+		})
+	}
+}
+
+// Exercise the canonical binder kernel as well as both legacy entry paths.
+func TestFormatLocaleDiagnostics(t *testing.T) {
+	for _, kernel := range []struct {
+		name                      string
+		run                       executeLogicOfOverload
+		numeric, integerPrecision bool
+	}{
+		{"canonical", formatIntegerPrecision, true, true},
+		{"legacy_numeric", FormatWith3Args, true, false},
+		{"legacy_string", FormatWith3Args, false, false},
+	} {
+		t.Run(kernel.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			locales := []string{"", "", strings.Repeat("X", 129), "EN_us"}
+			number := NewFunctionTestInput(types.T_varchar.ToType(), []string{"1234", "1234", "1234", "1234"}, nil)
+			if kernel.numeric {
+				number = NewFunctionTestInput(types.T_int64.ToType(), []int64{1234, 1234, 1234, 1234}, nil)
+			}
+			digits := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2", "2", "2", "2"}, nil)
+			if kernel.integerPrecision {
+				digits = NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2, 2}, nil)
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{number, digits,
+				NewFunctionTestInput(types.T_varchar.ToType(), locales, []bool{false, true, false, false})},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1,234.00", "1,234.00", "1,234.00", "1,234.00"}, nil), kernel.run)
+			defer fc.Free()
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{
+				{code: moerr.ER_UNKNOWN_LOCALE, msg: "Unknown locale: ''"},
+				{code: moerr.ER_UNKNOWN_LOCALE, msg: "Unknown locale: 'NULL'"},
+				{code: moerr.ER_UNKNOWN_LOCALE, msg: "Unknown locale: '" + strings.Repeat("X", 128) + "'"},
+			}, sink.warnings)
+			probe := &process.WarningProbe{}
+			proc.WarningSink = probe
+			ok, info = fc.Run()
+			require.True(t, ok, info)
+			require.True(t, probe.Warned())
+		})
+	}
+}
+
+// Allocate input vectors outside the measured loop; measure the actual SQL
+// kernel and the warning builder separately, with no retained output growth.
+func BenchmarkFormatLocaleDiagnostics(b *testing.B) {
+	for _, size := range []int{5, 2 << 20} {
+		locale := strings.Repeat("X", size)
+		for _, mode := range []string{"none", "probe", "retain"} {
+			b.Run(fmt.Sprintf("bytes=%d/%s", size, mode), func(b *testing.B) {
+				proc := testutil.NewProcess(b)
+				defer proc.Free()
+				sink := &numericWarningSession{}
+				switch mode {
+				case "probe":
+					proc.WarningSink = &process.WarningProbe{}
+				case "retain":
+					proc.WarningSink = sink
+				}
+				for _, kernel := range []bool{false, true} {
+					b.Run(fmt.Sprintf("kernel=%t", kernel), func(b *testing.B) {
+						fc := NewFunctionTestCase(proc, []FunctionTestInput{
+							NewFunctionTestInput(types.T_int64.ToType(), []int64{1234}, nil),
+							NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{locale}, nil)},
+							NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), formatIntegerPrecision)
+						defer fc.Free()
+						b.ReportAllocs()
+						b.ResetTimer()
+						for i := 0; i < b.N; i++ {
+							sink.warnings = sink.warnings[:0]
+							if kernel {
+								if err := fc.result.PreExtendAndReset(1); err != nil {
+									b.Fatal(err)
+								}
+								if err := formatIntegerPrecision(fc.parameters, fc.result, proc, 1, nil); err != nil {
+									b.Fatal(err)
+								}
+							} else {
+								appendLocaleUnknownWarning(proc, locale)
+							}
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestFormatDirectDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		locale   string
+		null     bool
+		warnings int
+	}{
+		{"bad_locale", false, 3}, {"", false, 3}, {"", true, 3}, {"en_US", false, 0},
+	} {
+		t.Run(fmt.Sprintf("%s/null=%t", tc.locale, tc.null), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1234}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.locale}, []bool{tc.null}),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), formatIntegerPrecision)
+			defer fc.Free()
+			for _, input := range fc.parameters {
+				input.SetClass(vector.CONSTANT)
+				input.SetLength(3)
+			}
+			for _, length := range []int{3, 0} {
+				sink.warnings = nil
+				func() {
+					out, err := RunFunctionDirectly(proc, EncodeOverloadID(FORMAT, FormatIntegerPrecisionLocaleOverload), fc.parameters, length)
+					require.NoError(t, err)
+					defer out.Free(proc.Mp())
+					require.Equal(t, length, out.Length())
+					want := 0
+					if length > 0 {
+						want = tc.warnings
+						require.True(t, out.IsConst())
+						require.Equal(t, "1,234.00", out.GetStringAt(0))
+					}
+					require.Len(t, sink.warnings, want)
+				}()
 			}
 		})
 	}

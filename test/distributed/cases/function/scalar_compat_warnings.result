@@ -20,7 +20,7 @@ select format(1234.5,2,null) as v;
 1,234.50
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
-Warning  ¦  1649  ¦  Unknown locale: ''
+Warning  ¦  1649  ¦  Unknown locale: 'NULL'
 select format(1234.5,2,'de_DE') as v;
 ➤ v[12,65535,0]  𝄀
 1.234,50
@@ -131,7 +131,7 @@ select format(1234.5,2,locale) as v from warning_rows order by id;
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'  𝄀
-Warning  ¦  1649  ¦  Unknown locale: ''
+Warning  ¦  1649  ¦  Unknown locale: 'NULL'
 select str_to_date(date_text,'%Y-%m-%d') as v from warning_rows order by id;
 ➤ v[91,10,0]  𝄀
 null  𝄀
@@ -204,4 +204,16 @@ show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
 deallocate prepare warning_stmt;
+set max_error_count=0;
+select format(1234.5,2,repeat('X',129)) as v from warning_rows order by id;
+➤ v[12,65535,0]  𝄀
+1,234.50  𝄀
+1,234.50  𝄀
+1,234.50
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set max_error_count=default;
 drop database scalar_compat_warnings;

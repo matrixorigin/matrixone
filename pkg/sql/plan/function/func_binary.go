@@ -6602,7 +6602,17 @@ func appendLocaleUnknownWarning(proc *process.Process, locale string) {
 	if proc == nil {
 		return
 	}
-	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+	sink := proc.GetWarningSink()
+	if counter, ok := sink.(process.WarningDiagnosticCountAppender); ok && process.WarningDiagnosticRetentionLimitForProcess(proc) == 0 {
+		counter.AppendWarningCount(1)
+		return
+	}
+	if appender, ok := sink.(warningDiagnosticAppender); ok {
+		// Bound the echo before formatting; sink-side truncation is too late
+		// to prevent input-sized temporary allocations.
+		if len(locale) > 128 {
+			locale = locale[:128]
+		}
 		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
 			fmt.Sprintf("Unknown locale: '%s'", locale))
 	}
@@ -6758,13 +6768,15 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 		} else {
 			if null3 {
-				appendLocaleUnknownWarning(proc, "")
+				appendLocaleUnknownWarning(proc, "NULL")
 				val, err = format.GetNumberFormat(string(v1), string(v2), "en_US")
 			} else {
-				if !format.IsValidLocale(string(v3)) {
-					appendLocaleUnknownWarning(proc, string(v3))
+				locale := functionUtil.QuickBytesToStr(v3)
+				if !format.IsValidLocale(locale) {
+					appendLocaleUnknownWarning(proc, locale)
+					locale = "en_US"
 				}
-				val, err = format.GetNumberFormat(string(v1), string(v2), string(v3))
+				val, err = format.GetNumberFormat(string(v1), string(v2), locale)
 			}
 			if err != nil {
 				return err
@@ -6809,11 +6821,11 @@ func formatWithNumericFirst(
 			localeBytes, nullLocale := locale.GetStrValue(i)
 			switch {
 			case nullLocale:
-				appendLocaleUnknownWarning(proc, "")
+				appendLocaleUnknownWarning(proc, "NULL")
 			case format.IsValidLocale(string(localeBytes)):
 				localeValue = string(localeBytes)
 			default:
-				appendLocaleUnknownWarning(proc, string(localeBytes))
+				appendLocaleUnknownWarning(proc, functionUtil.QuickBytesToStr(localeBytes))
 			}
 		}
 

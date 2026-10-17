@@ -66,6 +66,12 @@ func getFormatFunctionWithLocaleMode(locale string) formatModeFunc {
 // Anything else falls back to en_US and, in MySQL terms, warrants an
 // ER_UNKNOWN_LOCALE warning from the caller.
 func IsValidLocale(locale string) bool {
+	// The supported registry uses five-byte language_region names. Reject
+	// other lengths before lowercasing so unknown input cannot allocate a
+	// full-size copy merely to decide whether to emit a diagnostic.
+	if len(locale) != len("en_US") {
+		return false
+	}
 	if _, exist := localeToFormatFunction[locale]; exist {
 		return true
 	}

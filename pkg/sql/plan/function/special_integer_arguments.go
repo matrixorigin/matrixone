@@ -139,12 +139,11 @@ func formatIntegerPrecision(ivecs []*vector.Vector, result vector.FunctionResult
 			case isNull:
 				// #30217: MySQL warns (1649) on a NULL locale, then falls
 				// back to en_US.
-				appendLocaleUnknownWarning(proc, "")
+				appendLocaleUnknownWarning(proc, "NULL")
 			case format.IsValidLocale(functionUtil.QuickBytesToStr(value)):
 				localeValue = string(value)
 			default:
-				localeValue = string(value)
-				appendLocaleUnknownWarning(proc, localeValue)
+				appendLocaleUnknownWarning(proc, functionUtil.QuickBytesToStr(value))
 			}
 		}
 		// The formatter's string API is a rendering boundary, not source coercion:

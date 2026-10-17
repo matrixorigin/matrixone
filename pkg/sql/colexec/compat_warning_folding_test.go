@@ -54,6 +54,9 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 	}{
 		{"ln invalid argument warns per row", "ln", []*plan.Expr{f64(0)}, 3, false},
 		{"ln valid argument folds", "ln", []*plan.Expr{f64(2)}, 0, true},
+		{"log unary invalid argument warns per row", "log", []*plan.Expr{f64(0)}, 3, false},
+		{"log2 invalid argument warns per row", "log2", []*plan.Expr{f64(0)}, 3, false},
+		{"log10 invalid argument warns per row", "log10", []*plan.Expr{f64(0)}, 3, false},
 		{"log invalid base warns per row", "log", []*plan.Expr{f64(1), f64(2)}, 3, false},
 		{"format unknown locale warns per row", "format", []*plan.Expr{i64(1234567), i64(2), sval("zz_ZZ")}, 3, false},
 		{"str_to_date invalid date warns per row", "str_to_date", []*plan.Expr{sval("2024-02-30"), sval("%Y-%m-%d"), target(types.T_date)}, 3, false},
