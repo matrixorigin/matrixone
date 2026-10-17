@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -408,15 +409,27 @@ func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
 		name           string
 		restore        bool
 		sessionRestore bool
+		cloneLevel     tree.CloneLevelType
 		wantName       string
 	}{
 		{name: "like regenerates", wantName: "clone_t_chk_1"},
 		{name: "restore preserves", restore: true, wantName: "ck_positive"},
 		{name: "background restore preserves", sessionRestore: true, wantName: "ck_positive"},
+		{name: "data branch table regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelTable, wantName: "clone_t_chk_1"},
+		{name: "data branch database regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelDatabase, wantName: "clone_t_chk_1"},
+		{name: "normal account clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelAccount, wantName: "clone_t_chk_1"},
+		{name: "normal cluster clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelCluster, wantName: "clone_t_chk_1"},
+		{name: "table restore preserves", cloneLevel: tree.RestoreCloneLevelTable, wantName: "ck_positive"},
+		{name: "database restore preserves", cloneLevel: tree.RestoreCloneLevelDatabase, wantName: "ck_positive"},
+		{name: "account restore preserves", cloneLevel: tree.RestoreCloneLevelAccount, wantName: "ck_positive"},
+		{name: "cluster restore preserves", cloneLevel: tree.RestoreCloneLevelCluster, wantName: "ck_positive"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.GetProcess().GetSessionInfo().IsRestore = tc.sessionRestore
+			if tc.cloneLevel != 0 {
+				mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), tree.CloneLevelCtxKey{}, tc.cloneLevel))
+			}
 			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
