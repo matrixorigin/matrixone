@@ -91,3 +91,46 @@ func TestDecimalDivisionProtocolUnknownWorkerFallsBack(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 }
+
+func TestDecimalIntegerDivisionProtocol(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr := decimalDivisionProtocolExpr(types.T_uint64)
+	expr.Typ = planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}
+	expr.GetF().Func.Obj = function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	client.version = defines.MORPCVersion118
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err := encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "remote destination")
+	client.version = defines.MORPCVersion119
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	var wire pipeline.Pipeline
+	require.NoError(t, wire.Unmarshal(data))
+	require.Equal(t, expr.GetF().Func.Obj, wire.InstructionList[0].ProjectList[0].GetF().Func.Obj)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &wire), "version 119")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &wire))
+	required, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion119, required)
+	// Historical overload zero remains admitted after immediate-predecessor rollback.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	expr.GetF().Func.Obj = function.EncodeOverloadID(function.INTEGER_DIV, 0)
+	expr.Typ = planpb.Type{Id: int32(types.T_int64), Width: 64, Scale: -1}
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}))
+	require.Equal(t, client.calls, client.releases)
+}

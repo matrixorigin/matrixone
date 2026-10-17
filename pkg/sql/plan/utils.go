@@ -2171,6 +2171,13 @@ func constantFoldWithPreparedExactSource(
 	if source, ok := rule.ProvisionalPreparedExactPeerSource(expr); ok {
 		c.Src = source
 	}
+	// Schema consumers need the DIV precision source even when binding folds
+	// the value before output provenance is captured. Reuse Literal.Src rather
+	// than marking unrelated integer widths as decimal DIV results.
+	if c.Src == nil && functionID == function.INTEGER_DIV &&
+		expr.Typ.Width > 0 && expr.Typ.Width <= 20 && expr.Typ.Scale == 0 {
+		c.Src = &plan.Expr{Typ: expr.Typ, Expr: expr.Expr}
+	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
