@@ -351,11 +351,14 @@ select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs 
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 -- @session
 
+-- cluster快照须从同一TS恢复durable database default，而不是重放旧CREATE SQL。
+alter database db02 collate utf8mb4_bin;
 drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 -- @ignore:1
 show snapshots;
 
+alter database db02 collate utf8mb4_general_ci;
 use db02;
 alter table departments add column newcolumn int after department_id;
 show create table departments;
@@ -422,6 +425,10 @@ select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 restore cluster{snapshot="cluster_level_snapshot"};
 
 use db02;
+select default_collation_name from information_schema.schemata where schema_name='db02';
+select @@character_set_database,@@collation_database;
+create table ts_inherited(v varchar(8));
+select collation_name from information_schema.columns where table_schema='db02' and table_name='ts_inherited' and column_name='v';
 select * from departments;
 show create table departments;
 select * from employee_view;

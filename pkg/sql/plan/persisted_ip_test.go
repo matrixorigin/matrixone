@@ -1220,14 +1220,14 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 	}
 }
 
-func TestPersistedDependentProgramRequiresV118(t *testing.T) {
+func TestPersistedDependentProgramRequiresV119(t *testing.T) {
 	for _, expr := range []*planpb.Expr{
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
 	} {
 		version, err := RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion118, version)
+		require.Equal(t, defines.MORPCVersion119, version)
 	}
 	dateExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int32)},
@@ -1261,13 +1261,21 @@ func TestPersistedDependentProgramRequiresV118(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion117, leastVersion)
 	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: least}})
+	tableCollation := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTERNAL_TABLE_COLLATION, 0)},
+	}}}
+	tableVersion, err := RequiredPersistedExpressionProtocolVersion(tableCollation)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion118, tableVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: tableCollation}})
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 	require.NoError(t, err)
+	require.True(t, features.TableCollationFunction)
 	require.True(t, features.DateNumericResultContracts)
 	require.True(t, features.DependentPrograms)
 	require.True(t, features.DecimalStatisticalResultContracts)
 	require.True(t, features.LeastGreatestCollationSemantics)
 	version, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion118, version, "compose independent capabilities by maximum")
+	require.Equal(t, defines.MORPCVersion119, version, "compose independent capabilities by maximum")
 }

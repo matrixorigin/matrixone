@@ -97,7 +97,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 			defer proc.Free()
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
 			proc.SetStmtProfile(process.NewStmtProfile(uuid.Nil, uuid.New()))
-			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion118)
+			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion119)
 			clause := "when matched then update set id=(select (select s.id+10))"
 			want := []string{"12/target.parquet/1/update", "3/NULL/NULL/insert"}
 			if mode == "delete" {

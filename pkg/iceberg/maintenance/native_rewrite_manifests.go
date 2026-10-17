@@ -225,7 +225,10 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 			return nil, err
 		}
 		memoryUsed += entryMemory
-		entries = liveRewriteManifestEntries(entries, manifest)
+		entries, err = liveRewriteManifestEntries(entries, manifest)
+		if err != nil {
+			return nil, err
+		}
 		if len(entries) == 0 {
 			// Deleted entries describe historical changes, not live files. A
 			// rewrite may drop a manifest that contains no live entries.
@@ -305,22 +308,21 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	return result, nil
 }
 
-func liveRewriteManifestEntries(entries []api.ManifestEntry, manifest api.ManifestFile) []api.ManifestEntry {
+func liveRewriteManifestEntries(entries []api.ManifestEntry, manifest api.ManifestFile) ([]api.ManifestEntry, error) {
 	out := make([]api.ManifestEntry, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Status == api.ManifestEntryDeleted {
 			continue
 		}
+		var err error
+		entry, err = metadata.NormalizeManifestEntry(entry, manifest)
+		if err != nil {
+			return nil, err
+		}
 		entry.Status = api.ManifestEntryExisting
-		entry.SnapshotID = firstNonZeroMaintenanceInt64(entry.SnapshotID, manifest.AddedSnapshotID)
-		entry.SequenceNumber = firstNonZeroMaintenanceInt64(entry.SequenceNumber, manifest.SequenceNumber)
-		entry.FileSequence = firstNonZeroMaintenanceInt64(entry.FileSequence, manifest.SequenceNumber)
-		entry.DataFile.SpecID = manifest.PartitionSpecID
-		entry.DataFile.SequenceNumber = entry.SequenceNumber
-		entry.DataFile.FileSequenceNumber = entry.FileSequence
 		out = append(out, entry)
 	}
-	return out
+	return out, nil
 }
 
 func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, original api.ManifestFile, entries []api.ManifestEntry) (api.ManifestFile, error) {
@@ -372,15 +374,6 @@ func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, origin
 		manifest.ReferencedDataFilesCount = original.ReferencedDataFilesCount
 	}
 	return manifest, nil
-}
-
-func firstNonZeroMaintenanceInt64(values ...int64) int64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMaterializeRequest) (string, error) {

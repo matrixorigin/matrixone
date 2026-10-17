@@ -27,10 +27,35 @@ import (
 	"time"
 )
 
+// Workload and teardown execute SQL through the same finite operation policy.
+// Teardown gets a fresh background context, independent of a failed workload.
+const issue29876SQLOperationTimeout = 2 * time.Minute
+
+func execIssue29876SQL(parent context.Context, db *sql.DB, statement string) (sql.Result, error) {
+	ctx, cancel := context.WithTimeout(parent, issue29876SQLOperationTimeout)
+	defer cancel()
+	return db.ExecContext(ctx, statement)
+}
+
+func cleanupIssue29876Resource(db *sql.DB, statement, verification string, args ...any) error {
+	started := time.Now()
+	if _, err := execIssue29876SQL(context.Background(), db, statement); err != nil {
+		return fmt.Errorf("cleanup %q after %s: %w", statement, time.Since(started), err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), issue29876SQLOperationTimeout)
+	defer cancel()
+	var remaining uint64
+	if err := db.QueryRowContext(ctx, verification, args...).Scan(&remaining); err != nil {
+		return fmt.Errorf("verify cleanup %q: %w", statement, err)
+	}
+	if remaining != 0 {
+		return fmt.Errorf("cleanup %q left %d catalog records", statement, remaining)
+	}
+	return nil
+}
+
 func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-		defer cancel()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -39,7 +64,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		db.SetMaxOpenConns(1)
 		exec := func(t *testing.T, q string) sql.Result {
 			t.Helper()
-			r, err := db.ExecContext(ctx, q)
+			r, err := execIssue29876SQL(t.Context(), db, q)
 			require.NoError(t, err)
 			return r
 		}
@@ -47,10 +72,8 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		for _, name := range []string{main, stage} {
 			exec(t, "create database "+name)
 			defer func() {
-				cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				_, err := db.ExecContext(cleanup, "drop database if exists "+name)
-				assert.NoError(t, err)
+				assert.NoError(t, cleanupIssue29876Resource(db, "drop database if exists "+name,
+					"select count(*) from mo_catalog.mo_database where account_id = 0 and datname = ?", name))
 			}()
 		}
 		target, source := main+".records", stage+".records"
@@ -82,6 +105,8 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 				{"grouped_aliases", target + " t", "t from " + target + " t", "exists(select 1 from " + source + " s group by s.id having t.id=s.id)"},
 			} {
 				t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(t.Context(), issue29876SQLOperationTimeout)
+					defer cancel()
 					reset(t)
 					assert.Equal(t, tc.matched, queryInt64Rows(t, ctx, db, "select id from "+shape.selectFrom+" where "+shape.predicate+" order by id"))
 					r, err := db.ExecContext(ctx, "delete "+shape.deleteFrom+" where "+shape.predicate)
@@ -93,6 +118,9 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 				})
 			}
 		}
+		// Bound this ordered reuse scenario independently of the shape matrix.
+		ctx, cancel := context.WithTimeout(t.Context(), issue29876SQLOperationTimeout)
+		defer cancel()
 		// A real incremental package carries only changed rows, not a full reload.
 		reset(t)
 		exec(t, "insert into "+source+" values(1,99),(4,44)")
@@ -117,17 +145,19 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		for _, id := range []int64{1, 2} {
 			exec(t, "delete from "+source)
 			exec(t, fmt.Sprintf("insert into %s values(%d,99)", source, id))
-			rows, err := stmt.QueryContext(ctx)
-			require.NoError(t, err)
-			defer rows.Close()
-			var ids []int64
-			for rows.Next() {
-				var got int64
-				require.NoError(t, rows.Scan(&got))
-				ids = append(ids, got)
-			}
-			require.NoError(t, rows.Err())
-			assert.Equal(t, []int64{id}, ids)
+			func() {
+				rows, err := stmt.QueryContext(ctx)
+				require.NoError(t, err)
+				defer rows.Close()
+				var ids []int64
+				for rows.Next() {
+					var got int64
+					require.NoError(t, rows.Scan(&got))
+					ids = append(ids, got)
+				}
+				require.NoError(t, rows.Err())
+				assert.Equal(t, []int64{id}, ids)
+			}()
 		}
 		// A schema-less derived table cannot capture an explicit outer namespace.
 		assert.Equal(t, []int64{2}, queryInt64Rows(t, ctx, db, "select id from "+target+" where exists(select 1 from (select id from "+source+") records where "+target+".id=records.id) order by id"))
@@ -153,15 +183,14 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		assert.Error(t, err, "GROUP BY reuse cannot validate an invalid namespace")
 
 		t.Run("published_views", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), issue29876SQLOperationTimeout)
+			defer cancel()
 			account, publication := strings.ToLower(main)+"_acct", strings.ToLower(main)+"_pub"
 			exec(t, "create account "+account+" admin_name 'admin' identified by '111'")
-			cleanupResource := func(statement string) {
-				cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
-				defer stop()
-				_, err := db.ExecContext(cleanup, statement)
-				assert.NoError(t, err)
-			}
-			t.Cleanup(func() { cleanupResource("drop account if exists " + account) })
+			t.Cleanup(func() {
+				assert.NoError(t, cleanupIssue29876Resource(db, "drop account if exists "+account,
+					"select count(*) from mo_catalog.mo_account where account_name = ?", account))
+			})
 			exec(t, "use "+main)
 			for _, view := range []struct{ name, body string }{
 				{"plain_v", "select id from records where id=2"},
@@ -172,7 +201,10 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 				exec(t, "create view "+main+"."+view.name+" as "+view.body)
 			}
 			exec(t, "create publication "+publication+" database "+main+" account "+account)
-			t.Cleanup(func() { cleanupResource("drop publication if exists " + publication) })
+			t.Cleanup(func() {
+				assert.NoError(t, cleanupIssue29876Resource(db, "drop publication if exists "+publication,
+					"select count(*) from mo_catalog.mo_pubs where account_id = 0 and pub_name = ?", publication))
+			})
 			sub, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
 			defer sub.Close()

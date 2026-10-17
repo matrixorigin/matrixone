@@ -1671,7 +1671,7 @@ func Test_CALL3(t *testing.T) {
 }
 
 func TestReadDirSymlink(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 
 	root, err := os.MkdirTemp("", "*")
 	assert.Nil(t, err)

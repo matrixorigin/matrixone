@@ -850,7 +850,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			if len(preparedStatementProtocolSupported) > 0 && !preparedStatementProtocolSupported[0] {
 				return moerr.GetOkExpectedNotSafeToStartTransfer()
 			}
-			requiredVersions[i] = defines.MORPCVersion118
+			requiredVersions[i] = defines.MORPCVersion119
 		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
@@ -1160,7 +1160,12 @@ func (rt *Routine) resetSessionWithAdmission(
 	}()
 
 	// reset the old and new session.
-	if err := newSession.reset(operationCtx, oldSession); err != nil {
+	if err := newSession.resetWith(operationCtx, oldSession, func() error {
+		if protocol, ok := rt.getProtocol().(*MysqlProtocolImpl); ok {
+			return protocol.applyNegotiatedSessionCharsetTo(operationCtx, newSession)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 
