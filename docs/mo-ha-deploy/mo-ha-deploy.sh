@@ -804,9 +804,12 @@ stage_teardown(){
   runq "systemctl disable --now corosync pacemaker pcsd sbd 2>/dev/null || true"
   runq "docker rm -f matrixone 2>/dev/null || true"
   runq "drbdadm down $DRBD_RESOURCE 2>/dev/null || true"
+  # 先卸载再抹盘：否则会抹掉一个仍挂载着的文件系统的超级块，而 umount 又会失败。
+  if [ "$DRY_RUN" = 1 ] || mountpoint -q "$DATA_DIR" 2>/dev/null; then
+    run "umount $DATA_DIR" || die "umount $DATA_DIR 失败（仍被占用）：已跳过 wipefs，请手工卸载后重跑 teardown"
+  fi
   runq "drbdadm wipe-md $DRBD_RESOURCE 2>/dev/null || true"
-  runq "wipefs -a $DRBD_DEVICE 2>/dev/null || true"
-  runq "umount $DATA_DIR 2>/dev/null || true"
+  runq "wipefs -a $DRBD_DEVICE" || wrn "wipefs -a $DRBD_DEVICE 失败，请手工确认该盘已清空"
   runq "rm -f /etc/drbd.d/$DRBD_RESOURCE.res /etc/modules-load.d/drbd.conf"
   # stage_pre / stage_fence 写入的其它残留一并清理
   run "sed -i '/# MO-HA-BEGIN/,/# MO-HA-END/d' /etc/hosts"
