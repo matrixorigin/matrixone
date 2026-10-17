@@ -33,12 +33,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// ExpandSubStage resolves a stage:// URL down to its concrete backing URL, following each
+// stage-to-stage reference in turn.
+//
+// A cyclic definition (a -> a, or a -> b -> a) has no concrete URL to reach, so the walk is
+// terminated by the visited set below and reported as a bounded error. Nothing rejects such a
+// definition at CREATE/ALTER STAGE time, and the cycle can be closed by altering any node in the
+// chain, so resolution is where it must be caught: without the check the walk never ends, and
+// because StageLoadCatalog serves repeat lookups from proc's stage cache it spins with no SQL and
+// no I/O — the CN request hangs rather than failing (#26890).
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
-	if s.Url.Scheme == stage.STAGE_PROTOCOL {
+	if err := ensureStageEnabled(s); err != nil {
+		return stage.StageDef{}, err
+	}
+
+	// Stage names already expanded on this chain, in order, for both the cycle test and the error
+	// message. The walk is bounded by the number of distinct stages: every hop consumes one name.
+	visited := make(map[string]struct{})
+	var chain []string
+
+	for s.Url.Scheme == stage.STAGE_PROTOCOL {
 		stagename, prefix, query, err := stage.ParseStageUrl(s.Url)
 		if err != nil {
 			return stage.StageDef{}, err
 		}
+
+		if _, seen := visited[stagename]; seen {
+			return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(),
+				"cyclic stage reference: %s -> %s", strings.Join(chain, " -> "), stagename)
+		}
+		visited[stagename] = struct{}{}
+		chain = append(chain, stagename)
 
 		res, err := StageLoadCatalog(proc, stagename)
 		if err != nil {
@@ -47,10 +72,17 @@ func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, er
 
 		res.Url = res.Url.JoinPath(prefix)
 		res.Url.RawQuery = query
-		return ExpandSubStage(res, proc)
+		s = res
 	}
 
 	return s, nil
+}
+
+func ensureStageEnabled(s stage.StageDef) error {
+	if strings.EqualFold(strings.TrimSpace(s.Status), "disabled") {
+		return moerr.NewBadConfigf(context.TODO(), "stage %s is disabled", s.Name)
+	}
+	return nil
 }
 
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -83,7 +115,10 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
-		return s, nil
+		if err = ensureStageEnabled(s); err != nil {
+			return stage.StageDef{}, err
+		}
+		return cloneStageDef(s), nil
 	}
 
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
@@ -129,8 +164,24 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
-	cache.Set(stagename, reslist[0])
-	return reslist[0], nil
+	if err = ensureStageEnabled(reslist[0]); err != nil {
+		return stage.StageDef{}, err
+	}
+
+	// StageDef contains a pointer to url.URL. Keep the cached definition private
+	// from URL path joins performed during stage resolution and export filename
+	// expansion. A cached URL is shared by value copies of StageDef otherwise.
+	cached := cloneStageDef(reslist[0])
+	cache.Set(stagename, cached)
+	return cloneStageDef(cached), nil
+}
+
+func cloneStageDef(s stage.StageDef) stage.StageDef {
+	if s.Url != nil {
+		u := *s.Url
+		s.Url = &u
+	}
+	return s
 }
 
 func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {
@@ -149,6 +200,12 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 	if err != nil {
 		return stage.StageDef{}, err
 	}
+	return UrlToStageDefFromURL(aurl, proc)
+}
+
+// UrlToStageDefFromURL borrows an already parsed URL. Neither the input URL nor
+// cached stage definitions are modified by resolution.
+func UrlToStageDefFromURL(aurl *url.URL, proc *process.Process) (s stage.StageDef, err error) {
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
@@ -222,7 +279,7 @@ func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDe
 }
 
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
+	const wildcards = "*?["
 	const sep = "/"
 	fs := proc.GetFileService()
 
@@ -254,7 +311,7 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
 			p := fileservice.JoinPath(service, prefix)
-			etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+			etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 			if err != nil {
 				return nil, err
 			}
@@ -299,7 +356,7 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 
 	fs := proc.GetFileService()
 	p := fileservice.JoinPath(service, pattern)
-	etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+	etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +371,14 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 }
 
 func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
+	const wildcards = "*?["
+	provider, err := fileservice.ParseETLService(fileservice.JoinPath(service, pattern))
+	if err != nil {
+		return nil, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
+		return nil, err
+	}
 
 	idx := strings.IndexAny(pattern, wildcards)
 	if idx == -1 {
@@ -337,6 +401,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
 
+	ctx = process.SQLFileAccessContext(ctx, proc)
 	procCtx := *proc
 	procCtx.Ctx = ctx
 
@@ -347,6 +412,13 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 
 	fspath, query, err := s.ToPath()
 	if err != nil {
+		return 0, err
+	}
+	provider, err := fileservice.ParseETLService(fspath)
+	if err != nil {
+		return 0, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
 		return 0, err
 	}
 	if query != "" {
@@ -365,7 +437,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 	if filePattern == "/" {
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
-	if strings.ContainsAny(filePattern, "*?") {
+	if strings.ContainsAny(filePattern, "*?[") {
 		fileList, err := StageListWithPattern(service, filePattern, &procCtx)
 		if err != nil {
 			return 0, err

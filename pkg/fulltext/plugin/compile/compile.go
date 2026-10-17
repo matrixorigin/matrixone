@@ -27,6 +27,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -88,6 +90,22 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 
 	// 3a. async: register a CDC task; data syncs via ISCP.
 	if async {
+		var checks []string
+		for _, part := range indexDef.Parts {
+			for _, col := range originalTableDef.Cols {
+				if col.Name == catalog.ResolveAlias(part) && col.Typ.Id == int32(types.T_datalink) {
+					// Consume every source value while returning one aggregate row;
+					// RunSql otherwise retains all discarded per-row check results.
+					checks = append(checks, "sum(cast(_check_async_datalink_source("+sqlquote.Ident(col.Name)+",true) as unsigned))")
+					break
+				}
+			}
+		}
+		if len(checks) > 0 {
+			if err := ctx.RunSql("select " + strings.Join(checks, ",") + " from " + sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name)); err != nil {
+				return err
+			}
+		}
 		logutil.Infof("fulltext index Async is true")
 		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,

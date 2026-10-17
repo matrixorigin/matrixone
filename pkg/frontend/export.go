@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type ExportConfig struct {
@@ -69,6 +70,8 @@ type ExportConfig struct {
 	mrs         *MysqlResultSet
 	ctx         context.Context
 	service     string
+	// proc borrows the current statement identity; export never owns or changes it.
+	proc *process.Process
 
 	// Parquet writer for parquet format export
 	parquetWriter *ParquetWriter
@@ -149,7 +152,6 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 		return nil
 	}
 
-	ep.AsyncReader, ep.AsyncWriter = io.Pipe()
 	if len(ep.userConfig.StageFilePath) != 0 {
 		filePath = getExportFilePath(ep.userConfig.StageFilePath, ep.FileCnt)
 	} else {
@@ -164,18 +166,23 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 		return err
 	}
 
+	if err := process.AuthorizeSQLFileAccessPath(ep.proc, fspath); err != nil {
+		return err
+	}
 	var readPath string
 	if fspath.Service == defines.SharedFileServiceName {
 		ep.FileService = getPu(ep.service).FileService
 		readPath = filePath
 
 	} else {
-		ep.FileService, readPath, err = fileservice.GetForETL(ctx, nil, filePath)
+		ep.FileService, readPath, err = fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(ctx, ep.proc), nil, filePath, fspath)
 		if err != nil {
 			return err
 		}
 
 	}
+
+	ep.AsyncReader, ep.AsyncWriter = io.Pipe()
 
 	asyncWriteFunc := func() error {
 		vec := fileservice.IOVector{
@@ -915,13 +922,16 @@ func writeParquetToFile(ep *ExportConfig, data []byte) error {
 		return err
 	}
 
+	if err := process.AuthorizeSQLFileAccessPath(ep.proc, fspath); err != nil {
+		return err
+	}
 	var fs fileservice.FileService
 	var readPath string
 	if fspath.Service == defines.SharedFileServiceName {
 		fs = getPu(ep.service).FileService
 		readPath = filePath
 	} else {
-		fs, readPath, err = fileservice.GetForETL(ep.ctx, nil, filePath)
+		fs, readPath, err = fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(ep.ctx, ep.proc), nil, filePath, fspath)
 		if err != nil {
 			return err
 		}

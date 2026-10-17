@@ -1,7 +1,7 @@
 set experimental_fulltext2_index = 1;
 create stage ft2stage URL='file://$resources/fulltext/';
-create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
-insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
+create table dl (id bigint primary key, fpath text, FULLTEXT2 ftidx(fpath));
+insert into dl values (0, load_text('stage://ft2stage/mo.pdf')), (1, load_text('stage://ft2stage/chinese.pdf'));
 set @dl_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl') limit 1);
 set @wait_dl_initial_sql = concat(
 'select coalesce(max(chunk_id), -1) >= 0 as dl_ready from `', database(), '`.`', @dl_ft2,
@@ -22,8 +22,8 @@ select id from dl where match(fpath) against('ft2stage');
 ➤ id[-5,64,0]
 select id from dl where match(fpath) against('mo');
 ➤ id[-5,64,0]
-create table dl2 (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
-insert into dl2 values (0, 'stage://ft2stage/mo.pdf');
+create table dl2 (id bigint primary key, fpath text, FULLTEXT2 ftidx(fpath));
+insert into dl2 values (0, load_text('stage://ft2stage/mo.pdf'));
 set @dl2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl2') limit 1);
 set @wait_dl2_initial_sql = concat(
 'select coalesce(max(chunk_id), -1) >= 0 as dl2_ready from `', database(), '`.`', @dl2_ft2,
@@ -41,7 +41,7 @@ set @capture_dl2_tail_sql = concat(
 prepare capture_dl2_tail from @capture_dl2_tail_sql;
 execute capture_dl2_tail;
 deallocate prepare capture_dl2_tail;
-update dl2 set fpath='stage://ft2stage/file-sample_100kB.docx' where id=0;
+update dl2 set fpath=load_text('stage://ft2stage/file-sample_100kB.docx') where id=0;
 set @wait_dl2_update_sql = concat(
 'select coalesce(max(chunk_id), -1) > ', @dl2_tail_before_update,
 ' as dl2_update_ready from `', database(), '`.`', @dl2_ft2,

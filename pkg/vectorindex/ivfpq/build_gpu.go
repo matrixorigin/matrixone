@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // IvfpqBuild manages bulk index construction across one or more IvfpqModel sub-indexes.
@@ -157,7 +158,7 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	return nil
 }
 
-func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
+func (b *IvfpqBuild[B, Q]) PreparePersistence(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
 			return nil, err
@@ -174,18 +175,26 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	metas := make([]string, 0, len(b.indexes))
 
 	for _, idx := range b.indexes {
-		indexsqls, err := idx.ToSql(b.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-		sqls = append(sqls, indexsqls...)
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
+		metas = append(metas, fmt.Sprintf("(%s, %s, %d, %d)", sqlquote.String(idx.Id), sqlquote.String(idx.Checksum), ts, idx.FileSize))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",
 		sqlquote.QualifiedIdent(b.tblcfg.DbName, b.tblcfg.MetadataTable), strings.Join(metas, ", "))
 	sqls = append(sqls, metasql)
 	return sqls, nil
+}
+
+// PersistChunks writes the artifacts prepared by this builder.
+func (b *IvfpqBuild[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range b.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *IvfpqBuild[B, Q]) Destroy() error {

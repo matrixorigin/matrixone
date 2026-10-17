@@ -16,9 +16,14 @@ package fulltext2
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang/mock/gomock"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +36,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
+
+func installPersistenceExecutor(t *testing.T, sp *sqlexec.SqlProcess, execFn func(string, executor.StatementOption) (executor.Result, error)) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	sqlExec := executortest.NewMockSQLExecutor(ctrl)
+	txnExec := executortest.NewMockTxnExecutor(ctrl)
+	rt := moruntime.ServiceRuntime(sp.GetService())
+	prev, exists := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, prev)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+		}
+	})
+	sqlExec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, fn func(executor.TxnExecutor) error, _ executor.Options) error {
+		return fn(txnExec)
+	}).AnyTimes()
+	sqlExec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		return execFn(sql, opts.StatementOption())
+	}).AnyTimes()
+	txnExec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(execFn).AnyTimes()
+}
 
 // swapRunSql / swapRunStreamingSql install a mock and return a restore func. The engine
 // indirects sqlexec.RunSql / RunStreamingSql through these package vars so DB round-trips
@@ -130,7 +159,10 @@ func TestScanHelpers(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "SUM(") {
+			require.Contains(t, sql, " AS SIGNED)")
+		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 13)}}, nil
 	})
 
@@ -174,6 +206,17 @@ func TestLoadBudgetGates(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<50)}}, nil
 	})
 	require.Error(t, checkTailLoadBudget(sp, cfg))
+	for _, total := range []int64{0, -1, math.MaxInt64 / 2, math.MaxInt64} {
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			require.Contains(t, sql, " AS SIGNED)")
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, total)}}, nil
+		})
+		if total == 0 {
+			require.NoError(t, checkTailLoadBudget(sp, cfg))
+		} else {
+			require.Error(t, checkTailLoadBudget(sp, cfg), "invalid or overflowing byte total %d", total)
+		}
+	}
 }
 
 func TestLoadAllBasesEmpty(t *testing.T) {
@@ -282,6 +325,8 @@ func tailChunkBatch(mp *mpool.MPool, chunks []TailChunk) *batch.Batch {
 // (the user's "different runSql for different SQLs") and DELETE/INSERT writes succeed.
 func TestCompactSegmentsFoldsTail(t *testing.T) {
 	sp, mp := mockSqlProc(t)
+	sp.Proc.Base.SessionInfo.Account = "tenant"
+	sp.Proc.Base.SessionInfo.Role = "accountadmin"
 	cfg := testStorageCfg()
 
 	// forge a tail insert frame carrying two docs.
@@ -295,7 +340,11 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	chunks := splitFrameChunks(1, framed)
 
 	var deleteAllRan, insertRan bool
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	swapRunSql(t, func(execProc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		account, role := execProc.StatementOption().SessionIdentity()
+		require.Equal(t, "tenant", account)
+		require.Equal(t, "accountadmin", role)
+
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 100)}}, nil
@@ -324,12 +373,16 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	require.Equal(t, chunks[len(chunks)-1].ChunkId, maxChunk)
 	require.Positive(t, trace.event.TailBytes)
 	freeSegs(tracedSegs)
+	installPersistenceExecutor(t, sp, func(sql string, opts executor.StatementOption) (executor.Result, error) { return runSql(sp, sql) })
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, nlive) // both docs are live → folded into the fresh base
 	require.True(t, deleteAllRan, "MERGE must clear prior bases first")
 	require.True(t, insertRan, "MERGE must persist the rebuilt base")
+	account, role := sp.StatementOption().SessionIdentity()
+	require.Equal(t, "tenant", account)
+	require.Equal(t, "accountadmin", role)
 }
 
 // twoIdBatch renders a 2-row index_id enumerate result.

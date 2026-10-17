@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -3860,9 +3861,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 	if ok {
 		ses.ep.userConfig.StageFilePath = filePath
+	} else {
+		filePath = ep.FilePath
 	}
-
-	return
+	return process.AuthorizeSQLFileAccess(ses.proc, filePath)
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
@@ -9939,8 +9941,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		}
 
 		checkBackUpStartPrivilege := func() (bool, error) {
-			// only the moAdmin can execute the backup statement
-			return tenant.IsSysTenant(), nil
+			// Backup operates on server-owned files and requires system authority.
+			return verifyAccountCanExecMoCtrl(tenant), nil
 		}
 
 		checkCdcTaskPrivilege := func() (bool, error) {

@@ -296,7 +296,7 @@ col3 timestamp,
 col4 bool
 );
 set time_zone = 'SYSTEM';
-load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
+load data local infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
 1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
@@ -310,8 +310,11 @@ show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
+internal error: only the sys account moadmin role can access SQL file paths
+load data local infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
 1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
@@ -380,22 +383,11 @@ ab_def
 drop table if exists test02;
 create table test02 (col1 int, col2 datalink);
 insert into test02 values (1, 'file://$resources/load_data/time_date_2.csv');
+select col1, col2 = cast('file://$resources/load_data/time_date_2.csv' as datalink) as uri_preserved from test02;
+➤ col1[4,32,0]  ¦  uri_preserved[-7,1,0]  𝄀
+1  ¦  1
 select col1, load_file(col2) from test02;
-➤ col1[4,32,0]  ¦  load_file(col2)[12,0,0]  𝄀
-1  ¦  1000-01-01,0001-01-01,,0
-1000-01-01,0001-01-01 00:00:00,,0
-1000-01-01,0001-01-01 00:00:00.000000,,0
-"1000-01-01","0001-01-01",,"0"
-"9999-12-31","9999-12-31",,"1"
-9999-12-31,9999-12-31,,1
-9999-12-31,9999-12-31 23:59:59,,1
-,,,true
-,,,"true"
-,,,"false"
-,,,"true"
-\N,\N,\N,\N
-,,,,
-
+internal error: only the sys account moadmin role can access SQL file paths
 drop database if exists test06;
 create database test06;
 use test06;

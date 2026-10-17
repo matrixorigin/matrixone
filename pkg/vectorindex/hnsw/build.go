@@ -17,7 +17,6 @@ package hnsw
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -307,7 +306,7 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
+func (h *HnswBuild[T]) PreparePersistence(ts int64) ([]string, error) {
 
 	// Surface any worker error from the multi-threaded build. Without this a worker
 	// that failed on the last queued vector (after Add already returned nil) would be
@@ -324,32 +323,36 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 
 	metas := make([]string, 0, len(h.indexes))
 	for _, idx := range h.indexes {
-		indexsqls, err := idx.ToSql(h.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-
-		sqls = append(sqls, indexsqls...)
 
 		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := vectorindex.CheckSum(idx.Path)
-		if err != nil {
-			return nil, err
+		if idx.FileSize == 0 {
+			continue
 		}
+		chksum, fs := idx.Checksum, idx.FileSize
 
-		finfo, err := os.Stat(idx.Path)
-		if err != nil {
-			return nil, err
-		}
-		fs := finfo.Size()
-
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		metas = append(metas, fmt.Sprintf("(%s, %s, %d, %d)", sqlquote.String(idx.Id), sqlquote.String(chksum), ts, fs))
 	}
 
+	if len(metas) == 0 {
+		return nil, nil
+	}
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(h.tblcfg.DbName, h.tblcfg.MetadataTable), strings.Join(metas, ", "))
 
 	sqls = append(sqls, metasql)
 	return sqls, nil
+}
+
+// PersistChunks runs only after preparation and any device admission succeeds.
+func (h *HnswBuild[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range h.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *HnswBuild[T]) GetIndexes() []*HnswModel[T] {

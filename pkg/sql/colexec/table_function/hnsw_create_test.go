@@ -54,6 +54,8 @@ var (
 	}
 )
 
+var hnswTestRunSQL = sqlexec.RunSql
+
 func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
@@ -82,17 +84,20 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 			Params: []byte(param),
 		},
 	}
+	mockIndexTxn(t, proc, func(sql string, _ executor.StatementOption) (executor.Result, error) {
+		return hnswTestRunSQL(sqlexec.NewSqlProcess(proc), sql)
+	})
 	return ret
 }
 
-func mock_hnsw_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+func mock_hnswTestRunSQL(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
 func TestHnswCreate(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
+	hnswTestRunSQL = mock_hnswTestRunSQL
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
@@ -139,7 +144,7 @@ var failedparam []string = []string{"{",
 
 func TestHnswCreateParamFail(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
+	hnswTestRunSQL = mock_hnswTestRunSQL
 
 	for _, param := range failedparam {
 		ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
@@ -183,7 +188,7 @@ func TestHnswCreateParamFail(t *testing.T) {
 
 func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
+	hnswTestRunSQL = mock_hnswTestRunSQL
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
 	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
@@ -557,7 +562,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 // TestHnswCreatePrepareParsesConfig covers the zero-doc enabler: Prepare const-folds the
 // IndexTableConfig (arg 0) so end() has the table names even when start() never runs (empty source).
 func TestHnswCreatePrepareParsesConfig(t *testing.T) {
-	hnsw_runSql = mock_hnsw_runSql
+	hnswTestRunSQL = mock_hnswTestRunSQL
 	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, "{\"op_type\": \"vector_l2_ops\"}")
 	ut.arg.Args = makeConstInputExprsHnswCreate()
 
@@ -574,9 +579,9 @@ func TestHnswCreatePrepareParsesConfig(t *testing.T) {
 // TRUE (an in-place delete, not a TRUNCATE that would swap the physical table id).
 func TestHnswCreateEndZeroDocClears(t *testing.T) {
 	var captured []string
-	old := hnsw_runSql
-	defer func() { hnsw_runSql = old }()
-	hnsw_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	old := hnswTestRunSQL
+	defer func() { hnswTestRunSQL = old }()
+	hnswTestRunSQL = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		captured = append(captured, sql)
 		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{}}, nil
 	}
@@ -606,9 +611,9 @@ func TestHnswCreateEndZeroDocClears(t *testing.T) {
 // empty identifier.
 func TestHnswCreateEndNoConfigSkips(t *testing.T) {
 	var called bool
-	old := hnsw_runSql
-	defer func() { hnsw_runSql = old }()
-	hnsw_runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+	old := hnswTestRunSQL
+	defer func() { hnswTestRunSQL = old }()
+	hnswTestRunSQL = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		called = true
 		return executor.Result{}, nil
 	}
