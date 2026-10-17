@@ -294,14 +294,14 @@ func TestDefaultParquetLoadParallelAdmission(t *testing.T) {
 	}
 	param.Parallel = true
 	param.ParallelLoadMinSize = int64(LoadParallelMinSize)
-	applyLoadParallelAdmission(param, 0)
+	applyLoadParallelAdmission(param, 0, "")
 	require.True(t, param.Parallel, "an admitted default fanout at the threshold stays parallel")
 	require.True(t, param.ParallelLoadRequested)
 
 	param.FileSize = int64(LoadParallelMinSize) - 1
 	param.Parallel = true
 	param.ParallelLoadRequested = false
-	applyLoadParallelAdmission(param, 0)
+	applyLoadParallelAdmission(param, 0, "")
 	require.False(t, param.Parallel, "the small-file guard remains the nearest control")
 	require.True(t, param.ParallelLoadRequested)
 }
