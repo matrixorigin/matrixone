@@ -140,12 +140,15 @@ func TestTNStartReconcilesReportsAndTargets(t *testing.T) {
 			case "canceled":
 				op.Cancel()
 			case "canceled_siblings":
+				siblings := []*operator.Operator{op}
 				op.Cancel()
 				for i := uint64(1); i <= 2; i++ {
 					canceled := operator.NewOperator("tnservice", 2, operator.NoopEpoch, operator.AddTnReplica{StoreID: "tn-a", ShardID: 2, ReplicaID: id + i, LogShardID: 1})
-					canceled.Cancel()
 					c.OperatorController.Dispatch([]*operator.Operator{canceled}, state.LogState, state.TNState, state.CNState, state.ProxyState)
+					canceled.Cancel()
+					siblings = append(siblings, canceled)
 				}
+				require.Equal(t, siblings, c.OperatorController.GetOperators(2), "all three adjacent canceled entries must be present before reconciliation")
 			case "duplicate":
 				duplicate := operator.NewOperator("tnservice", 2, operator.NoopEpoch, operator.AddTnReplica{StoreID: "tn-a", ShardID: 2, ReplicaID: id + 10, LogShardID: 1})
 				c.OperatorController.Dispatch([]*operator.Operator{duplicate}, state.LogState, state.TNState, state.CNState, state.ProxyState)
@@ -254,4 +257,92 @@ func TestTNStartRebuildAndTeardown(t *testing.T) {
 		require.Empty(t, c.OperatorController.GetOperators(2))
 		require.Equal(t, operator.CANCELED, pending.Status())
 	}
+}
+
+func TestTNRetryPreservesPendingLogStart(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		pending, consumed bool
+	}{
+		{name: "tn_already_running"}, {name: "tn_start_pending", pending: true}, {name: "log_response_consumed", pending: true, consumed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			coordinator, state, alloc := tnStartScenario(t)
+			shard := pb.LogShardInfo{ShardID: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}, Epoch: 1, LeaderID: 1, Term: 1}
+			state.ClusterInfo.LogShards = []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}
+			state.LogState = pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{
+				"a": {Tick: 1, TaskServiceCreated: true, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+				"b": {Tick: 1, TaskServiceCreated: true, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 2}}},
+				"c": {Tick: 1, TaskServiceCreated: true},
+			}}
+			if !tt.pending {
+				info := state.TNState.Stores["tn-a"]
+				info.Shards = []pb.TNShardInfo{{ShardID: 2, ReplicaID: 99}}
+				state.TNState.Stores["tn-a"] = info
+			}
+			rsm := hakeeper.NewStateMachine(0, 1)
+			var index uint64
+			apply := func(cmd []byte) sm.Result {
+				index++
+				r, err := rsm.Update(sm.Entry{Index: index, Cmd: cmd})
+				require.NoError(t, err)
+				return r
+			}
+			first := coordinator.Check(alloc, state, false)
+			var logStart *pb.ScheduleCommand
+			for i := range first {
+				cmd := &first[i]
+				if cmd.UUID == "c" && cmd.ServiceType == pb.LogService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.StartReplica {
+					logStart = cmd
+				}
+			}
+			require.NotNil(t, logStart, "fixture must schedule the actual missing log replica")
+			t.Logf("first batch: %+v", first)
+			apply(hakeeper.GetUpdateCommandsCmd(1, first))
+			hb, err := (&pb.LogStoreHeartbeat{UUID: "c"}).Marshal()
+			require.NoError(t, err)
+			if tt.consumed {
+				var original pb.CommandBatch
+				require.NoError(t, original.Unmarshal(apply(hakeeper.GetLogStoreHeartbeatCmd(hb)).Data))
+				require.Contains(t, original.Commands, *logStart)
+			}
+			state.Tick++
+			second := coordinator.Check(alloc, state, false)
+			t.Logf("second batch: %+v", second)
+			if len(second) > 0 {
+				apply(hakeeper.GetUpdateCommandsCmd(1, second))
+			}
+			var received pb.CommandBatch
+			require.NoError(t, received.Unmarshal(apply(hakeeper.GetLogStoreHeartbeatCmd(hb)).Data))
+			t.Logf("log heartbeat commands: %+v", received.Commands)
+			require.Contains(t, received.Commands, *logStart, "a TN-only retry must not erase an unrelated undelivered log start")
+			// A real report ends the retained Log intent, even while TN still retries.
+			store := state.LogState.Stores["c"]
+			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}
+			state.LogState.Stores["c"] = store
+			next := coordinator.Check(alloc, state, false)
+			for _, cmd := range next {
+				require.NotEqual(t, pb.LogService, cmd.ServiceType)
+			}
+			require.Empty(t, coordinator.OperatorController.GetOperators(1))
+		})
+	}
+}
+
+func TestTNRetryDoesNotResurrectObsoleteRemoval(t *testing.T) {
+	c, state, alloc := tnStartScenario(t)
+	state.ClusterInfo.TNShards = append(state.ClusterInfo.TNShards, metadata.TNShardRecord{ShardID: 4, LogShardID: 1})
+	info := state.TNState.Stores["tn-a"]
+	info.Shards = []pb.TNShardInfo{{ShardID: 2, ReplicaID: 99}}
+	state.TNState.Stores["tn-a"] = info
+	old := operator.NewOperator("", 2, operator.NoopEpoch, operator.RemoveTnReplica{StoreID: "tn-a", ShardID: 2, ReplicaID: 99, LogShardID: 1})
+	// The removal was scheduled while another replica existed. That peer has
+	// since disappeared; tn-a is now the sole working replica of shard 2.
+	c.OperatorController.Dispatch([]*operator.Operator{old}, state.LogState, state.TNState, state.CNState, state.ProxyState)
+	first := c.Check(alloc, state, false)
+	require.Len(t, first, 1)
+	require.Equal(t, uint64(4), first[0].ConfigChange.Replica.ShardID)
+	next := c.Check(alloc, state, false)
+	require.Equal(t, first, next)
+	require.Equal(t, operator.STARTED, old.Status())
 }
