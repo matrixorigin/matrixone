@@ -3430,3 +3430,32 @@ func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 		})
 	}
 }
+
+func TestPitrRecreateTableStopsBeforeDropOnForeignKeyLookupFailure(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	info := &tableInfo{dbName: "issue_30393_db", tblName: "issue_30393_table"}
+	lookup := fmt.Sprintf(checkTableIsMasterFormat,
+		quoteSQLStringLiteral(info.dbName), quoteSQLStringLiteral(info.tblName))
+
+	t.Run("failed lookup propagates and prevents mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("injected foreign key metadata lookup failure")
+		bh.sql2err[lookup] = wantErr
+		err := reCreateTableWithPitr(ctx, "", bh, "pitr_30393", 123, info)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{lookup}, bh.executedSQLs,
+			"a failed metadata read must never be followed by USE, DROP, or CLONE")
+	})
+
+	t.Run("healthy lookup continues restore", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lookup] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "pitr_30393", 123, info))
+		require.Equal(t, lookup, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs, useDatabaseSQL(info.dbName))
+		require.Contains(t, bh.executedSQLs, dropTableIfExistsSQL("", info.tblName))
+		require.Contains(t, bh.executedSQLs, restoreTableDataByTsSQL(info.dbName, info.tblName, 123))
+	})
+}

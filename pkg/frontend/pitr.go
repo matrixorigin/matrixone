@@ -1675,6 +1675,10 @@ func reCreateTableWithPitr(
 
 	var isMasterTable bool
 	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		// A failed FK/master-table lookup must not allow destructive restore DDL.
+		return err
+	}
 	if isMasterTable {
 		// skip restore the table which is master table
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
