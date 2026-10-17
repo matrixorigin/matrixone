@@ -210,6 +210,21 @@ func buildInsertPlans(
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
+	asyncColumns, err := asyncDatalinkColumns(tableDef)
+	if err != nil {
+		return err
+	}
+	lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
+		for i, col := range tableDef.Cols {
+			if col.Name == name {
+				return int32(i), true
+			}
+		}
+		return 0, false
+	}, nil)
+	if err != nil {
+		return err
+	}
 
 	checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
@@ -237,7 +252,7 @@ func buildInsertPlans(
 	updatePkCol := true
 	addAffectedRows := true
 	isFkRecursionCall := false
-	ifNeedCheckPkDup := !builder.qry.LoadTag
+	ifNeedCheckPkDup := !builder.qry.LoadTag || builder.checkLoadPrimaryKey
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 	var skipIndexesCoyp map[string]bool
@@ -366,6 +381,21 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		builder.preservePreInsertProjection[lastNodeId] = struct{}{}
 	}
 
+	asyncColumns, err := asyncDatalinkColumns(updatePlanCtx.tableDef)
+	if err != nil {
+		return err
+	}
+	lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, updatePlanCtx.tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
+		for i, col := range updatePlanCtx.tableDef.Cols {
+			if col.Name == name {
+				return int32(i), true
+			}
+		}
+		return 0, false
+	}, nil)
+	if err != nil {
+		return err
+	}
 	//append sink node
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	if updatePlanCtx.preserveUpdateSourceProjection {

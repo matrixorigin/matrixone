@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -736,4 +737,17 @@ func TestRecordLine(t *testing.T) {
 			require.Equal(t, i, parser.RecordLine(), "record %d", i)
 		}
 	})
+}
+
+func TestIsSyntaxError(t *testing.T) {
+	for _, err := range []error{errUnterminatedQuotedField, errDanglingBackslash, errUnexpectedQuoteField} {
+		require.True(t, IsSyntaxError(err))
+		require.True(t, IsSyntaxError(fmt.Errorf("wrapped: %w", err)))
+	}
+	for _, err := range []error{nil, io.EOF, io.ErrUnexpectedEOF,
+		moerr.NewInvalidInputNoCtx("storage failure"),
+		moerr.NewInternalErrorNoCtx("row size limit"),
+	} {
+		require.False(t, IsSyntaxError(err))
+	}
 }

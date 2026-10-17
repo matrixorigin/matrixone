@@ -83,6 +83,10 @@ select id from warm_refresh where match(body) against('refreshmarker' in boolean
 id
 1
 set @warm_storage = (select index_table_name from mo_catalog.mo_indexes where name = 'ft_refresh' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'warm_refresh') limit 1);
+set @freshness_override = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+select @freshness_override not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-7,1,0]  𝄀
+1
 insert into warm_refresh values (101, 'refreshmarker committed');
 set @warm_tail_sql = concat('select count(*) > 0 as tail_ready from `', database(), '`.`', @warm_storage, '` where index_id = ''cdc_tail'' and tag = 1');
 prepare warm_tail from @warm_tail_sql;
@@ -94,6 +98,10 @@ select id from warm_refresh where match(body) against('refreshmarker' in boolean
 id
 1
 101
+set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+select @freshness_restore not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-7,1,0]  𝄀
+1
 drop table warm_refresh;
 create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
 create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;

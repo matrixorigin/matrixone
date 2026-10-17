@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -537,6 +538,31 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			} else {
 				require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[types.Decimal256](result)[0].Format(test.scale))
 			}
+		})
+	}
+}
+
+func TestResolveDivPrecisionIncrementFallback(t *testing.T) {
+	readErr := errors.New("read session variable")
+	for _, tc := range []struct {
+		name  string
+		value any
+		err   error
+		want  int32
+	}{
+		{name: "session value", value: int64(10), want: 10},
+		{name: "read error", err: readErr, want: function.DefaultDivPrecisionIncrement},
+		{name: "wrong runtime type", value: int(10), want: function.DefaultDivPrecisionIncrement},
+		{name: "unset value", want: function.DefaultDivPrecisionIncrement},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &MockCompilerContext{ResolveVariableFunc: func(name string, system, global bool) (any, error) {
+				require.Equal(t, "div_precision_increment", name)
+				require.True(t, system)
+				require.False(t, global)
+				return tc.value, tc.err
+			}}
+			require.Equal(t, tc.want, resolveDivPrecisionIncrement(ctx))
 		})
 	}
 }

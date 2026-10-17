@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,8 +170,11 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 			if entry.Status == api.ManifestEntryDeleted {
 				continue
 			}
+			entry, err = metadata.NormalizeManifestEntry(entry, manifest)
+			if err != nil {
+				return nil, memoryUsed, err
+			}
 			file := entry.DataFile
-			file.SpecID = manifest.PartitionSpecID
 			if err := metadata.ValidateP1DeleteFile(file); err != nil {
 				return nil, memoryUsed, err
 			}
@@ -356,9 +360,6 @@ func rewriteDataFilesDeleteAffectedFiles(deleteFile api.DataFile, dataByPath map
 }
 
 func rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile api.DataFile) bool {
-	if deleteFile.SequenceNumber == 0 || dataFile.SequenceNumber == 0 {
-		return true
-	}
 	if deleteFile.Content == api.DataFileContentPositionDelete {
 		return deleteFile.SequenceNumber >= dataFile.SequenceNumber
 	}
@@ -508,6 +509,11 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		if overflow {
 			return RewriteDataFileRewrite{}, ObjectWrite{}, maintenanceMemoryExceeded(math.MaxInt64, maxMemoryBytes)
 		}
+		projectionBytes := uint64(len(file.Schema().Columns()))*128 + uint64(len(writerSchema.Columns()))*(128*32+128)
+		workingBytes, overflow = addRewriteMemory(workingBytes, projectionBytes)
+		if overflow {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, maintenanceMemoryExceeded(math.MaxInt64, maxMemoryBytes)
+		}
 		output.reservedBytes = workingBytes
 		if err := output.checkMemory(uint64(cap(output.data))); err != nil {
 			return RewriteDataFileRewrite{}, ObjectWrite{}, err
@@ -521,13 +527,13 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 				parquet.MaxRowsPerRowGroup(rewriteDataFilesRowsPerRowGroup),
 			)
 		}
-		conv, err := parquet.Convert(writerSchema, file.Schema())
+		projection, err := newRewriteDataFilesProjection(req.Metadata, writerSchema, file.Schema())
 		if err != nil {
 			return RewriteDataFileRewrite{}, ObjectWrite{}, api.WrapError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor failed to map data file schema", map[string]string{
 				"file": api.RedactPath(candidate.File.FilePath),
 			}, err)
 		}
-		n, err := c.copyCandidateRows(writer, conv, file, candidate, deleteFilters[candidate.File.FilePath])
+		n, err := c.copyCandidateRows(writer, projection, file, candidate, deleteFilters[candidate.File.FilePath])
 		if err != nil {
 			return RewriteDataFileRewrite{}, ObjectWrite{}, err
 		}
@@ -792,6 +798,135 @@ func rewriteDataFilesPlainParquetNode(node parquet.Node) (parquet.Node, error) {
 	return out, nil
 }
 
+// Projection deliberately supports the writer's flat scalar schema. Planning
+// by identity once per input file prevents a rename or reused name from changing
+// which physical values are copied. No fallback to the current column name is
+// safe for an ID-less legacy file without an explicit name mapping.
+type rewriteDataFilesProjectionColumn struct {
+	source int
+	target parquet.Node
+	from   parquet.Node
+}
+
+type rewriteDataFilesProjection struct {
+	columns  []rewriteDataFilesProjectionColumn
+	input    []parquet.Value
+	identity bool
+}
+
+func newRewriteDataFilesProjection(meta *api.TableMetadata, target, source *parquet.Schema) (*rewriteDataFilesProjection, error) {
+	sourceFields, targetFields := source.Fields(), target.Fields()
+	byID := make(map[int]int, len(sourceFields))
+	for i, field := range sourceFields {
+		if !field.Leaf() || field.Repeated() {
+			return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg rewrite-data-files requires flat scalar Parquet columns", nil)
+		}
+		if field.ID() <= 0 {
+			return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg rewrite-data-files requires Parquet field ids", nil)
+		}
+		if _, exists := byID[field.ID()]; exists {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files found duplicate Parquet field id", nil)
+		}
+		byID[field.ID()] = i
+	}
+	out := &rewriteDataFilesProjection{
+		columns:  make([]rewriteDataFilesProjectionColumn, len(targetFields)),
+		identity: len(sourceFields) == len(targetFields),
+	}
+	var current api.Schema
+	if meta != nil {
+		current, _ = meta.CurrentSchema()
+	}
+	initialDefaults := make(map[int]bool, len(current.Fields))
+	for _, field := range current.Fields {
+		value := bytes.TrimSpace(field.InitialDefault)
+		initialDefaults[field.ID] = len(value) > 0 && string(value) != "null"
+	}
+	seen := make(map[int]bool, len(targetFields))
+	for i, field := range targetFields {
+		if field.ID() <= 0 || seen[field.ID()] || !field.Leaf() || field.Repeated() {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files target requires unique scalar field ids", nil)
+		}
+		seen[field.ID()] = true
+		col := rewriteDataFilesProjectionColumn{source: -1, target: field}
+		if idx, ok := byID[field.ID()]; ok {
+			col.source, col.from = idx, sourceFields[idx]
+			if !rewriteDataFilesSafePromotion(field.Type(), col.from.Type()) {
+				return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg rewrite-data-files cannot safely promote Parquet field type", map[string]string{"field_id": strconv.Itoa(field.ID())})
+			}
+		} else {
+			if field.Required() {
+				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files is missing a required field", map[string]string{"field_id": strconv.Itoa(field.ID())})
+			}
+			if initialDefaults[field.ID()] {
+				return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg rewrite-data-files cannot materialize an initial default", map[string]string{"field_id": strconv.Itoa(field.ID())})
+			}
+		}
+		// Names may change without changing the row representation. IDs must
+		// still map to the same physical positions, types and definition levels.
+		if col.source != i || col.from == nil || field.Type().Kind() != col.from.Type().Kind() || field.Optional() != col.from.Optional() {
+			out.identity = false
+		}
+		out.columns[i] = col
+	}
+	if !out.identity {
+		out.input = make([]parquet.Value, len(sourceFields))
+	}
+	return out, nil
+}
+
+func rewriteDataFilesSafePromotion(to, from parquet.Type) bool {
+	if to.Kind() == from.Kind() && reflect.DeepEqual(to.LogicalType(), from.LogicalType()) {
+		return true
+	}
+	// Unannotated signed physical integers are equivalent to Iceberg int/long.
+	plainInt := func(t parquet.Type) bool {
+		logical := t.LogicalType()
+		return (t.Kind() == parquet.Int32 || t.Kind() == parquet.Int64) && (logical == nil || (logical.Integer != nil && logical.Integer.IsSigned && ((t.Kind() == parquet.Int32 && logical.Integer.BitWidth == 32) || (t.Kind() == parquet.Int64 && logical.Integer.BitWidth == 64))))
+	}
+	if plainInt(to) && plainInt(from) {
+		return to.Kind() == from.Kind() || (to.Kind() == parquet.Int64 && from.Kind() == parquet.Int32)
+	}
+	return to.Kind() == parquet.Double && from.Kind() == parquet.Float && to.LogicalType() == nil && from.LogicalType() == nil
+}
+
+func (p *rewriteDataFilesProjection) project(rows, output []parquet.Row) error {
+	for r, row := range rows {
+		clear(p.input)
+		for _, value := range row {
+			if value.Column() < 0 || value.Column() >= len(p.input) {
+				return api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files found an invalid scalar column", nil)
+			}
+			p.input[value.Column()] = value
+		}
+		for i, col := range p.columns {
+			value := parquet.NullValue()
+			if col.source >= 0 {
+				value = p.input[col.source]
+			}
+			definition := 0
+			if value.IsNull() {
+				if col.target.Required() {
+					return api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files found null for a required field", nil)
+				}
+			} else {
+				var err error
+				if col.target.Type().Kind() != col.from.Type().Kind() {
+					value, err = col.target.Type().ConvertValue(value, col.from.Type())
+				}
+				if err != nil {
+					return api.WrapError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files failed to promote a field", nil, err)
+				}
+				if col.target.Optional() {
+					definition = 1
+				}
+			}
+			output[r][i] = value.Level(0, definition, i)
+		}
+	}
+	return nil
+}
+
 func cloneRewriteDataFilesPartition(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
@@ -980,10 +1115,20 @@ func (c ParquetConcatRewriteDataFilesCompactor) readEqualityDeleteKeys(ctx conte
 	return keys, nil
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) copyCandidateRows(writer *parquet.Writer, conv parquet.Conversion, file *parquet.File, candidate RewriteDataFileCandidate, filter rewriteDataFilesFileDeleteFilter) (int64, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) copyCandidateRows(writer *parquet.Writer, projection *rewriteDataFilesProjection, file *parquet.File, candidate RewriteDataFileCandidate, filter rewriteDataFilesFileDeleteFilter) (int64, error) {
 	columnByID, err := rewriteDataFilesColumnIndexByFieldID(file)
-	if err != nil && len(filter.Equality) > 0 {
+	if err != nil {
 		return 0, err
+	}
+	var projected []parquet.Row
+	if !projection.identity {
+		// Projection scratch never aliases input rows: subsequent ReadRows calls
+		// can safely reuse their buffers even after columns have been reordered.
+		projected = make([]parquet.Row, 128)
+		values := make([]parquet.Value, 128*len(projection.columns))
+		for i := range projected {
+			projected[i] = values[i*len(projection.columns) : (i+1)*len(projection.columns)]
+		}
 	}
 	var totalRows int64
 	var rowOrdinal int64
@@ -1013,13 +1158,17 @@ func (c ParquetConcatRewriteDataFilesCompactor) copyCandidateRows(writer *parque
 					rowOrdinal++
 				}
 				if len(kept) > 0 {
-					if _, err := conv.Convert(kept); err != nil {
-						_ = rows.Close()
-						return 0, api.WrapError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor failed to convert rows to target schema", map[string]string{
-							"file": api.RedactPath(candidate.File.FilePath),
-						}, err)
+					toWrite := kept
+					if !projection.identity {
+						if err := projection.project(kept, projected[:len(kept)]); err != nil {
+							_ = rows.Close()
+							return 0, api.WrapError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor failed to convert rows to target schema", map[string]string{
+								"file": api.RedactPath(candidate.File.FilePath),
+							}, err)
+						}
+						toWrite = projected[:len(kept)]
 					}
-					written, err := writer.WriteRows(kept)
+					written, err := writer.WriteRows(toWrite)
 					if err != nil {
 						_ = rows.Close()
 						return 0, api.WrapError(api.ErrObjectIO, "Iceberg parquet rewrite-data-files compactor failed to copy filtered rows", map[string]string{
