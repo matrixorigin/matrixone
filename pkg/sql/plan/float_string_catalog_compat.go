@@ -249,7 +249,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 
 // An unsupported local reconstruction rejects the whole candidate, including
 // repairs already made to other siblings. It is not a catalog execution error.
-var errLegacyFloatStringRebind = errors.New("cannot reconstruct legacy float string function")
+var errLegacyFloatStringRebind = moerr.NewInternalError(moerr.NoReportContext(), "cannot reconstruct legacy float string function")
 
 func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args []*planpb.Expr) (*planpb.Expr, error) {
 	fn := original.GetF()
