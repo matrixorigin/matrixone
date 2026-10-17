@@ -176,11 +176,16 @@ No blocking design choice is deferred; any material deviation requires review.
 
 ## Generation and delivery boundary
 
-NOWAIT and LOCKED remain ordinary identifiers. Only lock productions consume an
-unquoted ID and compare exact case-insensitive spelling. Unknown, quoted,
-repeated and conflicting options are rejected. Existing global token numbers
-remain stable, avoiding parser-table renumbering; the unchanged Makefile generates
-the output. No generated file is edited by hand.
+NOWAIT and LOCKED remain ordinary identifiers. Immediately after FOR, the lexer
+recognizes UPDATE/SHARE NOWAIT (and Part B SHARE SKIP LOCKED) as contextual
+phrases, carrying the phrase in the existing mode token's semantic string.
+The existing FOR UPDATE/FOR SHARE grammar actions select the corresponding
+lock type. Lookahead compares exact case-insensitive unquoted tokens and restores
+scanner state on a nonmatch. Unknown, quoted, repeated and conflicting options
+remain syntax errors; FOR UPDATE SKIP LOCKED remains unsupported.
+This follows the existing contextual phrase mechanism without adding global
+keywords, token numbers or parser states. The unchanged Makefile generates the
+output; no generated file is edited by hand.
 
 Both PRs must have fewer than 10,000 added plus deleted lines against main,
 including generated files. Upstream rules restrict dependency-branch creation,
@@ -196,9 +201,9 @@ Design blob `ac1fe701f454e2c62a4e0397c5f3ea05fd6e81d3`; SHA256 `27da256fbcdef89a
 [Full independent assessment](https://github.com/matrixorigin/matrixone/pull/30183#independent-complete-series-design-review), SHA256 `f5dd94f74f4f5dc82654cabd993623be90c5c1659ac351f98981dc377b9649f8`.
 Approval is design-only; implementation conformity, execution evidence and final-head CI remain separately validated.
 
-## Main synchronization amendment (2026-10-16)
+## Main synchronization amendments (2026-10-16/17)
 
-Main `14a8d854` already uses v114-v117. The nonblocking admission binding moves
+Main `47b9690d` already uses v114-v117. The nonblocking admission binding moves
 to v118; methods, wire fields, ownership and SQL semantics are unchanged. Tests
 reject v113-v117 before dispatch and admit v118. Pipeline generation preserves
 main's statement-runtime SELECT field. Obsolete fulltext integration fixes and
@@ -207,3 +212,11 @@ The AutoID generation-budget test fix is inherited from main.
 The approval above records the original v114 design revision; it does not claim
 independent approval of these maintenance edits. Integration and final-head CI
 are validated separately. No FOR UPDATE SKIP LOCKED support is added.
+
+The 2026-10-17 parser maintenance replaces appended modifier productions with
+contextual mode-token phrases because main's ALTER CHECK grammar makes added
+states repack over 15,000 generated lines. Speculation is bounded to one token
+for NOWAIT and two for SHARE SKIP LOCKED. It preserves scanner cancellation and
+budget accounting, quoted identifiers, comments, statement boundaries and normal
+identifier use; parser tests and direct/prepared two-CN tests prove these
+boundaries. This changes syntax recognition only, with no executor/RPC change.

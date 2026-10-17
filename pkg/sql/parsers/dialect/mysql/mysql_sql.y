@@ -4758,10 +4758,14 @@ alter_table_drop:
 |   CONSTRAINT ident
         {
             $$ = &tree.AlterOptionDrop{
-                Typ:  tree.AlterTableDropForeignKey,
+                Typ:  tree.AlterTableDropConstraint,
                 Name: tree.Identifier($2.Compare()),
             }
         }
+|   CHECK ident
+    {
+        $$ = tree.NewAlterOptionDrop(tree.AlterTableDropCheck, tree.Identifier($2.Compare()));
+    }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
@@ -7548,11 +7552,17 @@ select_lock_opt:
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
+        if strings.EqualFold($2, "update nowait") {
+            $$.LockType = tree.SelectLockForUpdateNoWait
+        }
     }
 |   FOR SHARE
     {
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
+        }
+        if strings.EqualFold($2, "share nowait") {
+            $$.LockType = tree.SelectLockForShareNoWait
         }
     }
 |   LOCK IN SHARE MODE
@@ -16898,32 +16908,6 @@ nth_value_from_first_opt:
     }
 |   FROM FIRST
     {
-    }
-
-// Lock modifiers are contextual identifiers: ordinary identifier use stays intact.
-// Append productions to preserve existing production and token numbers.
-select_lock_opt:
-    FOR UPDATE ID
-    {
-        if !strings.EqualFold($3, "nowait") {
-            yylex.Error("expected NOWAIT after FOR UPDATE"); return 1
-        }
-        $$ = &tree.SelectLockInfo{
-            LockType:tree.SelectLockForUpdateNoWait,
-        }
-    }
-|   FOR SHARE ID
-    {
-        if !strings.EqualFold($3, "nowait") {
-            yylex.Error("expected NOWAIT after FOR SHARE"); return 1
-        }
-        $$ = &tree.SelectLockInfo{
-            LockType:tree.SelectLockForShareNoWait,
-        }
-    }
-|   FOR SHARE CONFLICT_SKIP ID
-    {
-        yylex.Error("FOR SHARE SKIP LOCKED is not supported"); return 1
     }
 
 //mo_keywords:

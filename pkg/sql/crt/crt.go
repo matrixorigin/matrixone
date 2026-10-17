@@ -67,6 +67,7 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 
+	param.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	fs, readPath, err := plan2.GetForETLWithType(param, data)
 	if err != nil {
 		return nil, err

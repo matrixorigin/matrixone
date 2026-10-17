@@ -61,6 +61,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterConstraintDropIntent(t *testing.T) {
+	for _, test := range []struct {
+		clause string
+		typ    tree.AlterTableDropType
+	}{
+		{"drop check ck", tree.AlterTableDropCheck},
+		{"drop constraint ck", tree.AlterTableDropConstraint},
+		{"drop foreign key ck", tree.AlterTableDropForeignKey},
+	} {
+		t.Run(test.clause, func(t *testing.T) {
+			sql := "alter table t " + test.clause
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			alter := stmt.(*tree.AlterTable)
+			drop := alter.Options[0].(*tree.AlterOptionDrop)
+			require.Equal(t, test.typ, drop.Typ)
+			require.Equal(t, tree.Identifier("ck"), drop.Name)
+			require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -696,7 +719,7 @@ func TestSelectSharedLockParse(t *testing.T) {
 
 func TestSelectLockContextualNoWait(t *testing.T) {
 	for _, mode := range []string{"UPDATE", "SHARE"} {
-		for _, word := range []string{"nowait", "nOwAiT"} {
+		for _, word := range []string{"nowait", "nOwAiT", "/*! nowait */", "/*! nowait */ /* tail */"} {
 			sql := "SELECT id FROM t FOR " + mode + " /* option */ " + word
 			stmt, err := ParseOne(context.Background(), sql, 1)
 			require.NoError(t, err, sql)
@@ -715,10 +738,10 @@ func TestSelectLockContextualNoWait(t *testing.T) {
 }
 
 func TestSelectLockModifiersRemainUsableAsIdentifiers(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "SELECT nowait, locked FROM t", 1)
+	stmt, err := ParseOne(context.Background(), "SELECT nowait, locked, t.nowait, t.locked FROM t", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	require.Equal(t, "select nowait, locked from t", tree.String(stmt, dialect.MYSQL))
+	require.Equal(t, "select nowait, locked, t.nowait, t.locked from t", tree.String(stmt, dialect.MYSQL))
 }
 
 func TestSelectLockRejectsUnsupportedOrConflictingModifiers(t *testing.T) {
@@ -1075,6 +1098,9 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 		first   string
 	}{
 		{name: "simple statement", sql: "select 1; select 2", first: "select 1;"},
+		{name: "plain locking boundary", sql: "select id from t for update; select 2", first: "select id from t for update;"},
+		{name: "contextual locking boundary", sql: "select id from t for share /*! nowait */; select 2", first: "select id from t for share /*! nowait */;"},
+
 		{name: "leading empty statements", sql: ";; select 1; select 2", first: ";; select 1;"},
 		{
 			name:  "nested compound statement",
@@ -5348,7 +5374,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
-			output: "alter table tbl1 drop foreign key fk_name",
+			output: "alter table tbl1 drop constraint fk_name",
 		},
 		{
 			input:  "explain force execute st using @a",

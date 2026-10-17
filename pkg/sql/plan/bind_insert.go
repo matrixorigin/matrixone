@@ -4398,6 +4398,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	var asyncEligible *plan.Expr
+	if onDupAction == plan.Node_UPDATE && physicalChangedRowsInputPos >= 0 {
+		asyncEligible = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: physicalChangedRowsInputPos}}}
+	}
+	lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, dmlCtx.asyncDatalinkColumns[0], lastNodeID, selectTag, func(name string) (int32, bool) { pos, ok := colName2Idx[tableDef.Name+"."+name]; return pos, ok }, asyncEligible)
+	if err != nil {
+		return 0, err
+	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 

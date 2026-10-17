@@ -373,15 +373,17 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 		const successful = "issue_28079_refresh_success"
 		const rejected = "issue_28079_refresh_rejected"
 		cleanup := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
 			var cleanupErr error
 			for _, account := range []string{successful, rejected} {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, dropErr := db0.ExecContext(cleanupCtx, "drop account if exists `"+account+"`")
+				cleanupCancel()
 				if dropErr != nil {
 					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop %s: %w", account, dropErr))
 				}
 			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
 			var count int
 			if err := db0.QueryRowContext(cleanupCtx,
 				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",

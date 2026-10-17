@@ -16,7 +16,6 @@ package stage
 
 import (
 	"context"
-	"encoding/csv"
 	"net/url"
 	"strings"
 
@@ -71,66 +70,65 @@ func (s StageDef) GetCredentials(key string, defval string) (string, bool) {
 // expand the subpath to MO path.
 // subpath is in the format like path or path with query like path?q1=v1&q2=v2...
 func (s StageDef) ToPath() (mopath string, query string, err error) {
+	var scratch [7]string
+	fields, file, query, err := s.AppendPathParts(scratch[:0])
+	if err != nil {
+		return "", "", err
+	}
+	mopath, err = fileservice.EncodeServicePath(fields, file)
+	if err != nil {
+		return "", "", err
+	}
+	return mopath, query, nil
+}
 
+// AppendPathParts appends the decoded service fields to caller-owned scratch
+// and returns the file and query without materializing a service path.
+func (s StageDef) AppendPathParts(dst []string) (fields []string, file, query string, err error) {
 	if s.Url.Scheme == S3_PROTOCOL {
 		bucket, prefix, query, err := ParseS3Url(s.Url)
 		if err != nil {
-			return "", "", err
+			return nil, "", "", err
 		}
 
 		// get S3 credentials
 		aws_key_id, found := s.GetCredentials(PARAMKEY_AWS_KEY_ID, "")
 		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_KEY_ID not found")
+			return nil, "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_KEY_ID not found")
 		}
 		aws_secret_key, found := s.GetCredentials(PARAMKEY_AWS_SECRET_KEY, "")
 		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_SECRET_KEY not found")
+			return nil, "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_SECRET_KEY not found")
 		}
 		aws_region, found := s.GetCredentials(PARAMKEY_AWS_REGION, "")
 		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_REGION not found")
+			return nil, "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_REGION not found")
 		}
 		provider, found := s.GetCredentials(PARAMKEY_PROVIDER, "")
 		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: PROVIDER not found")
+			return nil, "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: PROVIDER not found")
 		}
 		endpoint, found := s.GetCredentials(PARAMKEY_ENDPOINT, "")
 		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: ENDPOINT not found")
+			return nil, "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: ENDPOINT not found")
 		}
 
 		service, err := getS3ServiceFromProvider(provider)
 		if err != nil {
-			return "", "", err
+			return nil, "", "", err
 		}
 
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		opts := []string{"s3-opts", "endpoint=" + endpoint, "region=" + aws_region, "bucket=" + bucket, "key=" + aws_key_id, "secret=" + aws_secret_key}
+		dst = append(dst, "s3-opts", "endpoint="+endpoint, "region="+aws_region, "bucket="+bucket, "key="+aws_key_id, "secret="+aws_secret_key)
 		if service == MINIO_SERVICE {
-			opts = append(opts, "is-minio=true")
+			dst = append(dst, "is-minio=true")
 		}
-
-		if err = w.Write(opts); err != nil {
-			return "", "", err
-		}
-		w.Flush()
-		return fileservice.JoinPath(buf.String(), prefix), query, nil
+		return dst, prefix, query, nil
 	} else if s.Url.Scheme == HDFS_PROTOCOL {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		opts := []string{"hdfs", "endpoint=" + s.Url.Host}
-
-		if err = w.Write(opts); err != nil {
-			return "", "", err
-		}
-		w.Flush()
-		return fileservice.JoinPath(buf.String(), s.Url.Path), s.Url.RawQuery, nil
+		return append(dst, "hdfs", "endpoint="+s.Url.Host), s.Url.Path, s.Url.RawQuery, nil
 	} else if s.Url.Scheme == FILE_PROTOCOL {
-		return s.Url.Path, s.Url.RawQuery, nil
+		return dst, s.Url.Path, s.Url.RawQuery, nil
 	}
-	return "", "", moerr.NewBadConfigf(context.TODO(), "URL protocol %s not supported", s.Url.Scheme)
+	return nil, "", "", moerr.NewBadConfigf(context.TODO(), "URL protocol %s not supported", s.Url.Scheme)
 }
 
 func getS3ServiceFromProvider(provider string) (string, error) {

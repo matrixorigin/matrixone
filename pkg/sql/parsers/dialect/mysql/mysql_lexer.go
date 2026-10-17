@@ -406,6 +406,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		*l.scanner = snapshot
 	}
 
+	if l.lastToken == FOR && (typ == UPDATE || typ == SHARE) {
+		str = l.scanLockModePhrase(str)
+		lval.pos = l.scanner.Pos
+		l.scanner.LastToken = str
+	}
+
 	switch typ {
 	case INTEGRAL:
 		l.recordSyntaxToken(typ)
@@ -440,6 +446,20 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+// scanLockModePhrase keeps modifiers contextual without new global keywords or
+// parser states. Failed speculation leaves the scanner in its original state;
+// shared parse-control accounting still charges the lookahead work.
+func (l *Lexer) scanLockModePhrase(mode string) string {
+	lookahead := *l.scanner
+	token, word := lookahead.Scan()
+	if token != ID || !strings.EqualFold(word, "nowait") {
+		return mode
+	}
+	lookahead.parseControl.token()
+	*l.scanner = lookahead
+	return mode + " nowait"
 }
 
 func (l *Lexer) alterAccountConfigPhraseAhead() bool {

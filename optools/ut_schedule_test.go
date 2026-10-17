@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func scheduleHarnessMock() string {
@@ -146,6 +148,25 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	t.Parallel()
+	workflowData, err := os.ReadFile("../.github/workflows/entrypoint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			With struct {
+				Parallel int `yaml:"ut_parallel"`
+			} `yaml:"with"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflowData, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	ciParallel := workflow.Jobs["matrixone-ci"].With.Parallel
+	if ciParallel <= 0 {
+		t.Fatal("CI workflow must supply a positive UT parallel budget")
+	}
+
 	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
 	// diagnostics without cloning a repository or changing this worktree.
 	gitDir := filepath.Join(t.TempDir(), "git")
@@ -181,8 +202,18 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
 		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
+		{name: "ci-issues-budget", args: []string{"UT_PARALLEL=" + strconv.Itoa(ciParallel)}, want: "8 4 4 0", accepted: true},
+		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 4 0", accepted: true},
+		{name: "seven-core-linux-default", args: []string{"UT_PARALLEL=7"}, want: "8 2 2 0", accepted: true},
+		{name: "eight-core-darwin-default", args: []string{"UNAME_S=darwin", "UT_PARALLEL=8"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-three-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=3"}, want: "8 3 2 0", accepted: true},
+		{name: "explicit-four-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=4"}, want: "8 4 2 0", accepted: true},
+		{name: "issues-parallel-above-cap", args: []string{"UT_ISSUES_BATCH_PARALLEL=5"}, want: "8 5 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "8 2 2 0", accepted: true},
 		{name: "explicit-issues-pool", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "8 2 2 0", accepted: true},
+		{name: "explicit-three-embedded-workers", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=3"}, want: "8 2 3 0", accepted: true},
+		{name: "explicit-four-embedded-workers", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=4"}, want: "8 2 4 0", accepted: true},
+		{name: "embedded-parallel-above-cap", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=5"}, want: "8 2 5 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 		{name: "embedded-pool-serial-rollback", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=1"}, want: "8 2 1 0", accepted: true},
 		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "8 1 1 1", accepted: true},
 		{name: "prebuild-explicit-opt-in", args: []string{"UT_PREBUILD_EMBEDDED=1"}, want: "8 2 2 1", accepted: true},
@@ -204,10 +235,11 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 			cmd.Dir = ".."
 			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\"\n")
 			// Test Make's defaults, not the enclosing UT's scheduling overrides.
-			for _, value := range os.Environ() {
+			// Always model the eight-task CI parent, even in focused local runs.
+			for _, value := range append(os.Environ(), "UT_PARALLEL=8") {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)
@@ -1088,13 +1120,13 @@ sleep() {
 ut_test_before_heartbeat_sleep_registration() {
     printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
     printf '%s\n' "$1" >&7
-    while ! read -r _ <&8; do
+    while (( heartbeat_stop_requested == 0 )) && ! read -r _ <&8; do
         :
     done
+    (( heartbeat_stop_requested != 0 )) || exit 100
 }
 ut_test_heartbeat_stop_requested() {
     printf '%s\n' "$heartbeat_stop_requested" >&6
-    printf 'release\n' >&8
 }
 
 UT_HEARTBEAT_INTERVAL=60
@@ -1107,6 +1139,9 @@ if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
     kill -INT "$$" || exit 92
 else
     kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+    # A trapped signal may be deferred while Bash is blocked in read. The
+    # sender releases that read; the handler must not own its own wakeup.
+    printf 'release\n' >&8
 fi
 read -r -t 10 stop_state <&6 || exit 93
 [[ "$stop_state" == 1 ]] || exit 94
@@ -1143,8 +1178,13 @@ exit 0
 		if got := strings.Count(text, stopAnchor); got != 1 {
 			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, stopAnchor,
+		text = strings.Replace(text, stopAnchor,
 			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
+		const ownerStop = "    kill -TERM \"${UT_HEARTBEAT_PID}\" 2>/dev/null || true\n"
+		if got := strings.Count(text, ownerStop); got != 1 {
+			t.Fatalf("heartbeat owner stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, ownerStop, ownerStop+"    printf 'release\\n' >&8\n", 1)
 	}
 	for _, signal := range []string{"TERM", "INT"} {
 		t.Run(strings.ToLower(signal), func(t *testing.T) {
