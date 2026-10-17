@@ -42,18 +42,35 @@ primary-key value is therefore part of hidden-index identity even when the
 tokenizer reads only the text parts.
 
 The optional `DMLMaintenanceNoOpHook` returns a complete, conservative set of
-stored base-table columns. SQL NULL-safe equality (`<=>`) for every returned
-column must imply byte-for-byte-equivalent hidden-index input between the old
-row image and the final ODKU row image. A hook must include row identity/doc
-identity whenever that value is an input. It must return `supported=false` if
-type comparison, external content, generated state, or any other dependency
-can invalidate that implication.
+stored base-table columns. For hook-supported `VARCHAR` and `TEXT` values, the
+planner casts both old and final expressions to unbounded binary types before
+using NULL-safe equality (`<=>`). This makes the proof depend on the complete
+stored payload, including trailing spaces and embedded NUL bytes, rather than
+on a SQL collation's equality relation. The returned set must include row
+identity/doc identity whenever that value is an input. A hook must return
+`supported=false` if type comparison, external content, generated state, or any
+other dependency can invalidate that implication.
 
 The FULLTEXT implementation therefore requires a resolvable
 `TableDef.Pkey.PkeyColName`, returns that primary-key column first, and then
 returns each distinct resolvable FULLTEXT part. It supports only `VARCHAR` and
 `TEXT` parts. CHAR, JSON, DATALINK, missing columns, missing primary-key
 metadata, and empty definitions fail closed to the rebuild path.
+
+### R4 stored-value identity revision
+
+The R4 implementation keeps the existing ODKU plan shape and transaction
+ownership. It changes only the proof expression for hook-supported text: the
+old and final values are converted to `VARBINARY`/`BLOB` with their native
+maximum widths, then compared with `<=>`. Non-text columns retain their typed
+comparison. This is deliberately narrower than changing SQL collation
+semantics; the latter belongs to the separate #28164 comparison-identity
+series. The regression BVT exercises real ODKU updates for VARCHAR and TEXT,
+case/space changes, NUL and bounded long values, mixed batches, NULL
+transitions, multiple FULLTEXT indexes, and rollback. Its result file must be
+generated from the exact service head; until that run is available, the SQL
+evidence is recorded as `NOT_RUN`/`BLOCKED_ENVIRONMENT` rather than a product
+PASS.
 
 ### ODKU row and primary-key preconditions
 
@@ -100,12 +117,23 @@ closure but do not create additional value-change branches. Existing fulltext
 tokenizer branches remain bounded by the physical index definitions already
 being maintained.
 
-The proof contains column references and NULL-safe comparisons only. It does
-not copy token data, retain rows in a process-global cache, or allocate work
-proportional to posting-list size. Long TEXT values may cost the normal SQL
-column comparison for rows reaching the marker, while equal-value conflicts
-avoid the old hidden-table scan and tokenizer work. New and changed rows keep
-the existing maintenance cost and semantics.
+The R4 proof contains column references, binary casts, and NULL-safe
+comparisons. Each supported text comparison materializes both the old and
+final payload in cast result vectors before comparing them. The cumulative
+payload copied therefore scales with the rows reaching the marker and the sum
+of old and final text lengths across affected logical groups. A column shared
+by several logical groups can occur in several proof expressions. This is not
+an estimate of peak memory: live batches, concurrent operators, vector capacity,
+and release timing determine the peak and must be measured separately.
+
+The proof does not retain token streams in a process-global cache or allocate
+state proportional to posting-list size. Equal-value conflicts avoid the old
+hidden-table scan and tokenizer work, but still pay the proof cost. Changed
+rows pay that cost in addition to the existing delete-and-rebuild work. New
+rows remain eligible for insertion; the marker projection precedes the
+new-or-changed filter, so new rows must not be assumed free of proof work.
+The A/B validation below must quantify this additional cost, especially for
+changed-heavy batches, multiple affected indexes, and long TEXT.
 
 ## Alternatives considered
 
