@@ -88,7 +88,7 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 ## 五、注意
 
 - 不要给 MatrixOne 建 systemd 服务，容器由 Pacemaker 管理。
-- **默认口令风险**：MO 首次启动的 root 密码是 `111`，端口默认绑在所有网卡上。上线前务必改掉：`mysql -h127.0.0.1 -P6001 -uroot -p111 -e "alter user root identified by '<新密码>'"`；同时把 `MO_BIND_IP` 换成本机内网 IP 或 VIP，不要留 `0.0.0.0`。
+- **默认口令风险**：MO 首次启动的 root 密码是 `111`，端口默认绑在所有网卡上。上线前务必改掉：`mysql -h127.0.0.1 -P6001 -uroot -p111 -e "alter user root identified by '<新密码>'"`；同时把 `MO_BIND_IP` 换成本机内网 IP（若填 VIP，必须同时配置 `VIP=`，脚本会让 VIP 先于容器启动），不要留 `0.0.0.0`。
 - `--hacluster-password` 没有默认值，两台必须一致；密码只能用字母/数字与 `._@%+=,:/_-`，含引号/空白/`$` 等会被脚本直接拒绝。
 - `--teardown` 会 `wipefs`  DRBD 裸盘，属破坏性操作，必须显式加 `--yes`（或交互输入 `yes`）才会执行。
 - 不要 `systemctl enable drbd`，它与 Pacemaker 冲突；模块靠 `/etc/modules-load.d/drbd.conf` 加载。

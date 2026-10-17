@@ -677,6 +677,9 @@ stage_resources(){
     runq "pcs resource create p_vip IPaddr2 ip=${VIP%%/*} cidr_netmask=${VIP##*/} op monitor interval=20s"
     runq "pcs constraint colocation add p_vip with p_fs INFINITY"
     runq "pcs constraint order start p_fs then start p_vip"
+    # MO 端口若绑定在 VIP 上，必须等 VIP 就绪后再起容器，否则 docker 会报
+    # "cannot assign requested address" 启动失败
+    [ "$NO_MO" = 1 ] || runq "pcs constraint order start p_vip then start p_mo"
   fi
 }
 
