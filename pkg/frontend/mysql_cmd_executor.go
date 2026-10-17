@@ -2316,6 +2316,9 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 		} else {
 			if value, err = ses.GetSessionSysVar(name); err != nil {
+				if name == "collation_database" || name == "character_set_database" {
+					return err
+				}
 				continue
 			}
 		}
@@ -4810,6 +4813,21 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	// SessionInfo is reused across statements.  Role changes update the
+	// session's TenantInfo, so refresh the trusted names at the same boundary
+	// as the other statement-scoped fields before planning or execution.
+	if ses != nil {
+		if tenant := ses.GetTenantInfo(); tenant != nil {
+			// Read both names under one lock. Besides avoiding two lock
+			// acquisitions on every statement, this keeps the account/role pair
+			// from being sampled across a concurrent role transition.
+			tenant.mu.Lock()
+			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			tenant.mu.Unlock()
+			proc.Base.SessionInfo.Account = account
+			proc.Base.SessionInfo.Role = role
+		}
+	}
 	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
 	if !ok {
 		limit, ok = resolveSessionWarningRetentionLimit(ses)
@@ -5076,6 +5094,11 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		return stats, nil
 	}
 	if ses.GetTenantInfo() != nil {
+		if _, ok := stmt.(*tree.AlterDatabase); ok {
+			// A persistent database-default change must recheck both the active role
+			// membership and its current privileges, including prepared execution.
+			ses.InvalidatePrivilegeCache()
+		}
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
 			// The privilege model has no external-connection USAGE object yet.
@@ -6236,9 +6259,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	if ses.GetTenantInfo() != nil {
-		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}

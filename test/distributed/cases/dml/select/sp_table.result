@@ -16,6 +16,7 @@ mo_columns    r
 mo_configurations    v
 mo_data_key    r
 mo_database    r
+mo_database_defaults    r
 mo_feature_limit    r
 mo_feature_registry    r
 mo_foreign_keys    r

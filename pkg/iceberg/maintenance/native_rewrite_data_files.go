@@ -554,7 +554,10 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 		}
 		memoryUsed += entryWeight
 		for idx := range entries {
-			entries[idx].DataFile.SpecID = manifest.PartitionSpecID
+			entries[idx], err = metadata.NormalizeManifestEntry(entries[idx], manifest)
+			if err != nil {
+				return nil, err
+			}
 		}
 		selection.ScannedManifestCount++
 		// PreservedDataManifests owns a second entry slice. Nested immutable maps

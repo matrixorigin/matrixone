@@ -39,13 +39,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func sysFileAccessTestProcess() *process.Process {
+	return &process.Process{Base: &process.BaseProcess{SessionInfo: process.SessionInfo{Account: "sys", Role: "moadmin"}}}
+}
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 
 func Test_initExportFileParam(t *testing.T) {
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{
 			Lines: &tree.Lines{
 				TerminatedBy: &tree.Terminated{},
@@ -74,7 +79,7 @@ func Test_initExportFileParam(t *testing.T) {
 
 func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile succ", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -106,7 +111,7 @@ func Test_openNewFile(t *testing.T) {
 
 func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -128,7 +133,7 @@ func Test_formatOutputString(t *testing.T) {
 
 func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -176,7 +181,7 @@ func Test_writeToCSVFile(t *testing.T) {
 
 func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -207,7 +212,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -284,7 +289,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	// []float32/[]float64 and then did value.([]byte) — a panic for []types.BF16 /
 	// []types.Float16 / []int8 and raw-byte corruption for []uint8.
 	convey.Convey("exportDataFromResultSetToCSVFile narrow vectors", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines:    &tree.Lines{TerminatedBy: &tree.Terminated{}},
 				Fields:   &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}},
@@ -319,7 +324,7 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	})
 
 	convey.Convey("exportDataToCSVFile fail", t, func() {
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Lines: &tree.Lines{
 					TerminatedBy: &tree.Terminated{},
@@ -366,7 +371,7 @@ func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
 		bat.Vecs[0] = vec
 		bat.SetRowCount(1)
 
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
 			},
@@ -398,7 +403,7 @@ func TestExportCSVBatchSplitPreservesRows(t *testing.T) {
 		column.SetName(name)
 		mrs.AddColumn(column)
 	}
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{
 			FilePath:   filepath.Join(t.TempDir(), "out_%02d.csv"),
 			SplitSize:  64,
@@ -463,7 +468,7 @@ func TestExportCSVEmptyEncodedRecordDoesNotCreateTrailingFile(t *testing.T) {
 			column := new(MysqlColumn)
 			column.SetName("value")
 			mrs.AddColumn(column)
-			ep := &ExportConfig{
+			ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 				userConfig: &tree.ExportParam{
 					FilePath:  filepath.Join(t.TempDir(), "empty_record_%02d.csv"),
 					SplitSize: 4,
@@ -550,7 +555,7 @@ func TestExportCSVFinalDrainPreservesOutOfOrderBatchMetadata(t *testing.T) {
 }
 
 func TestExportCSVUnlimitedBatchUsesSingleWrite(t *testing.T) {
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{ExportFormat: "csv"},
 	}
 	batch := makeCSVTestBatch("1,a\n", "2,b\n", "3,c\n")
@@ -574,7 +579,7 @@ func TestConstructByteOmitsRowOffsetsWhenCSVIsUnlimited(t *testing.T) {
 	column := new(MysqlColumn)
 	column.SetName("value")
 	mrs.AddColumn(column)
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{
 			ExportFormat: "csv",
 			Fields:       tree.NewFields("", false, 0, 0),
@@ -612,7 +617,7 @@ func TestConstructByteOmitsRowOffsetsWhenCSVIsUnlimited(t *testing.T) {
 }
 
 func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 8},
 	}
 	var writes []string
@@ -636,7 +641,7 @@ func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
 }
 
 func TestExportCSVFiniteSplitCoalescesRowsAfterRotation(t *testing.T) {
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 8},
 		ctx:        context.Background(),
 		mrs:        &MysqlResultSet{},
@@ -694,7 +699,7 @@ func TestExportCSVBatchSplitsAreIndependentOfBatchDistribution(t *testing.T) {
 
 func TestExportCSVBatchWriteErrorPreservesCompletedProgress(t *testing.T) {
 	writeErr := moerr.NewInternalError(context.Background(), "injected CSV write failure")
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 4},
 		ByteChan:   make(chan *BatchByte, 1),
 		BatchMap:   make(map[int32]*BatchByte),
@@ -733,7 +738,7 @@ func TestExportCSVRotationErrorsPreserveCompletedProgress(t *testing.T) {
 	for _, failAt := range []string{"close", "open"} {
 		t.Run(failAt, func(t *testing.T) {
 			rotationErr := moerr.NewInternalError(context.Background(), "injected CSV rotation failure")
-			ep := &ExportConfig{
+			ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 				userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 4},
 				ctx:        context.Background(),
 				mrs:        &MysqlResultSet{},
@@ -799,7 +804,7 @@ func newCSVBatchTestExport(t *testing.T, path string, splitSize uint64, header b
 		column.SetName(name)
 		mrs.AddColumn(column)
 	}
-	ep := &ExportConfig{
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 		userConfig: &tree.ExportParam{
 			FilePath:  path,
 			SplitSize: splitSize,
@@ -889,7 +894,7 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	column := &MysqlColumn{}
 	column.SetName("value")
 	mrs.AddColumn(column)
-	ep := &ExportConfig{mrs: mrs}
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
 	bytesChan := make(chan *BatchByte, 1)
 	bytesChan <- &BatchByte{index: 0}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -913,7 +918,7 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 func Test_getExportFormat(t *testing.T) {
 	convey.Convey("getExportFormat returns correct format", t, func() {
 		// Test default format (empty string returns "csv")
-		ep := &ExportConfig{
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
 				ExportFormat: "",
 			},
@@ -1295,7 +1300,7 @@ func Test_getEffectiveMaxFileSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ep := &ExportConfig{
+			ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 				userConfig: &tree.ExportParam{
 					MaxFileSize: tt.maxFileSize,
 					SplitSize:   tt.splitSize,
@@ -1803,7 +1808,7 @@ func TestExportParquetLargeSplitPreservesRows(t *testing.T) {
 				col.SetColumnType(defines.MYSQL_TYPE_LONG)
 				mrs.AddColumn(col)
 				dir := t.TempDir()
-				ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+				ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 					FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: splitSize,
 				}}
 				execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
@@ -1873,7 +1878,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	})
 	dir := t.TempDir()
-	ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+	ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
 	}}
 	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
@@ -1900,7 +1905,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {
-	ep := &ExportConfig{Rows: 1}
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), Rows: 1}
 	require.NoError(t, finalizeParquetExport(ep))
 }
 
@@ -2057,4 +2062,20 @@ func mustParquetEmptyPoint32(t *testing.T) []byte {
 	data, err := geo.WriteWKBFloat32(g)
 	require.NoError(t, err)
 	return data
+}
+
+func TestExportFileAdmissionRechecksRole(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-created")
+	proc := sysFileAccessTestProcess()
+	proc.Base.SessionInfo.Role = "public"
+	ep := &ExportConfig{proc: proc, ctx: t.Context(), userConfig: &tree.ExportParam{FilePath: filepath.Join(dir, "out.csv"), Fields: &tree.Fields{}, Lines: &tree.Lines{}}}
+	require.ErrorContains(t, openNewFile(t.Context(), ep, &MysqlResultSet{}), "only the sys account moadmin role")
+	require.Nil(t, ep.AsyncReader)
+	require.Nil(t, ep.AsyncWriter)
+	_, err := os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	ep.userConfig.FilePath = filepath.Join(dir, "out.parquet")
+	require.ErrorContains(t, writeParquetToFile(ep, []byte("owned")), "only the sys account moadmin role")
+	_, err = os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

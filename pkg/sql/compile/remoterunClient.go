@@ -913,7 +913,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse(parentCtx context.Co
 		// The handshake owns an independent live context. A cancellation-shaped
 		// Send result therefore describes a closed transport, not successful
 		// pipeline cancellation, and must not be suppressible by RemoteRun.
-		if isScopeCancellationError(err) {
+		if process.IsPipelineCancellationError(err) {
 			return moerr.NewStreamClosedNoCtx()
 		}
 		return err

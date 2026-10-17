@@ -609,7 +609,7 @@ func TestRaceInventoryPreservesRunnableRootsAndStress(t *testing.T) {
 	root := t.TempDir()
 	writeScopeFixture(t, root, "go.mod", "module inventoryfixture\n\ngo 1.27.0\n")
 	writeScopeFixture(t, root, "inventory_test.go", `package inventoryfixture
-import ("fmt"; "os"; "testing")
+import ("context"; "fmt"; "os"; "sync/atomic"; "testing"; "time")
 func record(name string) {
  f, err := os.OpenFile(os.Getenv("INVENTORY_RECORD"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
  if err != nil { panic(err) }; defer f.Close()
@@ -618,6 +618,19 @@ func record(name string) {
 func TestOne(t *testing.T) { record("one") }
 func TestTwentyRounds(t *testing.T) {
  for i:=0;i<20;i++ { t.Run(fmt.Sprint(i),func(t *testing.T) { record("round") }) }
+}
+func TestParallelResolvers(t *testing.T) {
+ var started atomic.Int32
+ ready := make(chan struct{})
+ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+ t.Cleanup(cancel)
+ for worker:=0;worker<4;worker++ {
+  t.Run(fmt.Sprint(worker),func(t *testing.T) {
+   t.Parallel()
+   if started.Add(1)==4 { close(ready) }
+   select { case <-ready: record("parallel"); case <-ctx.Done(): t.Fatal("four resolvers were serialized") }
+  })
+ }
 }
 func FuzzSeeds(f *testing.F) {
  for _,s:=range []string{"a","b","c"} { f.Add(s) }
@@ -673,7 +686,7 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	}
 	control := run(filepath.Join(root, "control"), []string{".*"})
 	batched := run(filepath.Join(root, "batched"), strings.Split(strings.TrimSpace(string(patterns)), "\n"))
-	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1}
+	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1, "parallel": 4}
 	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) {
 		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v want=%v", control, batched, want)
 	}

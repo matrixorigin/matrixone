@@ -1531,7 +1531,7 @@ func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpills(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	const rows = 20_000
 	values := make([]int32, rows)
 	for i := range values {
@@ -1616,7 +1616,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	trackingFS := installTrackingSpillFileService(t, proc)
 	const rows = 20_000
 	values := make([]int32, rows)
@@ -3232,7 +3232,7 @@ func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
 		{"spill_admission_failure", "rank", true, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			proc := newWindowSpillProcess(t)
 			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
 			t.Cleanup(proc.Free)
 			input := batch.NewWithSize(2)
@@ -3405,7 +3405,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 }
 
 func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
