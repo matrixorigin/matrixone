@@ -122,7 +122,11 @@ func TestAlterCheckOrderedNamesAndLegacyRecovery(t *testing.T) {
 	} {
 		for _, legacy := range []bool{false, true} {
 			t.Run(test.clause+map[bool]string{false: "/structured", true: "/legacy"}[legacy], func(t *testing.T) {
-				mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int, check(v>=0), check(v<100))")
+				// Use the names emitted by the legacy planner explicitly.  The
+				// current CREATE path names an unnamed CHECK as check_t_chk_N;
+				// this test is specifically exercising recovery of the historical
+				// __mo_chk_N identities when the structured CHECK metadata is absent.
+				mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int, constraint __mo_chk_1 check(v>=0), constraint __mo_chk_2 check(v<100))")
 				if legacy {
 					mock.ctxt.tables["check_t"].Checks = nil
 				}
