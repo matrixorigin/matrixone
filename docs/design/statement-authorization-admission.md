@@ -226,7 +226,9 @@ source and functional evidence are recorded in the
 [hot-path validation report](../performance/statement-authorization-hot-path.md).
 That report distinguishes unsuccessful pilots and diagnostic probes from
 acceptance measurements; the historical revision-2 matrix is not a new-head
-performance result.
+performance result. The subsequent [complete 32-cell delivery matrix](../performance/statement-authorization-delivery.md)
+identifies its refreshed inputs and retains all samples and runner limitations;
+completion of that protocol does not close the default performance gate.
 
 ## Alternatives and compatibility
 
