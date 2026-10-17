@@ -1466,6 +1466,14 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return nil, nil
+	case "max_sp_recursion_depth":
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return gSysVarsDefs["max_sp_recursion_depth"].Default, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
