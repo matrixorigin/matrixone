@@ -66,6 +66,11 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	}
 	original := read()
 	require.True(t, original != (PrivilegeCacheVersion{}))
+	accessTime := e.pClient.subscribed.m[catalog.MO_DATABASE_ID].lastTs.Load()
+	require.NotZero(t, accessTime)
+	for _, entry := range e.pClient.subscribed.m {
+		require.Equal(t, accessTime, entry.lastTs.Load(), "one proof shares idle bookkeeping across all eight tables")
+	}
 	require.True(t, original == read())
 	e.pClient.subscribed.setTablePendingUpdate(1, 1, timestamp.Timestamp{PhysicalTime: 15})
 	require.True(t, read() == (PrivilegeCacheVersion{}), "pending catalog application must not authorize reuse")
