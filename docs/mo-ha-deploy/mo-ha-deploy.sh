@@ -425,12 +425,12 @@ WRAP
 chmod 0755 $wpath"
     fi
   else
-    wrn "docker compose 插件不可用，跳过创建 $wpath（请自行准备 docker-compose）"
+    wrn "docker compose 插件不可用，跳过创建 ${wpath}（请自行准备 docker-compose）"
   fi
   run "mkdir -p $DATA_DIR $MO_DIR/conf"
   # 预拉 MO 镜像（避免 docker-compose RA start 超时触发资源迁移）
   if [ "$NO_MO" != 1 ] && [ "$PULL_IMAGE" = 1 ]; then
-    info "预拉取 MO 镜像: $MO_IMAGE（首次较慢，可用 --no-pull-image 跳过）"
+    info "预拉取 MO 镜像: ${MO_IMAGE}（首次较慢，可用 --no-pull-image 跳过）"
     if runq "docker pull $MO_IMAGE"; then
       info "镜像已就绪: $MO_IMAGE"
     else
@@ -482,7 +482,7 @@ stage_moconf(){
   [ -n "$payload" ] || payload="$(cd "$(dirname "$0")" && pwd)/mo-config"
   if [ ! -d "$payload" ]; then
     wrn "未找到配置目录 $payload"
-    info "请手动将 docker-compose.yaml 与 conf/ 放入 $MO_DIR（或用 --mo-config-dir 指定）"
+    info "请手动将 docker-compose.yaml 与 conf/ 放入 ${MO_DIR}（或用 --mo-config-dir 指定）"
     return 0
   fi
   run "mkdir -p $MO_DIR/conf"
@@ -642,7 +642,7 @@ stage_fence(){
     local sbd_conf=/etc/sysconfig/sbd
     [ "$OS_FAMILY" = deb ] && sbd_conf=/etc/default/sbd
     if [ "$DRY_RUN" != 1 ] && [ ! -e "$WATCHDOG" ]; then
-      die "sbd 需要 watchdog 设备 $WATCHDOG（modprobe softdog，或改用硬件 watchdog）"
+      die "sbd 需要 watchdog 设备 ${WATCHDOG}（modprobe softdog，或改用硬件 watchdog）"
     fi
     run "cat > $sbd_conf <<SBD
 SBD_DEVICE=\"${SBD_DEVICE}\"
