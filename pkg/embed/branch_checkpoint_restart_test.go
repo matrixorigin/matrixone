@@ -415,21 +415,36 @@ func assertDiskGCReclaimsProbe(
 // (Force-GCKP-End shows 54-58s stalls bounded by ForceICKP no-progress
 // retries). The heartbeat's steady commit stream keeps fresh WAL
 // boundaries available so each forced checkpoint has new content to
-// advance through when the cadence fires. The returned channel is closed
-// when the goroutine exits and yields the first failure if the heartbeat
-// itself broke, or nil if it was stopped cleanly.
+// advance through when the cadence fires.
+//
+// The heartbeat runs on its own context derived from the caller's: stop
+// closes stopCh and cancels that context, so a statement blocked inside
+// ExecContext is released immediately and the caller's join on done cannot
+// outlive the scenario context. A statement that fails because stop was
+// called — during setup DDL or during inserts — is a clean exit, not a
+// heartbeat failure. The returned channel is closed when the goroutine
+// exits and yields the first genuine failure, or nil if the heartbeat was
+// stopped or the parent context ended it.
 func startCommitHeartbeat(ctx context.Context, db *sql.DB) (stop func(), done <-chan error) {
+	hbCtx, cancel := context.WithCancel(ctx)
 	stopCh := make(chan struct{})
 	doneCh := make(chan error, 1)
 	go func() {
 		defer close(doneCh)
+		defer cancel()
 		for _, statement := range []string{
 			"create database if not exists gc_progress_heartbeat",
 			"create table if not exists gc_progress_heartbeat.tick(id int primary key)",
 		} {
-			if _, err := db.ExecContext(ctx, statement); err != nil {
-				doneCh <- err
-				return
+			if _, err := db.ExecContext(hbCtx, statement); err != nil {
+				select {
+				case <-stopCh:
+					// Stopped while the statement was in flight.
+					return
+				default:
+					doneCh <- err
+					return
+				}
 			}
 		}
 		ticker := time.NewTicker(50 * time.Millisecond)
@@ -440,7 +455,7 @@ func startCommitHeartbeat(ctx context.Context, db *sql.DB) (stop func(), done <-
 				return
 			default:
 			}
-			if _, err := db.ExecContext(ctx,
+			if _, err := db.ExecContext(hbCtx,
 				fmt.Sprintf("insert into gc_progress_heartbeat.tick values (%d)", n)); err != nil {
 				select {
 				case <-stopCh:
@@ -454,13 +469,16 @@ func startCommitHeartbeat(ctx context.Context, db *sql.DB) (stop func(), done <-
 			select {
 			case <-stopCh:
 				return
-			case <-ctx.Done():
+			case <-hbCtx.Done():
 				return
 			case <-ticker.C:
 			}
 		}
 	}()
-	return func() { close(stopCh) }, doneCh
+	return func() {
+		close(stopCh)
+		cancel()
+	}, doneCh
 }
 
 // assertBranchScenario checks the full post-lifecycle contract of one
