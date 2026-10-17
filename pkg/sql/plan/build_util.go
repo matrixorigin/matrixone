@@ -1115,6 +1115,10 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	if genAttr == nil {
 		return nil, nil
 	}
+	if containsUserVarAssignment(genAttr.Expr) {
+		return nil, moerr.NewNotSupported(bindCtx,
+			"user-variable assignment is not supported in generated column expressions")
+	}
 
 	colNameOrigin := col.Name.ColNameOrigin()
 

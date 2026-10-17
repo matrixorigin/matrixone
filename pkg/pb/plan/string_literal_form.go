@@ -1580,6 +1580,11 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 			}
 		}
 	}
+	if assignment := expr.GetUserVarAssignment(); assignment != nil {
+		if err := VisitExprTree(assignment.Value, visitor); err != nil {
+			return err
+		}
+	}
 	if sub := expr.GetSub(); sub != nil {
 		if err := VisitExprTree(sub.Child, visitor); err != nil {
 			return err

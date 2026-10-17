@@ -1923,7 +1923,19 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 
 // Accept implements NodeChecker Accept interface.
 func (node *VarExpr) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement VarExpr Accept")
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*VarExpr)
+	if node.Expr != nil {
+		child, ok := node.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Expr = child
+	}
+	return v.Exit(node)
 }
 
 func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
@@ -1933,6 +1945,43 @@ func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
 		Global: g,
 		Expr:   e,
 	}
+}
+
+// UserVarAssignmentExpr assigns the value of Expr to a MySQL user variable
+// while producing that value as the result of the expression. It is separate
+// from VarAssignmentExpr, which models SET and has different statement-level
+// semantics.
+type UserVarAssignmentExpr struct {
+	exprImpl
+	Name  string
+	Value Expr
+}
+
+func (node *UserVarAssignmentExpr) Format(ctx *FmtCtx) {
+	ctx.WriteByte('@')
+	ctx.WriteIdentifier(Identifier(node.Name))
+	ctx.WriteString(" := ")
+	ctx.PrintExpr(node, node.Value, false)
+}
+
+func (node *UserVarAssignmentExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*UserVarAssignmentExpr)
+	if node.Value != nil {
+		child, ok := node.Value.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Value = child
+	}
+	return v.Exit(node)
+}
+
+func NewUserVarAssignmentExpr(name string, value Expr) *UserVarAssignmentExpr {
+	return &UserVarAssignmentExpr{Name: name, Value: value}
 }
 
 // select a from t1 where a > ?

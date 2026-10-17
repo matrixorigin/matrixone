@@ -1273,6 +1273,14 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			},
 		}
 
+	case *plan.Expr_UserVarAssignment:
+		newExpr.Expr = &plan.Expr_UserVarAssignment{
+			UserVarAssignment: &plan.UserVarAssignment{
+				Name:  item.UserVarAssignment.GetName(),
+				Value: DeepCopyExpr(item.UserVarAssignment.GetValue()),
+			},
+		}
+
 	case *plan.Expr_Col:
 		newExpr.Expr = &plan.Expr_Col{
 			Col: &plan.ColRef{

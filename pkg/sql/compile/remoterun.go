@@ -94,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateNoRemoteUserVariableAssignment(p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
@@ -122,6 +125,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateNoRemoteUserVariableAssignment(p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
@@ -2261,6 +2267,9 @@ func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	if err := validateNoRemoteUserVariableAssignment(p); err != nil {
+		return err
+	}
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}

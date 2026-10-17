@@ -83,6 +83,7 @@ const (
 	tagFn
 	tagList
 	tagVec
+	tagUserVarAssignment
 	tagOther
 )
 
@@ -162,6 +163,12 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 			}
 			writeUint64(h, uint64(len(v.Vec.Data)))
 			_, _ = h.Write(v.Vec.Data)
+		}
+	case *plan.Expr_UserVarAssignment:
+		writeByte(h, tagUserVarAssignment)
+		if v.UserVarAssignment != nil {
+			writeString(h, v.UserVarAssignment.Name)
+			hashExprInto(h, v.UserVarAssignment.Value)
 		}
 	default:
 		// Uncommon variants (Sub, Vec, Max, ...) — fall back to the proto
@@ -389,6 +396,16 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 			av.Vec.StringSource == bv.Vec.StringSource &&
 			av.Vec.DecimalLiteralRequiresV82 == bv.Vec.DecimalLiteralRequiresV82 &&
 			bytes.Equal(av.Vec.Data, bv.Vec.Data)
+	case *plan.Expr_UserVarAssignment:
+		bv, ok := b.Expr.(*plan.Expr_UserVarAssignment)
+		if !ok {
+			return false
+		}
+		if av.UserVarAssignment == nil || bv.UserVarAssignment == nil {
+			return av.UserVarAssignment == bv.UserVarAssignment
+		}
+		return av.UserVarAssignment.Name == bv.UserVarAssignment.Name &&
+			exprStructuralEqual(av.UserVarAssignment.Value, bv.UserVarAssignment.Value)
 	default:
 		return exprWireEqual(a, b)
 	}

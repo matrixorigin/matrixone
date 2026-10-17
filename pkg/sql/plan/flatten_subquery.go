@@ -82,6 +82,16 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment != nil && exprImpl.UserVarAssignment.Value != nil {
+			leftID, rightID, exprImpl.UserVarAssignment.Value, err =
+				builder.flattenOuterJoinConditionSubqueries(
+					leftID, rightID, exprImpl.UserVarAssignment.Value, leftCtx, rightCtx,
+					leftTags, rightTags, defaultSide, nullResultRejected, guarded)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+		}
 	case *plan.Expr_F:
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
 		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
@@ -337,6 +347,19 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	preparedNumeric := copyPreparedNumericMetadata(expr.GetPreparedNumeric())
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment == nil || exprImpl.UserVarAssignment.Value == nil {
+			break
+		}
+		var childAffected bool
+		nodeID, exprImpl.UserVarAssignment.Value, childAffected, err =
+			builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, exprImpl.UserVarAssignment.Value, ctx, nullResultRejected,
+				consumer, guarded)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		affected = childAffected
 	case *plan.Expr_F:
 		// Function overloads are bound before subqueries are decorrelated.  A
 		// scalar aggregate that becomes the nullable side of a LEFT JOIN keeps
@@ -4776,6 +4799,8 @@ func exprHasColRef(expr *plan.Expr) bool {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return true
+	case *plan.Expr_UserVarAssignment:
+		return exprHasColRef(item.UserVarAssignment.Value)
 	case *plan.Expr_F:
 		for _, arg := range item.F.Args {
 			if exprHasColRef(arg) {
