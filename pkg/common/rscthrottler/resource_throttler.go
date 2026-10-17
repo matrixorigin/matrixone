@@ -26,6 +26,7 @@ import (
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -241,14 +242,17 @@ func (m *memThrottler) refresh(force bool) {
 		)
 		m.rssReservedBase.Store(base)
 		m.rssMpoolLiveBase.Store(liveBase)
-		m.tryScavengeRSS(now, rss)
+		if m.options.enableRSSScavenging {
+			headroom, measured := system.MemoryAvailableIncludingCache()
+			m.tryScavengeRSS(now, rss, headroom, measured)
+		}
 	}
 
 	m.cgroup.Store(cgroup)
 	m.total.Store(total)
 }
 
-func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
+func (m *memThrottler) tryScavengeRSS(now int64, rss int64, headroom uint64, measured bool) {
 	if !m.options.enableRSSScavenging {
 		return
 	}
@@ -261,6 +265,13 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		visible = 0
 	}
 	rssRate := float64(rss) / float64(actualMaxMemory)
+	// Keep process RSS intact for S3 accounting and scavenging eligibility.
+	// Physical headroom already credits clean reclaimable file cache and checks
+	// governing cgroup ancestors. A failed measurement must not mean zero free.
+	pressureRate := rssRate
+	if measured && headroom < uint64(actualMaxMemory) {
+		pressureRate = max(pressureRate, 1-float64(headroom)/float64(actualMaxMemory))
+	}
 
 	var (
 		prevState              rssPressureState
@@ -276,7 +287,13 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 
 	m.rssScavengeMu.Lock()
 	prevState = rssPressureState(m.rssPressureState.Load())
-	nextState = nextRSSPressureState(prevState, rssRate)
+	nextState = nextRSSPressureState(prevState, pressureRate)
+	// An unavailable headroom sample cannot prove that earlier pressure ended.
+	// Keep the existing target until a measured recovery, but still let RSS
+	// escalate it. This adds no separate pressure owner or persistent state.
+	if !measured && nextState < prevState {
+		nextState = prevState
+	}
 	cacheTargetPercent = rssPressureCacheTarget(nextState)
 
 	if nextState != prevState {
@@ -341,6 +358,9 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("rss", common.HumanReadableBytes(int(rss))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
+		zap.Uint64("physical-headroom", headroom),
+		zap.Bool("physical-headroom-measured", measured),
+		zap.Float64("pressure-rate", pressureRate),
 		zap.Bool("free-os-memory", shouldFreeOSMemory),
 		zap.Bool("evict-cache", shouldEvictCache),
 		zap.Bool("clear-cache-target", shouldClearCacheTarget),
