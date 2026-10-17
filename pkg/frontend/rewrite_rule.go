@@ -228,6 +228,24 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 	versionOf func(context.Context, *Session) (any, error),
 ) (*rewritePolicySnapshot, error) {
+	return refreshRewritePolicy(ctx, ses, versionOf, true)
+}
+
+// Prepared execution needs the current proof and generation, not another copy
+// of maps already materialized when its plan was captured. Keep freshness and
+// invalidation in the same owner as ordinary policy capture.
+func refreshPreparedRewritePolicy(ctx context.Context, ses *Session) error {
+	versionOf := ses.ruleCacheVersionProvider
+	if versionOf == nil {
+		versionOf = roleRuleCacheVersion
+	}
+	_, err := refreshRewritePolicy(ctx, ses, versionOf, false)
+	return err
+}
+
+func refreshRewritePolicy(ctx context.Context, ses *Session,
+	versionOf func(context.Context, *Session) (any, error), materialize bool,
+) (*rewritePolicySnapshot, error) {
 	request := rewritePolicyRequestFor(ctx, ses)
 	if request != nil {
 		request.mu.Lock()
@@ -238,10 +256,13 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 
 	sessionEnabled := ses.rewriteEnabled.Load()
 	policy := &rewritePolicySnapshot{
-		sessionEnabled:      sessionEnabled,
-		captured:            true,
-		lowerCaseTableNames: parserLowerCaseTableNames(ses),
+		sessionEnabled: sessionEnabled,
+		captured:       materialize,
 	}
+	if materialize {
+		policy.lowerCaseTableNames = parserLowerCaseTableNames(ses)
+	}
+	var roleRulesActive bool
 
 	// Role rules are mandatory access control: load them even when the
 	// optional enable_remap_hint switch is off, so a session SET cannot
@@ -267,7 +288,6 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 		ses.ruleCacheMu.RLock()
 		generation := ses.rewritePolicyGeneration
 		loaded := ses.ruleCache != nil
-		cachedRules := cloneRewriteMap(ses.ruleCache)
 		cachedVersion := ses.ruleCacheVersion
 		revision := ses.ruleCacheRevision
 		cachedIdentity := ses.ruleCacheIdentity
@@ -295,12 +315,16 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 			unchanged := generation == ses.rewritePolicyGeneration && ses.ruleCache != nil && ses.ruleCacheRevision == revision
 			if unchanged {
 				stamp = rewritePolicyRefreshStamp{identity, generation, revision}
+				roleRulesActive = len(ses.ruleCache) > 0
+				if materialize {
+					policy.roleRules = cloneRewriteMap(ses.ruleCache)
+				}
 			}
 			ses.ruleCacheMu.RUnlock()
 			if !unchanged {
 				continue
 			}
-			policy.generation, policy.roleRules = generation, cachedRules
+			policy.generation = generation
 			break
 		}
 
@@ -320,7 +344,7 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 			ses.mu.Unlock()
 			continue
 		}
-		if loaded && !maps.Equal(cachedRules, rules) {
+		if loaded && !maps.Equal(ses.ruleCache, rules) {
 			ses.rewritePolicyGeneration++
 			ses.invalidateAllPreparedRewriteStatementsLocked()
 		}
@@ -328,7 +352,10 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 		ses.ruleCacheIdentity = identity
 		ses.ruleCacheRevision++
 		policy.generation = ses.rewritePolicyGeneration
-		policy.roleRules = cloneRewriteMap(rules)
+		roleRulesActive = len(rules) > 0
+		if materialize {
+			policy.roleRules = cloneRewriteMap(rules)
+		}
 		stamp = rewritePolicyRefreshStamp{identity, ses.rewritePolicyGeneration, ses.ruleCacheRevision}
 		ses.ruleCacheMu.Unlock()
 		ses.mu.Unlock()
@@ -337,13 +364,13 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 	}
 
 	// Optional session layers are still gated by enable_remap_hint.
-	if sessionEnabled {
+	if materialize && sessionEnabled {
 		policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
 		policy.sessionRules = cloneRewriteMap(policy.sessionRules)
 		policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
 	}
 
-	policy.enabled = sessionEnabled || len(policy.roleRules) > 0
+	policy.enabled = sessionEnabled || roleRulesActive
 	if cacheReloaded {
 		// Every cache reload, including one after a failed SET ROLE, closes the
 		// generation boundary for handles published under the previous policy.

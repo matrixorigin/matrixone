@@ -655,23 +655,6 @@ func (client *txnClient) doCreateTxn(
 			op.closeUnadmitted(err)
 			return nil, err
 		}
-		var finishCreation func()
-		ctx, finishCreation = capability.creationContext(ctx)
-		defer finishCreation()
-	}
-
-	// Admission throttling obeys both the caller's cancellation and client
-	// shutdown. No client ownership exists yet, so failure closes only this
-	// unadmitted operator generation.
-	if admission == nil {
-		err = client.limiter.Wait(ctx, client.closeCtx)
-	}
-	if err != nil {
-		if client.isClosed() {
-			err = moerr.NewClientClosedNoCtx()
-		}
-		op.closeUnadmitted(err)
-		return nil, err
 	}
 
 	op.timestampWaiter = client.timestampWaiter
@@ -683,9 +666,36 @@ func (client *txnClient) doCreateTxn(
 	}
 	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
-	if err = client.openTxn(ctx, op); err != nil {
-		op.closeUnadmitted(err)
-		return nil, err
+	// A direct data admission with an already applied native frontier has no
+	// cancellation-dependent wait. Transfer ownership under the readiness lock;
+	// final capability validation below still rejects End racing publication.
+	// Every potentially waiting path retains the combined creation context.
+	opened := admission != nil && client.tryOpenAdmittedTxn(ctx, op, admittedSnapshot)
+	if !opened {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		if capability != nil {
+			var finishCreation func()
+			ctx, finishCreation = capability.creationContext(ctx)
+			defer finishCreation()
+		}
+		// Authorization readers still pay ordinary admission. No ownership has
+		// transferred on this path until openTxn succeeds.
+		if admission == nil {
+			err = client.limiter.Wait(ctx, client.closeCtx)
+		}
+		if err == nil {
+			err = client.openTxn(ctx, op)
+		}
+		if err != nil {
+			if client.isClosed() {
+				err = moerr.NewClientClosedNoCtx()
+			}
+			op.closeUnadmitted(err)
+			return nil, err
+		}
 	}
 	// Direct admission is already published. Queued admission may still be
 	// unpublished, but recording an older abort observation is safe and preserves
@@ -1158,6 +1168,39 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		client.mu.Unlock()
 		return err
 	}
+	client.openReadyTxnLocked(op)
+	return nil
+}
+
+// tryOpenAdmittedTxn only succeeds when no creation wait can follow. The native
+// frontier is monotonic; A.Prev() therefore remains applied after this check.
+// Readiness/capacity and the actual admission transition share one lock, so a
+// pause, abort barrier or queue cannot appear between the proof and opening.
+func (client *txnClient) tryOpenAdmittedTxn(ctx context.Context, op *txnOperator, snapshot timestamp.Timestamp) bool {
+	if op.timestampWaiter != nil {
+		waiter, native := op.timestampWaiter.(*timestampWaiter)
+		if !native {
+			return false
+		}
+		latest := waiter.latestTS.Load()
+		if latest == nil || latest.Less(snapshot.Prev()) {
+			return false
+		}
+	}
+	client.mu.Lock()
+	if client.isClosed() || ctx.Err() != nil || client.mu.state == paused ||
+		client.mu.waitMarkAllActiveAbortedC != nil || op.reset.waiter != nil ||
+		(op.opts.options.UserTxn() && client.mu.users >= client.maxActiveTxn) {
+		client.mu.Unlock()
+		return false
+	}
+	client.openReadyTxnLocked(op)
+	return true
+}
+
+// openReadyTxnLocked consumes client.mu and performs the sole admission
+// transition, shared by ordinary creation and the proven non-waiting path.
+func (client *txnClient) openReadyTxnLocked(op *txnOperator) {
 
 	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
@@ -1171,7 +1214,7 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		// Update metrics after actual operation
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-		return nil
+		return
 	}
 
 	op.reset.waiter = newActiveTxnWaiter()
@@ -1181,7 +1224,6 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 	client.mu.Unlock()
 	v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-	return nil
 }
 
 func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {

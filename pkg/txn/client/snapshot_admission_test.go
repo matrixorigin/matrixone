@@ -233,6 +233,148 @@ type admissionNotifyingWaiter struct {
 	entered chan struct{}
 }
 
+// Hiding the parent's private cancel key makes context.AfterFunc use this
+// observer. It detects adapter registration without inspecting Go internals.
+type admissionAdapterObserver struct {
+	context.Context
+	registrations atomic.Uint64
+}
+
+func (*admissionAdapterObserver) Value(any) any { return nil }
+func (c *admissionAdapterObserver) AfterFunc(f func()) func() bool {
+	c.registrations.Add(1)
+	return context.AfterFunc(c.Context, f)
+}
+
+func TestSnapshotAdmissionDirectCreationContext(t *testing.T) {
+	for _, kind := range []string{"native", "nil", "custom", "authorization"} {
+		t.Run(kind, func(t *testing.T) {
+			c, limiter := admissionTestClient(t)
+			ctx := t.Context()
+			a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
+			require.NoError(t, err)
+			t.Cleanup(a.End)
+			observer := &admissionAdapterObserver{Context: a.ctx}
+			a.ctx = observer
+			option := WithSnapshotAdmission(a)
+			switch kind {
+			case "native", "authorization":
+				waiter := NewTimestampWaiter(c.logger).(*timestampWaiter)
+				t.Cleanup(waiter.Close)
+				later := a.snapshot.Next()
+				waiter.latestTS.Store(&later)
+				c.timestampWaiter = waiter
+				if kind == "authorization" {
+					option = WithAuthorizationSnapshot(a)
+				}
+			case "nil":
+				c.timestampWaiter = nil
+			}
+			op, err := c.New(ctx, timestamp.Timestamp{}, WithUserTxn(), option)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, op.Rollback(ctx)) })
+			require.Equal(t, a.snapshot, op.SnapshotTS(), "a later native frontier must not replace A")
+			wantAdapters, wantAdmissions := uint64(0), uint64(1)
+			if kind == "custom" || kind == "authorization" {
+				wantAdapters = 1
+			}
+			if kind == "authorization" {
+				wantAdmissions++
+			}
+			require.Equal(t, wantAdapters, observer.registrations.Load())
+			require.Equal(t, wantAdmissions, limiter.calls.Load())
+			a.End()
+			require.Equal(t, a.snapshot, op.SnapshotTS(), "End does not own the created transaction")
+		})
+	}
+}
+
+func TestSnapshotAdmissionDirectOpenPredicates(t *testing.T) {
+	for _, kind := range []string{"native", "nil", "custom", "unapplied", "paused", "abort barrier", "capacity", "canceled", "closed"} {
+		t.Run(kind, func(t *testing.T) {
+			c, _ := admissionTestClient(t, WithMaxActiveTxn(1))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			op := newTxnOperator(c.sid, c.logger, c.clock, c.sender, c.newTxnMeta(), c.getTxnOptions([]TxnOption{WithUserTxn()})...)
+			op.setDefaultEventCallbacks(&c.sharedEventCallbacks)
+			frontier := newTestTimestamp(10)
+			waiter := NewTimestampWaiter(c.logger).(*timestampWaiter)
+			t.Cleanup(waiter.Close)
+			waiter.latestTS.Store(&frontier)
+			op.timestampWaiter = waiter
+			switch kind {
+			case "nil":
+				op.timestampWaiter = nil
+			case "custom":
+				op.timestampWaiter = immediateTimestampWaiter{}
+			case "unapplied":
+				older := frontier.Prev()
+				waiter.latestTS.Store(&older)
+			case "paused":
+				c.Pause()
+			case "abort barrier":
+				c.mu.Lock()
+				c.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+				c.mu.Unlock()
+			case "capacity":
+				first, err := c.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, first.Rollback(ctx)) })
+			case "canceled":
+				cancel()
+			case "closed":
+				require.NoError(t, c.Close())
+			}
+			users, active, queued := txnAdmissionCounts(c)
+			opened := c.tryOpenAdmittedTxn(ctx, op, frontier.Next())
+			require.Equal(t, kind == "native" || kind == "nil", opened)
+			if opened {
+				require.NoError(t, op.Rollback(t.Context()))
+			} else {
+				u, a, q := txnAdmissionCounts(c)
+				require.Equal(t, users, u)
+				require.Equal(t, active, a)
+				require.Equal(t, queued, q, "failed eligibility transfers no ownership")
+				op.closeUnadmitted(context.Canceled)
+			}
+		})
+	}
+}
+
+type admissionEndAtOpenContext struct {
+	context.Context
+	checks int
+	end    func()
+}
+
+func (c *admissionEndAtOpenContext) Err() error {
+	c.checks++
+	if c.checks == 2 { // claim has finished; locked direct-open check precedes publication
+		c.end()
+	}
+	return c.Context.Err()
+}
+
+func TestSnapshotAdmissionEndDuringDirectOpen(t *testing.T) {
+	c, limiter := admissionTestClient(t)
+	a, _, err := AcquireSnapshotAdmission(t.Context(), c, timestamp.Timestamp{})
+	require.NoError(t, err)
+	t.Cleanup(a.End)
+	observer := &admissionAdapterObserver{Context: a.ctx}
+	a.ctx = observer
+	c.timestampWaiter = nil
+	ctx := &admissionEndAtOpenContext{Context: t.Context(), end: a.End}
+	op, err := c.New(ctx, timestamp.Timestamp{}, WithUserTxn(), WithSnapshotAdmission(a))
+	require.Error(t, err)
+	require.Nil(t, op)
+	require.Zero(t, observer.registrations.Load(), "exercise actual non-waiting creation")
+	users, active, queued := txnAdmissionCounts(c)
+	require.Zero(t, users)
+	require.Zero(t, active)
+	require.Zero(t, queued)
+	require.EqualValues(t, 1, limiter.calls.Load(), "failure cannot mint a second admission")
+}
+
 func (w *admissionNotifyingWaiter) GetTimestampWithClose(ctx context.Context, ts timestamp.Timestamp, closed <-chan struct{}) (timestamp.Timestamp, error) {
 	w.entered <- struct{}{}
 	return ts.Next(), nil

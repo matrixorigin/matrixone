@@ -220,112 +220,150 @@ func seedRewriteRuleCacheProofForTest(ses *Session) {
 	ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { return 1, nil }
 }
 
+func TestPreparedRefreshDoesNotMaterializeOrAliasPolicy(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	ctx := t.Context()
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	ses.ruleCache = map[string]string{"db.t": "select * from db.t where role_keep = 1"}
+	seedRewriteRuleCacheProofForTest(ses)
+	ses.rewriteEnabled.Store(true)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"rewrites":{"db.t":"select * from db.t where session_keep = 1"}}`))
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	metadata, err := refreshRewritePolicy(ctx, ses, ses.ruleCacheVersionProvider, false)
+	require.NoError(t, err)
+	require.True(t, metadata.enabled)
+	require.False(t, metadata.captured, "refresh metadata cannot masquerade as a captured plan policy")
+	require.Nil(t, metadata.roleRules)
+	require.Nil(t, metadata.sessionRules)
+	require.Nil(t, metadata.sessionRemapDb)
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache["db.t"] = "select * from db.t where role_keep = 2"
+	ses.ruleCacheRevision++
+	ses.ruleCacheMu.Unlock()
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"rewrites":{"db.t":"select * from db.t where session_keep = 2"}}`))
+	require.Equal(t, "select * from db.t where role_keep = 1", policy.roleRules["db.t"])
+	require.Equal(t, "select * from db.t where session_keep = 1", policy.sessionRules["db.t"])
+	ses.rewriteEnabled.Store(false)
+	require.NoError(t, refreshPreparedRewritePolicy(ctx, ses), "disabling optional rewrites still refreshes mandatory rules")
+}
+
 func TestRewriteRuleCacheFreshness(t *testing.T) {
-	for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
-		t.Run(scenario, func(t *testing.T) {
-			ctx := context.Background()
-			ses := newSes(&privilege{}, gomock.NewController(t))
-			ses.SetTenantInfo(&TenantInfo{TenantID: 7, UserID: 42, DefaultRoleID: 10})
-			bh := &backgroundExecTest{}
-			bh.init()
-			bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
-			query := getSqlForRoleRulesOfRoleIDs([]int64{10})
-			bh.sql2result[query] = newMrsForRewriteRules(nil)
-			stub := gostub.StubFunc(&NewBackgroundExec, bh)
-			defer stub.Reset()
-			var proof any = 1
-			var proofErr error
-			var expectedErr error
-			versionOf := func(context.Context, *Session) (any, error) { return proof, proofErr }
-			capture := func() *rewritePolicySnapshot {
-				policy, err := captureRewritePolicyWithVersion(ctx, ses, versionOf)
-				require.NoError(t, err)
-				return policy
-			}
-			initial := capture()
-			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyGeneration: initial.generation}
-			ses.prepareStmts["old"] = old
-			switch scenario {
-			case "account change":
-				ses.GetTenantInfo().TenantID = 8
-			case "role change":
-				ses.GetTenantInfo().DefaultRoleID = 11
-				bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId(nil)
-				bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{11})] = newMrsForRewriteRules(nil)
-			case "secondary roles":
-				ses.GetTenantInfo().SetUseSecondaryRole(true)
-				bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId(nil)
-			case "unrelated catalog change":
-				proof = 2
-			case "changed rules":
-				proof = 2
-				bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
-			case "unknown proof":
-				proof = nil
-				bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
-			case "proof error":
-				proofErr = errors.New("proof unavailable")
-				bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
-			case "proof and read error":
-				proofErr = errors.New("proof unavailable")
-				expectedErr = errors.New("rule read unavailable")
-				bh.sql2err[query] = expectedErr
-			case "proof canceled":
-				proofErr, expectedErr = context.Canceled, context.Canceled
-			case "proof deadline":
-				proofErr, expectedErr = context.DeadlineExceeded, context.DeadlineExceeded
-			case "pre-read stamp":
-				proof = 2
-				bh.beforeExec = func(sql string) {
-					if sql == query {
-						proof = 3
+	for _, materialize := range []bool{true, false} {
+		t.Run(fmt.Sprintf("materialize_%v", materialize), func(t *testing.T) {
+			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
+				t.Run(scenario, func(t *testing.T) {
+					ctx := context.Background()
+					ses := newSes(&privilege{}, gomock.NewController(t))
+					ses.SetTenantInfo(&TenantInfo{TenantID: 7, UserID: 42, DefaultRoleID: 10})
+					bh := &backgroundExecTest{}
+					bh.init()
+					bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
+					query := getSqlForRoleRulesOfRoleIDs([]int64{10})
+					bh.sql2result[query] = newMrsForRewriteRules(nil)
+					stub := gostub.StubFunc(&NewBackgroundExec, bh)
+					defer stub.Reset()
+					var proof any = 1
+					var proofErr error
+					var expectedErr error
+					versionOf := func(context.Context, *Session) (any, error) { return proof, proofErr }
+					capture := func() *rewritePolicySnapshot {
+						policy, err := refreshRewritePolicy(ctx, ses, versionOf, materialize)
+						require.NoError(t, err)
+						return policy
 					}
-				}
+					initial := capture()
+					old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyGeneration: initial.generation}
+					ses.prepareStmts["old"] = old
+					switch scenario {
+					case "account change":
+						ses.GetTenantInfo().TenantID = 8
+					case "role change":
+						ses.GetTenantInfo().DefaultRoleID = 11
+						bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId(nil)
+						bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{11})] = newMrsForRewriteRules(nil)
+					case "secondary roles":
+						ses.GetTenantInfo().SetUseSecondaryRole(true)
+						bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId(nil)
+					case "unrelated catalog change":
+						proof = 2
+					case "changed rules":
+						proof = 2
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
+					case "unknown proof":
+						proof = nil
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
+					case "proof error":
+						proofErr = errors.New("proof unavailable")
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
+					case "proof and read error":
+						proofErr = errors.New("proof unavailable")
+						expectedErr = errors.New("rule read unavailable")
+						bh.sql2err[query] = expectedErr
+					case "proof canceled":
+						proofErr, expectedErr = context.Canceled, context.Canceled
+					case "proof deadline":
+						proofErr, expectedErr = context.DeadlineExceeded, context.DeadlineExceeded
+					case "pre-read stamp":
+						proof = 2
+						bh.beforeExec = func(sql string) {
+							if sql == query {
+								proof = 3
+							}
+						}
+					}
+					if expectedErr != nil {
+						ses.ruleCacheVersionProvider = versionOf
+						before := len(bh.executedSQLs)
+						_, err := ses.GetPrepareStmt(ctx, "old")
+						require.ErrorIs(t, err, expectedErr)
+						require.True(t, old.rewritePolicyInvalidated.Load())
+						if expectedErr == proofErr {
+							require.Len(t, bh.executedSQLs, before, "cancellation must not start a fallback read")
+						}
+						// A failed refresh must leave session locks usable, including cleanup.
+						_, err = ses.getPrepareStmtAllowInvalidated(ctx, "old")
+						require.NoError(t, err)
+						return
+					}
+					refreshed := capture()
+					changed := scenario == "changed rules" || scenario == "unknown proof" || scenario == "proof error"
+					require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
+					if changed {
+						require.NotEmpty(t, ses.ruleCache)
+						if materialize {
+							require.NotEmpty(t, refreshed.roleRules)
+						} else {
+							require.Nil(t, refreshed.roleRules)
+							require.False(t, refreshed.captured)
+						}
+						require.Greater(t, refreshed.generation, initial.generation)
+					} else {
+						require.Equal(t, initial.generation, refreshed.generation)
+					}
+					if scenario == "pre-read stamp" {
+						require.Equal(t, 2, ses.ruleCacheVersion)
+					}
+					if scenario == "proof error" {
+						require.Nil(t, ses.ruleCacheVersion, "a failed proof must not stamp the new rules")
+					}
+					capture()
+					loads := 0
+					for _, sql := range bh.executedSQLs {
+						if strings.Contains(sql, "select role_id, rule_name") {
+							loads++
+						}
+					}
+					expected := 2
+					if scenario == "stable" {
+						expected = 1
+					}
+					if scenario == "unknown proof" || scenario == "pre-read stamp" || scenario == "proof error" {
+						expected = 3
+					}
+					require.Equal(t, expected, loads)
+				})
 			}
-			if expectedErr != nil {
-				ses.ruleCacheVersionProvider = versionOf
-				before := len(bh.executedSQLs)
-				_, err := ses.GetPrepareStmt(ctx, "old")
-				require.ErrorIs(t, err, expectedErr)
-				require.True(t, old.rewritePolicyInvalidated.Load())
-				if expectedErr == proofErr {
-					require.Len(t, bh.executedSQLs, before, "cancellation must not start a fallback read")
-				}
-				// A failed refresh must leave session locks usable, including cleanup.
-				_, err = ses.getPrepareStmtAllowInvalidated(ctx, "old")
-				require.NoError(t, err)
-				return
-			}
-			refreshed := capture()
-			changed := scenario == "changed rules" || scenario == "unknown proof" || scenario == "proof error"
-			require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
-			if changed {
-				require.NotEmpty(t, refreshed.roleRules)
-				require.Greater(t, refreshed.generation, initial.generation)
-			} else {
-				require.Equal(t, initial.generation, refreshed.generation)
-			}
-			if scenario == "pre-read stamp" {
-				require.Equal(t, 2, ses.ruleCacheVersion)
-			}
-			if scenario == "proof error" {
-				require.Nil(t, ses.ruleCacheVersion, "a failed proof must not stamp the new rules")
-			}
-			capture()
-			loads := 0
-			for _, sql := range bh.executedSQLs {
-				if strings.Contains(sql, "select role_id, rule_name") {
-					loads++
-				}
-			}
-			expected := 2
-			if scenario == "stable" {
-				expected = 1
-			}
-			if scenario == "unknown proof" || scenario == "pre-read stamp" || scenario == "proof error" {
-				expected = 3
-			}
-			require.Equal(t, expected, loads)
 		})
 	}
 }

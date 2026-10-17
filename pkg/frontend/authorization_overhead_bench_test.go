@@ -55,3 +55,27 @@ func BenchmarkAuthorizationEpochScope(b *testing.B) {
 		epoch.end()
 	}
 }
+
+func BenchmarkPreparedRewritePolicyRefresh(b *testing.B) {
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(b.Context(), "", &testMysqlWriter{}, nil)
+	b.Cleanup(ses.Close)
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	ses.ruleCache = map[string]string{"db.t": "select * from db.t where id = 1"}
+	seedRewriteRuleCacheProofForTest(ses)
+	for _, materialize := range []bool{true, false} {
+		name := "refresh"
+		if materialize {
+			name = "capture"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, err := refreshRewritePolicy(b.Context(), ses, ses.ruleCacheVersionProvider, materialize)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
