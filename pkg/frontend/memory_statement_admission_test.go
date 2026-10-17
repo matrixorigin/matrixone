@@ -25,7 +25,8 @@ import (
 )
 
 func TestStatementMemoryAdmissionClassificationAndContextLifetime(t *testing.T) {
-	for _, stmt := range []tree.Statement{&tree.CommitTransaction{}, &tree.RollbackTransaction{}, &tree.Select{}} {
+	for _, stmt := range []tree.Statement{&tree.CommitTransaction{}, &tree.RollbackTransaction{}, &tree.Kill{},
+		&tree.Kill{Option: tree.KillOption{Exist: true, Typ: tree.KillTypeQuery}}, &tree.Select{}} {
 		proc := testutil.NewProcess(t)
 		beforeProc := proc.Ctx
 		beforeTop := proc.GetTopContext()
@@ -34,8 +35,9 @@ func TestStatementMemoryAdmissionClassificationAndContextLifetime(t *testing.T) 
 		require.NoError(t, e.admitStatementMemory())
 		_, commit := stmt.(*tree.CommitTransaction)
 		_, rollback := stmt.(*tree.RollbackTransaction)
-		require.Equal(t, commit || rollback, process.HasControlMemoryAdmission(e.reqCtx))
-		require.Equal(t, commit || rollback, process.HasControlMemoryAdmission(proc.GetTopContext()))
+		_, kill := stmt.(*tree.Kill)
+		require.Equal(t, commit || rollback || kill, process.HasControlMemoryAdmission(e.reqCtx))
+		require.Equal(t, commit || rollback || kill, process.HasControlMemoryAdmission(proc.GetTopContext()))
 		require.NoError(t, e.admitStatementMemory(), "the common execution path must not acquire twice")
 		e.releaseStatementMemoryAdmission()
 		e.releaseStatementMemoryAdmission()

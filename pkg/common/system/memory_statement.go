@@ -17,14 +17,15 @@ package system
 import (
 	"container/list"
 	"context"
-	"errors"
 	"os"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrMemoryStatementQueueFull = errors.New("memory statement admission queue full")
-	ErrMemoryStatementTimeout   = errors.New("memory statement admission wait timed out")
+	ErrMemoryStatementQueueFull = moerr.NewInternalErrorNoCtx("memory statement admission queue full")
+	ErrMemoryStatementTimeout   = moerr.NewInternalErrorNoCtx("memory statement admission wait timed out")
 )
 
 // MemoryStatementAdmissionPolicy bounds waiting, not the bytes a statement may

@@ -18,6 +18,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +125,115 @@ func TestMemoryAdmissionBudgetAllowsZeroByteRequestWithoutMeasurement(t *testing
 	budget := NewMemoryAdmissionBudget(MemoryDomainReservePolicy{})
 	_, ok := budget.TryReserve(0)
 	require.True(t, ok)
+}
+
+func TestMemoryAdmissionBudgetRecoversAfterNonGoPeak(t *testing.T) {
+	for _, source := range []MemoryDomainSource{MemoryDomainSourceHost, MemoryDomainSourceCgroupV1, MemoryDomainSourceCgroupV2} {
+		t.Run(string(source), func(t *testing.T) {
+			const gib = uint64(1 << 30)
+			policy := DefaultMemoryDomainReservePolicy()
+			sample := MemoryDomainSnapshot{Source: source, Used: gib, Limit: 16 * gib, NonGo: 64 << 20, Measured: true}
+			b := NewMemoryAdmissionBudgetWithProvider(policy, func() (MemoryDomainSnapshot, error) { return sample, nil })
+			_, ok := b.TryReserve(gib)
+			require.True(t, ok)
+			sample.Used, sample.NonGo = 12*gib, 8*gib
+			peak := b.Snapshot()
+			require.Zero(t, peak.Available)
+			require.Greater(t, peak.Reserve, sample.Limit)
+
+			sample.Used, sample.NonGo = gib, 64<<20
+			for range 10 {
+				recovered := b.Snapshot()
+				require.Equal(t, policy.Reserve(sample), recovered.Reserve)
+				require.Equal(t, gib, recovered.Reserved, "recalibration must not discard a live claim")
+				require.Positive(t, recovered.Available)
+			}
+			_, entry, err := b.EnterStatement(t.Context(), false)
+			require.NoError(t, err, "ordinary statement entry must recover too")
+			entry.Close()
+			_, ok = b.TryReserve(4096)
+			require.True(t, ok)
+			b.Release(4096)
+
+			// Recovery never permits charged usage/claims to cross a lowered
+			// soft boundary, including when cgroup clean-cache credit is large.
+			sample.SoftLimit = 2 * gib
+			if sample.IsCgroup() {
+				sample.Reclaimable = sample.Used
+			}
+			_, ok = b.TryReserve(1)
+			require.False(t, ok)
+			require.Equal(t, gib, b.Reserved())
+			b.Release(gib)
+			require.Zero(t, b.Reserved())
+		})
+	}
+}
+
+func TestMemoryAdmissionBudgetPreservesCalibrationUntilHealthy(t *testing.T) {
+	const gib = uint64(1 << 30)
+	sample := MemoryDomainSnapshot{Source: MemoryDomainSourceCgroupV2, Used: 12 * gib, Limit: 16 * gib, NonGo: 8 * gib, Measured: true}
+	b := NewMemoryAdmissionBudgetWithProvider(DefaultMemoryDomainReservePolicy(), func() (MemoryDomainSnapshot, error) { return sample, nil })
+	peak := b.Snapshot()
+	// A smaller current non-Go value alone is not evidence that the physical
+	// domain has recovered. Keep the peak while the working set is pressured.
+	sample.Used, sample.NonGo = 15*gib, 64<<20
+	for range 10 {
+		require.Equal(t, peak.Reserve, b.Snapshot().Reserve)
+		require.Zero(t, b.Snapshot().Available)
+	}
+	sample.Used = gib
+	require.Positive(t, b.Snapshot().Available)
+
+	// Small, still-useful calibration peaks are retained, not reset on every
+	// low observation or every Snapshot/Release call.
+	sample.NonGo = gib
+	smallPeak := b.Snapshot().Reserve
+	sample.NonGo = 64 << 20
+	require.Equal(t, smallPeak, b.Snapshot().Reserve)
+}
+
+func TestMemoryAdmissionRecoveryMarginIncludesLiveClaims(t *testing.T) {
+	const gib = uint64(1 << 30)
+	sample := MemoryDomainSnapshot{Source: MemoryDomainSourceCgroupV2, Used: gib, Limit: 16 * gib, NonGo: 64 << 20, Measured: true}
+	b := NewMemoryAdmissionBudgetWithProvider(DefaultMemoryDomainReservePolicy(), func() (MemoryDomainSnapshot, error) { return sample, nil })
+	_, ok := b.TryReserve(13 * gib)
+	require.True(t, ok)
+	sample.Used, sample.NonGo = 12*gib, 8*gib
+	peak := b.Snapshot()
+	sample.Used, sample.NonGo = gib, 64<<20
+	// The sample alone looks healthy, but the pending claims consume its spare
+	// margin. Neither repeated observations nor control/calibration reads may
+	// silently discard these commitments or reinterpret them as residency.
+	for range 10 {
+		s := b.Snapshot()
+		require.Equal(t, peak.Reserve, s.Reserve)
+		require.Zero(t, s.Available)
+		require.Equal(t, 13*gib, s.Reserved)
+	}
+	b.Release(12 * gib)
+	recovered := b.Snapshot()
+	require.Positive(t, recovered.Available)
+	require.Equal(t, gib, recovered.Reserved)
+	b.Release(gib)
+	require.Zero(t, b.Reserved())
+}
+
+func TestMemoryAdmissionRecoveryRejectsOutOfOrderObservation(t *testing.T) {
+	const gib = uint64(1 << 30)
+	peak := MemoryDomainSnapshot{Source: MemoryDomainSourceCgroupV2, Used: 12 * gib, Limit: 16 * gib, NonGo: 8 * gib,
+		Measured: true, ObservedAt: time.Now()}
+	b := NewMemoryAdmissionBudget(DefaultMemoryDomainReservePolicy())
+	before := b.Observe(peak)
+	stale := peak
+	stale.Used, stale.NonGo, stale.ObservedAt = gib, 64<<20, peak.ObservedAt.Add(-time.Second)
+	s := b.Observe(stale)
+	require.Equal(t, before.Reserve, s.Reserve, "a delayed old reader cannot undo a newer peak")
+	require.Zero(t, s.Available)
+	stale.ObservedAt = time.Time{}
+	require.Zero(t, b.Observe(stale).Available, "an undated observation cannot undo a dated peak")
+	stale.ObservedAt = peak.ObservedAt.Add(time.Second)
+	require.Positive(t, b.Observe(stale).Available, "a genuinely later healthy observation must recover")
 }
 
 func TestDefaultMemoryDomainReservePolicyAcceptsSizeSuffixes(t *testing.T) {

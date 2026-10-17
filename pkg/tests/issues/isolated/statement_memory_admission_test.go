@@ -21,8 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,4 +76,110 @@ func TestStatementMemoryAdmissionSQLLifecycle(t *testing.T) {
 	_, err = conn.ExecContext(ctx, "drop database statement_memory_lifecycle")
 	require.NoError(t, err)
 	require.Greater(t, system.DefaultMemoryAdmissionBudget().Snapshot().StatementAdmitted, before)
+}
+
+// Cancellation must not queue behind the query whose resources it releases.
+// Hold a real authenticated SQL query at an execution barrier, saturate the
+// pressure concurrency with accounted entries, then pressure the production
+// ledger using a pending claim rather than a multi-GiB physical allocation.
+func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, waitSystemBootstrap(ctx, db))
+	runner, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer runner.Close()
+	killer, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer killer.Close()
+	var connectionID uint64
+	require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
+	killSQL := fmt.Sprintf("kill query %d", connectionID)
+	_, err = killer.ExecContext(ctx, killSQL)
+	require.NoError(t, err, "prewarm the same identity/connection/cancellation path")
+	if fault.Enable() {
+		defer fault.Disable()
+	}
+	const barrier, waiters = "memory_admission_kill_running", "memory_admission_kill_waiters"
+	require.NoError(t, fault.AddFaultPoint(ctx, barrier, ":::", "WAIT", 0, "", false))
+	defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), barrier) }()
+	require.NoError(t, fault.AddFaultPoint(ctx, waiters, ":::", "GETWAITERS", 0, barrier, false))
+	defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), waiters) }()
+	done := make(chan error, 1)
+	joined := false
+	defer func() {
+		if !joined {
+			cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			_, _ = killer.ExecContext(cleanupCtx, killSQL)
+			_, _ = fault.RemoveFaultPoint(cleanupCtx, barrier)
+			select {
+			case <-done:
+			case <-cleanupCtx.Done():
+				t.Error("canceled query did not join")
+			}
+		}
+	}()
+	go func() {
+		_, queryErr := runner.ExecContext(ctx, "select trigger_fault_point('"+barrier+"')")
+		done <- queryErr
+	}()
+	require.Eventually(t, func() bool {
+		n, _, ok := fault.TriggerFault(waiters)
+		return ok && n > 0
+	}, 20*time.Second, 10*time.Millisecond, "worker must reach execution before pressure is injected")
+
+	b := system.DefaultMemoryAdmissionBudget()
+	// Do not change global policy/env: fill the production default pressure
+	// concurrency. The host may already be below the healthy margin, in which
+	// case the first timeout proves saturation and must not fail test setup.
+	for range max(1, system.GoMaxProcs()) {
+		_, lease, err := b.EnterStatement(ctx, false)
+		if err != nil {
+			require.ErrorIs(t, err, system.ErrMemoryStatementTimeout)
+			break
+		}
+		defer lease.Close()
+	}
+	s := b.Snapshot()
+	const margin = uint64(1 << 20)
+	require.Greater(t, s.Available, margin)
+	claim := s.Available - margin
+	_, ok := b.TryReserve(claim)
+	require.True(t, ok)
+	defer b.Release(claim)
+	s = b.Snapshot()
+	require.Less(t, s.Available, s.Reserve)
+	require.Positive(t, s.StatementActive)
+	t.Logf("pressure admission: available=%d reserve=%d active=%d", s.Available, s.Reserve, s.StatementActive)
+	_, err = killer.ExecContext(ctx, "select 1")
+	require.ErrorContains(t, err, "memory statement admission wait timed out", "ordinary SQL must still wait under pressure")
+	_, err = killer.ExecContext(ctx, killSQL)
+	require.NoError(t, err, "KILL must use the bounded control path while the ordinary queue is saturated")
+	_, err = fault.RemoveFaultPoint(ctx, barrier)
+	require.NoError(t, err)
+	select {
+	case err = <-done:
+		joined = true
+	case <-ctx.Done():
+		t.Fatal("KILL QUERY did not finish")
+	}
+	var sqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &sqlErr)
+	require.Equal(t, uint16(moerr.ER_QUERY_INTERRUPTED), sqlErr.Number)
+	require.Equal(t, "70100", string(sqlErr.SQLState[:]))
+	require.Eventually(t, func() bool {
+		s := b.Snapshot()
+		return s.ControlActive == 0 && s.ControlReserved == 0 && s.StatementQueued == 0
+	}, time.Second, 10*time.Millisecond, "cancellation/failed entry must not leak a control slot or queue element")
 }

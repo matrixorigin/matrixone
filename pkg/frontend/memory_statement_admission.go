@@ -29,10 +29,12 @@ func (execCtx *ExecCtx) admitStatementMemory() error {
 	if stmt == nil {
 		stmt = execCtx.stmt
 	}
-	// Transaction finalization must be able to release existing resources.
-	// This is still bounded and physically accounted, not an internal-SQL bypass.
+	// Transaction finalization and query/connection cancellation must be able
+	// to release existing resources without queuing behind their owners. KILL
+	// still follows the normal authenticated dispatch/handler path. Its control
+	// allowance is bounded and physically accounted, not an internal-SQL bypass.
 	switch stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill:
 		ctx = process.WithControlMemoryAdmission(ctx, true)
 	}
 	ctx, lease, err := execCtx.proc.EnterStatementMemoryAdmission(ctx)

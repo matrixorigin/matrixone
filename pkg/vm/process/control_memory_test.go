@@ -131,18 +131,30 @@ func TestControlExecutionBorrowsStatementAdmissionWithoutSecondSlot(t *testing.T
 }
 
 func TestStatementEntryFailurePrecedesAllocationAndPreservesCause(t *testing.T) {
-	t.Setenv("MO_MEMORY_STATEMENT_WAIT_TIMEOUT", "0s")
-	b, _ := controlTestBudget(t, 0)
-	g, err := b.openProcessGeneration(1, 1<<30, 0)
-	require.NoError(t, err)
-	defer g.Close()
-	proc := &Process{Ctx: t.Context(), Base: &BaseProcess{}}
-	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
-	_, _, err = proc.EnterStatementMemoryAdmission(t.Context())
-	require.ErrorIs(t, err, ErrExecutionResourceAdmission)
-	require.ErrorIs(t, err, system.ErrMemoryStatementTimeout)
-	require.Zero(t, g.Used())
-	require.Zero(t, b.physicalLedger.Reserved())
+	for _, cause := range []error{system.ErrMemoryStatementTimeout, system.ErrMemoryStatementQueueFull, context.Canceled} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			t.Setenv("MO_MEMORY_STATEMENT_WAIT_TIMEOUT", "0s")
+			if cause == system.ErrMemoryStatementQueueFull {
+				t.Setenv("MO_MEMORY_STATEMENT_MAX_QUEUED", "0")
+			}
+			b, _ := controlTestBudget(t, 0)
+			g, err := b.openProcessGeneration(1, 1<<30, 0)
+			require.NoError(t, err)
+			defer g.Close()
+			proc := &Process{Ctx: t.Context(), Base: &BaseProcess{}}
+			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if cause == context.Canceled {
+				cancel()
+			}
+			_, _, err = proc.EnterStatementMemoryAdmission(ctx)
+			require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+			require.ErrorIs(t, err, cause)
+			require.Zero(t, g.Used())
+			require.Zero(t, b.physicalLedger.Reserved())
+		})
+	}
 }
 
 func TestSharedPhysicalBudgetIsSoleAllocationAndGrowthAuthority(t *testing.T) {
@@ -208,6 +220,52 @@ func TestControlProcessWithFileServiceChargesPhysicalMPool(t *testing.T) {
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestFileServiceProcessRecoversAfterNonGoPeak(t *testing.T) {
+	for _, source := range []system.MemoryDomainSource{system.MemoryDomainSourceHost, system.MemoryDomainSourceCgroupV1, system.MemoryDomainSourceCgroupV2} {
+		t.Run(string(source), func(t *testing.T) {
+			const service = "__process_local_cn__"
+			const gib = uint64(1 << 30)
+			sample := system.MemoryDomainSnapshot{Used: 12 * gib, Limit: 16 * gib, NonGo: 8 * gib, Source: source, Measured: true}
+			b := MustNewExecutionResourceBudget(gib, gib)
+			b.physicalLedger = system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(),
+				func() (system.MemoryDomainSnapshot, error) { return sample, nil })
+			require.Zero(t, b.physicalLedger.Snapshot().Available)
+			sample.Used, sample.NonGo = gib, 64<<20
+			for range 10 {
+				b.physicalLedger.Snapshot()
+			}
+			executionResourceCNBudgets.Store(service, b)
+			t.Cleanup(func() { executionResourceCNBudgets.Delete(service) })
+			fs, err := fileservice.NewMemoryFS("LOCAL", fileservice.CacheConfig{}, nil)
+			require.NoError(t, err)
+			defer fs.Close(t.Context())
+			proc := &Process{Ctx: t.Context(), Base: &BaseProcess{FileService: fs, Lim: Limitation{Size: int64(gib)}}}
+			g, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			defer g.Close()
+			registry, err := g.AllocationAccountRegistry()
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(g.Cap(), g)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			buf, err := mp.AllocAccounted(4096, account, 1, 1)
+			require.NoError(t, err, "a recovered domain must admit an ordinary production MPool allocation")
+			require.Equal(t, uint64(4096), b.physicalLedger.Reserved())
+			sample.Used = sample.Limit
+			_, err = mp.AllocAccounted(4096, account, 1, 1)
+			require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+			require.Equal(t, uint64(4096), b.physicalLedger.Reserved())
+			g.Close()
+			mp.Free(buf)
+			require.Zero(t, b.physicalLedger.Reserved())
+			account.Seal()
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestFileServiceProcessHostCacheAndTrueExhaustion(t *testing.T) {

@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 type controlMemoryAdmissionKey struct{}
@@ -114,7 +115,7 @@ func (proc *Process) EnterStatementMemoryAdmission(ctx context.Context) (context
 	}
 	next, lease, err := ledger.EnterStatement(ctx, HasControlMemoryAdmission(ctx))
 	if err != nil {
-		return ctx, nil, fmt.Errorf("%w: statement entry: %w", ErrExecutionResourceAdmission, err)
+		return ctx, nil, errors.Join(ErrExecutionResourceAdmission, errutil.Wrap(err, "statement entry"))
 	}
 	return next, lease, nil
 }

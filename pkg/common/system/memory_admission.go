@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"math"
 	"sync"
+	"time"
 )
 
 // MemoryAdmissionBudget is the process-wide physical memory ledger shared by
@@ -32,10 +33,13 @@ import (
 type MemoryAdmissionBudget struct {
 	mu sync.Mutex
 
-	policy         MemoryDomainReservePolicy
-	reserved       uint64
-	nonGoHighWater uint64
-	last           MemoryAdmissionBudgetSnapshot
+	policy   MemoryDomainReservePolicy
+	reserved uint64
+	// Calibration history, not live ownership. A peak is retained while useful
+	// but may be reset after measured recovery; reserved is never reset with it.
+	nonGoHighWater  uint64
+	nonGoObservedAt time.Time
+	last            MemoryAdmissionBudgetSnapshot
 	// Control work can consume a bounded part of RuntimeBytes, which ordinary
 	// allocations cannot spend. These bytes are also included in reserved.
 	controlReserved   uint64
@@ -216,10 +220,33 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 	if snapshot.NonGo > b.nonGoHighWater {
 		b.nonGoHighWater = snapshot.NonGo
 	}
+	// Delayed readers may still hold an older immutable sample. That sample
+	// cannot establish recovery from a newer peak, even if its usage is low.
+	canRecalibrate := b.nonGoObservedAt.IsZero() ||
+		!snapshot.ObservedAt.IsZero() && !snapshot.ObservedAt.Before(b.nonGoObservedAt)
+	if snapshot.ObservedAt.After(b.nonGoObservedAt) {
+		b.nonGoObservedAt = snapshot.ObservedAt
+	}
 	reserveSnapshot := snapshot
 	reserveSnapshot.NonGo = b.nonGoHighWater
 	reserve := b.policy.Reserve(reserveSnapshot)
-	return b.availableWithReserveLocked(snapshot, reserve)
+	available := b.availableWithReserveLocked(snapshot, reserve)
+	if available == 0 && canRecalibrate && b.nonGoHighWater > snapshot.NonGo {
+		currentReserve := b.policy.Reserve(snapshot)
+		currentAvailable := b.availableWithReserveLocked(snapshot, currentReserve)
+		// A transient dirty/writeback/kernel peak must not latch ordinary
+		// admission off forever. Recalibrate only when history alone blocks
+		// progress and the current observation, AFTER every outstanding claim
+		// and both physical gates, has at least one full current reserve spare.
+		// This uses the same recovery margin as statement pressure admission;
+		// low NonGo alone, a full domain, or releasing some claims is not proof
+		// of recovery. Smaller useful historical peaks remain conservative.
+		if currentReserve < reserve && currentAvailable > 0 && currentAvailable >= currentReserve {
+			b.nonGoHighWater = snapshot.NonGo
+			available = currentAvailable
+		}
+	}
+	return available
 }
 
 func (b *MemoryAdmissionBudget) availableWithReserveLocked(snapshot MemoryDomainSnapshot, reserve uint64) uint64 {
