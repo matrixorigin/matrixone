@@ -402,6 +402,30 @@ func TestNegotiatedSessionCharsetInitializesSessionVariables(t *testing.T) {
 	}
 }
 
+func TestNegotiatedSessionCharsetRejectsIncompleteState(t *testing.T) {
+	// A protocol object can reach the publication boundary before handshake
+	// negotiation (for example, on an auth-switch path).  An incomplete pair
+	// must be a no-op rather than mutating the session.
+	empty := &MysqlProtocolImpl{}
+	require.NoError(t, empty.applyNegotiatedSessionCharsetTo(t.Context(), &Session{}))
+
+	invalid := &MysqlProtocolImpl{
+		charset:       "utf8mb4",
+		collationName: "utf8_unicode_ci",
+	}
+	require.ErrorContains(t,
+		invalid.applyNegotiatedSessionCharsetTo(t.Context(), &Session{}),
+		"not valid for CHARACTER SET")
+
+	valid := &MysqlProtocolImpl{
+		charset:       "utf8mb4",
+		collationName: "utf8mb4_unicode_ci",
+	}
+	require.ErrorContains(t,
+		valid.applyNegotiatedSessionCharsetTo(t.Context(), nil),
+		"cannot initialize negotiated charset without a session")
+}
+
 func TestCharsetAdmissionChangeUserProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		id       int
