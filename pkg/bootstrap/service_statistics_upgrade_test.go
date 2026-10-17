@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_13"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_16"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
@@ -80,6 +81,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "current_4.0.13", version: "4.0.13", offset: v4_0_13.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.14", version: "4.0.14", offset: v4_0_14.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.15", version: "4.0.15", offset: v4_0_15.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "current_4.0.16", version: "4.0.16", offset: v4_0_16.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -115,6 +117,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
+					if versions.Compare(test.version, "4.0.16") < 0 {
+						hops = append([]versions.Version{v4_0_16.Handler.Metadata()}, hops...)
+					}
 					if versions.Compare(test.version, "4.0.15") < 0 {
 						hops = append([]versions.Version{v4_0_15.Handler.Metadata()}, hops...)
 					}
@@ -239,9 +244,13 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 					return executor.Result{AffectedRows: 1}, nil
 				}, txnOp)
 
+				// Model the pre-PR 4.0.7 binary explicitly. Its handler had no
+				// tenant entries, so it could complete the offset-only task without
+				// running the current Python catalog migrations.
+				legacy407 := newTestVersionHandler("4.0.7", "4.0.6", versions.Yes, versions.Yes, 0)
 				old := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.handles = append(s.handles, v4_0_7.Handler) })
+					func(s *service) { s.handles = append(s.handles, legacy407) })
 				defer old.stopper.Stop()
 				// Both the worker admission code and this restored 4.0.7 handler are
 				// unchanged from the old binary; no new-worker-only offset check is used.
@@ -250,6 +259,11 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 				require.Equal(t, test.oldCanClaim, hasWork)
 				require.Equal(t, test.oldCanClaim, claimed)
 				require.Equal(t, test.oldCanClaim, ready)
+				wantLegacyCalls := uint64(0)
+				if test.oldCanClaim {
+					wantLegacyCalls = 1
+				}
+				require.Equal(t, wantLegacyCalls, legacy407.callHandleTenantUpgrade.Load())
 				require.Equal(t, legacy, definition)
 				require.Zero(t, creates)
 

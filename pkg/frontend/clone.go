@@ -1250,6 +1250,22 @@ func handleCloneDatabaseWithSource(
 			}
 		}
 	}
+	for _, definition := range source.userDefinedFuncs {
+		if !strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			continue
+		}
+		// Database clone is a new Python publication in the target account.
+		// Apply the same runtime and catalog gates before creating the target
+		// database, so a disabled or partially upgraded node cannot leave a
+		// clone that contains an unrunnable routine.
+		if err = ensurePythonUdfRuntimeReady(reqCtx, ses); err != nil {
+			return
+		}
+		if err = ensurePythonUdfCatalogReady(reqCtx, bh); err != nil {
+			return
+		}
+		break
+	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
@@ -1499,6 +1515,7 @@ func handleCloneDatabaseWithSource(
 	}
 	if err = restoreCloneDatabaseUserDefinedFunctions(
 		ctx1, bh, routineTenant, source.userDefinedFuncs, stmt.DstDatabase.String(),
+		getPu(ses.GetService()).FileService,
 	); err != nil {
 		return
 	}

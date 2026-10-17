@@ -1,0 +1,52 @@
+-- Arrow compute selection, ordering, comparison, and cast kernels.
+drop database if exists udf_python_arrow_compute_selection_bvt;
+create database udf_python_arrow_compute_selection_bvt;
+use udf_python_arrow_compute_selection_bvt;
+
+create function python_bvt_pc_take (x int, index_value int) returns int language python as 'python_bvt_pc_take = lambda ctx, values, indices: __import__("pyarrow.compute", fromlist=["take"]).take(values, indices, boundscheck=True)' handler 'python_bvt_pc_take' mode vector;
+create function python_bvt_pc_sort_take (x int) returns int language python as 'python_bvt_pc_sort_take = lambda ctx, values: __import__("pyarrow.compute", fromlist=["take"]).take(values, __import__("pyarrow.compute", fromlist=["sort_indices"]).sort_indices(values, null_placement="at_end"))' handler 'python_bvt_pc_sort_take' mode vector;
+create function python_bvt_pc_sort_indices (x int) returns bigint unsigned language python as 'python_bvt_pc_sort_indices = lambda ctx, values: __import__("pyarrow.compute", fromlist=["sort_indices"]).sort_indices(values, null_placement="at_end")' handler 'python_bvt_pc_sort_indices' mode vector;
+create function python_bvt_pc_equal (x int) returns bool language python as 'python_bvt_pc_equal = lambda ctx, values: __import__("pyarrow.compute", fromlist=["equal"]).equal(values, __import__("pyarrow").scalar(20, type=__import__("pyarrow").int32()))' handler 'python_bvt_pc_equal' mode vector;
+create function python_bvt_pc_cast (x int) returns bigint language python as 'python_bvt_pc_cast = lambda ctx, values: __import__("pyarrow.compute", fromlist=["cast"]).cast(values, __import__("pyarrow").int64(), safe=True)' handler 'python_bvt_pc_cast' mode vector;
+create function python_bvt_pc_filter (x int) returns int language python as 'python_bvt_pc_filter = lambda ctx, values: __import__("pyarrow.compute", fromlist=["filter"]).filter(values, __import__("pyarrow.compute", fromlist=["greater_equal"]).greater_equal(values, 20), null_selection_behavior="drop")' handler 'python_bvt_pc_filter' mode vector;
+
+create table selection_values (id int, value int, index_value int);
+insert into selection_values values
+    (1, 30, 2),
+    (2, null, 0),
+    (3, 20, 1),
+    (4, 10, 3),
+    (5, 40, null);
+
+-- take uses an Arrow index array, sort_indices keeps NULL placement explicit,
+-- and cast proves that the physical Arrow type can change within the declared
+-- SQL type contract.
+select id,
+       python_bvt_pc_take(value, index_value) as taken,
+       python_bvt_pc_sort_take(value) as sorted_value,
+       python_bvt_pc_sort_indices(value) as sorted_index,
+       python_bvt_pc_equal(value) as equals_twenty,
+       python_bvt_pc_cast(value) as cast_value
+from selection_values order by id;
+
+-- A filtering kernel shortens the Arrow array. The external evaluator must
+-- reject the result instead of silently misaligning rows.
+--error
+select python_bvt_pc_filter(value) from selection_values order by id;
+
+create table invalid_selection_values (value int, index_value int);
+insert into invalid_selection_values values (30, 99);
+
+-- boundscheck=True must turn an out-of-range index into a handler error.
+--error
+select python_bvt_pc_take(value, index_value) from invalid_selection_values;
+
+drop function python_bvt_pc_take(int, int);
+drop function python_bvt_pc_sort_take(int);
+drop function python_bvt_pc_sort_indices(int);
+drop function python_bvt_pc_equal(int);
+drop function python_bvt_pc_cast(int);
+drop function python_bvt_pc_filter(int);
+drop table invalid_selection_values;
+drop table selection_values;
+drop database udf_python_arrow_compute_selection_bvt;

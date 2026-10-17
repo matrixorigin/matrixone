@@ -229,7 +229,7 @@ func NewCodecService(
 	partitionService partitionservice.PartitionService,
 	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
+	udfService udf.Runtime,
 	engine engine.Engine,
 ) ProcessCodecService {
 	mp, err := mpool.NewMPool("codec", 1<<40, mpool.NoFixed)
@@ -256,7 +256,7 @@ type codecService struct {
 	partitionService partitionservice.PartitionService
 	queryClient      qclient.QueryClient
 	hakeeper         logservice.CNHAKeeperClient
-	udfService       udf.Service
+	udfService       udf.Runtime
 	mp               *mpool.MPool
 	engine           engine.Engine
 }

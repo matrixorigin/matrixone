@@ -1646,6 +1646,21 @@ func reCreateTableWithPitr(
 			fmt.Sprintf(" {MO_TS = %d}", ts),
 			accountID,
 			accountID,
+			tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", ts),
+			accountID,
+			accountID,
+			tblInfo.createSql,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
@@ -2052,8 +2067,9 @@ func restoreSystemDatabaseWithPitr(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", pitrName, moCatalog, tblInfo.tblName))
-		// Sequences use their CREATE definition; table schemas belong to CLONE.
-		if isSequence(tblInfo) {
+		// Sequences need their definition; routine catalogs need the source
+		// schema to preserve revision metadata. Other schemas belong to CLONE.
+		if isSequence(tblInfo) || isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) || isCurrentFunctionRevisionCatalog(tblInfo) {
 			tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName)
 			if err != nil {
 				return err
