@@ -78,6 +78,7 @@ const (
 	AlterSequence
 	Replace
 	TableClone
+	AlterDatabase
 )
 
 func (m magicType) String() string {
@@ -90,6 +91,8 @@ func (m magicType) String() string {
 		return "Remote"
 	case CreateDatabase:
 		return "CreateDatabase"
+	case AlterDatabase:
+		return "AlterDatabase"
 	case CreateTable:
 		return "CreateTable"
 	case CreateView:

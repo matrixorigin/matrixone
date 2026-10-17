@@ -79,6 +79,7 @@ WHERE c.table_schema = 'charset_test'
 ORDER BY c.ordinal_position;
 DROP TABLE charset_metadata_repro;
 
+-- Historical utf8 requests retain their admitted utf8mb4 compatibility mapping.
 -- Create database with explicit charset
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;

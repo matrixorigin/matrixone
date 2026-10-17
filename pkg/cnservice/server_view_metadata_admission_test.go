@@ -1553,7 +1553,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
 			snapshot.Ready = false
-			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion98)
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion118)
 			snapshot.CatalogFencedEpoch = 5
 			s.viewMetadataAdmission.Store(&snapshot)
 			t.Cleanup(func() { _ = s.Close() })
@@ -1565,7 +1565,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 				require.Equal(t, 1, creates)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 4, creates)
+				require.Equal(t, 5, creates, "TABLES plus the four trace views")
 				require.True(t, s.viewMetadataIngressReady.Load())
 			}
 		})
@@ -1594,20 +1594,25 @@ func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
 		floor   uint64
 		pending bool
 		want    bool
+		minimum uint64
 	}{
-		{"lower floor", 97, false, false}, {"activation pending", 98, true, false}, {"ready", 98, false, true},
+		{"lower floor", 97, false, false, 98}, {"activation pending", 98, true, false, 98}, {"ready", 98, false, true, 98},
+		{"C03 main113", 113, false, false, 118}, {"C03 native UNIQUE", 114, false, false, 118},
+		{"C03 calendar interval", 115, false, false, 118}, {"C03 division warnings", 116, false, false, 118},
+		{"C03 least greatest", 117, false, false, 118},
+		{"C03 activation pending", 118, true, false, 118}, {"C03 ready", 118, false, true, 118},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current := *ready
 			current.PersistedExpressionRequiredProtocolVersion = tc.floor
 			current.PersistedExpressionProtocolActivationPending = tc.pending
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, tc.minimum)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, accepted, "check current authority, not the older fenced snapshot")
 			current.Preparing = true
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, tc.minimum)
 			require.NoError(t, err)
 			require.False(t, accepted, "a preparing epoch cannot authorize writes")
 		})
